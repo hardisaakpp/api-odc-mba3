@@ -1,0 +1,12 @@
+# Dependencias del proyecto MBA3 Consultas
+# Instalar con: pip install -r requirements.txt
+
+python-dotenv>=1.0.0
+requests>=2.31.0
+
+# Dependencias para la API FastAPI
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+pydantic>=2.0.0
+python-multipart>=0.0.6
+
