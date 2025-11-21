@@ -269,11 +269,11 @@ def main():
         print(result_json)
         
         # Guardar resultado en archivo JSON (sobrescribe el archivo anterior)
-        output_file = "resultado_api.json"
+        from config import RESULTADO_API_FILE
         try:
-            with open(output_file, 'w', encoding='utf-8') as f:
+            with open(RESULTADO_API_FILE, 'w', encoding='utf-8') as f:
                 json.dump(result, f, indent=2, ensure_ascii=False)
-            print(f"\n[OK] Resultado completo guardado en: {output_file}")
+            print(f"\n[OK] Resultado completo guardado en: {RESULTADO_API_FILE}")
             
             # Mostrar estadísticas del resultado
             if isinstance(result, list):

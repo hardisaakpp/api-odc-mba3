@@ -2,3 +2,8 @@
 .venv/
 __pycache__/
 *.pyc
+
+# Archivos JSON generados
+resultado_api.json
+ultima_consulta.json
+src/resultado_api.json

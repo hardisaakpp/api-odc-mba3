@@ -4,6 +4,11 @@ API HTTP para recibir, validar y ejecutar consultas SQL contra MBA3.
 Servicio FastAPI que recibe consultas SQL (SELECT) desde Postman, las valida,
 y las ejecuta contra MBA3 usando MBA3APIClient.
 
+Esta versión usa una arquitectura mejorada con:
+- Capa de servicios para lógica de negocio
+- Helpers para parsing de requests
+- Exception handlers centralizados
+
 Endpoints disponibles:
 - /consulta: Ejecuta consultas dinámicas contra MBA3 y retorna el resultado JSON
 - /query: Recibe y valida consultas SQL (solo validación y almacenamiento)
@@ -17,6 +22,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from endpoints import create_endpoints
+from middleware.exception_handlers import setup_exception_handlers
 
 # Configurar logging
 logging.basicConfig(
@@ -29,7 +35,7 @@ logger = logging.getLogger(__name__)
 app = FastAPI(
     title="MBA3 Query API",
     description="API para recibir, validar y procesar consultas SQL (SELECT)",
-    version="1.0.0"
+    version="2.0.0"
 )
 
 # Configurar CORS para permitir pruebas desde Postman y otros clientes
@@ -40,6 +46,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Configurar exception handlers centralizados
+setup_exception_handlers(app)
 
 # Registrar todos los endpoints
 create_endpoints(app)

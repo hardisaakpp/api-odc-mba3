@@ -2,7 +2,9 @@
 Configuración y constantes para la API de consultas MBA3.
 """
 
+import os
 from pathlib import Path
+from dotenv import load_dotenv
 
 # Configuración de límites
 MAX_QUERY_LENGTH = 5000  # Longitud máxima de consulta en caracteres
@@ -11,14 +13,15 @@ MAX_QUERY_LENGTH = 5000  # Longitud máxima de consulta en caracteres
 # Si api_server.py está en src/, subir un nivel para llegar a la raíz
 _current_file = Path(__file__).resolve()
 if _current_file.parent.name == "src":
-    QUERY_STORAGE_FILE = _current_file.parent.parent / "ultima_consulta.json"
+    PROJECT_ROOT = _current_file.parent.parent
 else:
-    QUERY_STORAGE_FILE = _current_file.parent / "ultima_consulta.json"
+    PROJECT_ROOT = _current_file.parent
 
-# Cargar variables de entorno desde .env
-import os
-from pathlib import Path
-from dotenv import load_dotenv
+QUERY_STORAGE_FILE = PROJECT_ROOT / "ultima_consulta.json"
+
+# Ruta estándar para guardar resultados de consultas MBA3
+# Siempre en la raíz del proyecto
+RESULTADO_API_FILE = PROJECT_ROOT / "resultado_api.json"
 
 # Cargar variables de entorno desde .env si existe
 env_path = Path(__file__).resolve().parent.parent / ".env"

@@ -111,12 +111,11 @@ def do_query(query: str = None):
         print(result_json)
         
         # Guardar resultado en archivo JSON
-        output_file = "resultado_api.json"
+        from config import RESULTADO_API_FILE
         try:
-            output_path = Path(__file__).resolve().parents[1] / output_file
-            with open(output_path, 'w', encoding='utf-8') as f:
+            with open(RESULTADO_API_FILE, 'w', encoding='utf-8') as f:
                 json.dump(result, f, indent=2, ensure_ascii=False)
-            print(f"\n[OK] Resultado completo guardado en: {output_path}")
+            print(f"\n[OK] Resultado completo guardado en: {RESULTADO_API_FILE}")
             
             # Mostrar estadísticas del resultado
             if isinstance(result, list):
