@@ -560,14 +560,55 @@ def create_endpoints(app):
                     logger.info(f"Campos en resultado: {list(result.keys())[:5]}...")
                 logger.info("=" * 70)
                 
+                # Guardar en SQL Server (si está habilitado)
+                save_status = None
+                try:
+                    from database import save_mba3_data_to_sql_server
+                    logger.info("💾 Guardando datos en SQL Server...")
+                    save_status = save_mba3_data_to_sql_server(
+                        result,
+                        upsert=False,  # Cambiar a True si quieres actualizar facturas existentes
+                        continue_on_error=True  # Continuar aunque falle una factura
+                    )
+                    
+                    if save_status.get("status") == "success":
+                        logger.info(f"✅ Datos guardados exitosamente en SQL Server")
+                        logger.info(f"   Facturas guardadas: {save_status.get('facturas_guardadas', 0)}")
+                        logger.info(f"   Total detalles: {save_status.get('total_detalles', 0)}")
+                    elif save_status.get("status") == "partial":
+                        logger.warning(f"⚠️ Datos guardados parcialmente en SQL Server")
+                        logger.warning(f"   Guardadas: {save_status.get('facturas_guardadas', 0)}")
+                        logger.warning(f"   Errores: {save_status.get('facturas_error', 0)}")
+                        if save_status.get("errors"):
+                            for error in save_status["errors"][:3]:  # Mostrar primeros 3 errores
+                                logger.warning(f"   - {error}")
+                    elif save_status.get("status") == "disabled":
+                        logger.info("⏭️ Guardado en SQL Server deshabilitado")
+                    else:
+                        logger.error(f"❌ Error al guardar en SQL Server: {save_status.get('errors', [])}")
+                        
+                except ImportError:
+                    logger.warning("⚠️ Módulo database no disponible. Saltando guardado en SQL Server.")
+                except Exception as e:
+                    logger.error(f"❌ Error inesperado al guardar en SQL Server: {e}", exc_info=True)
+                    # No fallar la petición si falla el guardado, solo loguear el error
+                
+                # Preparar headers de respuesta
+                headers = {
+                    "X-Query": query_text[:100],  # Primeros 100 caracteres de la query
+                    "X-Source": source
+                }
+                
+                # Agregar información de guardado si existe
+                if save_status:
+                    headers["X-Saved-To-DB"] = save_status.get("status", "unknown")
+                    headers["X-DB-Facturas"] = str(save_status.get("facturas_guardadas", 0))
+                
                 # Retornar resultado JSON de MBA3 directamente
                 return JSONResponse(
                     status_code=200,
                     content=result,
-                    headers={
-                        "X-Query": query_text[:100],  # Primeros 100 caracteres de la query
-                        "X-Source": source
-                    }
+                    headers=headers
                 )
                 
             except HTTPException:

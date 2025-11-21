@@ -10,3 +10,6 @@ uvicorn[standard]>=0.24.0
 pydantic>=2.0.0
 python-multipart>=0.0.6
 
+# Dependencias para SQL Server
+pyodbc>=5.0.0
+

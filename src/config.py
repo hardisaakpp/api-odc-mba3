@@ -15,11 +15,49 @@ if _current_file.parent.name == "src":
 else:
     QUERY_STORAGE_FILE = _current_file.parent / "ultima_consulta.json"
 
-# Configuración de MBA3 (mismas credenciales que usa mba3_query_client.py)
+# Cargar variables de entorno desde .env
+import os
+from pathlib import Path
+from dotenv import load_dotenv
+
+# Cargar variables de entorno desde .env si existe
+env_path = Path(__file__).resolve().parent.parent / ".env"
+if env_path.exists():
+    load_dotenv(env_path)
+    # print(f"✅ Variables de entorno cargadas desde: {env_path}")
+else:
+    # print(f"⚠️ Archivo .env no encontrado en: {env_path}")
+    pass
+
+# ============================================================================
+# Configuración de MBA3
+# ============================================================================
 # Estas credenciales se usan para inicializar el cliente MBA3 cuando se reciben consultas dinámicas
-MBA3_BASE_URL = "http://192.168.2.159:8081"
-MBA3_SERVICE_CODE = "CDB002"
-MBA3_SERVICE_PASSWORD = "***REMOVED***"
-MBA3_DIGEST_USERNAME = "CDB002"
-MBA3_DIGEST_PASSWORD = "***REMOVED***"
+# Se pueden configurar en el archivo .env o usar valores por defecto
+
+MBA3_BASE_URL = os.getenv("MBA3_BASE_URL", "http://192.168.2.159:8081")
+MBA3_SERVICE_CODE = os.getenv("MBA3_CODIGO", os.getenv("MBA3_SERVICE_CODE", "CDB002"))
+MBA3_SERVICE_PASSWORD = os.getenv("MBA3_PWD", os.getenv("MBA3_SERVICE_PASSWORD", "***REMOVED***"))
+MBA3_DIGEST_USERNAME = os.getenv("MBA3_DIGEST_USERNAME", MBA3_SERVICE_CODE)
+MBA3_DIGEST_PASSWORD = os.getenv("MBA3_DIGEST_PASSWORD", MBA3_SERVICE_PASSWORD)
+
+# ============================================================================
+# Configuración de SQL Server
+# ============================================================================
+# Para usar variables de entorno, configura en el archivo .env:
+# - SQL_SERVER_DRIVER={ODBC Driver 17 for SQL Server}
+# - SQL_SERVER_SERVER=tu_servidor
+# - SQL_SERVER_DATABASE=tu_base_de_datos
+# - SQL_SERVER_UID=tu_usuario (opcional para Windows Auth)
+# - SQL_SERVER_PWD=tu_contraseña (opcional para Windows Auth)
+# - ENABLE_SQL_SERVER_STORAGE=true
+
+SQL_SERVER_DRIVER = os.getenv("SQL_SERVER_DRIVER", "{ODBC Driver 17 for SQL Server}")
+SQL_SERVER_SERVER = os.getenv("SQL_SERVER_SERVER", "localhost")
+SQL_SERVER_DATABASE = os.getenv("SQL_SERVER_DATABASE", "TuBaseDeDatos")
+SQL_SERVER_UID = os.getenv("SQL_SERVER_UID", "")
+SQL_SERVER_PWD = os.getenv("SQL_SERVER_PWD", "")
+
+# Habilitar guardado en SQL Server (poner a False para deshabilitar)
+ENABLE_SQL_SERVER_STORAGE = os.getenv("ENABLE_SQL_SERVER_STORAGE", "true").lower() == "true"
 
