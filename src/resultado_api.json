@@ -1,0 +1,168 @@
+[
+  {
+    "CODIGO_FACTURA": "REMSI-900125351-TRAYO",
+    "NUMERO_FACTURA": 900125351,
+    "EMPRESA": "TRAYO",
+    "CODIGO_CLIENTE": "CLI0513",
+    "FECHA_FACTURA": "2025-11-20",
+    "NUMERO_ORDEN": 129165,
+    "ANULADA": false,
+    "CODIGO_DESPACHO": 0,
+    "TIPO_DOCUMENTO": "REM",
+    "NUMERO_PEDIDO_SISTEMA": 176120,
+    "ORDEN_COMPRA_CLIENTE": "",
+    "ORDEN_COMPRA": "",
+    "ObjDatosFactura": {
+      "CtrlEliminados4": [
+        {
+          "Codigo": "5-0012.9",
+          "Nombre": "MDS TOB M/FELPA T.9-11",
+          "Cantidad": 456,
+          "Descuento": 0,
+          "PrecioUnitario": 4.65,
+          "TotalLinea": 2120.4
+        }
+      ]
+    },
+    "Remision_Facturada": true,
+    "NumIDFacturaRelacionada": 132954
+  },
+  {
+    "CODIGO_FACTURA": "FE-1002000124372-TRAYO",
+    "NUMERO_FACTURA": 1002000124372,
+    "EMPRESA": "TRAYO",
+    "CODIGO_CLIENTE": "CLI0513",
+    "FECHA_FACTURA": "2025-11-20",
+    "NUMERO_ORDEN": 132954,
+    "ANULADA": false,
+    "CODIGO_DESPACHO": 0,
+    "TIPO_DOCUMENTO": "FACT",
+    "NUMERO_PEDIDO_SISTEMA": 176120,
+    "ORDEN_COMPRA_CLIENTE": "",
+    "ORDEN_COMPRA": "",
+    "ObjDatosFactura": {
+      "CtrlEliminadosA": [
+        {
+          "Codigo": "",
+          "Nombre": "",
+          "Cantidad": 0,
+          "Descuento": 0,
+          "PrecioUnitario": 0,
+          "TotalLinea": 0
+        },
+        {
+          "Codigo": "5-0012.9",
+          "Nombre": "MDS TOB M/FELPA T.9-11",
+          "Cantidad": 456,
+          "Descuento": 0,
+          "PrecioUnitario": 4.65,
+          "TotalLinea": 2120.4
+        }
+      ],
+      "CtrlEliminadosB": [
+        {
+          "Codigo": "5-0012.9",
+          "Nombre": "MDS TOB M/FELPA T.9-11",
+          "Cantidad": 456,
+          "Descuento": 0,
+          "PrecioUnitario": 4.65,
+          "TotalLinea": 2120.4
+        }
+      ],
+      "CtrlEliminados1": [
+        {
+          "Codigo": "5-0012.9",
+          "Nombre": "MDS TOB M/FELPA T.9-11",
+          "Cantidad": 456,
+          "Descuento": 0,
+          "PrecioUnitario": 4.65,
+          "TotalLinea": 2120.4
+        }
+      ],
+      "CtrlEliminados2": [
+        {
+          "Codigo": "5-0012.9",
+          "Nombre": "MDS TOB M/FELPA T.9-11",
+          "Cantidad": 456,
+          "Descuento": 0,
+          "PrecioUnitario": 4.65,
+          "TotalLinea": 2120.4
+        }
+      ],
+      "CtrlEliminados3": [
+        {
+          "Codigo": "5-0012.9",
+          "Nombre": "MDS TOB M/FELPA T.9-11",
+          "Cantidad": 456,
+          "Descuento": 0,
+          "PrecioUnitario": 4.65,
+          "TotalLinea": 2120.4
+        }
+      ],
+      "GrabarLineasProd": [
+        {
+          "RegNum": 6491340,
+          "Codigo": "5-0012.9",
+          "Nombre": "MDS TOB M/FELPA T.9-11",
+          "Cantidad": 456,
+          "Descuento": 0,
+          "PrecioUnitario": 4.65,
+          "Impuesto": 318.06,
+          "TotalLinea": 2120.4
+        }
+      ],
+      "CtrlEliminados4": [
+        {
+          "Codigo": "5-0012.9",
+          "Nombre": "MDS TOB M/FELPA T.9-11",
+          "Cantidad": 456,
+          "Descuento": 0,
+          "PrecioUnitario": 4.65,
+          "TotalLinea": 2120.4
+        }
+      ],
+      "CtrlEliminados5": [
+        {
+          "Codigo": "5-0012.9",
+          "Nombre": "MDS TOB M/FELPA T.9-11",
+          "Cantidad": 456,
+          "Descuento": 0,
+          "PrecioUnitario": 4.65,
+          "TotalLinea": 2120.4
+        }
+      ],
+      "CtrlEliminados6": [
+        {
+          "Codigo": "5-0012.9",
+          "Nombre": "MDS TOB M/FELPA T.9-11",
+          "Cantidad": 456,
+          "Descuento": 0,
+          "PrecioUnitario": 4.65,
+          "TotalLinea": 2120.4
+        }
+      ],
+      "CtrlEliminados7": [
+        {
+          "Codigo": "5-0012.9",
+          "Nombre": "MDS TOB M/FELPA T.9-11",
+          "Cantidad": 456,
+          "Descuento": 0,
+          "PrecioUnitario": 4.65,
+          "TotalLinea": 2120.4
+        }
+      ],
+      "CtrlEliminados8": [
+        {
+          "Codigo": "5-0012.9",
+          "Nombre": "MDS TOB M/FELPA T.9-11",
+          "Cantidad": 456,
+          "Descuento": 0,
+          "PrecioUnitario": 4.65,
+          "TotalLinea": 2120.4
+        }
+      ]
+    },
+    "Remision_Facturada": false,
+    "NumIDFacturaRelacionada": 0
+  }
+]

@@ -1,11 +1,14 @@
 """
-API HTTP para recibir, validar y procesar consultas SQL.
+API HTTP para recibir, validar y ejecutar consultas SQL contra MBA3.
 
-Servicio FastAPI que recibe consultas SQL (SELECT), las valida,
-las parsea y las guarda en ultima_consulta.json.
+Servicio FastAPI que recibe consultas SQL (SELECT) desde Postman, las valida,
+y las ejecuta contra MBA3 usando MBA3APIClient.
 
-Esta es la primera fase: solo recepción, validación y almacenamiento.
-La ejecución contra MBA3 se implementará en una siguiente etapa.
+Endpoints disponibles:
+- /consulta: Ejecuta consultas dinámicas contra MBA3 y retorna el resultado JSON
+- /query: Recibe y valida consultas SQL (solo validación y almacenamiento)
+- /health: Health check del servicio
+- /test: Endpoint de prueba para verificar comunicación Postman → API
 """
 
 import json
@@ -20,6 +23,7 @@ from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 
 from models import QueryResponse, HealthResponse
+from mba3_query_client import MBA3APIClient
 
 # Configurar logging
 logging.basicConfig(
@@ -54,6 +58,39 @@ if _current_file.parent.name == "src":
     QUERY_STORAGE_FILE = _current_file.parent.parent / "ultima_consulta.json"
 else:
     QUERY_STORAGE_FILE = _current_file.parent / "ultima_consulta.json"
+
+# Configuración de MBA3 (mismas credenciales que usa mba3_query_client.py)
+# Estas credenciales se usan para inicializar el cliente MBA3 cuando se reciben consultas dinámicas
+MBA3_BASE_URL = "http://192.168.2.159:8081"
+MBA3_SERVICE_CODE = "CDB002"
+MBA3_SERVICE_PASSWORD = "***REMOVED***"
+MBA3_DIGEST_USERNAME = "CDB002"
+MBA3_DIGEST_PASSWORD = "***REMOVED***"
+
+# Instancia global del cliente MBA3 (se inicializa lazy)
+_mba3_client: Optional[MBA3APIClient] = None
+
+
+def get_mba3_client() -> MBA3APIClient:
+    """
+    Obtiene o crea la instancia del cliente MBA3.
+    Usa singleton pattern para reutilizar la misma instancia y mantener el JWT.
+    
+    Returns:
+        Instancia de MBA3APIClient configurada con las credenciales
+    """
+    global _mba3_client
+    if _mba3_client is None:
+        logger.info("Inicializando cliente MBA3 para consultas dinámicas...")
+        _mba3_client = MBA3APIClient(
+            base_url=MBA3_BASE_URL,
+            service_code=MBA3_SERVICE_CODE,
+            service_password=MBA3_SERVICE_PASSWORD,
+            digest_username=MBA3_DIGEST_USERNAME,
+            digest_password=MBA3_DIGEST_PASSWORD
+        )
+        logger.info(f"Cliente MBA3 inicializado con URL: {MBA3_BASE_URL}")
+    return _mba3_client
 
 
 def get_source_from_headers(request: Request) -> str:
@@ -639,6 +676,239 @@ async def forward_query():
             "note": "Este endpoint estará disponible en futuras versiones para ejecutar consultas usando MBA3APIClient"
         }
     )
+
+
+@app.post("/consulta")
+async def ejecutar_consulta(request: Request):
+    """
+    Endpoint para ejecutar consultas SQL dinámicas contra MBA3.
+    
+    Recibe una consulta SQL desde Postman, la valida, la ejecuta en MBA3
+    y retorna el resultado JSON que devuelve MBA3.
+    
+    Acepta:
+    - JSON: {"query": "SELECT * FROM tabla WHERE condicion"}
+    - Form-data: campo "query" con la consulta SQL
+    - URL-encoded: campo "query" con la consulta SQL
+    
+    Valida que sea solo SELECT y bloquea operaciones peligrosas.
+    Usa el cliente MBA3APIClient para ejecutar la consulta.
+    
+    Returns:
+        JSON con el resultado de MBA3 o error si falla
+    """
+    try:
+        content_type = request.headers.get("Content-Type", "").lower()
+        
+        # Determinar fuente
+        source = get_source_from_headers(request)
+        
+        # Obtener consulta según el tipo de contenido
+        query_text = None
+        metodo_usado = None
+        
+        # Si Content-Type es JSON, leer del body
+        if "application/json" in content_type:
+            try:
+                body = await request.json()
+                query_text = body.get("query")
+                metodo_usado = "JSON"
+                logger.debug(f"Consulta recibida via JSON: {query_text[:100] if query_text else None}...")
+            except Exception as e:
+                logger.error(f"Error al leer JSON body: {e}")
+                raise HTTPException(status_code=400, detail="Error al leer JSON body")
+        
+        # Si viene en form-data o url-encoded
+        elif "multipart/form-data" in content_type or "application/x-www-form-urlencoded" in content_type:
+            try:
+                form_data = await request.form()
+                
+                # Debug: mostrar qué campos recibimos
+                form_dict = dict(form_data)
+                logger.debug(f"Form data recibido - campos: {list(form_data.keys())}")
+                logger.debug(f"Form data completo: {form_dict}")
+                
+                # Buscar el campo "query" (case-insensitive)
+                query_text = form_data.get("query")
+                if not query_text:
+                    # Intentar otros nombres posibles (case variations)
+                    for key in form_data.keys():
+                        if key.lower() == "query":
+                            query_text = form_data.get(key)
+                            logger.info(f"⚠️ Campo 'query' encontrado con diferente capitalización: '{key}'")
+                            break
+                    # Si aún no, intentar mayúsculas
+                    if not query_text:
+                        query_text = form_data.get("Query") or form_data.get("QUERY")
+                
+                metodo_usado = "FORM-DATA" if "multipart" in content_type else "URL-ENCODED"
+                
+                # Si aún no encontramos query, mostrar campos disponibles para debug
+                if not query_text:
+                    campos_recibidos = list(form_data.keys())
+                    logger.warning(f"No se encontró campo 'query' en form-data. Campos recibidos: {campos_recibidos}")
+                    
+                    # Intentar obtener cualquier campo de texto que parezca SQL como último recurso
+                    for key in form_data.keys():
+                        valor = form_data.get(key)
+                        if isinstance(valor, str) and valor.strip():
+                            valor_upper = valor.upper().strip()
+                            if valor_upper.startswith("SELECT"):
+                                query_text = valor
+                                logger.info(f"⚠️ Usando campo '{key}' como query (auto-detectado por contenido SQL)")
+                                break
+                    
+                    # Si aún no encontramos nada, dar información detallada del error
+                    if not query_text:
+                        raise HTTPException(
+                            status_code=400,
+                            detail={
+                                "error": "No se encontró el campo 'query' en el form-data",
+                                "campos_recibidos": campos_recibidos,
+                                "instrucciones": {
+                                    "paso_1": "En Postman, selecciona 'form-data' en la pestaña Body",
+                                    "paso_2": "Agrega un nuevo campo con Key = 'query' (sin comillas, minúsculas)",
+                                    "paso_3": f"En Value, escribe tu consulta SQL, ejemplo: SELECT * FROM tabla"
+                                },
+                                "ejemplo_postman": {
+                                    "key": "query",
+                                    "value": "SELECT * FROM CLNT_FACTURA_PRINCIPAL WHERE NUMERO_PEDIDO_SISTEMA='176120'"
+                                }
+                            }
+                        )
+                
+            except HTTPException:
+                # Re-lanzar excepciones HTTP (como la que acabamos de crear)
+                raise
+            except Exception as e:
+                logger.error(f"Error al leer form data: {e}", exc_info=True)
+                
+                # Intentar obtener información adicional del error
+                try:
+                    body_raw = await request.body()
+                    logger.debug(f"Body crudo recibido (primeros 500 chars): {body_raw[:500] if body_raw else None}")
+                except:
+                    pass
+                
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "error": f"Error al leer form data: {str(e)}",
+                        "content_type": content_type,
+                        "sugerencia": "Asegúrate de que el campo Key en Postman se llame exactamente 'query' (minúsculas)"
+                    }
+                )
+        
+        # Si no identificamos el tipo, intentar leer el body directamente
+        else:
+            logger.warning(f"Content-Type no reconocido: {content_type}")
+            try:
+                # Intentar leer como JSON de todas formas
+                try:
+                    body = await request.json()
+                    query_text = body.get("query")
+                    metodo_usado = "JSON (auto-detectado)"
+                except:
+                    # Si no es JSON, intentar como texto plano
+                    body_raw = await request.body()
+                    if body_raw:
+                        query_text = body_raw.decode('utf-8')
+                        metodo_usado = "TEXTO PLANO"
+            except Exception as e:
+                logger.warning(f"No se pudo leer body: {e}")
+        
+        # Validar que tenemos una consulta
+        if not query_text or (isinstance(query_text, str) and not query_text.strip()):
+            # Preparar información de debug más detallada
+            debug_info = {}
+            if "multipart/form-data" in content_type or "application/x-www-form-urlencoded" in content_type:
+                try:
+                    form_data = await request.form()
+                    debug_info = {
+                        "campos_recibidos": list(form_data.keys()) if form_data else [],
+                        "content_type": content_type
+                    }
+                except:
+                    pass
+            
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "Se requiere una consulta SQL en el campo 'query'",
+                    "ejemplo_json": {"query": "SELECT * FROM tabla"},
+                    "ejemplo_form_data": "Key: 'query', Value: 'SELECT * FROM tabla'",
+                    "ejemplo_url_encoded": "query=SELECT * FROM tabla",
+                    "debug": debug_info if debug_info else None
+                }
+            )
+        
+        # Validar consulta (solo SELECT, sin operaciones peligrosas)
+        is_valid, validation_message = validate_query(query_text)
+        if not is_valid:
+            raise HTTPException(status_code=400, detail=validation_message)
+        
+        # Log de la consulta recibida
+        logger.info("=" * 70)
+        logger.info(f"Consulta dinámica recibida a las {datetime.now().isoformat()}")
+        logger.info(f"Fuente: {source}")
+        logger.info(f"Método: {metodo_usado or 'desconocido'}")
+        logger.info(f"Consulta: {query_text}")
+        logger.info("Ejecutando consulta contra MBA3...")
+        logger.info("=" * 70)
+        
+        # Obtener cliente MBA3
+        client = get_mba3_client()
+        
+        # Ejecutar consulta contra MBA3
+        try:
+            result = client.execute_query(query_text, require_jwt=True)
+            
+            if result is None:
+                logger.error("La consulta no retornó resultados (resultado None)")
+                raise HTTPException(
+                    status_code=500,
+                    detail="La consulta no retornó resultados. Verifica la consulta SQL y la conexión con MBA3."
+                )
+            
+            # Log de éxito
+            logger.info("=" * 70)
+            logger.info("✅ Consulta ejecutada exitosamente contra MBA3")
+            logger.info(f"Resultado tipo: {type(result)}")
+            if isinstance(result, list):
+                logger.info(f"Total de registros: {len(result)}")
+            elif isinstance(result, dict):
+                logger.info(f"Campos en resultado: {list(result.keys())[:5]}...")
+            logger.info("=" * 70)
+            
+            # Retornar resultado JSON de MBA3 directamente
+            return JSONResponse(
+                status_code=200,
+                content=result,
+                headers={
+                    "X-Query": query_text[:100],  # Primeros 100 caracteres de la query
+                    "X-Source": source
+                }
+            )
+            
+        except HTTPException:
+            # Re-lanzar excepciones HTTP
+            raise
+        except Exception as e:
+            logger.error(f"Error al ejecutar consulta contra MBA3: {e}", exc_info=True)
+            raise HTTPException(
+                status_code=500,
+                detail=f"Error al ejecutar consulta contra MBA3: {str(e)}"
+            )
+        
+    except HTTPException:
+        # Re-lanzar excepciones HTTP (validaciones, etc.)
+        raise
+    except Exception as e:
+        logger.error(f"Error inesperado en /consulta: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error interno del servidor: {str(e)}"
+        )
 
 
 if __name__ == "__main__":
