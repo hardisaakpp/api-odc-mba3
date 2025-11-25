@@ -202,3 +202,6 @@ from database import save_mba3_data_to_sql_server  # ✅ Funciona
 
 **Nota**: Esta refactorización mantiene 100% de compatibilidad con el código existente. No se requiere ningún cambio en los archivos que usan `database`.
 
+
+
+

@@ -12,12 +12,22 @@ mba3-consultas/
 ├─ .env                 # archivo local con credenciales (NO subir a git)
 ├─ requirements.txt
 ├─ ultima_consulta.json # archivo generado por el API (última consulta recibida)
+├─ resultado_api.json   # resultado de consultas a MBA3
 ├─ src/
 │  ├─ main.py              # Script principal para obtener JWT mediante LOGIN
 │  ├─ mba3_client.py       # Cliente para realizar LOGIN y obtener JWT
 │  ├─ mba3_query_client.py # Cliente para ejecutar consultas SQL
 │  ├─ api_server.py        # Servidor FastAPI para recibir consultas
-│  └─ models.py            # Modelos Pydantic para la API
+│  ├─ models.py            # Modelos Pydantic para la API
+│  ├─ config.py            # Configuración y variables de entorno
+│  ├─ database/            # Módulo de persistencia en SQL Server
+│  │  ├─ connection.py     # Gestión de conexiones SQL Server
+│  │  ├─ services/         # Servicios de negocio
+│  │  ├─ repositories/     # Repositorios de datos
+│  │  └─ mappers/          # Mapeo de datos MBA3 → SQL Server
+│  ├─ endpoints.py         # Endpoints de la API
+│  ├─ services/            # Servicios de la aplicación
+│  └─ utils.py             # Utilidades y validaciones
 └─ README.md
 ```
 
@@ -34,13 +44,25 @@ mba3-consultas/
    pip install -r requirements.txt
    ```
 4. Configurar variables de entorno:
-   - Crear archivo `.env` con las siguientes variables:
-     ```
-     MBA3_BASE_URL=https://tu-servidor.mba3.com
+   - Crear archivo `.env` en la raíz del proyecto con las siguientes variables:
+     ```env
+     # Configuración MBA3
+     MBA3_BASE_URL=http://192.168.2.159:8081
      MBA3_CODIGO=tu_codigo_servicio
      MBA3_PWD=tu_contraseña_servicio
+     
+     # Configuración SQL Server
+     SQL_SERVER_DRIVER={ODBC Driver 17 for SQL Server}
+     SQL_SERVER_SERVER=localhost
+     SQL_SERVER_DATABASE=tu_base_de_datos
+     SQL_SERVER_UID=tu_usuario
+     SQL_SERVER_PWD=tu_contraseña
+     
+     # Habilitar guardado en SQL Server
+     ENABLE_SQL_SERVER_STORAGE=true
      ```
    - **IMPORTANTE**: No subir el archivo `.env` a git
+   - Para más detalles sobre configuración, ver `CONFIGURACION_ENV.md`
 
 ## Uso
 
@@ -218,9 +240,152 @@ curl -X POST "http://localhost:8000/query" \
 - Múltiples statements separados por punto y coma
 - Excede longitud máxima (5000 caracteres)
 
-#### 3. POST `/query/forward`
+#### 3. GET `/facturas` ⭐ **Recomendado para Frontend**
 
-Endpoint placeholder para reenvío de consultas a MBA3 (implementación futura).
+Endpoint principal diseñado para uso en producción desde el frontend. **No requiere que el usuario ingrese SQL** - la query está integrada en el backend.
+
+**Características:**
+- ✅ Query integrada en el backend (no requiere SQL del frontend)
+- ✅ Ejecuta consultas contra MBA3 automáticamente
+- ✅ Guarda automáticamente resultados en SQL Server
+- ✅ Filtros configurables mediante query parameters
+- ✅ Retorna JSON con los datos de MBA3 y metadata
+
+**Query integrada (valores por defecto):**
+```sql
+SELECT CODIGO_FACTURA, ANULADA, NUMERO_PEDIDO_SISTEMA, NUMERO_ORDEN, 
+       NUMERO_FACTURA, CODIGO_DESPACHO, EMPRESA, CODIGO_CLIENTE, 
+       FECHA_FACTURA, TIPO_DOCUMENTO, ObjDatosFactura, ORDEN_COMPRA, 
+       ORDEN_COMPRA_CLIENTE, Remision_Facturada, NumIDFacturaRelacionada, 
+       CONFIRMADO, CODIGO_BODEGA
+FROM CLNT_FACTURA_PRINCIPAL
+WHERE ANULADA='false' 
+  AND CONFIRMADO='true' 
+  AND Remision_Facturada='false' 
+  AND ObjDatosFactura IS NOT NULL
+```
+
+**Parámetros de filtrado (query parameters):**
+
+| Parámetro | Tipo | Default | Descripción |
+|-----------|------|---------|-------------|
+| `anulada` | boolean | `false` | `false` = no anuladas, `true` = anuladas |
+| `confirmado` | boolean | `true` | `true` = confirmadas, `false` = no confirmadas |
+| `remision_facturada` | boolean | `false` | `false` = sin remisión, `true` = con remisión |
+| `include_obj_datos` | boolean | `true` | Si `true`, solo incluye facturas con ObjDatosFactura |
+| `save_to_db` | boolean | `true` | Si `true`, guarda los resultados en SQL Server |
+
+**Ejemplos de uso:**
+
+##### Uso básico (valores por defecto)
+```bash
+curl "http://localhost:8000/facturas"
+```
+
+##### Con filtros personalizados
+```bash
+curl "http://localhost:8000/facturas?anulada=false&confirmado=true&remision_facturada=false"
+```
+
+##### Desde JavaScript (fetch)
+```javascript
+fetch('http://localhost:8000/facturas?anulada=false&confirmado=true')
+  .then(response => response.json())
+  .then(data => {
+    console.log('Facturas:', data.data);
+    console.log('Total:', data.metadata.count);
+  });
+```
+
+**Respuesta exitosa (200 OK):**
+```json
+{
+  "status": "success",
+  "data": [
+    {
+      "CODIGO_FACTURA": "FE-1002000124372-TRAYO",
+      "NUMERO_FACTURA": 1002000124372,
+      "EMPRESA": "TRAYO",
+      "CODIGO_CLIENTE": "CLI0513",
+      "FECHA_FACTURA": "2025-11-20",
+      "ObjDatosFactura": {
+        "GrabarLineasProd": [...]
+      },
+      ...
+    }
+  ],
+  "metadata": {
+    "count": 2,
+    "filters": {
+      "anulada": false,
+      "confirmado": true,
+      "remision_facturada": false,
+      "include_obj_datos": true
+    },
+    "save_status": {
+      "status": "success",
+      "facturas_guardadas": 2,
+      "total_detalles": 5
+    }
+  }
+}
+```
+
+**Headers de respuesta:**
+- `X-Count`: Número total de facturas retornadas
+- `X-Saved-To-DB`: Estado del guardado en SQL Server
+- `X-DB-Facturas`: Cantidad de facturas guardadas/actualizadas
+
+**Nota:** Este endpoint es el recomendado para uso en producción, ya que no requiere que el frontend envíe consultas SQL. La query está integrada y segura en el backend.
+
+#### 4. POST `/consulta`
+
+Endpoint para ejecutar consultas SQL dinámicas contra MBA3 y guardar resultados en SQL Server.
+
+**⚠️ Nota:** Este endpoint requiere enviar SQL desde el frontend. Para uso en producción, se recomienda usar el endpoint `/facturas` en su lugar.
+
+**Características:**
+- ✅ Ejecuta consultas SQL contra MBA3
+- ✅ Valida que solo sean consultas SELECT
+- ✅ Guarda automáticamente resultados en SQL Server
+- ✅ Retorna JSON con los datos de MBA3
+
+**Acepta múltiples formatos:**
+
+##### JSON (Content-Type: application/json)
+
+```bash
+curl -X POST "http://localhost:8000/consulta" \
+  -H "Content-Type: application/json" \
+  -d '{"query":"SELECT * FROM CLNT_FACTURA_PRINCIPAL WHERE NUMERO_PEDIDO_SISTEMA='\''176120'\''"}'
+```
+
+##### Form-data
+
+```bash
+curl -X POST "http://localhost:8000/consulta" \
+  -F "query=SELECT * FROM CLNT_FACTURA_PRINCIPAL WHERE NUMERO_PEDIDO_SISTEMA='176120'"
+```
+
+**Respuesta exitosa (200 OK):**
+- Retorna el JSON completo de MBA3
+- Headers incluyen: `X-Saved-To-DB` (status del guardado), `X-DB-Facturas` (cantidad guardada)
+
+**Ejemplo con Postman:**
+- **Método:** POST
+- **URL:** `http://localhost:8000/consulta`
+- **Body:** raw JSON
+  ```json
+  {
+    "query": "SELECT CODIGO_FACTURA, NUMERO_PEDIDO_SISTEMA, EMPRESA, CODIGO_CLIENTE, FECHA_FACTURA, ObjDatosFactura FROM CLNT_FACTURA_PRINCIPAL WHERE NUMERO_PEDIDO_SISTEMA='176120'"
+  }
+  ```
+
+**Nota:** Los datos se guardan automáticamente en SQL Server si está configurado. Ver sección de **Integración con SQL Server** para más detalles.
+
+#### 5. POST `/query/forward`
+
+Endpoint placeholder para reenvío de consultas a MBA3 (deprecated, usar `/consulta` en su lugar).
 
 **Respuesta (501 Not Implemented):**
 ```json
@@ -326,15 +491,130 @@ Cuando se implemente el endpoint `/query/forward`, la API de MBA3 devuelve datos
 
 Los modelos Pydantic para este formato están disponibles en `src/models.py` (`FacturaMBA3`, `ObjDatosFactura`, `LineaFactura`) para su uso futuro en el endpoint `/query/forward`.
 
+---
+
+## Integración con SQL Server
+
+El proyecto incluye integración completa con SQL Server para almacenar automáticamente los datos obtenidos de MBA3.
+
+### Características
+
+- ✅ **Guardado automático**: Los resultados de consultas a MBA3 se guardan automáticamente en SQL Server
+- ✅ **Mapeo de datos**: Transformación automática de JSON de MBA3 a estructura de tablas SQL Server
+- ✅ **Manejo de errores**: Continúa procesando aunque falle una factura
+- ✅ **Logging detallado**: Logs completos de operaciones de guardado
+
+### Tablas SQL Server
+
+El sistema guarda datos en las siguientes tablas:
+
+#### `despacho_cabecera`
+Almacena información de cabecera de las facturas/despachos:
+- `despacho_id` (PK, UUID)
+- `codigo_factura`, `numero_factura`, `empresa`, `codigo_cliente`
+- `fecha_factura`, `fecha_despacho`, `tipo_documento`
+- `numero_pedido_sistema`, `numero_orden`
+- `anulada`, `remision_facturada`, `codigo_despacho`, `codigo_bodega`
+- Y más campos...
+
+#### `despacho_detalle`
+Almacena las líneas de detalle de cada factura/despacho:
+- `detalle_id` (PK, UUID)
+- `despacho_id` (FK a `despacho_cabecera`)
+- `sku`, `nombre_producto`, `cantidad`, `precio_unitario`
+- `total_linea`, `descuento`, `impuesto`, `reg_num`
+- `tipo_linea` (identifica el tipo: GrabarLineasProd, CtrlEliminados1-8, etc.)
+
+### Configuración
+
+1. **Configurar variables de entorno en `.env`:**
+   ```env
+   SQL_SERVER_DRIVER={ODBC Driver 17 for SQL Server}
+   SQL_SERVER_SERVER=localhost
+   SQL_SERVER_DATABASE=tu_base_de_datos
+   SQL_SERVER_UID=tu_usuario
+   SQL_SERVER_PWD=tu_contraseña
+   
+   # O para autenticación Windows (dejar vacíos UID y PWD):
+   # SQL_SERVER_UID=
+   # SQL_SERVER_PWD=
+   
+   ENABLE_SQL_SERVER_STORAGE=true
+   ```
+
+2. **Verificar driver ODBC instalado:**
+   ```bash
+   # En PowerShell o CMD:
+   odbcinst -q -d
+   ```
+   Debe mostrar `ODBC Driver 17 for SQL Server` o similar.
+
+3. **Crear tablas en SQL Server:**
+   - Ejecutar el script SQL proporcionado para crear las tablas necesarias
+   - Ver estructura de tablas en la sección anterior
+
+### Uso
+
+Una vez configurado, el guardado es automático:
+
+1. **Hacer consulta desde Postman:**
+   ```
+   POST http://localhost:8000/consulta
+   Body: {"query": "SELECT * FROM CLNT_FACTURA_PRINCIPAL WHERE ..."}
+   ```
+
+2. **El sistema automáticamente:**
+   - Ejecuta la consulta contra MBA3
+   - Recibe el JSON con los datos
+   - Guarda cada factura en `despacho_cabecera`
+   - Guarda cada línea en `despacho_detalle`
+   - Retorna el JSON original a Postman
+
+3. **Ver logs:**
+   - Los logs muestran el proceso de guardado
+   - Indican cuántas facturas y detalles se guardaron
+   - Muestran errores si los hay
+
+### Mapeo de Datos
+
+El sistema mapea automáticamente los datos de MBA3 a SQL Server:
+
+| MBA3 (JSON) | SQL Server |
+|------------|-----------|
+| `CODIGO_FACTURA` | `despacho_cabecera.codigo_factura` |
+| `EMPRESA` | `despacho_cabecera.empresa` |
+| `CODIGO_CLIENTE` | `despacho_cabecera.codigo_cliente` |
+| `CODIGO_BODEGA` | `despacho_cabecera.codigo_bodega` |
+| `ObjDatosFactura.GrabarLineasProd[]` | `despacho_detalle` (con `tipo_linea='GrabarLineasProd'`) |
+| `ObjDatosFactura.CtrlEliminados1[]` | `despacho_detalle` (con `tipo_linea='CtrlEliminados1'`) |
+| Y más...
+
+### Deshabilitar Guardado
+
+Para deshabilitar el guardado automático (útil para pruebas):
+
+```env
+ENABLE_SQL_SERVER_STORAGE=false
+```
+
+### Diagnóstico
+
+Si hay problemas de conexión, ejecutar:
+
+```bash
+python src/database/test_connection.py
+```
+
+Este script diagnostica problemas de configuración y conexión.
+
 ### Próximas etapas
 
-- 🔄 Implementar endpoint `/query/forward` para ejecutar consultas contra MBA3 usando `MBA3APIClient`
-  - Utilizar los modelos Pydantic (`FacturaMBA3`) para validar las respuestas
-  - Devolver datos en el mismo formato que MBA3 o transformarlos según necesidades
+- ✅ Integración con SQL Server completada
+- ✅ Endpoint `/consulta` para ejecutar consultas contra MBA3
 - 🔐 Agregar autenticación (JWT, API keys, etc.)
-- 💾 Almacenar consultas en base de datos (SQL Server)
 - 📊 Dashboard de consultas ejecutadas
 - 🔍 Historial de consultas
+- 🔄 Implementar upsert (actualizar si existe, insertar si no)
 
 ---
 
@@ -349,5 +629,14 @@ Los modelos Pydantic para este formato están disponibles en `src/models.py` (`F
 ### Componentes del API
 
 - `src/api_server.py`: Servidor FastAPI con endpoints para recibir consultas
-- `src/models.py`: Modelos Pydantic para validación de datos (QueryRequest, QueryResponse)
+- `src/endpoints.py`: Definición de todos los endpoints de la API
+- `src/models.py`: Modelos Pydantic para validación de datos (QueryRequest, QueryResponse, FacturaMBA3)
+- `src/config.py`: Configuración y carga de variables de entorno desde `.env`
+- `src/database/`: Módulo completo de persistencia en SQL Server
+  - `connection.py`: Gestión de conexiones a SQL Server
+  - `services/factura_service.py`: Servicio para guardar facturas de MBA3
+  - `repositories/despacho_repository.py`: Repositorio para operaciones de datos
+  - `mappers/factura_mapper.py`: Mapeo de datos MBA3 → SQL Server
+- `src/services/`: Servicios de la aplicación (mba3_service, query_service)
+- `src/utils.py`: Utilidades y funciones de validación de consultas SQL
 

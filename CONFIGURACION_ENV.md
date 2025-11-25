@@ -172,3 +172,4 @@ Después de configurar el `.env`, puedes verificar que todo funcione:
 - Verifica que el servidor MBA3 esté accesible
 - Verifica la URL base (`MBA3_BASE_URL`)
 
+

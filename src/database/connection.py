@@ -56,3 +56,6 @@ def get_db_connection() -> pyodbc.Connection:
         logger.error(f"❌ Error al conectar a SQL Server: {e}")
         raise
 
+
+
+

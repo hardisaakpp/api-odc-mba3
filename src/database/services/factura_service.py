@@ -49,6 +49,7 @@ def save_mba3_factura(
         "status": "success",
         "despacho_id": None,
         "cabecera_insertada": False,
+        "cabecera_actualizada": False,
         "detalles_insertados": 0,
         "errors": []
     }
@@ -56,24 +57,38 @@ def save_mba3_factura(
     try:
         codigo_factura = factura.get("CODIGO_FACTURA")
         
-        # Verificar si ya existe (para upsert)
-        if upsert and codigo_factura:
-            existing_id = repository.find_by_codigo_factura(codigo_factura)
-            if existing_id:
-                result["despacho_id"] = existing_id
-                logger.info(f"⚠️ Factura ya existe: {codigo_factura} (despacho_id: {existing_id})")
-                result["status"] = "exists"
-                return result
-        
         # Transformar factura a formato SQL Server
         datos_cabecera = FacturaMapper.to_despacho_cabecera(factura)
         
-        # Insertar cabecera
-        despacho_id = repository.insert_cabecera(datos_cabecera)
-        result["despacho_id"] = despacho_id
-        result["cabecera_insertada"] = True
+        # Verificar si ya existe (para upsert)
+        existing_id = None
+        if upsert and codigo_factura:
+            existing_id = repository.find_by_codigo_factura(codigo_factura)
         
-        # Procesar detalles desde ObjDatosFactura
+        if existing_id:
+            # ACTUALIZAR factura existente (UPSERT)
+            logger.info(f"🔄 Factura ya existe: {codigo_factura} (despacho_id: {existing_id}) - Actualizando...")
+            
+            # Actualizar cabecera
+            repository.update_cabecera(existing_id, datos_cabecera)
+            result["despacho_id"] = existing_id
+            result["cabecera_insertada"] = False  # No se insertó, se actualizó
+            result["cabecera_actualizada"] = True
+            
+            # Eliminar detalles antiguos
+            detalles_eliminados = repository.delete_detalles(existing_id)
+            logger.debug(f"   → {detalles_eliminados} detalles antiguos eliminados")
+            
+            # Insertar detalles nuevos
+            despacho_id = existing_id
+        else:
+            # INSERTAR nueva factura
+            despacho_id = repository.insert_cabecera(datos_cabecera)
+            result["despacho_id"] = despacho_id
+            result["cabecera_insertada"] = True
+            result["cabecera_actualizada"] = False
+        
+        # Procesar detalles desde ObjDatosFactura (tanto para INSERT como UPDATE)
         obj_datos = factura.get("ObjDatosFactura")
         if obj_datos:
             for tipo_linea in TIPOS_LINEAS:
@@ -95,8 +110,9 @@ def save_mba3_factura(
                         logger.error(f"❌ {error_msg}")
                         result["errors"].append(error_msg)
         
+        accion = "actualizada" if result.get("cabecera_actualizada") else "guardada"
         logger.info(
-            f"✅ Factura guardada: {codigo_factura} "
+            f"✅ Factura {accion}: {codigo_factura} "
             f"(despacho_id: {despacho_id}, detalles: {result['detalles_insertados']})"
         )
         
@@ -138,7 +154,8 @@ def save_mba3_data_to_sql_server(
         "status": "success",
         "total_facturas": 0,
         "facturas_guardadas": 0,
-        "facturas_existentes": 0,
+        "facturas_actualizadas": 0,
+        "facturas_existentes": 0,  # Deprecated: usar facturas_actualizadas
         "facturas_error": 0,
         "total_detalles": 0,
         "errors": []
@@ -147,8 +164,21 @@ def save_mba3_data_to_sql_server(
     conn = None
     try:
         # Conectar a SQL Server
-        conn = get_db_connection()
-        repository = DespachoRepository(conn)
+        try:
+            conn = get_db_connection()
+            repository = DespachoRepository(conn)
+        except Exception as conn_error:
+            logger.error(f"❌ Error al conectar a SQL Server: {conn_error}")
+            return {
+                "status": "error",
+                "message": f"Error de conexión a SQL Server: {str(conn_error)}",
+                "total_facturas": 0,
+                "facturas_guardadas": 0,
+                "facturas_actualizadas": 0,
+                "facturas_error": 0,
+                "total_detalles": 0,
+                "errors": [f"Error de conexión: {str(conn_error)}"]
+            }
         
         # Procesar según el tipo de resultado
         facturas = []
@@ -175,9 +205,13 @@ def save_mba3_data_to_sql_server(
                 result = save_mba3_factura(repository, factura, upsert=upsert)
                 
                 if result["status"] == "success":
-                    stats["facturas_guardadas"] += 1
+                    if result.get("cabecera_actualizada"):
+                        stats["facturas_actualizadas"] += 1
+                    else:
+                        stats["facturas_guardadas"] += 1
                     stats["total_detalles"] += result["detalles_insertados"]
                 elif result["status"] == "exists":
+                    # Este caso ya no debería ocurrir con upsert=True, pero lo mantenemos por compatibilidad
                     stats["facturas_existentes"] += 1
                 else:
                     stats["facturas_error"] += 1
@@ -206,8 +240,8 @@ def save_mba3_data_to_sql_server(
         logger.info("=" * 70)
         logger.info(f"✅ Proceso completado:")
         logger.info(f"   Total facturas: {stats['total_facturas']}")
-        logger.info(f"   Guardadas: {stats['facturas_guardadas']}")
-        logger.info(f"   Existentes: {stats['facturas_existentes']}")
+        logger.info(f"   Guardadas (nuevas): {stats['facturas_guardadas']}")
+        logger.info(f"   Actualizadas: {stats['facturas_actualizadas']}")
         logger.info(f"   Errores: {stats['facturas_error']}")
         logger.info(f"   Total detalles: {stats['total_detalles']}")
         logger.info("=" * 70)
@@ -226,4 +260,6 @@ def save_mba3_data_to_sql_server(
                 pass
     
     return stats
+
+
 

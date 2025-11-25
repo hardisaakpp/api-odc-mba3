@@ -10,8 +10,12 @@ Según la documentación, se requiere primero hacer LOGIN para obtener un JWT (s
 import requests
 from requests.auth import HTTPDigestAuth
 import json
+import logging
 from typing import Dict, Any, Optional
 from mba3_client import MBA3Client
+from exceptions import MBA3QueryError
+
+logger = logging.getLogger(__name__)
 
 
 class MBA3APIClient:
@@ -50,16 +54,15 @@ class MBA3APIClient:
             True si el login fue exitoso, False en caso contrario
         """
         try:
-            print("Intentando hacer LOGIN usando el método de mba3_client...")
+            logger.info("Intentando hacer LOGIN usando el método de mba3_client...")
             token = self.login_client.login(self.service_code, self.service_password)
             if token:
                 self.jwt_token = token
-                print(f"[OK] Login exitoso. JWT obtenido.")
-                print(f"  JWT (primeros 50 caracteres): {self.jwt_token[:50]}...")
+                logger.info(f"Login exitoso. JWT obtenido (primeros 50 caracteres): {self.jwt_token[:50]}...")
                 return True
             return False
         except Exception as e:
-            print(f"[ERROR] No se pudo hacer login: {e}")
+            logger.error(f"No se pudo hacer login: {e}")
             return False
     
     def execute_query(self, query: str, require_jwt: bool = True) -> Optional[Dict[Any, Any]]:
@@ -77,7 +80,7 @@ class MBA3APIClient:
         # Si require_jwt es True y no hay JWT, intentar hacer login primero
         if require_jwt and not self.jwt_token:
             if not self.login():
-                print("[INFO] No se pudo obtener JWT. Intentando consulta directa sin JWT...")
+                logger.warning("No se pudo obtener JWT. Intentando consulta directa sin JWT...")
                 # Intentar sin JWT (el Digest Auth podría ser suficiente)
                 return self.execute_query(query, require_jwt=False)
         
@@ -93,50 +96,72 @@ class MBA3APIClient:
         
         if query:
             query_upper = query.upper().strip()
+            query_original = query.strip()
+            
             if "SELECT" in query_upper and "FROM" in query_upper:
-                # Parsear SELECT
-                select_part = query_upper.split("SELECT")[1].split("FROM")[0].strip()
+                # Parsear SELECT - usar original para preservar mayúsculas/minúsculas
+                select_idx = query_upper.find("SELECT")
+                from_idx = query_upper.find("FROM")
+                select_part = query_original[select_idx + 6:from_idx].strip()
                 select_fields = select_part if select_part else "*"
                 
-                # Parsear FROM
-                from_part = query_upper.split("FROM")[1]
-                if "WHERE" in from_part:
-                    from_table = from_part.split("WHERE")[0].strip()
-                elif "ORDER BY" in from_part:
-                    from_table = from_part.split("ORDER BY")[0].strip()
-                elif "LIMIT" in from_part:
-                    from_table = from_part.split("LIMIT")[0].strip()
-                else:
-                    from_table = from_part.strip()
+                # Parsear FROM - usar original para preservar mayúsculas/minúsculas
+                from_start = from_idx + 4
+                from_rest_upper = query_upper[from_start:]
+                from_rest_original = query_original[from_start:]
                 
-                # Parsear WHERE
-                if "WHERE" in query_upper:
-                    where_part = query_upper.split("WHERE")[1]
-                    if "ORDER BY" in where_part:
-                        where_clause = where_part.split("ORDER BY")[0].strip()
-                    elif "LIMIT" in where_part:
-                        where_clause = where_part.split("LIMIT")[0].strip()
-                    else:
-                        where_clause = where_part.strip()
+                # Encontrar posiciones de WHERE, ORDER BY, LIMIT en la parte después de FROM
+                where_pos = from_rest_upper.find(" WHERE ")
+                order_by_pos = from_rest_upper.find(" ORDER BY ")
+                limit_pos = from_rest_upper.find(" LIMIT ")
                 
-                # Parsear ORDER BY
-                if "ORDER BY" in query_upper:
-                    order_part = query_upper.split("ORDER BY")[1]
-                    if "LIMIT" in order_part:
-                        order_by_clause = order_part.split("LIMIT")[0].strip()
-                    else:
-                        order_by_clause = order_part.strip()
+                # Determinar fin de la tabla
+                table_end = len(from_rest_original)
+                if where_pos >= 0:
+                    table_end = where_pos
+                elif order_by_pos >= 0:
+                    table_end = order_by_pos
+                elif limit_pos >= 0:
+                    table_end = limit_pos
                 
-                # Parsear LIMIT
-                if "LIMIT" in query_upper:
-                    limit_part = query_upper.split("LIMIT")[1].strip().split()[0]
-                    limit_value = limit_part
+                from_table = from_rest_original[:table_end].strip()
+                
+                # Parsear WHERE - usar original para preservar valores exactos
+                if where_pos >= 0:
+                    where_start = where_pos + 7  # " WHERE " tiene 7 caracteres
+                    where_rest_original = from_rest_original[where_start:]
+                    
+                    # Encontrar fin del WHERE clause
+                    where_end = len(where_rest_original)
+                    if order_by_pos >= 0 and order_by_pos > where_pos:
+                        where_end = order_by_pos - where_pos - 7
+                    elif limit_pos >= 0 and limit_pos > where_pos:
+                        where_end = limit_pos - where_pos - 7
+                    
+                    where_clause = where_rest_original[:where_end].strip()
+                
+                # Parsear ORDER BY - usar original
+                if order_by_pos >= 0:
+                    order_by_start = order_by_pos + 10  # " ORDER BY " tiene 10 caracteres
+                    order_by_rest_original = from_rest_original[order_by_start:]
+                    
+                    order_by_end = len(order_by_rest_original)
+                    if limit_pos >= 0 and limit_pos > order_by_pos:
+                        order_by_end = limit_pos - order_by_pos - 10
+                    
+                    order_by_clause = order_by_rest_original[:order_by_end].strip()
+                
+                # Parsear LIMIT - usar original
+                if limit_pos >= 0:
+                    limit_start = limit_pos + 7  # " LIMIT " tiene 7 caracteres
+                    limit_rest_original = from_rest_original[limit_start:]
+                    limit_value = limit_rest_original.strip().split()[0] if limit_rest_original.strip() else None
         
         # Validar que tenemos al menos la tabla
         if not from_table:
-            print("[ERROR] No se pudo determinar la tabla desde la consulta SQL.")
-            print("  Usa el formato: select * from clnt_factura_principal")
-            return None
+            error_msg = "No se pudo determinar la tabla desde la consulta SQL. Usa el formato: select * from clnt_factura_principal"
+            logger.error(error_msg)
+            raise MBA3QueryError(error_msg)
         
         # Preparar form-data según el formato esperado por el API
         # Según el código JavaScript: data.append("select", "..."), data.append("from", "..."), etc.
@@ -152,6 +177,11 @@ class MBA3APIClient:
             form_data['orderBy'] = order_by_clause
         if limit_value:
             form_data['limit'] = limit_value
+        
+        # Log detallado de lo que se está enviando
+        logger.debug(f"URL: {url}")
+        logger.debug(f"Form-data a enviar: {form_data}")
+        logger.info(f"Ejecutando consulta - Tabla: {from_table}, WHERE: {where_clause or 'N/A'}")
         
         # Preparar headers con el JWT
         # Según el código JavaScript: xhr.setRequestHeader("Authorization", localStorage.jwt);
@@ -171,17 +201,16 @@ class MBA3APIClient:
             if response.status_code == 200:
                 try:
                     result = response.json()
-                    print(f"[OK] Consulta exitosa!")
+                    logger.info("Consulta exitosa!")
                     return result
                 except json.JSONDecodeError:
-                    print(f"[WARNING] La respuesta no es JSON válido.")
-                    print(f"Respuesta recibida: {response.text[:500]}")
+                    logger.warning(f"La respuesta no es JSON válido. Respuesta recibida: {response.text[:500]}")
                     return {'raw_response': response.text}
             
             elif response.status_code == 401:
                 # Token inválido o expirado, intentar login nuevamente
                 if self.jwt_token:
-                    print("[INFO] Token inválido o expirado. Intentando login nuevamente...")
+                    logger.info("Token inválido o expirado. Intentando login nuevamente...")
                     if self.login():
                         headers['Authorization'] = self.jwt_token
                         # Reintentar la consulta
@@ -197,22 +226,38 @@ class MBA3APIClient:
                             except json.JSONDecodeError:
                                 return {'raw_response': response.text}
                 
-                print(f"[ERROR] Error 401 - No autorizado. Verifica tus credenciales.")
-                return None
+                error_msg = f"Error 401 - No autorizado. Verifica tus credenciales. Respuesta: {response.text[:500]}"
+                logger.error(error_msg)
+                raise MBA3QueryError(error_msg)
             else:
-                print(f"[ERROR] Error HTTP {response.status_code}")
-                print(f"Respuesta del servidor: {response.text[:500]}")
-                return None
+                # Capturar respuesta completa de MBA3 para diagnóstico
+                error_detail = response.text[:1000] if response.text else "Sin respuesta del servidor"
+                error_msg = (
+                    f"Error HTTP {response.status_code} al ejecutar consulta en MBA3.\n"
+                    f"Consulta: {query}\n"
+                    f"Respuesta del servidor: {error_detail}"
+                )
+                logger.error(f"Error HTTP {response.status_code}")
+                logger.error(f"Consulta enviada: {query}")
+                logger.error(f"Form-data enviado: {form_data}")
+                logger.error(f"Respuesta del servidor: {error_detail}")
+                raise MBA3QueryError(error_msg)
                 
+        except MBA3QueryError:
+            # Re-lanzar excepciones de MBA3QueryError sin modificar
+            raise
         except requests.exceptions.HTTPError as e:
-            print(f"[ERROR] Error HTTP: {e}")
+            error_detail = ""
             if hasattr(e, 'response') and e.response:
-                print(f"Respuesta: {e.response.text[:500]}")
-            return None
+                error_detail = e.response.text[:1000] if e.response.text else "Sin respuesta"
+            error_msg = f"Error HTTP al comunicarse con MBA3: {str(e)}. Respuesta: {error_detail}"
+            logger.error(error_msg, exc_info=True)
+            raise MBA3QueryError(error_msg)
             
         except requests.exceptions.RequestException as e:
-            print(f"[ERROR] Error en la petición: {e}")
-            return None
+            error_msg = f"Error en la petición a MBA3: {str(e)}"
+            logger.error(error_msg, exc_info=True)
+            raise MBA3QueryError(error_msg)
 
 
 def main():
