@@ -3,12 +3,13 @@ Servicio para guardar facturas de MBA3 en SQL Server.
 """
 
 import logging
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 
 from config import ENABLE_SQL_SERVER_STORAGE
 from ..connection import get_db_connection
 from ..repositories.despacho_repository import DespachoRepository
 from ..mappers.factura_mapper import FacturaMapper
+from ..services.sap_service import SAPService
 
 logger = logging.getLogger(__name__)
 
@@ -91,13 +92,34 @@ def save_mba3_factura(
         # Procesar detalles desde ObjDatosFactura (tanto para INSERT como UPDATE)
         obj_datos = factura.get("ObjDatosFactura")
         if obj_datos:
+            # Inicializar servicio SAP para consultar información de productos
+            sap_service = SAPService()
+            
             for tipo_linea in TIPOS_LINEAS:
                 if tipo_linea in obj_datos and obj_datos[tipo_linea]:
                     try:
                         # Transformar líneas a formato SQL Server
                         detalles = []
                         for linea in obj_datos[tipo_linea]:
-                            detalle = FacturaMapper.to_despacho_detalle(linea, tipo_linea)
+                            codigo = linea.get("Codigo")
+                            
+                            # Consultar información SAP para este SKU
+                            sap_info = None
+                            if codigo:
+                                try:
+                                    sap_info = sap_service.get_or_fetch_producto_info(codigo)
+                                    if sap_info:
+                                        logger.debug(
+                                            f"   → SAP info para {codigo}: "
+                                            f"Pack={sap_info.get('pack_sap')}, "
+                                            f"Unidad={sap_info.get('unidad_conversion')}"
+                                        )
+                                except Exception as sap_error:
+                                    # No fallar si no se puede consultar SAP, continuar sin conversión
+                                    logger.warning(f"   ⚠️ Error al consultar SAP para {codigo}: {sap_error}")
+                            
+                            # Transformar línea con información SAP si está disponible
+                            detalle = FacturaMapper.to_despacho_detalle(linea, tipo_linea, sap_info=sap_info)
                             if detalle:
                                 detalles.append(detalle)
                         

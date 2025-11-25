@@ -13,7 +13,7 @@ mba3-consultas/
 ├─ requirements.txt
 ├─ ultima_consulta.json # archivo generado por el API (última consulta recibida)
 ├─ resultado_api.json   # resultado de consultas a MBA3
-├─ src/
+├─ src/                 # Backend (Python/FastAPI)
 │  ├─ main.py              # Script principal para obtener JWT mediante LOGIN
 │  ├─ mba3_client.py       # Cliente para realizar LOGIN y obtener JWT
 │  ├─ mba3_query_client.py # Cliente para ejecutar consultas SQL
@@ -28,6 +28,18 @@ mba3-consultas/
 │  ├─ endpoints.py         # Endpoints de la API
 │  ├─ services/            # Servicios de la aplicación
 │  └─ utils.py             # Utilidades y validaciones
+├─ frontend/            # Frontend (Vue.js/TypeScript)
+│  ├─ src/
+│  │  ├─ main.ts           # Punto de entrada
+│  │  ├─ App.vue            # Componente raíz
+│  │  ├─ router/            # Rutas (Vue Router)
+│  │  ├─ stores/            # Estado global (Pinia)
+│  │  ├─ views/             # Vistas principales
+│  │  ├─ components/        # Componentes reutilizables
+│  │  ├─ services/          # Servicios API
+│  │  └─ types/             # Tipos TypeScript
+│  ├─ package.json
+│  └─ vite.config.ts        # Configuración de Vite
 └─ README.md
 ```
 
@@ -383,7 +395,72 @@ curl -X POST "http://localhost:8000/consulta" \
 
 **Nota:** Los datos se guardan automáticamente en SQL Server si está configurado. Ver sección de **Integración con SQL Server** para más detalles.
 
-#### 5. POST `/query/forward`
+#### 5. GET `/consulta` 🔍 **Útil para pruebas desde navegador/Postman**
+
+Endpoint equivalente al POST `/consulta` pero usando método GET con query parameter. **Ideal para pruebas desde Postman o el navegador.**
+
+**Características:**
+- ✅ Mismo comportamiento que POST `/consulta`
+- ✅ Ejecuta consultas SQL contra MBA3
+- ✅ Valida que solo sean consultas SELECT
+- ✅ Guarda automáticamente resultados en SQL Server
+- ✅ Retorna JSON con los datos de MBA3
+- ✅ Útil para pruebas rápidas desde el navegador o Postman
+
+**Parámetros:**
+- `query` (requerido): Consulta SQL a ejecutar
+
+**Ejemplo con curl:**
+```bash
+curl "http://localhost:8000/consulta?query=SELECT%20CODIGO_FACTURA%2CANULADA%2CNUMERO_PEDIDO_SISTEMA%20FROM%20CLNT_FACTURA_PRINCIPAL%20WHERE%20ANULADA%3D'false'"
+```
+
+**Ejemplo con Postman:**
+- **Método:** GET
+- **URL:** `http://localhost:8000/consulta`
+- **Params (query parameters):**
+  - `query`: `SELECT CODIGO_FACTURA,ANULADA,NUMERO_PEDIDO_SISTEMA,NUMERO_ORDEN,NUMERO_FACTURA,CODIGO_DESPACHO,EMPRESA,CODIGO_CLIENTE,FECHA_FACTURA,TIPO_DOCUMENTO,ObjDatosFactura,ORDEN_COMPRA,ORDEN_COMPRA_CLIENTE,Remision_Facturada,NumIDFacturaRelacionada,CONFIRMADO,CODIGO_BODEGA FROM CLNT_FACTURA_PRINCIPAL WHERE ANULADA='false' AND CONFIRMADO='true' AND Remision_Facturada='false' AND ObjDatosFactura IS NOT NULL`
+
+**Ejemplo desde el navegador:**
+```
+http://localhost:8000/consulta?query=SELECT CODIGO_FACTURA, NUMERO_FACTURA, EMPRESA FROM CLNT_FACTURA_PRINCIPAL WHERE NUMERO_PEDIDO_SISTEMA='176120'
+```
+
+**Respuesta exitosa (200 OK):**
+- Retorna el JSON completo de MBA3 (array de facturas)
+- Headers incluyen: `X-Saved-To-DB` (status del guardado), `X-DB-Facturas` (cantidad guardada), `X-Query` (primeros 100 caracteres de la query)
+
+**Ejemplo de respuesta:**
+```json
+[
+  {
+    "CODIGO_FACTURA": "FE-1002000092292-TRAYO",
+    "NUMERO_FACTURA": 1002000092292,
+    "EMPRESA": "TRAYO",
+    "CODIGO_CLIENTE": "CLI0839",
+    "FECHA_FACTURA": "2022-12-12",
+    "NUMERO_ORDEN": 99391,
+    "ANULADA": false,
+    "CODIGO_DESPACHO": 0,
+    "CONFIRMADO": true,
+    "CODIGO_BODEGA": "BPT",
+    "TIPO_DOCUMENTO": "FACT",
+    "NUMERO_PEDIDO_SISTEMA": 128900,
+    "ORDEN_COMPRA_CLIENTE": "",
+    "ORDEN_COMPRA": "3-1109",
+    "ObjDatosFactura": {},
+    "Remision_Facturada": false,
+    "NumIDFacturaRelacionada": 0
+  }
+]
+```
+
+**Nota:** 
+- Las consultas complejas con caracteres especiales pueden requerir encoding URL
+- Para consultas muy largas, se recomienda usar POST `/consulta` en su lugar
+- Los datos se guardan automáticamente en SQL Server si está configurado
+
+#### 6. POST `/query/forward`
 
 Endpoint placeholder para reenvío de consultas a MBA3 (deprecated, usar `/consulta` en su lugar).
 
@@ -409,7 +486,25 @@ El servidor bloquea automáticamente:
 - **Método:** GET
 - **URL:** `http://localhost:8000/health`
 
-#### 2. Enviar consulta SQL
+#### 2. Ejecutar consulta SQL con GET (Recomendado para pruebas)
+- **Método:** GET
+- **URL:** `http://localhost:8000/consulta`
+- **Params (query parameters):**
+  - `query`: `SELECT CODIGO_FACTURA,ANULADA,NUMERO_PEDIDO_SISTEMA,NUMERO_ORDEN,NUMERO_FACTURA,CODIGO_DESPACHO,EMPRESA,CODIGO_CLIENTE,FECHA_FACTURA,TIPO_DOCUMENTO,ObjDatosFactura,ORDEN_COMPRA,ORDEN_COMPRA_CLIENTE,Remision_Facturada,NumIDFacturaRelacionada,CONFIRMADO,CODIGO_BODEGA FROM CLNT_FACTURA_PRINCIPAL WHERE ANULADA='false' AND CONFIRMADO='true' AND Remision_Facturada='false' AND ObjDatosFactura IS NOT NULL`
+- **Respuesta:** Array JSON con las facturas encontradas
+
+#### 3. Ejecutar consulta SQL con POST
+- **Método:** POST
+- **URL:** `http://localhost:8000/consulta`
+- **Headers:** `Content-Type: application/json`
+- **Body (raw JSON):**
+  ```json
+  {
+    "query": "SELECT CODIGO_FACTURA, NUMERO_PEDIDO_SISTEMA, EMPRESA FROM CLNT_FACTURA_PRINCIPAL WHERE NUMERO_PEDIDO_SISTEMA='176120'"
+  }
+  ```
+
+#### 4. Enviar consulta SQL (solo validación)
 - **Método:** POST
 - **URL:** `http://localhost:8000/query`
 - **Headers:** `Content-Type: application/json`
@@ -420,7 +515,7 @@ El servidor bloquea automáticamente:
   }
   ```
 
-#### 3. Enviar consulta con form-data
+#### 5. Enviar consulta con form-data
 - **Método:** POST
 - **URL:** `http://localhost:8000/query`
 - **Body:** form-data
@@ -615,6 +710,167 @@ Este script diagnostica problemas de configuración y conexión.
 - 📊 Dashboard de consultas ejecutadas
 - 🔍 Historial de consultas
 - 🔄 Implementar upsert (actualizar si existe, insertar si no)
+
+---
+
+## Frontend Vue.js
+
+El proyecto incluye un frontend moderno desarrollado con Vue.js 3, TypeScript, Pinia y Vue Router.
+
+### Características del Frontend
+
+- ✅ **Interfaz moderna y responsive** con soporte para tema claro/oscuro
+- ✅ **Vista de facturas** con filtros configurables (anulada, confirmado, remisión facturada)
+- ✅ **Vista de consulta SQL dinámica** para ejecutar consultas personalizadas
+- ✅ **Tabla interactiva** con paginación y visualización de detalles
+- ✅ **Logs detallados en consola** del navegador para debugging
+- ✅ **Integración completa** con la API del backend
+
+### Estructura del Frontend
+
+```
+frontend/
+├── src/
+│   ├── main.ts              # Punto de entrada
+│   ├── App.vue              # Componente raíz
+│   ├── router/              # Rutas (Vue Router)
+│   │   └── index.ts
+│   ├── stores/              # Estado global (Pinia)
+│   │   ├── facturas.ts      # Store de facturas
+│   │   └── theme.ts         # Store de tema (claro/oscuro)
+│   ├── views/               # Vistas principales
+│   │   ├── FacturasView.vue # Vista de facturas con filtros
+│   │   └── ConsultaView.vue # Vista de consulta SQL dinámica
+│   ├── components/          # Componentes reutilizables
+│   │   ├── FacturaTable.vue # Tabla de facturas
+│   │   ├── FacturaModal.vue # Modal de detalles
+│   │   ├── FacturaFilters.vue # Filtros de facturas
+│   │   ├── LineasList.vue   # Lista de líneas de factura
+│   │   ├── Pagination.vue   # Componente de paginación
+│   │   └── ThemeToggle.vue  # Toggle de tema
+│   ├── services/            # Servicios API
+│   │   └── api.ts           # Cliente Axios para API
+│   ├── types/               # Tipos TypeScript
+│   │   └── factura.ts       # Interfaces de facturas
+│   └── assets/              # Estilos y recursos
+│       └── main.css
+├── package.json
+├── vite.config.ts           # Configuración de Vite
+└── tsconfig.json            # Configuración de TypeScript
+```
+
+### Instalación del Frontend
+
+1. **Navegar al directorio del frontend:**
+   ```bash
+   cd frontend
+   ```
+
+2. **Instalar dependencias:**
+   ```bash
+   npm install
+   ```
+
+3. **Configurar variables de entorno:**
+   Crear archivo `.env.local` en el directorio `frontend/`:
+   ```env
+   VITE_API_URL=http://localhost:8000
+   ```
+
+4. **Iniciar servidor de desarrollo:**
+   ```bash
+   npm run dev
+   ```
+   
+   El frontend estará disponible en: `http://localhost:5173`
+
+### Uso del Frontend
+
+#### Vista de Facturas (`/facturas`)
+
+- **Filtros disponibles:**
+  - Anulada (false/true)
+  - Confirmado (true/false)
+  - Remisión facturada (false/true)
+  - Incluir ObjDatosFactura (true/false)
+  
+- **Características:**
+  - Tabla con todas las facturas
+  - Paginación configurable
+  - Modal para ver detalles completos
+  - Visualización de líneas de factura
+
+#### Vista de Consulta SQL (`/consulta`)
+
+- **Funcionalidad:**
+  - Ejecutar consultas SQL dinámicas contra MBA3
+  - Ver resultados en tabla interactiva
+  - Logs detallados en consola del navegador (F12)
+  
+- **Ejemplo de uso:**
+  1. Ir a la ruta `/consulta`
+  2. Hacer clic en "Cargar Ejemplo" para cargar una consulta de ejemplo
+  3. Hacer clic en "Ejecutar Consulta"
+  4. Abrir la consola del navegador (F12) para ver:
+     - URL completa de la petición
+     - Query SQL ejecutada
+     - Total de facturas recibidas
+     - Lista de campos disponibles
+     - Primera factura completa en JSON
+     - Array completo con todas las facturas
+
+- **Logs en consola:**
+  El frontend muestra información detallada en la consola del navegador:
+  ```
+  ======================================================================
+  🌐 GET /consulta - Ejecutando consulta SQL
+  🌐 URL: http://localhost:8000/consulta?query=...
+  🌐 Query: SELECT CODIGO_FACTURA, ...
+  ======================================================================
+  📊 RESPUESTA DE /consulta:
+     Total facturas recibidas: 1
+     Campos en primera factura: 17 campos
+     Lista de campos: ["CODIGO_FACTURA", "NUMERO_FACTURA", ...]
+  
+  📋 PRIMERA FACTURA COMPLETA:
+  {
+    "CODIGO_FACTURA": "FE-1002000092292-TRAYO",
+    ...
+  }
+  ======================================================================
+  ```
+
+### Scripts Disponibles
+
+- `npm run dev` - Inicia servidor de desarrollo
+- `npm run build` - Compila para producción
+- `npm run preview` - Previsualiza el build de producción
+- `npm run lint` - Ejecuta el linter
+
+### Configuración de Proxy
+
+El frontend está configurado con un proxy en `vite.config.ts` para redirigir peticiones `/api` al backend:
+
+```typescript
+server: {
+  proxy: {
+    '/api': {
+      target: 'http://localhost:8000',
+      changeOrigin: true,
+      rewrite: (path) => path.replace(/^\/api/, '')
+    }
+  }
+}
+```
+
+### Integración con Backend
+
+El frontend se comunica con el backend mediante:
+
+- **GET `/facturas`**: Obtiene facturas con filtros configurables
+- **GET `/consulta?query=...`**: Ejecuta consultas SQL dinámicas
+
+Ambos endpoints retornan JSON con los datos de MBA3 y se muestran en la interfaz del usuario.
 
 ---
 

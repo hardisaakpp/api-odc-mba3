@@ -10,11 +10,14 @@ Estructura:
 
 from .connection import get_db_connection
 from .services.factura_service import save_mba3_data_to_sql_server
+from .services.sap_service import SAPService
 
 __all__ = [
     "get_db_connection",
-    "save_mba3_data_to_sql_server"
+    "save_mba3_data_to_sql_server",
+    "SAPService"
 ]
+
 
 
 

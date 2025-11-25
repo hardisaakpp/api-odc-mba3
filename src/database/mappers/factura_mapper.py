@@ -140,13 +140,27 @@ class FacturaMapper:
         }
     
     @staticmethod
-    def to_despacho_detalle(linea: Dict[str, Any], tipo_linea: str) -> Optional[Dict[str, Any]]:
+    def to_despacho_detalle(
+        linea: Dict[str, Any], 
+        tipo_linea: str,
+        sap_info: Optional[Dict[str, Any]] = None
+    ) -> Optional[Dict[str, Any]]:
         """
         Transforma una línea de factura MBA3 a formato de despacho_detalle.
+        
+        Si se proporciona información SAP, calcula las conversiones automáticamente:
+        - cantidad_sap = cantidad (docenas) × unidad_conversion
+        - precio_unitario_sap = total_linea / cantidad_sap
         
         Args:
             linea: Diccionario con datos de línea de factura
             tipo_linea: Tipo de línea (GrabarLineasProd, CtrlEliminados1, etc.)
+            sap_info: Información SAP del producto (opcional):
+                {
+                    "pack_sap": "X3",
+                    "unidad_conversion": 4.0,
+                    "pack_id": "X3"
+                }
             
         Returns:
             Diccionario con datos para insertar en despacho_detalle, o None si no es válida
@@ -158,12 +172,32 @@ class FacturaMapper:
             return None
         
         total_linea = linea.get("TotalLinea") or 0
+        cantidad = linea.get("Cantidad") or 0
+        
+        # Calcular conversiones SAP si hay información disponible
+        cantidad_sap = None
+        precio_unitario_sap = None
+        unidad_sap = None
+        
+        if sap_info and cantidad > 0:
+            unidad_conversion = sap_info.get("unidad_conversion")
+            pack_sap = sap_info.get("pack_sap")
+            
+            if unidad_conversion is not None and unidad_conversion > 0:
+                # Calcular cantidad en packs: docenas × unidad_conversion = packs
+                cantidad_sap = cantidad * unidad_conversion
+                
+                # Calcular precio unitario en packs: total_linea / cantidad_sap
+                if cantidad_sap > 0:
+                    precio_unitario_sap = total_linea / cantidad_sap
+                
+                unidad_sap = pack_sap
         
         return {
             # Campos que vienen de MBA3
             "sku": codigo,
-            "cantidad": linea.get("Cantidad") or 0,
-            "precio_unitario": linea.get("PrecioUnitario") or 0,
+            "cantidad": cantidad,  # Docenas de El Rayo
+            "precio_unitario": linea.get("PrecioUnitario") or 0,  # Precio por docena
             "total_linea": total_linea,
             "descuento": linea.get("Descuento") or 0,
             "tipo_linea": tipo_linea,
@@ -175,12 +209,12 @@ class FacturaMapper:
             "producto_id": codigo,  # Por defecto igual a SKU (puede cambiarse después)
             "total_producto": total_linea,  # Por defecto igual a total_linea
             
-            # Campos que NO vienen de MBA3 (se dejan como NULL)
-            # Estos campos se pueden poblar después mediante transformaciones o mapeos
+            # Campos de conversión SAP
             "unid_detalle": None,  # Unidad de medida (no viene de MBA3)
-            "cantidad_sap": None,  # Transformación para SAP
-            "unidad_sap": None,  # Transformación para SAP
-            "sku_sap": None,  # Transformación para SAP
+            "cantidad_sap": cantidad_sap,  # Packs convertidos para Mabel
+            "unidad_sap": unidad_sap,  # Pack usado (X1, X2, X3, etc.)
+            "sku_sap": codigo,  # SKU SAP (mismo que SKU de El Rayo)
+            "precio_unitario_sap": precio_unitario_sap,  # Precio por pack
         }
 
 

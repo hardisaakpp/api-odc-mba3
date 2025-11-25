@@ -16,6 +16,9 @@ from services.query_service import QueryService
 from services.mba3_service import MBA3Service
 from helpers.request_parser import RequestParser
 from utils import get_source_from_headers
+from database.services.sap_service import SAPService
+from database.clients.sap_client import SAPClient
+from config import ENABLE_SAP_QUERIES, SAP_LINKED_SERVER
 
 logger = logging.getLogger(__name__)
 
@@ -381,6 +384,114 @@ def create_endpoints(app):
             )
     
     
+    @app.get("/consulta/predefinida")
+    async def ejecutar_consulta_predefinida(request: Request):
+        """
+        Endpoint para ejecutar una consulta SQL predefinida contra MBA3.
+        
+        Similar a /facturas, pero para una consulta específica.
+        No requiere enviar la query desde el frontend - está integrada en el backend.
+        Ideal para usar desde Swagger UI sin necesidad de ingresar la query.
+        
+        **Características:**
+        - ✅ Query integrada en el backend (no requiere SQL del frontend)
+        - ✅ Ejecuta consultas contra MBA3 automáticamente
+        - ✅ Guarda resultados en SQL Server (upsert)
+        - ✅ Logs detallados para debugging
+        
+        **Ejemplo de uso:**
+        ```
+        GET /consulta/predefinida
+        ```
+        
+        **Query predefinida:**
+        ```sql
+        SELECT CODIGO_FACTURA,ANULADA,NUMERO_PEDIDO_SISTEMA,NUMERO_ORDEN,NUMERO_FACTURA,CODIGO_DESPACHO,EMPRESA,CODIGO_CLIENTE,FECHA_FACTURA,TIPO_DOCUMENTO,ObjDatosFactura,ORDEN_COMPRA,ORDEN_COMPRA_CLIENTE,Remision_Facturada,NumIDFacturaRelacionada,CONFIRMADO,CODIGO_BODEGA FROM CLNT_FACTURA_PRINCIPAL WHERE NUMERO_PEDIDO_SISTEMA='176110' AND ANULADA='false' AND CONFIRMADO='true' AND Remision_Facturada='false' AND ObjDatosFactura IS NOT NULL
+        ```
+        
+        **Nota:** Para cambiar la query predefinida, modifica el código del endpoint.
+        Para consultas dinámicas, usa GET /consulta o POST /consulta.
+        
+        Returns:
+            JSON con el resultado de MBA3 o error si falla
+        """
+        # Query predefinida integrada en el backend
+        query_predefinida = "SELECT CODIGO_FACTURA,ANULADA,NUMERO_PEDIDO_SISTEMA,NUMERO_ORDEN,NUMERO_FACTURA,CODIGO_DESPACHO,EMPRESA,CODIGO_CLIENTE,FECHA_FACTURA,TIPO_DOCUMENTO,ObjDatosFactura,ORDEN_COMPRA,ORDEN_COMPRA_CLIENTE,Remision_Facturada,NumIDFacturaRelacionada,CONFIRMADO,CODIGO_BODEGA FROM CLNT_FACTURA_PRINCIPAL WHERE NUMERO_PEDIDO_SISTEMA='176110' AND ANULADA='false' AND CONFIRMADO='true' AND Remision_Facturada='false' AND ObjDatosFactura IS NOT NULL"
+        
+        # Determinar fuente
+        source = get_source_from_headers(request)
+        
+        # Log de la consulta predefinida
+        logger.info("=" * 70)
+        logger.info(f"Consulta predefinida ejecutada a las {datetime.now().isoformat()}")
+        logger.info(f"Fuente: {source}")
+        logger.info(f"Query predefinida: {query_predefinida}")
+        logger.info("Ejecutando consulta contra MBA3...")
+        logger.info("=" * 70)
+        
+        try:
+            # Ejecutar consulta usando el servicio
+            result = MBA3Service.execute_query(query_predefinida)
+            
+            # Log detallado de la respuesta para debugging
+            logger.info("=" * 70)
+            logger.info("📊 RESPUESTA DE MBA3:")
+            if isinstance(result, list):
+                logger.info(f"   Tipo: Lista con {len(result)} elementos")
+                if len(result) > 0:
+                    first_item = result[0]
+                    if isinstance(first_item, dict):
+                        campos = list(first_item.keys())
+                        logger.info(f"   Campos en primera factura: {campos}")
+                        logger.info(f"   Total de campos: {len(campos)}")
+                        # Mostrar algunos valores de ejemplo
+                        for campo in campos[:5]:  # Primeros 5 campos
+                            logger.info(f"   {campo}: {first_item.get(campo)}")
+                    else:
+                        logger.warning(f"   ⚠️ Primer elemento no es dict: {type(first_item)}")
+            elif isinstance(result, dict):
+                logger.info(f"   Tipo: Diccionario")
+                campos = list(result.keys())
+                logger.info(f"   Campos: {campos}")
+            else:
+                logger.warning(f"   ⚠️ Tipo inesperado: {type(result)}")
+            logger.info("=" * 70)
+            
+            # Guardar en SQL Server (si está habilitado)
+            # upsert=True: Actualiza si existe, inserta si no existe
+            save_status = MBA3Service.save_to_database(result, upsert=True)
+            
+            # Preparar headers de respuesta
+            headers = {
+                "X-Query": query_predefinida[:100],  # Primeros 100 caracteres de la query
+                "X-Source": source,
+                "X-Method": "GET",
+                "X-Predefined": "true"
+            }
+            
+            # Agregar información de guardado si existe
+            if save_status:
+                headers["X-Saved-To-DB"] = save_status.get("status", "unknown")
+                headers["X-DB-Facturas"] = str(save_status.get("facturas_guardadas", 0))
+            
+            # Retornar resultado JSON de MBA3 directamente
+            return JSONResponse(
+                status_code=200,
+                content=result,
+                headers=headers
+            )
+            
+        except Exception as e:
+            logger.error(f"❌ Error al ejecutar consulta predefinida: {e}", exc_info=True)
+            return JSONResponse(
+                status_code=500,
+                content={
+                    "status": "error",
+                    "message": f"Error al ejecutar consulta predefinida: {str(e)}"
+                }
+            )
+    
+    
     @app.post("/consulta")
     async def ejecutar_consulta(request: Request):
         """
@@ -439,3 +550,209 @@ def create_endpoints(app):
             content=result,
             headers=headers
         )
+    
+    
+    @app.get("/sap/test")
+    async def test_sap_query(
+        request: Request,
+        sku: str = FastAPIQuery(..., description="SKU del producto a consultar en SAP (ej: 5-0012.9)")
+    ):
+        """
+        Endpoint de prueba para consultar información de un producto desde SAP.
+        
+        Este endpoint permite probar la integración con SAP sin necesidad de procesar
+        una factura completa. Consulta información del producto y muestra el resultado.
+        
+        **Parámetros:**
+        - `sku`: SKU del producto a consultar (requerido)
+        
+        **Ejemplo de uso:**
+        ```
+        GET /sap/test?sku=5-0012.9
+        ```
+        
+        **Respuesta:**
+        - Información del producto desde SAP (ItemCode, ItemName, U_IXX_PACK)
+        - Información del cache si está disponible
+        - Unidad de conversión calculada
+        
+        Returns:
+            JSON con información del producto desde SAP o error si falla
+        """
+        # Determinar fuente
+        source = get_source_from_headers(request)
+        
+        # Log
+        logger.info("=" * 70)
+        logger.info(f"Prueba de consulta SAP recibida a las {datetime.now().isoformat()}")
+        logger.info(f"Fuente: {source}")
+        logger.info(f"SKU: {sku}")
+        logger.info("=" * 70)
+        
+        try:
+            # Verificar si SAP está habilitado
+            if not ENABLE_SAP_QUERIES:
+                return JSONResponse(
+                    status_code=400,
+                    content={
+                        "status": "error",
+                        "message": "Consultas SAP están deshabilitadas",
+                        "hint": "Configura ENABLE_SAP_QUERIES=true en .env"
+                    }
+                )
+            
+            # Inicializar servicio SAP
+            sap_service = SAPService()
+            
+            # Obtener información del producto (consultará SAP o usará cache)
+            producto_info = sap_service.get_or_fetch_producto_info(sku)
+            
+            if producto_info:
+                # Preparar respuesta detallada
+                response_data = {
+                    "status": "success",
+                    "sku": sku,
+                    "sap_info": {
+                        "item_code": producto_info.get("item_code"),
+                        "item_name": producto_info.get("item_name"),
+                        "pack_sap": producto_info.get("pack_sap"),
+                        "pack_id": producto_info.get("pack_id"),
+                        "unidad_conversion": producto_info.get("unidad_conversion"),
+                    },
+                    "config": {
+                        "sap_linked_server": SAP_LINKED_SERVER,
+                        "sap_enabled": ENABLE_SAP_QUERIES,
+                    },
+                    "message": "Producto encontrado en SAP",
+                    "timestamp": datetime.now().isoformat()
+                }
+                
+                # Agregar información de conversión si está disponible
+                unidad = producto_info.get("unidad_conversion")
+                if unidad:
+                    response_data["conversion_info"] = {
+                        "unidad_conversion": unidad,
+                        "formula": "1 docena = {unidad} packs".format(unidad=unidad),
+                        "ejemplo": {
+                            "docenas": 456,
+                            "packs": 456 * unidad,
+                            "formula_ejemplo": f"456 docenas × {unidad} = {456 * unidad} packs"
+                        }
+                    }
+                
+                logger.info(f"✅ Consulta SAP exitosa para SKU: {sku}")
+                logger.info(f"   Pack: {producto_info.get('pack_sap')}, Unidad: {producto_info.get('unidad_conversion')}")
+                
+                return JSONResponse(
+                    status_code=200,
+                    content=response_data,
+                    headers={
+                        "X-Source": source,
+                        "X-SKU": sku,
+                        "X-Pack-SAP": producto_info.get("pack_sap") or "N/A"
+                    }
+                )
+            else:
+                logger.warning(f"⚠️ Producto no encontrado en SAP: {sku}")
+                return JSONResponse(
+                    status_code=404,
+                    content={
+                        "status": "not_found",
+                        "message": f"Producto no encontrado en SAP para SKU: {sku}",
+                        "sku": sku,
+                        "hint": "Verifica que el SKU exista en SAP y que el servidor vinculado esté configurado correctamente",
+                        "timestamp": datetime.now().isoformat()
+                    }
+                )
+                
+        except Exception as e:
+            logger.error(f"❌ Error al consultar SAP: {e}", exc_info=True)
+            return JSONResponse(
+                status_code=500,
+                content={
+                    "status": "error",
+                    "message": f"Error al consultar SAP: {str(e)}",
+                    "sku": sku,
+                    "timestamp": datetime.now().isoformat()
+                }
+            )
+    
+    
+    @app.get("/sap/test/direct")
+    async def test_sap_direct(
+        request: Request,
+        sku: str = FastAPIQuery(..., description="SKU del producto a consultar directamente en SAP")
+    ):
+        """
+        Endpoint de prueba para consulta directa a SAP (sin usar cache).
+        
+        Este endpoint consulta directamente a SAP sin verificar el cache primero.
+        Útil para forzar una consulta nueva y verificar que la conexión funciona.
+        
+        **Parámetros:**
+        - `sku`: SKU del producto a consultar (requerido)
+        
+        **Ejemplo de uso:**
+        ```
+        GET /sap/test/direct?sku=5-0012.9
+        ```
+        
+        Returns:
+            JSON con información del producto desde SAP (sin cache)
+        """
+        source = get_source_from_headers(request)
+        
+        logger.info("=" * 70)
+        logger.info(f"Prueba de consulta SAP directa recibida a las {datetime.now().isoformat()}")
+        logger.info(f"SKU: {sku}")
+        logger.info("=" * 70)
+        
+        try:
+            if not ENABLE_SAP_QUERIES:
+                return JSONResponse(
+                    status_code=400,
+                    content={
+                        "status": "error",
+                        "message": "Consultas SAP están deshabilitadas"
+                    }
+                )
+            
+            # Consulta directa sin cache
+            client = SAPClient()
+            resultado = client.get_producto_info(sku)
+            
+            if resultado:
+                return JSONResponse(
+                    status_code=200,
+                    content={
+                        "status": "success",
+                        "sku": sku,
+                        "sap_direct_result": resultado,
+                        "message": "Consulta directa a SAP exitosa",
+                        "timestamp": datetime.now().isoformat()
+                    },
+                    headers={
+                        "X-Source": source,
+                        "X-SKU": sku
+                    }
+                )
+            else:
+                return JSONResponse(
+                    status_code=404,
+                    content={
+                        "status": "not_found",
+                        "message": f"Producto no encontrado en SAP: {sku}",
+                        "sku": sku
+                    }
+                )
+                
+        except Exception as e:
+            logger.error(f"❌ Error en consulta directa SAP: {e}", exc_info=True)
+            return JSONResponse(
+                status_code=500,
+                content={
+                    "status": "error",
+                    "message": f"Error al consultar SAP: {str(e)}",
+                    "sku": sku
+                }
+            )

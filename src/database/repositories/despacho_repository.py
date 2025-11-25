@@ -373,13 +373,14 @@ class DespachoRepository:
                 unidad_sap,
                 sku_sap,
                 precio_unitario,
+                precio_unitario_sap,
                 descuento,
                 total_linea,
                 impuesto,
                 reg_num,
                 nombre_producto,
                 tipo_linea
-            ) VALUES (NEWID(), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (NEWID(), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """
             
             for detalle in detalles:
@@ -395,6 +396,7 @@ class DespachoRepository:
                         detalle.get("unidad_sap"),  # NULL si no existe
                         detalle.get("sku_sap"),  # NULL si no existe
                         detalle["precio_unitario"],
+                        detalle.get("precio_unitario_sap"),  # NULL si no existe (precio por pack)
                         detalle["descuento"],
                         detalle["total_linea"],
                         detalle.get("impuesto"),  # NULL si no existe

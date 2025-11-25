@@ -64,3 +64,22 @@ SQL_SERVER_PWD = os.getenv("SQL_SERVER_PWD", "")
 # Habilitar guardado en SQL Server (poner a False para deshabilitar)
 ENABLE_SQL_SERVER_STORAGE = os.getenv("ENABLE_SQL_SERVER_STORAGE", "true").lower() == "true"
 
+# ============================================================================
+# Configuración de SAP (HANA)
+# ============================================================================
+# Configuración para consultas a SAP usando OPENQUERY desde SQL Server
+# El servidor vinculado debe estar configurado en SQL Server como [MYHANADB]
+
+# Nombre del servidor vinculado en SQL Server (configurado con OPENQUERY)
+SAP_LINKED_SERVER = os.getenv("SAP_LINKED_SERVER", "MYHANADB")
+
+# Base de datos y esquema de SAP
+SAP_DATABASE = os.getenv("SAP_DATABASE", "SBO_MABEL_PROD")
+SAP_SCHEMA = os.getenv("SAP_SCHEMA", "SBO_MABEL_PROD")
+
+# Habilitar consultas a SAP (poner a False para deshabilitar)
+ENABLE_SAP_QUERIES = os.getenv("ENABLE_SAP_QUERIES", "true").lower() == "true"
+
+# Tiempo de vida del cache en días (cuántos días antes de re-consultar SAP)
+SAP_CACHE_DAYS = int(os.getenv("SAP_CACHE_DAYS", "30"))
+
