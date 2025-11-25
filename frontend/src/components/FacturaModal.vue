@@ -63,6 +63,17 @@
                 <span v-else class="badge badge-warning">Pendiente</span>
               </span>
             </div>
+            <div class="info-item">
+              <label>Remisión Facturada:</label>
+              <span>
+                <span v-if="factura.Remision_Facturada" class="badge badge-success">Sí</span>
+                <span v-else class="badge badge-secondary">No</span>
+              </span>
+            </div>
+            <div class="info-item">
+              <label>ID Factura Relacionada:</label>
+              <span>{{ factura.NumIDFacturaRelacionada ?? '-' }}</span>
+            </div>
           </div>
         </div>
         
@@ -119,9 +130,19 @@ function handleEscape(event: KeyboardEvent) {
   }
 }
 
-// Agregar listener cuando el modal se monta
-watch(() => props.factura, (newValue) => {
-  if (newValue) {
+// Watch combinado: Log de información y manejo de escape key
+watch(() => props.factura, (newFactura) => {
+  if (newFactura) {
+    // Log resumido para verificar campos
+    const campos = Object.keys(newFactura)
+    console.log('📦 Modal - Total campos:', campos.length)
+    if (campos.length === 1) {
+      console.warn('⚠️ PROBLEMA: Solo hay 1 campo en el modal:', campos)
+      console.warn('⚠️ Datos completos:', JSON.stringify(newFactura, null, 2))
+    } else {
+      console.log('✅ Campos en modal:', campos)
+    }
+    
     // Agregar listener de escape cuando el modal está abierto
     window.addEventListener('keydown', handleEscape)
   } else {

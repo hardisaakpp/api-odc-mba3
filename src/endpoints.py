@@ -225,6 +225,23 @@ def create_endpoints(app):
                 headers["X-Saved-To-DB"] = save_status.get("status", "unknown")
                 headers["X-DB-Facturas"] = str(save_status.get("facturas_guardadas", 0) + save_status.get("facturas_actualizadas", 0))
             
+            # Log final antes de devolver la respuesta
+            if isinstance(data, list) and len(data) > 0:
+                first_factura = data[0]
+                if isinstance(first_factura, dict):
+                    campos_finales = list(first_factura.keys())
+                    logger.info("=" * 70)
+                    logger.info("📤 DATOS QUE SE ENVIAN AL FRONTEND:")
+                    logger.info(f"   Total facturas: {len(data)}")
+                    logger.info(f"   Campos en primera factura: {campos_finales}")
+                    logger.info(f"   Total campos: {len(campos_finales)}")
+                    if len(campos_finales) == 1:
+                        logger.error(f"   ❌ PROBLEMA: Solo hay 1 campo antes de enviar al frontend!")
+                        logger.error(f"   ❌ Datos completos de primera factura: {first_factura}")
+                    else:
+                        logger.info(f"   ✅ Se enviarán {len(campos_finales)} campos al frontend")
+                    logger.info("=" * 70)
+            
             # Retornar respuesta con metadata - asegurar que data contiene todos los campos
             response_data = {
                 "status": "success",

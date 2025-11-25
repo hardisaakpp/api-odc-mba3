@@ -1,5 +1,5 @@
 import axios from 'axios'
-import type { FacturaFilters, FacturasResponse } from '@/types/factura'
+import type { Factura, FacturaFilters, FacturasResponse } from '@/types/factura'
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000'
 
@@ -23,7 +23,28 @@ export const facturasApi = {
       }
     })
     
-    const response = await apiClient.get<FacturasResponse>(`/facturas?${params.toString()}`)
+    const url = `/facturas?${params.toString()}`
+    const response = await apiClient.get<FacturasResponse>(url)
+    
+    // Log detallado de la primera factura para debugging
+    if (response.data?.data && Array.isArray(response.data.data) && response.data.data.length > 0) {
+      const firstFactura = response.data.data[0]
+      const campos = Object.keys(firstFactura)
+      console.log('🌐 GET /facturas - Total facturas:', response.data.data.length)
+      console.log('🌐 GET /facturas - Campos recibidos:', campos.length, 'campos')
+      console.log('🌐 GET /facturas - Lista de campos:', campos)
+      console.log('🌐 GET /facturas - Primera factura completa:', firstFactura)
+      console.log('🌐 GET /facturas - JSON completo:', JSON.stringify(firstFactura, null, 2))
+      
+      if (campos.length === 1) {
+        console.error('❌ PROBLEMA CRÍTICO: Solo se recibió 1 campo desde el backend')
+        console.error('❌ Campo recibido:', campos[0])
+        console.error('❌ Esto significa que el backend solo está devolviendo CODIGO_FACTURA')
+      } else {
+        console.log('✅ Se recibieron múltiples campos desde el backend')
+      }
+    }
+    
     return response.data
   },
 
@@ -34,7 +55,50 @@ export const facturasApi = {
     const params = new URLSearchParams()
     params.append('query', query)
     
-    const response = await apiClient.get<Factura[]>(`/consulta?${params.toString()}`)
+    const url = `/consulta?${params.toString()}`
+    
+    console.log('='.repeat(70))
+    console.log('🌐 GET /consulta - Ejecutando consulta SQL')
+    console.log('🌐 URL:', `${API_URL}${url}`)
+    console.log('🌐 Query:', query)
+    console.log('='.repeat(70))
+    
+    const response = await apiClient.get<Factura[]>(url)
+    
+    // Log detallado de la respuesta para debugging (similar a Postman)
+    if (Array.isArray(response.data) && response.data.length > 0) {
+      const firstFactura = response.data[0]
+      const campos = Object.keys(firstFactura)
+      
+      console.log('='.repeat(70))
+      console.log('📊 RESPUESTA DE /consulta:')
+      console.log(`   Total facturas recibidas: ${response.data.length}`)
+      console.log(`   Campos en primera factura: ${campos.length} campos`)
+      console.log(`   Lista de campos:`, campos)
+      console.log('')
+      console.log('📋 PRIMERA FACTURA COMPLETA:')
+      console.log(JSON.stringify(firstFactura, null, 2))
+      console.log('')
+      console.log('📋 TODAS LAS FACTURAS (array completo):')
+      console.log(JSON.stringify(response.data, null, 2))
+      console.log('='.repeat(70))
+      
+      if (campos.length === 1) {
+        console.error('❌ PROBLEMA CRÍTICO: Solo se recibió 1 campo desde el backend')
+        console.error('❌ Campo recibido:', campos[0])
+        console.error('❌ Esto significa que el backend solo está devolviendo un campo')
+      } else {
+        console.log('✅ Se recibieron múltiples campos desde el backend')
+      }
+    } else if (Array.isArray(response.data) && response.data.length === 0) {
+      console.log('='.repeat(70))
+      console.log('📊 RESPUESTA DE /consulta:')
+      console.log('   ⚠️ La consulta se ejecutó correctamente pero no se encontraron resultados')
+      console.log('='.repeat(70))
+    } else {
+      console.warn('⚠️ Respuesta inesperada:', response.data)
+    }
+    
     return response.data
   }
 }

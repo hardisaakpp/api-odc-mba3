@@ -73,6 +73,16 @@ function getTipoClass(tipo?: string): string {
 }
 
 function viewDetails(factura: Factura) {
+  // Log resumido para verificar campos
+  const campos = Object.keys(factura)
+  console.log('🔍 Factura seleccionada - Total campos:', campos.length)
+  if (campos.length === 1) {
+    console.warn('⚠️ PROBLEMA: Solo hay 1 campo en la factura:', campos)
+    console.warn('⚠️ Datos:', JSON.stringify(factura, null, 2))
+  } else {
+    console.log('✅ Campos disponibles:', campos)
+  }
+  
   selectedFactura.value = factura
 }
 </script>

@@ -118,8 +118,34 @@ class MBA3Service:
             include_obj_datos=include_obj_datos
         )
         
+        # Log de la query que se va a ejecutar
+        logger.info("=" * 70)
+        logger.info(f"🔍 Query que se ejecutará en get_facturas:")
+        logger.info(query)
+        logger.info("=" * 70)
+        
         # Ejecutar query
         result = MBA3Service.execute_query(query)
+        
+        # Log detallado del resultado
+        logger.info("=" * 70)
+        logger.info(f"📦 Resultado de execute_query:")
+        logger.info(f"   Tipo: {type(result)}")
+        if isinstance(result, list):
+            logger.info(f"   Total elementos: {len(result)}")
+            if len(result) > 0:
+                first = result[0]
+                logger.info(f"   Tipo primer elemento: {type(first)}")
+                if isinstance(first, dict):
+                    campos = list(first.keys())
+                    logger.info(f"   Campos en primera factura: {campos}")
+                    logger.info(f"   Total campos: {len(campos)}")
+                    if len(campos) == 1:
+                        logger.error(f"   ⚠️ PROBLEMA: Solo hay 1 campo: {campos}")
+                    # Mostrar algunos valores
+                    for campo in campos[:5]:
+                        logger.info(f"   {campo}: {first.get(campo)}")
+        logger.info("=" * 70)
         
         # Guardar en base de datos si está habilitado
         # Capturar cualquier error para que no afecte la respuesta de las facturas
@@ -191,13 +217,30 @@ class MBA3Service:
                     "Verifica la consulta SQL y la conexión con MBA3."
                 )
             
-            # Log de éxito
+            # Log detallado del resultado de MBA3
             logger.info("=" * 70)
             logger.info("✅ Consulta ejecutada exitosamente contra MBA3")
+            logger.info(f"   Tipo de resultado: {type(result)}")
             if isinstance(result, list):
-                logger.info(f"Total de registros: {len(result)}")
+                logger.info(f"   Total de registros: {len(result)}")
+                if len(result) > 0:
+                    first = result[0]
+                    logger.info(f"   Tipo primer elemento: {type(first)}")
+                    if isinstance(first, dict):
+                        campos = list(first.keys())
+                        logger.info(f"   Campos devueltos por MBA3: {campos}")
+                        logger.info(f"   Total campos: {len(campos)}")
+                        if len(campos) == 1:
+                            logger.error(f"   ⚠️ PROBLEMA: MBA3 solo devolvió 1 campo: {campos}")
+                            logger.error(f"   ⚠️ Datos completos: {first}")
+                        else:
+                            # Mostrar primeros 5 campos como ejemplo
+                            for campo in campos[:5]:
+                                logger.info(f"   {campo}: {first.get(campo)}")
             elif isinstance(result, dict):
-                logger.info(f"Resultado tipo: diccionario")
+                logger.info(f"   Resultado tipo: diccionario")
+                campos = list(result.keys())
+                logger.info(f"   Campos: {campos}")
             logger.info("=" * 70)
             
             return result

@@ -3,15 +3,13 @@ import { ref, watch } from 'vue'
 
 export const useThemeStore = defineStore('theme', () => {
   // State
-  const isDark = ref<boolean>(() => {
-    // Verificar si hay una preferencia guardada
-    const saved = localStorage.getItem('theme')
-    if (saved) {
-      return saved === 'dark'
-    }
-    // Verificar preferencia del sistema
-    return window.matchMedia('(prefers-color-scheme: dark)').matches
-  })
+  // Verificar si hay una preferencia guardada
+  const saved = localStorage.getItem('theme')
+  const initialTheme = saved 
+    ? saved === 'dark'
+    : window.matchMedia('(prefers-color-scheme: dark)').matches
+  
+  const isDark = ref<boolean>(initialTheme)
 
   // Actions
   function toggleTheme() {

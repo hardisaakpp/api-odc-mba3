@@ -17,7 +17,7 @@
         id="sql-query"
         v-model="query"
         class="query-input"
-        placeholder="Ejemplo: SELECT * FROM CLNT_FACTURA_PRINCIPAL WHERE NUMERO_PEDIDO_SISTEMA='176120'"
+        placeholder="Ejemplo: SELECT CODIGO_FACTURA, NUMERO_FACTURA, EMPRESA FROM CLNT_FACTURA_PRINCIPAL WHERE ANULADA='false' AND CONFIRMADO='true'"
         rows="6"
       ></textarea>
       <div class="query-footer">
@@ -96,7 +96,7 @@ async function executeQuery() {
 
 // Cargar ejemplo
 function loadExample() {
-  query.value = `SELECT * FROM CLNT_FACTURA_PRINCIPAL WHERE NUMERO_PEDIDO_SISTEMA='176120'`
+  query.value = `SELECT CODIGO_FACTURA,ANULADA,NUMERO_PEDIDO_SISTEMA,NUMERO_ORDEN,NUMERO_FACTURA,CODIGO_DESPACHO,EMPRESA,CODIGO_CLIENTE,FECHA_FACTURA,TIPO_DOCUMENTO,ObjDatosFactura,ORDEN_COMPRA,ORDEN_COMPRA_CLIENTE,Remision_Facturada,NumIDFacturaRelacionada,CONFIRMADO,CODIGO_BODEGA FROM CLNT_FACTURA_PRINCIPAL WHERE ANULADA='false' AND CONFIRMADO='true' AND Remision_Facturada='false' AND ObjDatosFactura IS NOT NULL`
 }
 
 // Limpiar consulta
