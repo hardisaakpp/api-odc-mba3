@@ -11,17 +11,12 @@ from typing import Optional, Dict, Any
 from datetime import datetime
 
 from config import (
-    SQL_SERVER_DRIVER,
-    SQL_SERVER_SERVER,
-    SQL_SERVER_DATABASE,
-    SQL_SERVER_UID,
-    SQL_SERVER_PWD,
     SAP_LINKED_SERVER,
     SAP_DATABASE,
     SAP_SCHEMA,
     ENABLE_SAP_QUERIES
 )
-from ..connection import get_db_connection
+from ..connection import get_sap_db_connection
 
 logger = logging.getLogger(__name__)
 
@@ -86,7 +81,8 @@ class SAPClient:
         conn = None
         try:
             logger.debug(f"🔍 Consultando SAP para ItemCode: {item_code}")
-            conn = get_db_connection()
+            # Usar conexión específica para SAP (servidor con OPENQUERY)
+            conn = get_sap_db_connection()
             cursor = conn.cursor()
             
             cursor.execute(query)

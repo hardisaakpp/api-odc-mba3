@@ -21,7 +21,12 @@ from database.clients.sap_client import SAPClient
 from database.services.sap_service import SAPService
 from database.repositories.producto_sap_repository import ProductoSAPRepository
 from database.connection import get_db_connection
-from config import ENABLE_SAP_QUERIES, SAP_LINKED_SERVER
+from config import (
+    ENABLE_SAP_QUERIES, 
+    SAP_LINKED_SERVER,
+    SQL_SERVER_SERVER,
+    SQL_SERVER_DATABASE
+)
 
 # Configurar logging
 logging.basicConfig(
@@ -210,6 +215,33 @@ def main():
     
     print()
     print("🚀 INICIANDO PRUEBAS DE CONSULTA SAP")
+    print("=" * 70)
+    print()
+    print("📋 Configuración de conexión:")
+    print(f"   SQL Server: {SQL_SERVER_SERVER}")
+    print(f"   Base de datos: {SQL_SERVER_DATABASE}")
+    print(f"   Servidor vinculado SAP: {SAP_LINKED_SERVER}")
+    print()
+    
+    # Verificar conexión rápida
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT DB_NAME()")
+        current_db = cursor.fetchone()[0]
+        cursor.close()
+        conn.close()
+        
+        if current_db.lower() != SQL_SERVER_DATABASE.lower():
+            print("⚠️ ADVERTENCIA:")
+            print(f"   Base de datos configurada: {SQL_SERVER_DATABASE}")
+            print(f"   Base de datos conectada: {current_db}")
+            print("   Verifica tu archivo .env")
+            print()
+    except Exception as e:
+        print(f"⚠️ No se pudo verificar la conexión: {e}")
+        print()
+    
     print("=" * 70)
     print()
     

@@ -45,7 +45,7 @@ MBA3_DIGEST_USERNAME = os.getenv("MBA3_DIGEST_USERNAME", MBA3_SERVICE_CODE)
 MBA3_DIGEST_PASSWORD = os.getenv("MBA3_DIGEST_PASSWORD", MBA3_SERVICE_PASSWORD)
 
 # ============================================================================
-# Configuración de SQL Server
+# Configuración de SQL Server (Principal - para almacenar datos)
 # ============================================================================
 # Para usar variables de entorno, configura en el archivo .env:
 # - SQL_SERVER_DRIVER={ODBC Driver 17 for SQL Server}
@@ -63,6 +63,19 @@ SQL_SERVER_PWD = os.getenv("SQL_SERVER_PWD", "")
 
 # Habilitar guardado en SQL Server (poner a False para deshabilitar)
 ENABLE_SQL_SERVER_STORAGE = os.getenv("ENABLE_SQL_SERVER_STORAGE", "true").lower() == "true"
+
+# ============================================================================
+# Configuración de SQL Server SAP (para consultas OPENQUERY)
+# ============================================================================
+# Este servidor es diferente y se usa SOLO para ejecutar consultas OPENQUERY a SAP
+# Debe tener el servidor vinculado [MYHANADB] configurado
+# Si no se configuran estas variables, se usan las del servidor principal
+
+SQL_SERVER_SAP_DRIVER = os.getenv("SQL_SERVER_SAP_DRIVER", SQL_SERVER_DRIVER)
+SQL_SERVER_SAP_SERVER = os.getenv("SQL_SERVER_SAP_SERVER", SQL_SERVER_SERVER)
+SQL_SERVER_SAP_DATABASE = os.getenv("SQL_SERVER_SAP_DATABASE", SQL_SERVER_DATABASE)
+SQL_SERVER_SAP_UID = os.getenv("SQL_SERVER_SAP_UID", SQL_SERVER_UID)
+SQL_SERVER_SAP_PWD = os.getenv("SQL_SERVER_SAP_PWD", SQL_SERVER_PWD)
 
 # ============================================================================
 # Configuración de SAP (HANA)
