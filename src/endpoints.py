@@ -18,6 +18,10 @@ from helpers.request_parser import RequestParser
 from utils import get_source_from_headers
 from database.services.sap_service import SAPService
 from database.clients.sap_client import SAPClient
+from database.repositories.despacho_repository import DespachoRepository
+from database.repositories.orden_compra_repository import OrdenCompraRepository
+from database.services.orden_compra_service import copy_despacho_to_orden_compra
+from database.connection import get_db_connection
 from config import ENABLE_SAP_QUERIES, SAP_LINKED_SERVER
 
 logger = logging.getLogger(__name__)
@@ -387,16 +391,20 @@ def create_endpoints(app):
     @app.get("/consulta/predefinida")
     async def ejecutar_consulta_predefinida(request: Request):
         """
-        Endpoint para ejecutar una consulta SQL predefinida contra MBA3.
+        Endpoint PROCESAR: Ejecuta consulta predefinida, guarda en despacho y copia a orden de compra.
         
-        Similar a /facturas, pero para una consulta específica.
-        No requiere enviar la query desde el frontend - está integrada en el backend.
-        Ideal para usar desde Swagger UI sin necesidad de ingresar la query.
+        Este endpoint realiza el proceso completo:
+        1. ✅ Consulta datos desde MBA3 usando query predefinida
+        2. ✅ Guarda resultados en SQL Server (despacho_cabecera/detalle)
+        3. ✅ Copia despachos a orden_compra_cabecera/detalle
+        
+        **Responsabilidad:** PROCESAR (endpoint #3 de los 4 requeridos)
         
         **Características:**
         - ✅ Query integrada en el backend (no requiere SQL del frontend)
         - ✅ Ejecuta consultas contra MBA3 automáticamente
         - ✅ Guarda resultados en SQL Server (upsert)
+        - ✅ Copia automáticamente a orden_compra_cabecera/detalle
         - ✅ Logs detallados para debugging
         
         **Ejemplo de uso:**
@@ -409,11 +417,19 @@ def create_endpoints(app):
         SELECT CODIGO_FACTURA,ANULADA,NUMERO_PEDIDO_SISTEMA,NUMERO_ORDEN,NUMERO_FACTURA,CODIGO_DESPACHO,EMPRESA,CODIGO_CLIENTE,FECHA_FACTURA,TIPO_DOCUMENTO,ObjDatosFactura,ORDEN_COMPRA,ORDEN_COMPRA_CLIENTE,Remision_Facturada,NumIDFacturaRelacionada,CONFIRMADO,CODIGO_BODEGA FROM CLNT_FACTURA_PRINCIPAL WHERE TIPO_DOCUMENTO='REM' AND ANULADA='false' AND CONFIRMADO='true' AND Remision_Facturada='false' AND CODIGO_DESPACHO=0 AND NUMERO_FACTURA > 0 AND ObjDatosFactura IS NOT NULL
         ```
         
-        **Nota:** Para cambiar la query predefinida, modifica el código del endpoint.
-        Para consultas dinámicas, usa GET /consulta o POST /consulta.
+        **Respuesta incluye:**
+        - `data`: Resultados de MBA3
+        - `metadata.save_status`: Estado del guardado en despacho
+        - `metadata.oc_status`: Estado de copia a orden de compra
+        
+        **Headers de respuesta:**
+        - `X-Saved-To-DB`: Estado del guardado
+        - `X-DB-Facturas`: Número de facturas guardadas
+        - `X-OC-Status`: Estado de copia a ODC
+        - `X-OC-Creadas`: Número de OCs creadas
         
         Returns:
-            JSON con el resultado de MBA3 o error si falla
+            JSON con datos de MBA3 y metadata del proceso completo
         """
         # Query predefinida integrada en el backend
         query_predefinida = "SELECT CODIGO_FACTURA,ANULADA,NUMERO_PEDIDO_SISTEMA,NUMERO_ORDEN,NUMERO_FACTURA,CODIGO_DESPACHO,EMPRESA,CODIGO_CLIENTE,FECHA_FACTURA,TIPO_DOCUMENTO,ObjDatosFactura,ORDEN_COMPRA,ORDEN_COMPRA_CLIENTE,Remision_Facturada,NumIDFacturaRelacionada,CONFIRMADO,CODIGO_BODEGA FROM CLNT_FACTURA_PRINCIPAL WHERE TIPO_DOCUMENTO='REM' AND ANULADA='false' AND CONFIRMADO='true' AND Remision_Facturada='false' AND CODIGO_DESPACHO=0 AND NUMERO_FACTURA > 0 AND ObjDatosFactura IS NOT NULL"
@@ -461,6 +477,90 @@ def create_endpoints(app):
             # upsert=True: Actualiza si existe, inserta si no existe
             save_status = MBA3Service.save_to_database(result, upsert=True)
             
+            # PROCESAR: Copiar despachos a orden_compra_cabecera/detalle
+            oc_status = None
+            if save_status and save_status.get("status") in ["success", "partial"]:
+                try:
+                    logger.info("=" * 70)
+                    logger.info("🔄 PROCESANDO: Copiando despachos a orden de compra...")
+                    logger.info("=" * 70)
+                    
+                    # Obtener conexión y repositorios
+                    conn = get_db_connection()
+                    despacho_repo = DespachoRepository(conn)
+                    oc_repo = OrdenCompraRepository(conn)
+                    
+                    # Obtener despacho_ids de las facturas guardadas
+                    facturas = result if isinstance(result, list) else [result]
+                    oc_resultados = []
+                    oc_exitosas = 0
+                    oc_errores = 0
+                    
+                    for factura in facturas:
+                        codigo_factura = factura.get("CODIGO_FACTURA")
+                        if not codigo_factura:
+                            continue
+                        
+                        # Buscar despacho_id por código_factura
+                        despacho_id = despacho_repo.find_by_codigo_factura(codigo_factura)
+                        if not despacho_id:
+                            logger.warning(f"⚠️ No se encontró despacho_id para factura: {codigo_factura}")
+                            continue
+                        
+                        try:
+                            # Copiar despacho a orden de compra
+                            oc_resultado = copy_despacho_to_orden_compra(
+                                despacho_repo=despacho_repo,
+                                oc_repo=oc_repo,
+                                despacho_id=despacho_id,
+                                skip_if_exists=True
+                            )
+                            
+                            if oc_resultado:
+                                oc_exitosas += 1
+                                oc_resultados.append({
+                                    "despacho_id": despacho_id,
+                                    "oc_id": oc_resultado.get("oc_id"),
+                                    "proveedor": oc_resultado.get("proveedor"),
+                                    "detalles_insertados": oc_resultado.get("detalles_insertados", 0)
+                                })
+                            else:
+                                logger.debug(f"⏭️ OC ya existe o no se pudo crear para despacho: {despacho_id}")
+                                
+                        except Exception as oc_error:
+                            oc_errores += 1
+                            logger.error(f"❌ Error al copiar despacho {despacho_id} a OC: {oc_error}")
+                            oc_resultados.append({
+                                "despacho_id": despacho_id,
+                                "error": str(oc_error)
+                            })
+                    
+                    # Cerrar conexión
+                    conn.close()
+                    
+                    oc_status = {
+                        "status": "success" if oc_errores == 0 else "partial",
+                        "oc_creadas": oc_exitosas,
+                        "oc_errores": oc_errores,
+                        "total_procesadas": len(oc_resultados),
+                        "detalles": oc_resultados
+                    }
+                    
+                    logger.info("=" * 70)
+                    logger.info(f"✅ PROCESO COMPLETO:")
+                    logger.info(f"   OCs creadas: {oc_exitosas}")
+                    logger.info(f"   Errores: {oc_errores}")
+                    logger.info("=" * 70)
+                    
+                except Exception as e:
+                    logger.error(f"❌ Error al procesar copia a ODC: {e}", exc_info=True)
+                    oc_status = {
+                        "status": "error",
+                        "message": str(e),
+                        "oc_creadas": 0,
+                        "oc_errores": 0
+                    }
+            
             # Preparar headers de respuesta
             headers = {
                 "X-Query": query_predefinida[:100],  # Primeros 100 caracteres de la query
@@ -472,12 +572,27 @@ def create_endpoints(app):
             # Agregar información de guardado si existe
             if save_status:
                 headers["X-Saved-To-DB"] = save_status.get("status", "unknown")
-                headers["X-DB-Facturas"] = str(save_status.get("facturas_guardadas", 0))
+                headers["X-DB-Facturas"] = str(save_status.get("facturas_guardadas", 0) + save_status.get("facturas_actualizadas", 0))
             
-            # Retornar resultado JSON de MBA3 directamente
+            # Agregar información de ODC si existe
+            if oc_status:
+                headers["X-OC-Status"] = oc_status.get("status", "unknown")
+                headers["X-OC-Creadas"] = str(oc_status.get("oc_creadas", 0))
+            
+            # Preparar respuesta con metadata completa
+            response_content = {
+                "data": result,  # Datos de MBA3
+                "metadata": {
+                    "query": query_predefinida,
+                    "save_status": save_status,
+                    "oc_status": oc_status  # Estado de copia a ODC
+                }
+            }
+            
+            # Retornar respuesta con metadata
             return JSONResponse(
                 status_code=200,
-                content=result,
+                content=response_content,
                 headers=headers
             )
             

@@ -416,5 +416,54 @@ class DespachoRepository:
             raise
         finally:
             cursor.close()
+    
+    def get_detalles(self, despacho_id: str) -> List[Dict[str, Any]]:
+        """
+        Obtiene todos los detalles de un despacho.
+        
+        Args:
+            despacho_id: UUID del despacho
+            
+        Returns:
+            Lista de diccionarios con los datos de detalle
+        """
+        cursor = self.conn.cursor()
+        try:
+            cursor.execute(
+                """
+                SELECT detalle_id, despacho_id, sku, cantidad_docena_mba3,
+                       subtotal_sap, cantidad_pack_sap, unidad_sap,
+                       precio_unitario_mba3, descuento, total_linea_mba3,
+                       impuesto, nombre_producto, tipo_linea, precio_unitario_sap
+                FROM despacho_detalle
+                WHERE despacho_id = ?
+                ORDER BY detalle_id
+                """,
+                (despacho_id,)
+            )
+            results = cursor.fetchall()
+            
+            detalles = []
+            for row in results:
+                detalles.append({
+                    "detalle_id": str(row[0]),
+                    "despacho_id": str(row[1]),
+                    "sku": row[2],
+                    "cantidad_docena_mba3": row[3],
+                    "subtotal_sap": row[4],
+                    "cantidad_pack_sap": row[5],
+                    "unidad_sap": row[6],
+                    "precio_unitario_mba3": row[7],
+                    "descuento": row[8],
+                    "total_linea_mba3": row[9],
+                    "impuesto": row[10],
+                    "nombre_producto": row[11],
+                    "tipo_linea": row[12],
+                    "precio_unitario_sap": row[13],
+                })
+            
+            return detalles
+        finally:
+            cursor.close()
 
 
