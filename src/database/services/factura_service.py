@@ -121,6 +121,13 @@ def save_mba3_factura(
                             # Transformar línea con información SAP si está disponible
                             detalle = FacturaMapper.to_despacho_detalle(linea, tipo_linea, sap_info=sap_info)
                             if detalle:
+                                # Log de conversión si se aplicó
+                                if detalle.get("cantidad_sap"):
+                                    logger.info(
+                                        f"   ✅ Conversión aplicada para {codigo}: "
+                                        f"{detalle['cantidad']} docenas → {detalle['cantidad_sap']:.2f} packs "
+                                        f"({detalle.get('unidad_sap')})"
+                                    )
                                 detalles.append(detalle)
                         
                         # Insertar detalles

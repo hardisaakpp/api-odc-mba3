@@ -149,8 +149,15 @@ class FacturaMapper:
         Transforma una línea de factura MBA3 a formato de despacho_detalle.
         
         Si se proporciona información SAP, calcula las conversiones automáticamente:
-        - cantidad_sap = cantidad (docenas) × unidad_conversion
-        - precio_unitario_sap = total_linea / cantidad_sap
+        - cantidad_pack_sap = cantidad_docena_mba3 (docenas) × unidad_conversion
+        - precio_unitario_sap = total_linea_mba3 / cantidad_pack_sap
+        
+        Mapeo de campos a columnas de la tabla:
+        - cantidad → cantidad_docena_mba3 (docenas de El Rayo)
+        - cantidad_sap → cantidad_pack_sap (packs convertidos para Mabel)
+        - precio_unitario → precio_unitario_mba3 (precio por docena)
+        - total_linea → total_linea_mba3 (total de la línea)
+        - total_producto → subtotal_sap (subtotal para SAP)
         
         Args:
             linea: Diccionario con datos de línea de factura
@@ -192,29 +199,34 @@ class FacturaMapper:
                     precio_unitario_sap = total_linea / cantidad_sap
                 
                 unidad_sap = pack_sap
+                
+                # Log de conversión para debugging
+                import logging
+                logger = logging.getLogger(__name__)
+                logger.debug(
+                    f"   🔄 Conversión para {codigo}: "
+                    f"{cantidad} docenas × {unidad_conversion} = {cantidad_sap:.2f} packs, "
+                    f"Precio: {total_linea:.2f} / {cantidad_sap:.2f} = {precio_unitario_sap:.4f}"
+                )
         
         return {
             # Campos que vienen de MBA3
             "sku": codigo,
-            "cantidad": cantidad,  # Docenas de El Rayo
-            "precio_unitario": linea.get("PrecioUnitario") or 0,  # Precio por docena
-            "total_linea": total_linea,
+            "cantidad": cantidad,  # Docenas de El Rayo -> cantidad_docena_mba3
+            "precio_unitario": linea.get("PrecioUnitario") or 0,  # Precio por docena -> precio_unitario_mba3
+            "total_linea": total_linea,  # total_linea_mba3
             "descuento": linea.get("Descuento") or 0,
             "tipo_linea": tipo_linea,
             "nombre_producto": linea.get("Nombre") or None,
             "impuesto": linea.get("Impuesto"),
-            "reg_num": linea.get("RegNum"),
             
             # Campos calculados o derivados
-            "producto_id": codigo,  # Por defecto igual a SKU (puede cambiarse después)
-            "total_producto": total_linea,  # Por defecto igual a total_linea
+            "total_producto": total_linea,  # subtotal_sap (por defecto igual a total_linea)
             
             # Campos de conversión SAP
-            "unid_detalle": None,  # Unidad de medida (no viene de MBA3)
-            "cantidad_sap": cantidad_sap,  # Packs convertidos para Mabel
-            "unidad_sap": unidad_sap,  # Pack usado (X1, X2, X3, etc.)
-            "sku_sap": codigo,  # SKU SAP (mismo que SKU de El Rayo)
-            "precio_unitario_sap": precio_unitario_sap,  # Precio por pack
+            "cantidad_sap": cantidad_sap,  # cantidad_pack_sap - Packs convertidos para Mabel
+            "unidad_sap": unidad_sap,  # unidad_sap - Pack usado (X1, X2, X3, etc.)
+            "precio_unitario_sap": precio_unitario_sap,  # precio_unitario_sap - Precio por pack
         }
 
 

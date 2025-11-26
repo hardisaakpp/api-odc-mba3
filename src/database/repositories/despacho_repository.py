@@ -365,22 +365,18 @@ class DespachoRepository:
                 detalle_id,
                 despacho_id,
                 sku,
-                producto_id,
-                cantidad,
-                total_producto,
-                unid_detalle,
-                cantidad_sap,
+                cantidad_docena_mba3,
+                subtotal_sap,
+                cantidad_pack_sap,
                 unidad_sap,
-                sku_sap,
-                precio_unitario,
-                precio_unitario_sap,
+                precio_unitario_mba3,
                 descuento,
-                total_linea,
+                total_linea_mba3,
                 impuesto,
-                reg_num,
                 nombre_producto,
-                tipo_linea
-            ) VALUES (NEWID(), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                tipo_linea,
+                precio_unitario_sap
+            ) VALUES (NEWID(), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """
             
             for detalle in detalles:
@@ -388,21 +384,17 @@ class DespachoRepository:
                     values = (
                         despacho_id,
                         detalle["sku"],
-                        detalle.get("producto_id"),  # NULL o igual a sku
-                        detalle["cantidad"],
-                        detalle.get("total_producto"),  # NULL o igual a total_linea
-                        detalle.get("unid_detalle"),  # NULL si no existe
-                        detalle.get("cantidad_sap"),  # NULL si no existe
-                        detalle.get("unidad_sap"),  # NULL si no existe
-                        detalle.get("sku_sap"),  # NULL si no existe
-                        detalle["precio_unitario"],
-                        detalle.get("precio_unitario_sap"),  # NULL si no existe (precio por pack)
+                        detalle["cantidad"],  # cantidad_docena_mba3
+                        detalle.get("total_producto"),  # subtotal_sap - NULL o igual a total_linea
+                        detalle.get("cantidad_sap"),  # cantidad_pack_sap - NULL si no existe
+                        detalle.get("unidad_sap"),  # unidad_sap - NULL si no existe
+                        detalle["precio_unitario"],  # precio_unitario_mba3
                         detalle["descuento"],
-                        detalle["total_linea"],
+                        detalle["total_linea"],  # total_linea_mba3
                         detalle.get("impuesto"),  # NULL si no existe
-                        detalle.get("reg_num"),  # NULL si no existe
                         detalle.get("nombre_producto"),  # NULL si no existe
                         detalle["tipo_linea"],
+                        detalle.get("precio_unitario_sap"),  # precio_unitario_sap - NULL si no existe
                     )
                     
                     cursor.execute(sql, values)
