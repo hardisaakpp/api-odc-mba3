@@ -13,3 +13,12 @@ python-multipart>=0.0.6
 # Dependencias para SQL Server
 pyodbc>=5.0.0
 
+# Dependencias para Testing (opcional)
+pytest>=7.4.0
+pytest-asyncio>=0.21.0
+pytest-cov>=4.1.0
+httpx>=0.25.0  # Para testing de FastAPI
+
+# Dependencias para Seguridad (opcional)
+slowapi>=0.1.9  # Rate limiting
+

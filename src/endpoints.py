@@ -24,6 +24,9 @@ from database.services.orden_compra_service import copy_despacho_to_orden_compra
 from database.services.oc_sap_service import OCSAPService
 from database.connection import get_db_connection
 from config import ENABLE_SAP_QUERIES, SAP_LINKED_SERVER, ENABLE_SAP_SERVICE_LAYER
+from security.auth import optional_auth
+from typing import Optional
+from fastapi import Depends
 
 logger = logging.getLogger(__name__)
 
@@ -122,7 +125,10 @@ def create_endpoints(app):
     
     
     @app.get("/consultar")
-    async def consultar_despachos(request: Request):
+    async def consultar_despachos(
+        request: Request,
+        auth: Optional[str] = Depends(optional_auth)  # Autenticación opcional
+    ):
         """
         Endpoint CONSULTAR: Ejecuta consulta predefinida y muestra resultados.
         
@@ -222,7 +228,10 @@ def create_endpoints(app):
     
     
     @app.get("/migrar")
-    async def migrar_despachos(request: Request):
+    async def migrar_despachos(
+        request: Request,
+        auth: Optional[str] = Depends(optional_auth)  # Autenticación opcional
+    ):
         """
         Endpoint MIGRAR: Ejecuta consulta predefinida y guarda en despacho_cabecera/detalle.
         
@@ -352,7 +361,10 @@ def create_endpoints(app):
     
     
     @app.get("/pruebas")
-    async def ejecutar_pruebas(request: Request):
+    async def ejecutar_pruebas(
+        request: Request,
+        auth: Optional[str] = Depends(optional_auth)  # Autenticación opcional
+    ):
         """
         Endpoint de PRUEBAS: Ejecuta el proceso completo de los 3 primeros endpoints.
         
@@ -591,7 +603,10 @@ def create_endpoints(app):
     
     
     @app.get("/procesar-oc")
-    async def procesar_orden_compra(request: Request):
+    async def procesar_orden_compra(
+        request: Request,
+        auth: Optional[str] = Depends(optional_auth)  # Autenticación opcional
+    ):
         """
         Endpoint PROCESAR-OC: Copia despachos a orden de compra.
         
@@ -780,7 +795,10 @@ def create_endpoints(app):
     
     
     @app.post("/enviar-oc-sap")
-    async def enviar_oc_a_sap(request: Request):
+    async def enviar_oc_a_sap(
+        request: Request,
+        auth: Optional[str] = Depends(optional_auth)  # Autenticación opcional
+    ):
         """
         Endpoint ENVIAR-OC-SAP (POST): Copia despachos a orden de compra.
         
@@ -964,6 +982,174 @@ def create_endpoints(app):
                 content={
                     "status": "error",
                     "message": f"Error al procesar orden de compra: {str(e)}"
+                }
+            )
+    
+    
+    @app.post("/integrar-sap")
+    async def integrar_sap(
+        request: Request,
+        auth: Optional[str] = Depends(optional_auth)  # Autenticación opcional
+    ):
+        """
+        Endpoint INTEGRAR-SAP: Envía órdenes de compra a SAP Service Layer.
+        
+        **Responsabilidad:** INTEGRAR (endpoint #4 de los 4 requeridos)
+        
+        Este endpoint realiza:
+        1. ❌ NO consulta (ya lo hizo CONSULTAR)
+        2. ❌ NO guarda en despacho (ya lo hizo MIGRAR)
+        3. ❌ NO copia a OC (ya lo hizo PROCESAR)
+        4. ✅ Envía ODCs con estado "PENDIENTE" a SAP Service Layer
+        5. ✅ Actualiza estado a "ENVIADA" o "ERROR" según resultado
+        
+        **Características:**
+        - ✅ Busca ODCs en orden_compra_cabecera con estado "PENDIENTE"
+        - ✅ Convierte cada ODC a formato JSON de SAP Service Layer
+        - ✅ Envía cada ODC directamente a SAP Service Layer (sin middleware)
+        - ✅ Actualiza estado y número de OC en la base de datos
+        - ✅ Retorna resumen detallado del proceso
+        
+        **Ejemplo de uso:**
+        ```
+        POST /integrar-sap
+        ```
+        
+        **Nota:** Este endpoint asume que las ODCs ya están creadas con estado "PENDIENTE".
+        Para proceso completo (consulta + guarda + copia + integración), usar los 4 endpoints en secuencia.
+        
+        **Flujo recomendado:**
+        1. GET /consultar - Solo consulta
+        2. GET /migrar - Consulta + Guarda en despacho
+        3. GET /procesar-oc - Copia despachos a ODC (estado: PENDIENTE)
+        4. POST /integrar-sap - Envía ODC a SAP Service Layer
+        
+        **Estados de ODC:**
+        - `PENDIENTE`: Creada pero no enviada a SAP (estado inicial)
+        - `ENVIADA`: Enviada exitosamente a SAP (se actualiza aquí)
+        - `ERROR`: Error al enviar a SAP (se actualiza aquí)
+        
+        **Configuración requerida:**
+        - Variables de entorno en `.env`:
+          - `SAP_SERVICE_LAYER_URL`
+          - `SAP_SERVICE_LAYER_USERNAME`
+          - `SAP_SERVICE_LAYER_PASSWORD`
+          - `SAP_SERVICE_LAYER_DATABASE`
+          - `ENABLE_SAP_SERVICE_LAYER=true`
+        
+        Returns:
+            JSON con metadata del proceso de envío a SAP
+        """
+        # Determinar fuente
+        source = get_source_from_headers(request)
+        
+        # Log del proceso
+        logger.info("=" * 70)
+        logger.info(f"🚀 INTEGRAR-SAP: Iniciado a las {datetime.now().isoformat()}")
+        logger.info(f"Fuente: {source}")
+        logger.info("Buscando órdenes de compra pendientes de enviar a SAP...")
+        logger.info("=" * 70)
+        
+        try:
+            # Verificar si SAP Service Layer está habilitado
+            if not ENABLE_SAP_SERVICE_LAYER:
+                logger.warning("⚠️ SAP Service Layer está deshabilitado")
+                return JSONResponse(
+                    status_code=400,
+                    content={
+                        "status": "error",
+                        "message": "SAP Service Layer está deshabilitado",
+                        "hint": "Configura ENABLE_SAP_SERVICE_LAYER=true en .env"
+                    },
+                    headers={
+                        "X-Source": source,
+                        "X-Endpoint": "INTEGRAR-SAP"
+                    }
+                )
+            
+            # Obtener conexión y repositorios
+            conn = get_db_connection()
+            oc_repo = OrdenCompraRepository(conn)
+            
+            # Inicializar servicio SAP
+            oc_sap_service = OCSAPService()
+            
+            # Enviar todas las ODCs pendientes
+            logger.info("📤 Enviando ODCs pendientes a SAP Service Layer...")
+            logger.info("=" * 70)
+            
+            resultado = oc_sap_service.enviar_ocs_pendientes(
+                oc_repo=oc_repo,
+                warehouse_code=None,  # Se puede agregar como parámetro opcional en el futuro
+                limit=None  # Procesar todas las pendientes
+            )
+            
+            conn.close()
+            
+            # Preparar respuesta
+            total_pendientes = resultado.get("total_pendientes", 0)
+            enviadas = resultado.get("enviadas", 0)
+            errores = resultado.get("errores", 0)
+            detalles = resultado.get("detalles", [])
+            
+            # Determinar status general
+            if total_pendientes == 0:
+                status_general = "success"
+                mensaje = "No hay órdenes de compra pendientes de enviar a SAP"
+            elif errores == 0:
+                status_general = "success"
+                mensaje = f"Proceso completado: {enviadas} ODC(s) enviada(s) exitosamente a SAP"
+            elif enviadas == 0:
+                status_general = "error"
+                mensaje = f"Error: No se pudo enviar ninguna ODC a SAP ({errores} error(es))"
+            else:
+                status_general = "partial"
+                mensaje = f"Proceso completado parcialmente: {enviadas} enviada(s), {errores} error(es)"
+            
+            logger.info("=" * 70)
+            logger.info(f"✅ INTEGRAR-SAP completado:")
+            logger.info(f"   Total ODCs pendientes: {total_pendientes}")
+            logger.info(f"   ODCs enviadas: {enviadas}")
+            logger.info(f"   Errores: {errores}")
+            logger.info("=" * 70)
+            
+            # Preparar headers de respuesta
+            headers = {
+                "X-Source": source,
+                "X-Endpoint": "INTEGRAR-SAP",
+                "X-OC-Status": status_general,
+                "X-OC-Enviadas": str(enviadas),
+                "X-OC-Errores": str(errores),
+                "X-Total-Pendientes": str(total_pendientes)
+            }
+            
+            # Retornar respuesta con metadata
+            return JSONResponse(
+                status_code=200 if status_general != "error" else 500,
+                content={
+                    "status": status_general,
+                    "message": mensaje,
+                    "metadata": {
+                        "total_pendientes": total_pendientes,
+                        "enviadas": enviadas,
+                        "errores": errores,
+                        "detalles": detalles
+                    }
+                },
+                headers=headers
+            )
+            
+        except Exception as e:
+            logger.error(f"❌ Error al integrar con SAP: {e}", exc_info=True)
+            return JSONResponse(
+                status_code=500,
+                content={
+                    "status": "error",
+                    "message": f"Error al integrar con SAP: {str(e)}"
+                },
+                headers={
+                    "X-Source": source,
+                    "X-Endpoint": "INTEGRAR-SAP"
                 }
             )
     

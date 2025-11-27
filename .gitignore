@@ -7,3 +7,15 @@ __pycache__/
 resultado_api.json
 ultima_consulta.json
 src/resultado_api.json
+
+# Archivos de debugging
+debug/
+*.log
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+*.cover
+.hypothesis/

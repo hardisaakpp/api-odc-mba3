@@ -23,6 +23,13 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from endpoints import create_endpoints
 from middleware.exception_handlers import setup_exception_handlers
+from config import (
+    ENABLE_CORS_RESTRICTION,
+    CORS_ALLOWED_ORIGINS,
+    ENVIRONMENT,
+    HIDE_SWAGGER_IN_PROD
+)
+from security.rate_limit import setup_rate_limiting
 
 # Configurar logging
 logging.basicConfig(
@@ -35,17 +42,43 @@ logger = logging.getLogger(__name__)
 app = FastAPI(
     title="MBA3 Query API",
     description="API para recibir, validar y procesar consultas SQL (SELECT)",
-    version="2.0.0"
+    version="2.0.0",
+    # Ocultar Swagger en producción si está configurado
+    docs_url="/docs" if not (ENVIRONMENT == "production" and HIDE_SWAGGER_IN_PROD) else None,
+    redoc_url="/redoc" if not (ENVIRONMENT == "production" and HIDE_SWAGGER_IN_PROD) else None,
 )
 
-# Configurar CORS para permitir pruebas desde Postman y otros clientes
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# Configurar CORS (restrictivo o permisivo según configuración)
+if ENABLE_CORS_RESTRICTION:
+    # CORS restrictivo: solo origenes permitidos
+    allowed_origins = [origin.strip() for origin in CORS_ALLOWED_ORIGINS if origin.strip() != "*"]
+    if not allowed_origins:
+        logger.warning("⚠️ ENABLE_CORS_RESTRICTION=true pero CORS_ALLOWED_ORIGINS está vacío o es '*'")
+        logger.warning("   Usando configuración permisiva por seguridad")
+        allowed_origins = ["*"]
+    else:
+        logger.info(f"✅ CORS restrictivo habilitado: {allowed_origins}")
+    
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=allowed_origins,
+        allow_credentials=True,
+        allow_methods=["GET", "POST"],
+        allow_headers=["*"],
+    )
+else:
+    # CORS permisivo (por defecto, para desarrollo)
+    logger.info("ℹ️ CORS permisivo (desarrollo). Configura ENABLE_CORS_RESTRICTION=true para producción")
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
+# Configurar rate limiting (opcional)
+setup_rate_limiting(app)
 
 # Configurar exception handlers centralizados
 setup_exception_handlers(app)

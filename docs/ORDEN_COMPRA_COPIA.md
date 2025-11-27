@@ -169,3 +169,4 @@ CREATE TABLE orden_compra_detalle (
 );
 ```
 
+

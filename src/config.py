@@ -115,3 +115,25 @@ ENABLE_SAP_SERVICE_LAYER = os.getenv("ENABLE_SAP_SERVICE_LAYER", "false").lower(
 # Timeout para requests a Service Layer (segundos)
 SAP_SERVICE_LAYER_TIMEOUT = int(os.getenv("SAP_SERVICE_LAYER_TIMEOUT", "30"))
 
+# ============================================================================
+# Configuración de Seguridad (Opcional)
+# ============================================================================
+# Todas las funcionalidades de seguridad están DESHABILITADAS por defecto
+# Actívalas configurando las variables a "true" en .env
+
+# Autenticación mediante API Keys
+ENABLE_AUTH = os.getenv("ENABLE_AUTH", "false").lower() == "true"
+API_KEY = os.getenv("API_KEY", "")  # API Key requerida si ENABLE_AUTH=true
+
+# Rate Limiting (límite de requests)
+ENABLE_RATE_LIMITING = os.getenv("ENABLE_RATE_LIMITING", "false").lower() == "true"
+RATE_LIMIT_DEFAULT = os.getenv("RATE_LIMIT_DEFAULT", "100/minute")  # Límite por defecto
+
+# CORS Restrictivo
+ENABLE_CORS_RESTRICTION = os.getenv("ENABLE_CORS_RESTRICTION", "false").lower() == "true"
+CORS_ALLOWED_ORIGINS = os.getenv("CORS_ALLOWED_ORIGINS", "*").split(",")  # Lista separada por comas
+
+# Ocultar Swagger en producción
+ENVIRONMENT = os.getenv("ENVIRONMENT", "development")  # development, staging, production
+HIDE_SWAGGER_IN_PROD = os.getenv("HIDE_SWAGGER_IN_PROD", "true").lower() == "true"
+

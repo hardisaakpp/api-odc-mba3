@@ -89,20 +89,25 @@ mba3-consultas/
 
 ## 🔌 Endpoints Principales
 
-### Consultas
+### Flujo Completo de Procesamiento (4 Endpoints)
+
+1. **GET `/consultar`** - Consultar despachos desde MBA3 (solo lectura)
+2. **GET `/migrar`** - Consultar y guardar en `despacho_cabecera`/`despacho_detalle`
+3. **GET `/procesar-oc`** - Copiar despachos a `orden_compra_cabecera`/`orden_compra_detalle` (estado: PENDIENTE)
+4. **POST `/integrar-sap`** ⭐ - Enviar ODCs a SAP Service Layer (estado: PENDIENTE → ENVIADA)
+
+### Otros Endpoints
 
 - **GET `/health`** - Health check
 - **GET `/facturas`** - Obtener facturas con filtros (recomendado para frontend)
-- **GET `/consultar`** - Consultar despachos (solo lectura)
-- **GET `/migrar`** - Consultar y guardar en despacho
-- **GET `/pruebas`** - Proceso completo (consulta + guarda + copia a OC)
-- **GET `/procesar-oc`** - Copiar despachos a orden de compra
+- **GET `/pruebas`** - Proceso completo (consulta + guarda + copia a OC, sin enviar a SAP)
+- **POST `/enviar-oc-sap`** - Equivalente a `GET /procesar-oc` pero con método POST
 - **POST `/consulta`** - Ejecutar consulta SQL dinámica
 - **POST `/query`** - Validar y parsear consulta SQL
 
 ### SAP
 
-- **GET `/sap/test?sku=...`** - Consultar producto en SAP
+- **GET `/sap/test?sku=...`** - Consultar producto en SAP (usa cache)
 - **GET `/sap/test/direct?sku=...`** - Consulta directa a SAP (sin cache)
 
 Ver [docs/ENDPOINTS.md](docs/ENDPOINTS.md) para documentación completa.
@@ -114,9 +119,11 @@ Ver [docs/ENDPOINTS.md](docs/ENDPOINTS.md) para documentación completa.
 - ✅ Consultas a API MBA3 con autenticación JWT
 - ✅ Guardado automático en SQL Server
 - ✅ Integración con SAP HANA (OPENQUERY)
+- ✅ Integración con SAP Service Layer (Purchase Orders)
 - ✅ Validación de consultas SQL (solo SELECT)
 - ✅ Mapeo automático MBA3 → SQL Server
 - ✅ Procesamiento de orden de compra
+- ✅ Envío de órdenes de compra a SAP Service Layer
 
 ### Frontend
 

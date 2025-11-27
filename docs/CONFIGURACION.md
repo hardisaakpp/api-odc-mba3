@@ -27,7 +27,7 @@ ENABLE_SQL_SERVER_STORAGE=true
 
 **Autenticación Windows:** Dejar `SQL_SERVER_UID` y `SQL_SERVER_PWD` vacíos.
 
-### SAP (Opcional)
+### SAP HANA (Opcional - Consultas)
 
 ```env
 SAP_LINKED_SERVER=MYHANADB
@@ -36,6 +36,26 @@ SAP_SCHEMA=SBO_MABEL_PROD
 ENABLE_SAP_QUERIES=true
 SAP_CACHE_DAYS=30
 ```
+
+### SAP Service Layer (Opcional - Envío de Purchase Orders)
+
+```env
+# URL base del Service Layer
+SAP_SERVICE_LAYER_URL=http://tu-servidor-sap:50000/b1s/v1
+
+# Credenciales de autenticación
+SAP_SERVICE_LAYER_USERNAME=tu_usuario
+SAP_SERVICE_LAYER_PASSWORD=tu_contraseña
+SAP_SERVICE_LAYER_DATABASE=SBO_MABEL_PROD
+
+# Habilitar envío de ODC a SAP Service Layer
+ENABLE_SAP_SERVICE_LAYER=true
+
+# Timeout para requests a Service Layer (segundos)
+SAP_SERVICE_LAYER_TIMEOUT=30
+```
+
+**Nota:** Estas variables son necesarias para el endpoint `POST /integrar-sap` que envía órdenes de compra a SAP.
 
 ### SQL Server SAP (Opcional)
 

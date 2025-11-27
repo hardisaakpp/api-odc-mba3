@@ -5,7 +5,10 @@ Este servicio orquesta la construcción del JSON y el envío de ODC a SAP.
 """
 
 import logging
+import json
+import os
 from typing import Optional, Dict, Any
+from datetime import datetime
 
 from ..repositories.orden_compra_repository import OrdenCompraRepository
 from ..clients.sap_service_layer_client import SAPServiceLayerClient
@@ -98,6 +101,26 @@ class OCSAPService:
                 result["error"] = f"Error inesperado al construir JSON: {str(e)}"
                 logger.error(f"❌ {result['error']}", exc_info=True)
                 return result
+            
+            # 3.5. Guardar JSON en archivo para debugging (fase de pruebas)
+            try:
+                debug_dir = "debug/odc_json"
+                os.makedirs(debug_dir, exist_ok=True)
+                
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                proveedor_clean = oc_cabecera.get("proveedor", "UNKNOWN").replace("/", "_").replace("\\", "_")
+                filename = f"oc_{oc_id[:8]}_{proveedor_clean}_{timestamp}.json"
+                filepath = os.path.join(debug_dir, filename)
+                
+                # Guardar JSON con formato legible
+                with open(filepath, "w", encoding="utf-8") as f:
+                    json.dump(purchase_order_json, f, indent=2, ensure_ascii=False)
+                
+                logger.info(f"💾 JSON guardado para debugging: {filepath}")
+                result["debug_file"] = filepath
+            except Exception as e:
+                # No fallar si no se puede guardar el archivo de debug
+                logger.warning(f"⚠️ No se pudo guardar archivo de debugging: {e}")
             
             # 4. Enviar a SAP Service Layer
             sap_response = self.sap_client.create_purchase_order(purchase_order_json)
@@ -248,4 +271,5 @@ class OCSAPService:
                 "error": str(e),
                 "detalles": []
             }
+
 

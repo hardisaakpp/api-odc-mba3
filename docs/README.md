@@ -20,6 +20,7 @@
 
 ### Procesos de Negocio
 
+- [Flujo Completo](FLUJO_COMPLETO.md) - Flujo completo de los 4 endpoints (CONSULTAR → MIGRAR → PROCESAR → INTEGRAR)
 - [Orden de Compra](ORDEN_COMPRA_COPIA.md) - Proceso de copia a orden de compra
 
 ### Pruebas y Testing
@@ -29,9 +30,10 @@
 ## 🚀 Inicio Rápido
 
 1. **Setup inicial:** Ver [Configuración](CONFIGURACION.md)
-2. **Usar la API:** Ver [Endpoints](ENDPOINTS.md)
-3. **Probar funcionalidades:** Ver [Guía de Pruebas](pruebas/README.md)
-4. **Integración SAP:** Ver [Integración SAP](INTEGRACION_SAP.md) si es necesario
+2. **Entender el flujo:** Ver [Flujo Completo](FLUJO_COMPLETO.md) para entender los 4 endpoints principales
+3. **Usar la API:** Ver [Endpoints](ENDPOINTS.md) para documentación detallada
+4. **Probar funcionalidades:** Ver [Guía de Pruebas](pruebas/README.md)
+5. **Integración SAP:** Ver [Integración SAP](INTEGRACION_SAP.md) si es necesario
 
 ## 📖 Estructura de Documentación
 
@@ -40,6 +42,7 @@ docs/
 ├── README.md (este archivo)
 ├── CONFIGURACION.md
 ├── ENDPOINTS.md
+├── FLUJO_COMPLETO.md ⭐ (Nuevo - Flujo de los 4 endpoints)
 ├── INTEGRACION_SAP.md
 ├── CONFIGURACION_DOS_SERVIDORES.md
 ├── CONFIGURAR_SERVIDOR_VINCULADO.md
