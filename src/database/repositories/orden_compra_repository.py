@@ -106,6 +106,9 @@ class OrdenCompraRepository:
             oc_id = str(cursor.execute("SELECT NEWID()").fetchone()[0])
             
             # SQL para insertar (estructura real de la tabla)
+            # Inicializar estado como 'PENDIENTE' si no se proporciona
+            estado = datos_cabecera.get("estado", "PENDIENTE")
+            
             sql = """
             INSERT INTO orden_compra_cabecera (
                 oc_id,
@@ -113,8 +116,9 @@ class OrdenCompraRepository:
                 proveedor,
                 fecha_generacion,
                 referencia_despacho,
+                estado,
                 created_at
-            ) VALUES (?, ?, ?, ?, ?, GETDATE())
+            ) VALUES (?, ?, ?, ?, ?, ?, GETDATE())
             """
             
             values = (
@@ -123,6 +127,7 @@ class OrdenCompraRepository:
                 datos_cabecera.get("proveedor"),
                 datos_cabecera.get("fecha_generacion"),
                 datos_cabecera.get("referencia_despacho"),
+                estado,
             )
             
             cursor.execute(sql, values)
@@ -225,6 +230,50 @@ class OrdenCompraRepository:
         finally:
             cursor.close()
     
+    def get_by_estado(self, estado: str) -> List[Dict[str, Any]]:
+        """
+        Obtiene todas las órdenes de compra con un estado específico.
+        
+        Útil para consultar ODC pendientes, enviadas, confirmadas, etc.
+        
+        Args:
+            estado: Estado a filtrar (PENDIENTE, ENVIADA, CONFIRMADA, ERROR, etc.)
+            
+        Returns:
+            Lista de diccionarios con información de las ODC
+        """
+        cursor = self.conn.cursor()
+        try:
+            cursor.execute(
+                """
+                SELECT oc_id, despacho_id, proveedor, fecha_generacion,
+                       estado, numero_oc_sap, referencia_despacho, created_at, updated_at
+                FROM orden_compra_cabecera
+                WHERE estado = ?
+                ORDER BY created_at DESC
+                """,
+                (estado,)
+            )
+            results = cursor.fetchall()
+            
+            oc_list = []
+            for row in results:
+                oc_list.append({
+                    "oc_id": str(row[0]),
+                    "despacho_id": str(row[1]),
+                    "proveedor": row[2],
+                    "fecha_generacion": row[3],
+                    "estado": row[4],
+                    "numero_oc_sap": row[5],
+                    "referencia_despacho": row[6],
+                    "created_at": row[7],
+                    "updated_at": row[8],
+                })
+            
+            return oc_list
+        finally:
+            cursor.close()
+    
     def get_existing_cabecera(self, oc_id: str) -> Optional[Dict[str, Any]]:
         """
         Obtiene los datos existentes de una cabecera de orden de compra.
@@ -300,11 +349,15 @@ class OrdenCompraRepository:
                     merged[key] = existing[key]
             
             # SQL para actualizar (campos actualizables)
+            # Incluir estado y numero_oc_sap si están presentes
             sql = """
             UPDATE orden_compra_cabecera SET
                 proveedor = ?,
                 fecha_generacion = ?,
-                referencia_despacho = ?
+                referencia_despacho = ?,
+                estado = ?,
+                numero_oc_sap = ?,
+                updated_at = GETDATE()
             WHERE oc_id = ?
             """
             
@@ -312,6 +365,8 @@ class OrdenCompraRepository:
                 merged.get("proveedor"),
                 merged.get("fecha_generacion"),
                 merged.get("referencia_despacho"),
+                merged.get("estado"),  # Puede ser None, se preservará el existente
+                merged.get("numero_oc_sap"),  # Puede ser None
                 oc_id,
             )
             
@@ -330,6 +385,62 @@ class OrdenCompraRepository:
             self.conn.rollback()
             logger.error(f"❌ Error al actualizar orden_compra_cabecera: {e}")
             logger.error(f"   OC ID: {oc_id}")
+            raise
+        finally:
+            cursor.close()
+    
+    def update_estado(self, oc_id: str, estado: str, numero_oc_sap: Optional[str] = None) -> bool:
+        """
+        Actualiza el estado de una orden de compra.
+        
+        Método helper para cambiar el estado de una OC fácilmente.
+        Útil para cuando se implemente la integración con SAP.
+        
+        Args:
+            oc_id: UUID de la orden de compra
+            estado: Nuevo estado (PENDIENTE, ENVIADA, CONFIRMADA, ERROR, etc.)
+            numero_oc_sap: Número de OC asignado por SAP (opcional)
+            
+        Returns:
+            True si se actualizó correctamente, False en caso contrario
+        """
+        cursor = self.conn.cursor()
+        
+        try:
+            if numero_oc_sap:
+                sql = """
+                UPDATE orden_compra_cabecera SET
+                    estado = ?,
+                    numero_oc_sap = ?,
+                    updated_at = GETDATE()
+                WHERE oc_id = ?
+                """
+                values = (estado, numero_oc_sap, oc_id)
+            else:
+                sql = """
+                UPDATE orden_compra_cabecera SET
+                    estado = ?,
+                    updated_at = GETDATE()
+                WHERE oc_id = ?
+                """
+                values = (estado, oc_id)
+            
+            cursor.execute(sql, values)
+            rows_affected = cursor.rowcount
+            self.conn.commit()
+            
+            if rows_affected > 0:
+                logger.info(f"✅ Estado de OC actualizado: {oc_id} → {estado}" + 
+                          (f" (SAP: {numero_oc_sap})" if numero_oc_sap else ""))
+                return True
+            else:
+                logger.warning(f"⚠️ No se encontró orden de compra para actualizar estado: {oc_id}")
+                return False
+                
+        except Exception as e:
+            self.conn.rollback()
+            logger.error(f"❌ Error al actualizar estado de orden_compra: {e}")
+            logger.error(f"   OC ID: {oc_id}, Estado: {estado}")
             raise
         finally:
             cursor.close()

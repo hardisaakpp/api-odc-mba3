@@ -74,7 +74,6 @@ class SAPClient:
                 "U_IXX_PACK"
             FROM "{SAP_DATABASE}"."OITM"
             WHERE "ItemCode" = ''{item_code_escaped}''
-            LIMIT 100
         ') T0;
         """
         
