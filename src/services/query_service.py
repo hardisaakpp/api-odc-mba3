@@ -6,7 +6,6 @@ Maneja la validación, parsing y almacenamiento de consultas.
 
 import logging
 from datetime import datetime
-from typing import Dict, Any, Tuple
 
 from utils import (
     validate_query,
@@ -16,7 +15,6 @@ from utils import (
 )
 from models import QueryResponse
 from exceptions import QueryValidationError
-from typing import Dict, Any
 
 logger = logging.getLogger(__name__)
 

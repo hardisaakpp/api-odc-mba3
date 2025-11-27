@@ -445,6 +445,51 @@ class OrdenCompraRepository:
         finally:
             cursor.close()
     
+    def get_detalles(self, oc_id: str) -> List[Dict[str, Any]]:
+        """
+        Obtiene todos los detalles de una orden de compra.
+        
+        Args:
+            oc_id: UUID de la orden de compra
+            
+        Returns:
+            Lista de diccionarios con los detalles de la ODC
+        """
+        cursor = self.conn.cursor()
+        try:
+            cursor.execute(
+                """
+                SELECT oc_detalle_id, oc_id, sku_sap, cantidad_sap, unidad_sap,
+                       referencia_detalle, precio_unitario, total_linea, cantidad_origen,
+                       created_at, updated_at
+                FROM orden_compra_detalle
+                WHERE oc_id = ?
+                ORDER BY created_at ASC
+                """,
+                (oc_id,)
+            )
+            results = cursor.fetchall()
+            
+            detalles = []
+            for row in results:
+                detalles.append({
+                    "oc_detalle_id": str(row[0]),
+                    "oc_id": str(row[1]),
+                    "sku_sap": row[2],
+                    "cantidad_sap": float(row[3]) if row[3] is not None else 0.0,
+                    "unidad_sap": row[4],
+                    "referencia_detalle": str(row[5]) if row[5] else None,
+                    "precio_unitario": float(row[6]) if row[6] is not None else 0.0,
+                    "total_linea": float(row[7]) if row[7] is not None else 0.0,
+                    "cantidad_origen": float(row[8]) if row[8] is not None else None,
+                    "created_at": row[9],
+                    "updated_at": row[10],
+                })
+            
+            return detalles
+        finally:
+            cursor.close()
+    
     def delete_detalles(self, oc_id: str) -> int:
         """
         Elimina todos los detalles de una orden de compra.

@@ -70,7 +70,7 @@ class HealthResponse(BaseModel):
     time: str = Field(..., description="Timestamp ISO8601")
 
 
-# Modelos para la respuesta de MBA3 (cuando se implemente /query/forward)
+# Modelos para la respuesta de MBA3
 class LineaFactura(BaseModel):
     """Modelo para una línea de factura dentro de ObjDatosFactura."""
     

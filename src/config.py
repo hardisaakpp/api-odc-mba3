@@ -96,3 +96,22 @@ ENABLE_SAP_QUERIES = os.getenv("ENABLE_SAP_QUERIES", "true").lower() == "true"
 # Tiempo de vida del cache en días (cuántos días antes de re-consultar SAP)
 SAP_CACHE_DAYS = int(os.getenv("SAP_CACHE_DAYS", "30"))
 
+# ============================================================================
+# Configuración de SAP Service Layer (API REST)
+# ============================================================================
+# Configuración para enviar órdenes de compra a SAP Business One usando Service Layer
+
+# URL base del Service Layer (ej: http://localhost:50000/b1s/v1)
+SAP_SERVICE_LAYER_URL = os.getenv("SAP_SERVICE_LAYER_URL", "http://localhost:50000/b1s/v1")
+
+# Credenciales de autenticación
+SAP_SERVICE_LAYER_USERNAME = os.getenv("SAP_SERVICE_LAYER_USERNAME", "")
+SAP_SERVICE_LAYER_PASSWORD = os.getenv("SAP_SERVICE_LAYER_PASSWORD", "")
+SAP_SERVICE_LAYER_DATABASE = os.getenv("SAP_SERVICE_LAYER_DATABASE", "SBODEMOUS")
+
+# Habilitar envío de ODC a SAP Service Layer
+ENABLE_SAP_SERVICE_LAYER = os.getenv("ENABLE_SAP_SERVICE_LAYER", "false").lower() == "true"
+
+# Timeout para requests a Service Layer (segundos)
+SAP_SERVICE_LAYER_TIMEOUT = int(os.getenv("SAP_SERVICE_LAYER_TIMEOUT", "30"))
+

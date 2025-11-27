@@ -21,8 +21,9 @@ from database.clients.sap_client import SAPClient
 from database.repositories.despacho_repository import DespachoRepository
 from database.repositories.orden_compra_repository import OrdenCompraRepository
 from database.services.orden_compra_service import copy_despacho_to_orden_compra
+from database.services.oc_sap_service import OCSAPService
 from database.connection import get_db_connection
-from config import ENABLE_SAP_QUERIES, SAP_LINKED_SERVER
+from config import ENABLE_SAP_QUERIES, SAP_LINKED_SERVER, ENABLE_SAP_SERVICE_LAYER
 
 logger = logging.getLogger(__name__)
 
@@ -118,27 +119,6 @@ def create_endpoints(app):
         )
         
         return response_data
-    
-    
-    @app.post("/query/forward")
-    async def forward_query():
-        """
-        Endpoint placeholder para reenvío de consultas a MBA3.
-        
-        Esta funcionalidad se implementará en una siguiente etapa.
-        Por ahora devuelve 501 Not Implemented.
-        
-        Returns:
-            JSON con mensaje indicando que no está implementado
-        """
-        return JSONResponse(
-            status_code=501,
-            content={
-                "status": "not_implemented",
-                "message": "La ejecución remota de consultas contra MBA3 se implementará en una siguiente etapa",
-                "note": "Este endpoint estará disponible en futuras versiones para ejecutar consultas usando MBA3APIClient"
-            }
-        )
     
     
     @app.get("/consultar")
@@ -374,20 +354,22 @@ def create_endpoints(app):
     @app.get("/pruebas")
     async def ejecutar_pruebas(request: Request):
         """
-        Endpoint de PRUEBAS: Ejecuta consulta predefinida, guarda en despacho y copia a orden de compra.
+        Endpoint de PRUEBAS: Ejecuta el proceso completo de los 3 primeros endpoints.
         
         Este endpoint realiza el proceso completo (para pruebas):
-        1. ✅ Consulta datos desde MBA3 usando query predefinida
-        2. ✅ Guarda resultados en SQL Server (despacho_cabecera/detalle)
-        3. ✅ Copia despachos a orden_compra_cabecera/detalle
+        1. ✅ Consulta datos desde MBA3 usando query predefinida (CONSULTAR)
+        2. ✅ Guarda resultados en SQL Server (despacho_cabecera/detalle) (MIGRAR)
+        3. ✅ Copia despachos a orden_compra_cabecera/detalle (PROCESAR)
+        4. ❌ NO envía a SAP (ese paso lo hace el endpoint INTEGRAR)
         
-        **Uso:** Endpoint de pruebas que ejecuta todo el flujo completo.
+        **Uso:** Endpoint de pruebas que ejecuta todo el flujo completo de los 3 primeros endpoints.
         
         **Características:**
         - ✅ Query integrada en el backend (no requiere SQL del frontend)
         - ✅ Ejecuta consultas contra MBA3 automáticamente
         - ✅ Guarda resultados en SQL Server (upsert)
         - ✅ Copia automáticamente a orden_compra_cabecera/detalle
+        - ✅ Crea las ODC con estado "PENDIENTE" (listas para enviar a SAP)
         - ✅ Logs detallados para debugging
         
         **Ejemplo de uso:**
@@ -410,6 +392,9 @@ def create_endpoints(app):
         - `X-DB-Facturas`: Número de facturas guardadas
         - `X-OC-Status`: Estado de copia a ODC
         - `X-OC-Creadas`: Número de OCs creadas
+        
+        **Nota:** Este endpoint ejecuta los 3 primeros pasos del flujo completo.
+        Para enviar a SAP, usar el endpoint POST /integrar-sap (cuando esté disponible).
         
         Returns:
             JSON con datos de MBA3 y metadata del proceso completo
@@ -501,16 +486,28 @@ def create_endpoints(app):
                             
                             if oc_resultado:
                                 oc_exitosas += 1
+                                oc_id = oc_resultado.get("oc_id")
                                 accion = "actualizada" if oc_resultado.get("cabecera_actualizada") else "creada"
-                                oc_resultados.append({
+                                
+                                resultado_item = {
                                     "despacho_id": despacho_id,
-                                    "oc_id": oc_resultado.get("oc_id"),
+                                    "oc_id": oc_id,
                                     "proveedor": oc_resultado.get("proveedor"),
                                     "detalles_insertados": oc_resultado.get("detalles_insertados", 0),
-                                    "accion": accion
-                                })
+                                    "accion": accion,
+                                    "estado": "PENDIENTE"  # Estado inicial de la ODC
+                                }
+                                
+                                logger.info(f"   ✅ OC {accion}: {oc_id} (estado: PENDIENTE)")
+                                
+                                oc_resultados.append(resultado_item)
                             else:
+                                oc_errores += 1
                                 logger.warning(f"⚠️ No se pudo crear/actualizar OC para despacho: {despacho_id}")
+                                oc_resultados.append({
+                                    "despacho_id": despacho_id,
+                                    "error": "No se pudo crear/actualizar OC"
+                                })
                                 
                         except Exception as oc_error:
                             oc_errores += 1
@@ -535,6 +532,7 @@ def create_endpoints(app):
                     logger.info(f"✅ PROCESO COMPLETO:")
                     logger.info(f"   OCs creadas: {oc_exitosas}")
                     logger.info(f"   Errores: {oc_errores}")
+                    logger.info(f"   Estado de OCs creadas: PENDIENTE (listas para enviar a SAP)")
                     logger.info("=" * 70)
                     
                 except Exception as e:
@@ -595,20 +593,22 @@ def create_endpoints(app):
     @app.get("/procesar-oc")
     async def procesar_orden_compra(request: Request):
         """
-        Endpoint PROCESAR-OC: Copia despachos existentes a orden_compra_cabecera/detalle.
+        Endpoint PROCESAR-OC: Copia despachos a orden de compra.
         
-        **Responsabilidad:** Copiar despachos a orden de compra (paso 3 del proceso completo)
+        **Responsabilidad:** PROCESAR (endpoint #3 de los 4 requeridos)
         
         Este endpoint realiza:
         1. ❌ NO consulta (ya lo hizo CONSULTAR)
         2. ❌ NO guarda en despacho (ya lo hizo MIGRAR)
         3. ✅ Copia despachos existentes a orden_compra_cabecera/detalle
+        4. ❌ NO envía a SAP (ese paso lo hace el endpoint INTEGRAR)
         
         **Características:**
         - ✅ Busca despachos en despacho_cabecera que NO tienen OC asociada
         - ✅ Copia cada despacho a orden_compra_cabecera/detalle
         - ✅ Mapea empresa → proveedor desde tabla cliente
         - ✅ Omite despachos que ya tienen OC (skip_if_exists=True)
+        - ✅ Crea las ODC con estado "PENDIENTE" (listas para enviar a SAP)
         
         **Ejemplo de uso:**
         ```
@@ -616,15 +616,21 @@ def create_endpoints(app):
         ```
         
         **Nota:** Este endpoint asume que los despachos ya están guardados en despacho_cabecera/detalle.
-        Para proceso completo (consulta + guarda + copia), usar GET /consulta/predefinida.
+        Para proceso completo (consulta + guarda + copia + integración), usar los 4 endpoints en secuencia.
         
         **Flujo recomendado:**
         1. GET /consultar - Solo consulta
         2. GET /migrar - Consulta + Guarda en despacho
-        3. GET /procesar-oc - Copia despachos a ODC
+        3. GET /procesar-oc - Copia despachos a ODC (estado: PENDIENTE)
+        4. POST /integrar-sap - Envía ODC a SAP usando middleware
+        
+        **Estados de ODC:**
+        - `PENDIENTE`: Creada pero no enviada a SAP (estado inicial)
+        - `ENVIADA`: Enviada exitosamente a SAP (se actualiza en endpoint INTEGRAR)
+        - `ERROR`: Error al enviar a SAP (se actualiza en endpoint INTEGRAR)
         
         Returns:
-            JSON con metadata del proceso de copia a orden de compra
+            JSON con metadata del proceso de creación de ODC
         """
         # Determinar fuente
         source = get_source_from_headers(request)
@@ -687,17 +693,28 @@ def create_endpoints(app):
                     
                     if oc_resultado:
                         oc_exitosas += 1
+                        oc_id = oc_resultado.get("oc_id")
                         accion = "actualizada" if oc_resultado.get("cabecera_actualizada") else "creada"
-                        oc_resultados.append({
+                        
+                        resultado_item = {
                             "despacho_id": despacho_id,
-                            "oc_id": oc_resultado.get("oc_id"),
+                            "oc_id": oc_id,
                             "proveedor": oc_resultado.get("proveedor"),
                             "detalles_insertados": oc_resultado.get("detalles_insertados", 0),
-                            "accion": accion
-                        })
-                        logger.info(f"   ✅ OC {accion}: {oc_resultado.get('oc_id')}")
+                            "accion": accion,
+                            "estado": "PENDIENTE"  # Estado inicial de la ODC
+                        }
+                        
+                        logger.info(f"   ✅ OC {accion}: {oc_id} (estado: PENDIENTE)")
+                        
+                        oc_resultados.append(resultado_item)
                     else:
+                        oc_errores += 1
                         logger.warning(f"   ⚠️ No se pudo crear/actualizar OC para despacho: {despacho_id}")
+                        oc_resultados.append({
+                            "despacho_id": despacho_id,
+                            "error": "No se pudo crear/actualizar OC"
+                        })
                         
                 except Exception as oc_error:
                     oc_errores += 1
@@ -724,6 +741,7 @@ def create_endpoints(app):
             logger.info(f"   Total despachos encontrados: {len(despachos_sin_oc)}")
             logger.info(f"   OCs creadas: {oc_exitosas}")
             logger.info(f"   Errores: {oc_errores}")
+            logger.info(f"   Estado de OCs creadas: PENDIENTE (listas para enviar a SAP)")
             logger.info("=" * 70)
             
             # Preparar headers de respuesta
@@ -736,12 +754,204 @@ def create_endpoints(app):
                 "X-Total-Despachos": str(len(despachos_sin_oc))
             }
             
+            # Construir mensaje
+            mensaje = f"Proceso completado: {oc_exitosas} OCs creadas de {len(despachos_sin_oc)} despachos (estado: PENDIENTE)"
+            
             # Retornar respuesta con metadata
             return JSONResponse(
                 status_code=200,
                 content={
                     "status": "success",
-                    "message": f"Proceso completado: {oc_exitosas} OCs creadas de {len(despachos_sin_oc)} despachos",
+                    "message": mensaje,
+                    "metadata": oc_status
+                },
+                headers=headers
+            )
+            
+        except Exception as e:
+            logger.error(f"❌ Error al procesar orden de compra: {e}", exc_info=True)
+            return JSONResponse(
+                status_code=500,
+                content={
+                    "status": "error",
+                    "message": f"Error al procesar orden de compra: {str(e)}"
+                }
+            )
+    
+    
+    @app.post("/enviar-oc-sap")
+    async def enviar_oc_a_sap(request: Request):
+        """
+        Endpoint ENVIAR-OC-SAP (POST): Copia despachos a orden de compra.
+        
+        **Responsabilidad:** PROCESAR (endpoint #3 de los 4 requeridos) - Versión POST
+        
+        Este endpoint realiza:
+        1. ❌ NO consulta (ya lo hizo CONSULTAR)
+        2. ❌ NO guarda en despacho (ya lo hizo MIGRAR)
+        3. ✅ Copia despachos existentes a orden_compra_cabecera/detalle
+        4. ❌ NO envía a SAP (ese paso lo hace el endpoint INTEGRAR)
+        
+        **Características:**
+        - ✅ Busca despachos en despacho_cabecera que NO tienen OC asociada
+        - ✅ Copia cada despacho a orden_compra_cabecera/detalle
+        - ✅ Mapea empresa → proveedor desde tabla cliente
+        - ✅ Omite despachos que ya tienen OC (skip_if_exists=True)
+        - ✅ Crea las ODC con estado "PENDIENTE" (listas para enviar a SAP)
+        
+        **Ejemplo de uso:**
+        ```
+        POST /enviar-oc-sap
+        ```
+        
+        **Nota:** Este endpoint asume que los despachos ya están guardados en despacho_cabecera/detalle.
+        Es equivalente a GET /procesar-oc pero usando método POST.
+        
+        **Flujo recomendado:**
+        1. GET /consultar - Solo consulta
+        2. GET /migrar - Consulta + Guarda en despacho
+        3. POST /enviar-oc-sap - Copia despachos a ODC (estado: PENDIENTE)
+        4. POST /integrar-sap - Envía ODC a SAP usando middleware
+        
+        **Estados de ODC:**
+        - `PENDIENTE`: Creada pero no enviada a SAP (estado inicial)
+        - `ENVIADA`: Enviada exitosamente a SAP (se actualiza en endpoint INTEGRAR)
+        - `ERROR`: Error al enviar a SAP (se actualiza en endpoint INTEGRAR)
+        
+        Returns:
+            JSON con metadata del proceso de creación de ODC
+        """
+        # Determinar fuente
+        source = get_source_from_headers(request)
+        
+        # Log del proceso
+        logger.info("=" * 70)
+        logger.info(f"🔄 ENVIAR-OC-SAP (POST): Iniciado a las {datetime.now().isoformat()}")
+        logger.info(f"Fuente: {source}")
+        logger.info("Buscando despachos sin orden de compra asociada...")
+        logger.info("=" * 70)
+        
+        try:
+            # Obtener conexión y repositorios
+            conn = get_db_connection()
+            despacho_repo = DespachoRepository(conn)
+            oc_repo = OrdenCompraRepository(conn)
+            
+            # Obtener despachos que no tienen OC asociada
+            despachos_sin_oc = despacho_repo.get_despachos_sin_oc()
+            
+            if not despachos_sin_oc:
+                logger.info("ℹ️ No se encontraron despachos sin orden de compra")
+                conn.close()
+                return JSONResponse(
+                    status_code=200,
+                    content={
+                        "status": "success",
+                        "message": "No hay despachos pendientes de copiar a orden de compra",
+                        "oc_creadas": 0,
+                        "oc_errores": 0,
+                        "total_despachos": 0
+                    },
+                    headers={
+                        "X-Source": source,
+                        "X-Endpoint": "ENVIAR-OC-SAP"
+                    }
+                )
+            
+            logger.info(f"📦 Encontrados {len(despachos_sin_oc)} despachos sin OC")
+            logger.info("=" * 70)
+            logger.info("🔄 PROCESANDO: Copiando despachos a orden de compra...")
+            logger.info("=" * 70)
+            
+            # Procesar cada despacho
+            oc_resultados = []
+            oc_exitosas = 0
+            oc_errores = 0
+            
+            for idx, despacho_id in enumerate(despachos_sin_oc, 1):
+                try:
+                    logger.info(f"[{idx}/{len(despachos_sin_oc)}] Procesando despacho: {despacho_id}")
+                    
+                    # Copiar despacho a orden de compra (con upsert)
+                    oc_resultado = copy_despacho_to_orden_compra(
+                        despacho_repo=despacho_repo,
+                        oc_repo=oc_repo,
+                        despacho_id=despacho_id,
+                        upsert=True
+                    )
+                    
+                    if oc_resultado:
+                        oc_exitosas += 1
+                        oc_id = oc_resultado.get("oc_id")
+                        accion = "actualizada" if oc_resultado.get("cabecera_actualizada") else "creada"
+                        
+                        resultado_item = {
+                            "despacho_id": despacho_id,
+                            "oc_id": oc_id,
+                            "proveedor": oc_resultado.get("proveedor"),
+                            "detalles_insertados": oc_resultado.get("detalles_insertados", 0),
+                            "accion": accion,
+                            "estado": "PENDIENTE"  # Estado inicial de la ODC
+                        }
+                        
+                        logger.info(f"   ✅ OC {accion}: {oc_id} (estado: PENDIENTE)")
+                        
+                        oc_resultados.append(resultado_item)
+                    else:
+                        oc_errores += 1
+                        logger.warning(f"   ⚠️ No se pudo crear/actualizar OC para despacho: {despacho_id}")
+                        oc_resultados.append({
+                            "despacho_id": despacho_id,
+                            "error": "No se pudo crear/actualizar OC"
+                        })
+                        
+                except Exception as oc_error:
+                    oc_errores += 1
+                    logger.error(f"   ❌ Error al copiar despacho {despacho_id} a OC: {oc_error}")
+                    oc_resultados.append({
+                        "despacho_id": despacho_id,
+                        "error": str(oc_error)
+                    })
+            
+            # Cerrar conexión
+            conn.close()
+            
+            oc_status = {
+                "status": "success" if oc_errores == 0 else "partial",
+                "oc_creadas": oc_exitosas,
+                "oc_errores": oc_errores,
+                "total_procesadas": len(oc_resultados),
+                "total_despachos": len(despachos_sin_oc),
+                "detalles": oc_resultados
+            }
+            
+            logger.info("=" * 70)
+            logger.info(f"✅ ENVIAR-OC-SAP (POST) completado:")
+            logger.info(f"   Total despachos encontrados: {len(despachos_sin_oc)}")
+            logger.info(f"   OCs creadas: {oc_exitosas}")
+            logger.info(f"   Errores: {oc_errores}")
+            logger.info(f"   Estado de OCs creadas: PENDIENTE (listas para enviar a SAP)")
+            logger.info("=" * 70)
+            
+            # Preparar headers de respuesta
+            headers = {
+                "X-Source": source,
+                "X-Endpoint": "ENVIAR-OC-SAP",
+                "X-OC-Status": oc_status.get("status", "unknown"),
+                "X-OC-Creadas": str(oc_exitosas),
+                "X-OC-Errores": str(oc_errores),
+                "X-Total-Despachos": str(len(despachos_sin_oc))
+            }
+            
+            # Construir mensaje
+            mensaje = f"Proceso completado: {oc_exitosas} OCs creadas de {len(despachos_sin_oc)} despachos (estado: PENDIENTE)"
+            
+            # Retornar respuesta con metadata
+            return JSONResponse(
+                status_code=200,
+                content={
+                    "status": "success",
+                    "message": mensaje,
                     "metadata": oc_status
                 },
                 headers=headers
