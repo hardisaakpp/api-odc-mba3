@@ -465,5 +465,28 @@ class DespachoRepository:
             return detalles
         finally:
             cursor.close()
+    
+    def get_despachos_sin_oc(self) -> List[str]:
+        """
+        Obtiene todos los despacho_id que no tienen una orden de compra asociada.
+        
+        Returns:
+            Lista de despacho_id (UUIDs) que no tienen OC
+        """
+        cursor = self.conn.cursor()
+        try:
+            cursor.execute(
+                """
+                SELECT dc.despacho_id
+                FROM despacho_cabecera dc
+                LEFT JOIN orden_compra_cabecera oc ON dc.despacho_id = oc.despacho_id
+                WHERE oc.despacho_id IS NULL
+                ORDER BY dc.created_at DESC
+                """
+            )
+            results = cursor.fetchall()
+            return [str(row[0]) for row in results]
+        finally:
+            cursor.close()
 
 

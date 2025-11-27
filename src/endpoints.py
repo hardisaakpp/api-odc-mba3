@@ -141,194 +141,54 @@ def create_endpoints(app):
         )
     
     
-    @app.get("/facturas")
-    async def obtener_facturas(
-        request: Request,
-        anulada: Optional[bool] = FastAPIQuery(False, description="Filtrar por facturas anuladas (false=no anuladas, true=anuladas)"),
-        confirmado: Optional[bool] = FastAPIQuery(True, description="Filtrar por facturas confirmadas (true=confirmadas, false=no confirmadas)"),
-        remision_facturada: Optional[bool] = FastAPIQuery(False, description="Filtrar por remisión facturada (false=sin remisión, true=con remisión)"),
-        include_obj_datos: bool = FastAPIQuery(True, description="Incluir solo facturas con ObjDatosFactura no nulo"),
-        save_to_db: bool = FastAPIQuery(True, description="Guardar resultados en SQL Server")
-    ):
+    @app.get("/consultar")
+    async def consultar_despachos(request: Request):
         """
-        Endpoint para obtener facturas desde MBA3 sin necesidad de enviar SQL.
+        Endpoint CONSULTAR: Ejecuta consulta predefinida y muestra resultados.
         
-        Este endpoint está diseñado para ser usado desde el frontend sin que
-        el usuario necesite escribir consultas SQL. La query está integrada
-        en el backend.
+        **Responsabilidad:** Solo consulta, NO guarda en base de datos.
+        Usa la query predefinida configurada en el backend.
         
-        **Filtros disponibles (query parameters):**
-        - `anulada`: false (no anuladas) o true (anuladas) - Por defecto: false
-        - `confirmado`: true (confirmadas) o false (no confirmadas) - Por defecto: true
-        - `remision_facturada`: false (sin remisión) o true (con remisión) - Por defecto: false
-        - `include_obj_datos`: true o false - Por defecto: true (solo con ObjDatosFactura)
-        - `save_to_db`: true o false - Por defecto: true (guardar en SQL Server)
+        **Características:**
+        - ✅ Query predefinida integrada en el backend
+        - ✅ Solo consulta datos desde MBA3
+        - ✅ NO guarda en SQL Server
+        - ✅ Retorna resultados para visualización en Swagger/Postman
         
         **Ejemplo de uso:**
         ```
-        GET /facturas?anulada=false&confirmado=true&remision_facturada=false
+        GET /consultar
         ```
         
-        **Valores por defecto (si no se especifican parámetros):**
-        - Facturas NO anuladas (anulada=false)
-        - Facturas confirmadas (confirmado=true)
-        - Sin remisión facturada (remision_facturada=false)
-        - Con ObjDatosFactura (include_obj_datos=true)
+        **Query predefinida:**
+        ```sql
+        SELECT CODIGO_FACTURA,ANULADA,NUMERO_PEDIDO_SISTEMA,NUMERO_ORDEN,NUMERO_FACTURA,CODIGO_DESPACHO,EMPRESA,CODIGO_CLIENTE,FECHA_FACTURA,TIPO_DOCUMENTO,ObjDatosFactura,ORDEN_COMPRA,ORDEN_COMPRA_CLIENTE,Remision_Facturada,NumIDFacturaRelacionada,CONFIRMADO,CODIGO_BODEGA FROM CLNT_FACTURA_PRINCIPAL WHERE TIPO_DOCUMENTO='REM' AND ANULADA='false' AND CONFIRMADO='true' AND Remision_Facturada='false' AND CODIGO_DESPACHO=0 AND NUMERO_FACTURA > 0 AND ObjDatosFactura IS NOT NULL
+        ```
+        
+        **Nota:** Este endpoint es solo para consultar y visualizar datos.
+        Para guardar en despacho, usar endpoint MIGRAR.
+        Para proceso completo (consulta + guarda + copia a ODC), usar GET /consulta/predefinida.
         
         Returns:
-            JSON con los datos de MBA3, metadata de la consulta y estado del guardado
+            JSON con los datos consultados de MBA3 (sin guardar)
         """
+        # Query predefinida (la misma que usa /consulta/predefinida)
+        query_predefinida = "SELECT CODIGO_FACTURA,ANULADA,NUMERO_PEDIDO_SISTEMA,NUMERO_ORDEN,NUMERO_FACTURA,CODIGO_DESPACHO,EMPRESA,CODIGO_CLIENTE,FECHA_FACTURA,TIPO_DOCUMENTO,ObjDatosFactura,ORDEN_COMPRA,ORDEN_COMPRA_CLIENTE,Remision_Facturada,NumIDFacturaRelacionada,CONFIRMADO,CODIGO_BODEGA FROM CLNT_FACTURA_PRINCIPAL WHERE TIPO_DOCUMENTO='REM' AND ANULADA='false' AND CONFIRMADO='true' AND Remision_Facturada='false' AND CODIGO_DESPACHO=0 AND NUMERO_FACTURA > 0 AND ObjDatosFactura IS NOT NULL"
+        
         # Determinar fuente
         source = get_source_from_headers(request)
         
-        # Log
+        # Log de la consulta
         logger.info("=" * 70)
-        logger.info(f"Solicitud de facturas recibida a las {datetime.now().isoformat()}")
+        logger.info(f"🔍 CONSULTAR: Consulta ejecutada a las {datetime.now().isoformat()}")
         logger.info(f"Fuente: {source}")
-        logger.info(f"Filtros: anulada={anulada}, confirmado={confirmado}, remision_facturada={remision_facturada}")
+        logger.info(f"Query predefinida: {query_predefinida}")
+        logger.info("Ejecutando consulta contra MBA3 (SOLO CONSULTA, NO GUARDA)...")
         logger.info("=" * 70)
         
         try:
-            # Obtener facturas usando el servicio
-            result = MBA3Service.get_facturas(
-                anulada=anulada,
-                confirmado=confirmado,
-                remision_facturada=remision_facturada,
-                include_obj_datos=include_obj_datos,
-                save_to_db=save_to_db,
-                upsert=True
-            )
-            
-            # Obtener los datos completos de MBA3
-            data = result.get("data")
-            
-            # Log para debugging: verificar estructura de datos
-            if data:
-                if isinstance(data, list) and len(data) > 0:
-                    logger.info(f"📊 Datos obtenidos: {len(data)} facturas")
-                    # Log del primer elemento para verificar campos
-                    first_item = data[0]
-                    if isinstance(first_item, dict):
-                        campos = list(first_item.keys())
-                        logger.info(f"📋 Campos disponibles en primera factura: {campos}")
-                        logger.info(f"📋 Ejemplo CODIGO_FACTURA: {first_item.get('CODIGO_FACTURA')}")
-                        logger.info(f"📋 Ejemplo NUMERO_FACTURA: {first_item.get('NUMERO_FACTURA')}")
-                        logger.info(f"📋 Ejemplo EMPRESA: {first_item.get('EMPRESA')}")
-                elif isinstance(data, dict):
-                    logger.info(f"📊 Datos obtenidos: objeto único (dict)")
-                    campos = list(data.keys())
-                    logger.info(f"📋 Campos disponibles: {campos}")
-            
-            # Preparar headers de respuesta
-            headers = {
-                "X-Source": source,
-                "X-Filters": f"anulada={anulada},confirmado={confirmado},remision_facturada={remision_facturada}",
-                "X-Count": str(result.get("count", 0))
-            }
-            
-            # Agregar información de guardado si existe
-            save_status = result.get("save_status")
-            if save_status:
-                headers["X-Saved-To-DB"] = save_status.get("status", "unknown")
-                headers["X-DB-Facturas"] = str(save_status.get("facturas_guardadas", 0) + save_status.get("facturas_actualizadas", 0))
-            
-            # Log final antes de devolver la respuesta
-            if isinstance(data, list) and len(data) > 0:
-                first_factura = data[0]
-                if isinstance(first_factura, dict):
-                    campos_finales = list(first_factura.keys())
-                    logger.info("=" * 70)
-                    logger.info("📤 DATOS QUE SE ENVIAN AL FRONTEND:")
-                    logger.info(f"   Total facturas: {len(data)}")
-                    logger.info(f"   Campos en primera factura: {campos_finales}")
-                    logger.info(f"   Total campos: {len(campos_finales)}")
-                    if len(campos_finales) == 1:
-                        logger.error(f"   ❌ PROBLEMA: Solo hay 1 campo antes de enviar al frontend!")
-                        logger.error(f"   ❌ Datos completos de primera factura: {first_factura}")
-                    else:
-                        logger.info(f"   ✅ Se enviarán {len(campos_finales)} campos al frontend")
-                    logger.info("=" * 70)
-            
-            # Retornar respuesta con metadata - asegurar que data contiene todos los campos
-            response_data = {
-                "status": "success",
-                "data": data,  # Datos completos de MBA3 con todos los campos
-                "metadata": {
-                    "count": result.get("count", 0),
-                    "filters": result.get("filters", {}),
-                    "save_status": save_status
-                }
-            }
-            
-            return JSONResponse(
-                status_code=200,
-                content=response_data,
-                headers=headers
-            )
-            
-        except Exception as e:
-            logger.error(f"❌ Error al obtener facturas: {e}", exc_info=True)
-            return JSONResponse(
-                status_code=500,
-                content={
-                    "status": "error",
-                    "message": f"Error al obtener facturas: {str(e)}"
-                }
-            )
-    
-    
-    @app.get("/consulta")
-    async def ejecutar_consulta_get(
-        request: Request,
-        query: str = FastAPIQuery(..., description="Consulta SQL a ejecutar contra MBA3")
-    ):
-        """
-        Endpoint GET para ejecutar consultas SQL dinámicas contra MBA3.
-        
-        Equivalente al POST /consulta pero usando método GET con query parameter.
-        Útil para pruebas desde el navegador o herramientas que prefieren GET.
-        
-        **Parámetros:**
-        - `query`: Consulta SQL a ejecutar (requerido)
-        
-        **Ejemplo de uso:**
-        ```
-        GET /consulta?query=SELECT * FROM CLNT_FACTURA_PRINCIPAL WHERE NUMERO_PEDIDO_SISTEMA='176120'
-        ```
-        
-        **Nota:** Las consultas complejas con caracteres especiales pueden requerir encoding URL.
-        Para consultas más complejas, se recomienda usar POST /consulta.
-        
-        Valida que sea solo SELECT y bloquea operaciones peligrosas.
-        Usa el cliente MBA3APIClient para ejecutar la consulta.
-        
-        Returns:
-            JSON con el resultado de MBA3 o error si falla
-        """
-        # Determinar fuente
-        source = get_source_from_headers(request)
-        
-        # Log de la consulta recibida
-        logger.info("=" * 70)
-        logger.info(f"Consulta GET recibida a las {datetime.now().isoformat()}")
-        logger.info(f"Fuente: {source}")
-        logger.info(f"Consulta: {query}")
-        
-        # Verificar si la query solo selecciona CODIGO_FACTURA
-        query_upper = query.upper().strip()
-        if "SELECT" in query_upper:
-            select_part = query_upper.split("SELECT")[1].split("FROM")[0].strip() if "FROM" in query_upper else ""
-            if select_part and "CODIGO_FACTURA" in select_part and len(select_part.split(",")) == 1:
-                logger.warning("⚠️ ADVERTENCIA: La query solo selecciona CODIGO_FACTURA")
-                logger.warning("⚠️ Para obtener todos los campos, usa: SELECT * FROM ...")
-                logger.warning("⚠️ O especifica todos los campos necesarios")
-        
-        logger.info("Ejecutando consulta contra MBA3...")
-        logger.info("=" * 70)
-        
-        try:
-            # Ejecutar consulta usando el servicio
-            result = MBA3Service.execute_query(query)
+            # Ejecutar consulta usando el servicio (SOLO consulta, NO guarda)
+            result = MBA3Service.execute_query(query_predefinida)
             
             # Log detallado de la respuesta para debugging
             logger.info("=" * 70)
@@ -354,23 +214,16 @@ def create_endpoints(app):
                 logger.warning(f"   ⚠️ Tipo inesperado: {type(result)}")
             logger.info("=" * 70)
             
-            # Guardar en SQL Server (si está habilitado)
-            # upsert=True: Actualiza si existe, inserta si no existe
-            save_status = MBA3Service.save_to_database(result, upsert=True)
-            
             # Preparar headers de respuesta
             headers = {
-                "X-Query": query[:100],  # Primeros 100 caracteres de la query
+                "X-Query": query_predefinida[:100],  # Primeros 100 caracteres de la query
                 "X-Source": source,
-                "X-Method": "GET"
+                "X-Method": "GET",
+                "X-Endpoint": "CONSULTAR",
+                "X-Saved-To-DB": "false"  # Indica que NO se guardó
             }
             
-            # Agregar información de guardado si existe
-            if save_status:
-                headers["X-Saved-To-DB"] = save_status.get("status", "unknown")
-                headers["X-DB-Facturas"] = str(save_status.get("facturas_guardadas", 0))
-            
-            # Retornar resultado JSON de MBA3 directamente (mismo formato que POST)
+            # Retornar resultado JSON de MBA3 directamente (solo para visualización)
             return JSONResponse(
                 status_code=200,
                 content=result,
@@ -378,7 +231,7 @@ def create_endpoints(app):
             )
             
         except Exception as e:
-            logger.error(f"❌ Error al ejecutar consulta GET: {e}", exc_info=True)
+            logger.error(f"❌ Error al ejecutar consulta: {e}", exc_info=True)
             return JSONResponse(
                 status_code=500,
                 content={
@@ -388,17 +241,147 @@ def create_endpoints(app):
             )
     
     
-    @app.get("/consulta/predefinida")
-    async def ejecutar_consulta_predefinida(request: Request):
+    @app.get("/migrar")
+    async def migrar_despachos(request: Request):
         """
-        Endpoint PROCESAR: Ejecuta consulta predefinida, guarda en despacho y copia a orden de compra.
+        Endpoint MIGRAR: Ejecuta consulta predefinida y guarda en despacho_cabecera/detalle.
         
-        Este endpoint realiza el proceso completo:
+        **Responsabilidad:** MIGRAR (endpoint #2 de los 4 requeridos)
+        
+        Este endpoint realiza:
+        1. ✅ Consulta datos desde MBA3 usando query predefinida
+        2. ✅ Guarda resultados en SQL Server (despacho_cabecera/detalle)
+        3. ❌ NO copia a orden_compra (ese paso lo hace el endpoint PROCESAR)
+        
+        **Características:**
+        - ✅ Query predefinida integrada en el backend
+        - ✅ Ejecuta consultas contra MBA3 automáticamente
+        - ✅ Guarda resultados en SQL Server (upsert)
+        - ✅ NO copia a orden_compra_cabecera/detalle
+        
+        **Ejemplo de uso:**
+        ```
+        GET /migrar
+        ```
+        
+        **Query predefinida:**
+        ```sql
+        SELECT CODIGO_FACTURA,ANULADA,NUMERO_PEDIDO_SISTEMA,NUMERO_ORDEN,NUMERO_FACTURA,CODIGO_DESPACHO,EMPRESA,CODIGO_CLIENTE,FECHA_FACTURA,TIPO_DOCUMENTO,ObjDatosFactura,ORDEN_COMPRA,ORDEN_COMPRA_CLIENTE,Remision_Facturada,NumIDFacturaRelacionada,CONFIRMADO,CODIGO_BODEGA FROM CLNT_FACTURA_PRINCIPAL WHERE TIPO_DOCUMENTO='REM' AND ANULADA='false' AND CONFIRMADO='true' AND Remision_Facturada='false' AND CODIGO_DESPACHO=0 AND NUMERO_FACTURA > 0 AND ObjDatosFactura IS NOT NULL
+        ```
+        
+        **Nota:** Este endpoint solo migra a despacho.
+        Para proceso completo (consulta + guarda + copia a ODC), usar GET /consulta/predefinida.
+        
+        Returns:
+            JSON con los datos de MBA3 y metadata del guardado en despacho
+        """
+        # Query predefinida (la misma que usa /consulta/predefinida)
+        query_predefinida = "SELECT CODIGO_FACTURA,ANULADA,NUMERO_PEDIDO_SISTEMA,NUMERO_ORDEN,NUMERO_FACTURA,CODIGO_DESPACHO,EMPRESA,CODIGO_CLIENTE,FECHA_FACTURA,TIPO_DOCUMENTO,ObjDatosFactura,ORDEN_COMPRA,ORDEN_COMPRA_CLIENTE,Remision_Facturada,NumIDFacturaRelacionada,CONFIRMADO,CODIGO_BODEGA FROM CLNT_FACTURA_PRINCIPAL WHERE TIPO_DOCUMENTO='REM' AND ANULADA='false' AND CONFIRMADO='true' AND Remision_Facturada='false' AND CODIGO_DESPACHO=0 AND NUMERO_FACTURA > 0 AND ObjDatosFactura IS NOT NULL"
+        
+        # Determinar fuente
+        source = get_source_from_headers(request)
+        
+        # Log de la consulta predefinida
+        logger.info("=" * 70)
+        logger.info(f"🔄 MIGRAR: Proceso iniciado a las {datetime.now().isoformat()}")
+        logger.info(f"Fuente: {source}")
+        logger.info(f"Query predefinida: {query_predefinida}")
+        logger.info("Ejecutando consulta contra MBA3...")
+        logger.info("=" * 70)
+        
+        try:
+            # Ejecutar consulta usando el servicio
+            result = MBA3Service.execute_query(query_predefinida)
+            
+            # Log detallado de la respuesta para debugging
+            logger.info("=" * 70)
+            logger.info("📊 RESPUESTA DE MBA3:")
+            if isinstance(result, list):
+                logger.info(f"   Tipo: Lista con {len(result)} elementos")
+                if len(result) > 0:
+                    first_item = result[0]
+                    if isinstance(first_item, dict):
+                        campos = list(first_item.keys())
+                        logger.info(f"   Campos en primera factura: {campos}")
+                        logger.info(f"   Total de campos: {len(campos)}")
+                        # Mostrar algunos valores de ejemplo
+                        for campo in campos[:5]:  # Primeros 5 campos
+                            logger.info(f"   {campo}: {first_item.get(campo)}")
+                    else:
+                        logger.warning(f"   ⚠️ Primer elemento no es dict: {type(first_item)}")
+            elif isinstance(result, dict):
+                logger.info(f"   Tipo: Diccionario")
+                campos = list(result.keys())
+                logger.info(f"   Campos: {campos}")
+            else:
+                logger.warning(f"   ⚠️ Tipo inesperado: {type(result)}")
+            logger.info("=" * 70)
+            
+            # Guardar en SQL Server (despacho_cabecera/detalle)
+            # upsert=True: Actualiza si existe, inserta si no existe
+            logger.info("💾 Guardando en despacho_cabecera/detalle...")
+            save_status = MBA3Service.save_to_database(result, upsert=True)
+            
+            # Preparar headers de respuesta
+            headers = {
+                "X-Query": query_predefinida[:100],  # Primeros 100 caracteres de la query
+                "X-Source": source,
+                "X-Method": "GET",
+                "X-Endpoint": "MIGRAR"
+            }
+            
+            # Agregar información de guardado si existe
+            if save_status:
+                headers["X-Saved-To-DB"] = save_status.get("status", "unknown")
+                headers["X-DB-Facturas"] = str(save_status.get("facturas_guardadas", 0) + save_status.get("facturas_actualizadas", 0))
+                headers["X-DB-Detalles"] = str(save_status.get("total_detalles", 0))
+            
+            # Preparar respuesta con metadata
+            response_content = {
+                "data": result,  # Datos de MBA3
+                "metadata": {
+                    "query": query_predefinida,
+                    "save_status": save_status  # Estado del guardado en despacho
+                }
+            }
+            
+            logger.info("=" * 70)
+            logger.info(f"✅ MIGRAR completado:")
+            if save_status:
+                logger.info(f"   Facturas guardadas: {save_status.get('facturas_guardadas', 0)}")
+                logger.info(f"   Facturas actualizadas: {save_status.get('facturas_actualizadas', 0)}")
+                logger.info(f"   Total detalles: {save_status.get('total_detalles', 0)}")
+            logger.info("=" * 70)
+            
+            # Retornar respuesta con metadata
+            return JSONResponse(
+                status_code=200,
+                content=response_content,
+                headers=headers
+            )
+            
+        except Exception as e:
+            logger.error(f"❌ Error al ejecutar migración: {e}", exc_info=True)
+            return JSONResponse(
+                status_code=500,
+                content={
+                    "status": "error",
+                    "message": f"Error al ejecutar migración: {str(e)}"
+                }
+            )
+    
+    
+    @app.get("/pruebas")
+    async def ejecutar_pruebas(request: Request):
+        """
+        Endpoint de PRUEBAS: Ejecuta consulta predefinida, guarda en despacho y copia a orden de compra.
+        
+        Este endpoint realiza el proceso completo (para pruebas):
         1. ✅ Consulta datos desde MBA3 usando query predefinida
         2. ✅ Guarda resultados en SQL Server (despacho_cabecera/detalle)
         3. ✅ Copia despachos a orden_compra_cabecera/detalle
         
-        **Responsabilidad:** PROCESAR (endpoint #3 de los 4 requeridos)
+        **Uso:** Endpoint de pruebas que ejecuta todo el flujo completo.
         
         **Características:**
         - ✅ Query integrada en el backend (no requiere SQL del frontend)
@@ -409,7 +392,7 @@ def create_endpoints(app):
         
         **Ejemplo de uso:**
         ```
-        GET /consulta/predefinida
+        GET /pruebas
         ```
         
         **Query predefinida:**
@@ -508,24 +491,26 @@ def create_endpoints(app):
                             continue
                         
                         try:
-                            # Copiar despacho a orden de compra
+                            # Copiar despacho a orden de compra (con upsert)
                             oc_resultado = copy_despacho_to_orden_compra(
                                 despacho_repo=despacho_repo,
                                 oc_repo=oc_repo,
                                 despacho_id=despacho_id,
-                                skip_if_exists=True
+                                upsert=True
                             )
                             
                             if oc_resultado:
                                 oc_exitosas += 1
+                                accion = "actualizada" if oc_resultado.get("cabecera_actualizada") else "creada"
                                 oc_resultados.append({
                                     "despacho_id": despacho_id,
                                     "oc_id": oc_resultado.get("oc_id"),
                                     "proveedor": oc_resultado.get("proveedor"),
-                                    "detalles_insertados": oc_resultado.get("detalles_insertados", 0)
+                                    "detalles_insertados": oc_resultado.get("detalles_insertados", 0),
+                                    "accion": accion
                                 })
                             else:
-                                logger.debug(f"⏭️ OC ya existe o no se pudo crear para despacho: {despacho_id}")
+                                logger.warning(f"⚠️ No se pudo crear/actualizar OC para despacho: {despacho_id}")
                                 
                         except Exception as oc_error:
                             oc_errores += 1
@@ -607,64 +592,170 @@ def create_endpoints(app):
             )
     
     
-    @app.post("/consulta")
-    async def ejecutar_consulta(request: Request):
+    @app.get("/procesar-oc")
+    async def procesar_orden_compra(request: Request):
         """
-        Endpoint para ejecutar consultas SQL dinámicas contra MBA3.
+        Endpoint PROCESAR-OC: Copia despachos existentes a orden_compra_cabecera/detalle.
         
-        Recibe una consulta SQL desde Postman, la valida, la ejecuta en MBA3
-        y retorna el resultado JSON que devuelve MBA3.
+        **Responsabilidad:** Copiar despachos a orden de compra (paso 3 del proceso completo)
         
-        Acepta:
-        - JSON: {"query": "SELECT * FROM tabla WHERE condicion"}
-        - Form-data: campo "query" con la consulta SQL
-        - URL-encoded: campo "query" con la consulta SQL
+        Este endpoint realiza:
+        1. ❌ NO consulta (ya lo hizo CONSULTAR)
+        2. ❌ NO guarda en despacho (ya lo hizo MIGRAR)
+        3. ✅ Copia despachos existentes a orden_compra_cabecera/detalle
         
-        Valida que sea solo SELECT y bloquea operaciones peligrosas.
-        Usa el cliente MBA3APIClient para ejecutar la consulta.
+        **Características:**
+        - ✅ Busca despachos en despacho_cabecera que NO tienen OC asociada
+        - ✅ Copia cada despacho a orden_compra_cabecera/detalle
+        - ✅ Mapea empresa → proveedor desde tabla cliente
+        - ✅ Omite despachos que ya tienen OC (skip_if_exists=True)
+        
+        **Ejemplo de uso:**
+        ```
+        GET /procesar-oc
+        ```
+        
+        **Nota:** Este endpoint asume que los despachos ya están guardados en despacho_cabecera/detalle.
+        Para proceso completo (consulta + guarda + copia), usar GET /consulta/predefinida.
+        
+        **Flujo recomendado:**
+        1. GET /consultar - Solo consulta
+        2. GET /migrar - Consulta + Guarda en despacho
+        3. GET /procesar-oc - Copia despachos a ODC
         
         Returns:
-            JSON con el resultado de MBA3 o error si falla
+            JSON con metadata del proceso de copia a orden de compra
         """
         # Determinar fuente
         source = get_source_from_headers(request)
         
-        # Parsear consulta del request
-        query_text, metodo_usado = await RequestParser.parse_query_from_request(request)
-        
-        # Log de la consulta recibida
+        # Log del proceso
         logger.info("=" * 70)
-        logger.info(f"Consulta dinámica recibida a las {datetime.now().isoformat()}")
+        logger.info(f"🔄 PROCESAR-OC: Iniciado a las {datetime.now().isoformat()}")
         logger.info(f"Fuente: {source}")
-        logger.info(f"Método: {metodo_usado}")
-        logger.info(f"Consulta: {query_text}")
-        logger.info("Ejecutando consulta contra MBA3...")
+        logger.info("Buscando despachos sin orden de compra asociada...")
         logger.info("=" * 70)
         
-        # Ejecutar consulta usando el servicio
-        result = MBA3Service.execute_query(query_text)
-        
-        # Guardar en SQL Server (si está habilitado)
-        # upsert=True: Actualiza si existe, inserta si no existe
-        save_status = MBA3Service.save_to_database(result, upsert=True)
-        
-        # Preparar headers de respuesta
-        headers = {
-            "X-Query": query_text[:100],  # Primeros 100 caracteres de la query
-            "X-Source": source
-        }
-        
-        # Agregar información de guardado si existe
-        if save_status:
-            headers["X-Saved-To-DB"] = save_status.get("status", "unknown")
-            headers["X-DB-Facturas"] = str(save_status.get("facturas_guardadas", 0))
-        
-        # Retornar resultado JSON de MBA3 directamente
-        return JSONResponse(
-            status_code=200,
-            content=result,
-            headers=headers
-        )
+        try:
+            # Obtener conexión y repositorios
+            conn = get_db_connection()
+            despacho_repo = DespachoRepository(conn)
+            oc_repo = OrdenCompraRepository(conn)
+            
+            # Obtener despachos que no tienen OC asociada
+            despachos_sin_oc = despacho_repo.get_despachos_sin_oc()
+            
+            if not despachos_sin_oc:
+                logger.info("ℹ️ No se encontraron despachos sin orden de compra")
+                conn.close()
+                return JSONResponse(
+                    status_code=200,
+                    content={
+                        "status": "success",
+                        "message": "No hay despachos pendientes de copiar a orden de compra",
+                        "oc_creadas": 0,
+                        "oc_errores": 0,
+                        "total_despachos": 0
+                    },
+                    headers={
+                        "X-Source": source,
+                        "X-Endpoint": "PROCESAR-OC"
+                    }
+                )
+            
+            logger.info(f"📦 Encontrados {len(despachos_sin_oc)} despachos sin OC")
+            logger.info("=" * 70)
+            logger.info("🔄 PROCESANDO: Copiando despachos a orden de compra...")
+            logger.info("=" * 70)
+            
+            # Procesar cada despacho
+            oc_resultados = []
+            oc_exitosas = 0
+            oc_errores = 0
+            
+            for idx, despacho_id in enumerate(despachos_sin_oc, 1):
+                try:
+                    logger.info(f"[{idx}/{len(despachos_sin_oc)}] Procesando despacho: {despacho_id}")
+                    
+                    # Copiar despacho a orden de compra (con upsert)
+                    oc_resultado = copy_despacho_to_orden_compra(
+                        despacho_repo=despacho_repo,
+                        oc_repo=oc_repo,
+                        despacho_id=despacho_id,
+                        upsert=True
+                    )
+                    
+                    if oc_resultado:
+                        oc_exitosas += 1
+                        accion = "actualizada" if oc_resultado.get("cabecera_actualizada") else "creada"
+                        oc_resultados.append({
+                            "despacho_id": despacho_id,
+                            "oc_id": oc_resultado.get("oc_id"),
+                            "proveedor": oc_resultado.get("proveedor"),
+                            "detalles_insertados": oc_resultado.get("detalles_insertados", 0),
+                            "accion": accion
+                        })
+                        logger.info(f"   ✅ OC {accion}: {oc_resultado.get('oc_id')}")
+                    else:
+                        logger.warning(f"   ⚠️ No se pudo crear/actualizar OC para despacho: {despacho_id}")
+                        
+                except Exception as oc_error:
+                    oc_errores += 1
+                    logger.error(f"   ❌ Error al copiar despacho {despacho_id} a OC: {oc_error}")
+                    oc_resultados.append({
+                        "despacho_id": despacho_id,
+                        "error": str(oc_error)
+                    })
+            
+            # Cerrar conexión
+            conn.close()
+            
+            oc_status = {
+                "status": "success" if oc_errores == 0 else "partial",
+                "oc_creadas": oc_exitosas,
+                "oc_errores": oc_errores,
+                "total_procesadas": len(oc_resultados),
+                "total_despachos": len(despachos_sin_oc),
+                "detalles": oc_resultados
+            }
+            
+            logger.info("=" * 70)
+            logger.info(f"✅ PROCESAR-OC completado:")
+            logger.info(f"   Total despachos encontrados: {len(despachos_sin_oc)}")
+            logger.info(f"   OCs creadas: {oc_exitosas}")
+            logger.info(f"   Errores: {oc_errores}")
+            logger.info("=" * 70)
+            
+            # Preparar headers de respuesta
+            headers = {
+                "X-Source": source,
+                "X-Endpoint": "PROCESAR-OC",
+                "X-OC-Status": oc_status.get("status", "unknown"),
+                "X-OC-Creadas": str(oc_exitosas),
+                "X-OC-Errores": str(oc_errores),
+                "X-Total-Despachos": str(len(despachos_sin_oc))
+            }
+            
+            # Retornar respuesta con metadata
+            return JSONResponse(
+                status_code=200,
+                content={
+                    "status": "success",
+                    "message": f"Proceso completado: {oc_exitosas} OCs creadas de {len(despachos_sin_oc)} despachos",
+                    "metadata": oc_status
+                },
+                headers=headers
+            )
+            
+        except Exception as e:
+            logger.error(f"❌ Error al procesar orden de compra: {e}", exc_info=True)
+            return JSONResponse(
+                status_code=500,
+                content={
+                    "status": "error",
+                    "message": f"Error al procesar orden de compra: {str(e)}"
+                }
+            )
     
     
     @app.get("/sap/test")

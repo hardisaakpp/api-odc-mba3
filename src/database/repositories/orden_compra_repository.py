@@ -224,4 +224,146 @@ class OrdenCompraRepository:
             return str(result[0]) if result else None
         finally:
             cursor.close()
+    
+    def get_existing_cabecera(self, oc_id: str) -> Optional[Dict[str, Any]]:
+        """
+        Obtiene los datos existentes de una cabecera de orden de compra.
+        
+        Args:
+            oc_id: UUID de la orden de compra
+            
+        Returns:
+            Diccionario con los datos existentes, o None si no existe
+        """
+        cursor = self.conn.cursor()
+        try:
+            cursor.execute(
+                """
+                SELECT oc_id, despacho_id, proveedor, fecha_generacion,
+                       estado, numero_oc_sap, referencia_despacho
+                FROM orden_compra_cabecera
+                WHERE oc_id = ?
+                """,
+                (oc_id,)
+            )
+            result = cursor.fetchone()
+            if not result:
+                return None
+            
+            return {
+                "oc_id": str(result[0]),
+                "despacho_id": str(result[1]),
+                "proveedor": result[2],
+                "fecha_generacion": result[3],
+                "estado": result[4],
+                "numero_oc_sap": result[5],
+                "referencia_despacho": result[6],
+            }
+        finally:
+            cursor.close()
+    
+    def update_cabecera(self, oc_id: str, datos_cabecera: Dict[str, Any]) -> bool:
+        """
+        Actualiza un registro existente en orden_compra_cabecera.
+        
+        Si algún campo en datos_cabecera es None, se preserva el valor existente
+        en la base de datos para evitar violar restricciones NOT NULL.
+        
+        Args:
+            oc_id: UUID de la orden de compra a actualizar
+            datos_cabecera: Diccionario con datos actualizados (sin oc_id)
+            
+        Returns:
+            True si se actualizó correctamente
+            
+        Raises:
+            Exception: Si falla la actualización
+        """
+        cursor = self.conn.cursor()
+        
+        try:
+            # Obtener valores existentes para campos que son None
+            existing = self.get_existing_cabecera(oc_id)
+            if not existing:
+                logger.warning(f"⚠️ No se encontró orden de compra para actualizar: {oc_id}")
+                return False
+            
+            # Fusionar datos: usar nuevo valor si existe y no es None, sino usar existente
+            merged = {}
+            for key in existing.keys():
+                if key == "oc_id":  # No actualizar oc_id
+                    continue
+                new_value = datos_cabecera.get(key)
+                if new_value is not None:
+                    merged[key] = new_value
+                else:
+                    merged[key] = existing[key]
+            
+            # SQL para actualizar (campos actualizables)
+            sql = """
+            UPDATE orden_compra_cabecera SET
+                proveedor = ?,
+                fecha_generacion = ?,
+                referencia_despacho = ?
+            WHERE oc_id = ?
+            """
+            
+            values = (
+                merged.get("proveedor"),
+                merged.get("fecha_generacion"),
+                merged.get("referencia_despacho"),
+                oc_id,
+            )
+            
+            cursor.execute(sql, values)
+            rows_affected = cursor.rowcount
+            self.conn.commit()
+            
+            if rows_affected > 0:
+                logger.debug(f"✅ Orden compra cabecera actualizada: {oc_id} - Despacho: {merged.get('despacho_id', 'N/A')}")
+                return True
+            else:
+                logger.warning(f"⚠️ No se encontró orden de compra para actualizar: {oc_id}")
+                return False
+                
+        except Exception as e:
+            self.conn.rollback()
+            logger.error(f"❌ Error al actualizar orden_compra_cabecera: {e}")
+            logger.error(f"   OC ID: {oc_id}")
+            raise
+        finally:
+            cursor.close()
+    
+    def delete_detalles(self, oc_id: str) -> int:
+        """
+        Elimina todos los detalles de una orden de compra.
+        
+        Args:
+            oc_id: UUID de la orden de compra
+            
+        Returns:
+            Número de detalles eliminados
+        """
+        cursor = self.conn.cursor()
+        
+        try:
+            cursor.execute(
+                "DELETE FROM orden_compra_detalle WHERE oc_id = ?",
+                (oc_id,)
+            )
+            rows_deleted = cursor.rowcount
+            self.conn.commit()
+            
+            if rows_deleted > 0:
+                logger.debug(f"✅ {rows_deleted} detalles eliminados para OC: {oc_id}")
+            
+            return rows_deleted
+            
+        except Exception as e:
+            self.conn.rollback()
+            logger.error(f"❌ Error al eliminar detalles de OC: {e}")
+            logger.error(f"   OC ID: {oc_id}")
+            raise
+        finally:
+            cursor.close()
 
