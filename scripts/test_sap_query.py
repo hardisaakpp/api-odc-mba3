@@ -228,11 +228,12 @@ def main():
         conn = get_db_connection()
         cursor = conn.cursor()
         cursor.execute("SELECT DB_NAME()")
-        current_db = cursor.fetchone()[0]
+        db_result = cursor.fetchone()
+        current_db = db_result[0] if db_result else "UNKNOWN"
         cursor.close()
         conn.close()
         
-        if current_db.lower() != SQL_SERVER_DATABASE.lower():
+        if current_db and current_db.lower() != SQL_SERVER_DATABASE.lower():
             print("⚠️ ADVERTENCIA:")
             print(f"   Base de datos configurada: {SQL_SERVER_DATABASE}")
             print(f"   Base de datos conectada: {current_db}")

@@ -2,7 +2,7 @@
 Tests para DespachoRepository.
 """
 
-import pytest
+import pytest  # type: ignore[reportMissingImports]
 from unittest.mock import MagicMock, Mock
 import uuid
 

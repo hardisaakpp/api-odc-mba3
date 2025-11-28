@@ -64,11 +64,13 @@ try:
     
     # Obtener nombre de la base de datos actual
     cursor.execute("SELECT DB_NAME()")
-    current_db = cursor.fetchone()[0]
+    db_result = cursor.fetchone()
+    current_db = db_result[0] if db_result else "UNKNOWN"
     
     # Obtener nombre del servidor
     cursor.execute("SELECT @@SERVERNAME")
-    server_name = cursor.fetchone()[0]
+    server_result = cursor.fetchone()
+    server_name = server_result[0] if server_result else "UNKNOWN"
     
     # Verificar si existe la tabla producto_sap_cache
     cursor.execute("""
@@ -76,7 +78,8 @@ try:
         FROM INFORMATION_SCHEMA.TABLES 
         WHERE TABLE_NAME = 'producto_sap_cache'
     """)
-    table_exists = cursor.fetchone()[0] > 0
+    table_result = cursor.fetchone()
+    table_exists = (table_result[0] if table_result else 0) > 0
     
     # Verificar si existe la tabla pack_conversion
     cursor.execute("""
@@ -84,7 +87,8 @@ try:
         FROM INFORMATION_SCHEMA.TABLES 
         WHERE TABLE_NAME = 'pack_conversion'
     """)
-    pack_table_exists = cursor.fetchone()[0] > 0
+    pack_result = cursor.fetchone()
+    pack_table_exists = (pack_result[0] if pack_result else 0) > 0
     
     print("✅ Conexión exitosa!")
     print()
@@ -97,7 +101,8 @@ try:
     if pack_table_exists:
         print("   ✅ pack_conversion: EXISTE")
         cursor.execute("SELECT COUNT(*) FROM pack_conversion")
-        pack_count = cursor.fetchone()[0]
+        pack_result = cursor.fetchone()
+        pack_count = pack_result[0] if pack_result else 0
         print(f"      Registros: {pack_count}")
     else:
         print("   ❌ pack_conversion: NO EXISTE")
@@ -105,7 +110,8 @@ try:
     if table_exists:
         print("   ✅ producto_sap_cache: EXISTE")
         cursor.execute("SELECT COUNT(*) FROM producto_sap_cache")
-        cache_count = cursor.fetchone()[0]
+        cache_result = cursor.fetchone()
+        cache_count = cache_result[0] if cache_result else 0
         print(f"      Registros: {cache_count}")
     else:
         print("   ❌ producto_sap_cache: NO EXISTE")
@@ -146,9 +152,11 @@ try:
     
     cursor = conn_sap.cursor()
     cursor.execute("SELECT DB_NAME()")
-    current_db_sap = cursor.fetchone()[0]
+    db_result_sap = cursor.fetchone()
+    current_db_sap = db_result_sap[0] if db_result_sap else "UNKNOWN"
     cursor.execute("SELECT @@SERVERNAME")
-    server_name_sap = cursor.fetchone()[0]
+    server_result_sap = cursor.fetchone()
+    server_name_sap = server_result_sap[0] if server_result_sap else "UNKNOWN"
     
     print("✅ Conexión exitosa!")
     print()

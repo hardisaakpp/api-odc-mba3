@@ -22,7 +22,7 @@ class MBA3APIClient:
     """Cliente para interactuar con la API de MBA3 (4D)."""
     
     def __init__(self, base_url: str, service_code: str, service_password: str, 
-                 digest_username: str = None, digest_password: str = None):
+                 digest_username: Optional[str] = None, digest_password: Optional[str] = None):
         """
         Inicializa el cliente de API.
         

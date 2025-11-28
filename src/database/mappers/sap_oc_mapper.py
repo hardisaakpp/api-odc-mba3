@@ -58,7 +58,7 @@ class SAPOCMapper:
             except:
                 # Si ya está en formato YYYY-MM-DD, usarlo directamente
                 pass
-        elif hasattr(fecha, 'strftime'):
+        elif fecha is not None and hasattr(fecha, 'strftime'):
             fecha = fecha.strftime("%Y-%m-%d")
         elif fecha is None:
             fecha = datetime.now().strftime("%Y-%m-%d")

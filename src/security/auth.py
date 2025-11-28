@@ -52,8 +52,9 @@ async def verify_api_key(
         return None
     
     # Si no se proporcionó API Key
+    client_host = request.client.host if request.client else "unknown"
     if not api_key:
-        logger.warning(f"❌ Intento de acceso sin API Key desde {request.client.host}")
+        logger.warning(f"❌ Intento de acceso sin API Key desde {client_host}")
         raise HTTPException(
             status_code=401,
             detail="API Key requerida. Proporciona X-API-Key en el header."
@@ -61,13 +62,13 @@ async def verify_api_key(
     
     # Verificar API Key
     if api_key != expected_api_key:
-        logger.warning(f"❌ API Key inválida desde {request.client.host}")
+        logger.warning(f"❌ API Key inválida desde {client_host}")
         raise HTTPException(
             status_code=403,
             detail="API Key inválida"
         )
     
-    logger.debug(f"✅ API Key válida desde {request.client.host}")
+    logger.debug(f"✅ API Key válida desde {client_host}")
     return api_key
 
 

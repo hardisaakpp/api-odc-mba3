@@ -131,20 +131,20 @@ class MBA3Service:
         logger.info("=" * 70)
         logger.info(f"📦 Resultado de execute_query:")
         logger.info(f"   Tipo: {type(result)}")
-        if isinstance(result, list):
+        if isinstance(result, list) and len(result) > 0:
             logger.info(f"   Total elementos: {len(result)}")
-            if len(result) > 0:
-                first = result[0]
-                logger.info(f"   Tipo primer elemento: {type(first)}")
-                if isinstance(first, dict):
-                    campos = list(first.keys())
-                    logger.info(f"   Campos en primera factura: {campos}")
-                    logger.info(f"   Total campos: {len(campos)}")
-                    if len(campos) == 1:
-                        logger.error(f"   ⚠️ PROBLEMA: Solo hay 1 campo: {campos}")
-                    # Mostrar algunos valores
-                    for campo in campos[:5]:
-                        logger.info(f"   {campo}: {first.get(campo)}")
+            # Type narrowing: result es una lista no vacía aquí
+            first = result[0]  # type: ignore[reportArgumentType]
+            logger.info(f"   Tipo primer elemento: {type(first)}")
+            if isinstance(first, dict):
+                campos = list(first.keys())
+                logger.info(f"   Campos en primera factura: {campos}")
+                logger.info(f"   Total campos: {len(campos)}")
+                if len(campos) == 1:
+                    logger.error(f"   ⚠️ PROBLEMA: Solo hay 1 campo: {campos}")
+                # Mostrar algunos valores
+                for campo in campos[:5]:
+                    logger.info(f"   {campo}: {first.get(campo)}")
         logger.info("=" * 70)
         
         # Guardar en base de datos si está habilitado

@@ -42,6 +42,9 @@ def do_login():
     Returns:
         JWT token como string, o None si hay error
     """
+    if not BASE_URL or not CODIGO or not PWD:
+        raise SystemExit("Falta configurar BASE_URL, CODIGO o PWD en .env")
+    
     client = MBA3Client(BASE_URL)
     try:
         token = client.login(CODIGO, PWD)
@@ -61,7 +64,7 @@ def do_login():
         return None
 
 
-def do_query(query: str = None):
+def do_query(query: str | None = None):
     """
     Ejecuta una consulta SQL en la base de datos MBA3.
     
@@ -78,13 +81,25 @@ def do_query(query: str = None):
             query = "select CODIGO_FACTURA,ANULADA,NUMERO_PEDIDO_SISTEMA,NUMERO_ORDEN,NUMERO_FACTURA,CODIGO_DESPACHO,EMPRESA,CODIGO_CLIENTE,FECHA_FACTURA,TIPO_DOCUMENTO,ObjDatosFactura,ORDEN_COMPRA,ORDEN_COMPRA_CLIENTE,Remision_Facturada,NumIDFacturaRelacionada from CLNT_FACTURA_PRINCIPAL where NUMERO_PEDIDO_SISTEMA='176120'"
             print("[INFO] Usando consulta por defecto. Configura MBA3_QUERY en .env para usar otra consulta.")
     
+    # Verificar que query no sea None después de las asignaciones
+    if not query:
+        raise SystemExit("No se pudo determinar la consulta SQL a ejecutar")
+    
+    # Verificar que las variables de configuración no sean None
+    if not BASE_URL or not CODIGO or not PWD:
+        raise SystemExit("Falta configurar BASE_URL, CODIGO o PWD en .env")
+    
+    # Asegurar que DIGEST_USERNAME y DIGEST_PASSWORD no sean None
+    digest_user = DIGEST_USERNAME if DIGEST_USERNAME else CODIGO
+    digest_pwd = DIGEST_PASSWORD if DIGEST_PASSWORD else PWD
+    
     # Crear cliente de API con autenticación Digest
     client = MBA3APIClient(
         base_url=BASE_URL,
         service_code=CODIGO,
         service_password=PWD,
-        digest_username=DIGEST_USERNAME,
-        digest_password=DIGEST_PASSWORD
+        digest_username=digest_user,
+        digest_password=digest_pwd
     )
     
     print("=" * 70)
@@ -187,7 +202,7 @@ Ejemplos:
     elif args.login:
         do_login()
     elif args.query:
-        query_str = args.query if isinstance(args.query, str) else None
+        query_str: str | None = args.query if isinstance(args.query, str) else None
         do_query(query_str)
 
 

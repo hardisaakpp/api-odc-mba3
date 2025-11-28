@@ -29,9 +29,9 @@ def setup_rate_limiting(app):
         return None
     
     try:
-        from slowapi import Limiter, _rate_limit_exceeded_handler
-        from slowapi.util import get_remote_address
-        from slowapi.errors import RateLimitExceeded
+        from slowapi import Limiter, _rate_limit_exceeded_handler  # type: ignore[reportMissingImports]
+        from slowapi.util import get_remote_address  # type: ignore[reportMissingImports]
+        from slowapi.errors import RateLimitExceeded  # type: ignore[reportMissingImports]
         
         global _limiter
         

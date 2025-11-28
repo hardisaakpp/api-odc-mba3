@@ -233,6 +233,19 @@ class OCSAPService:
             
             for oc_info in ocs_pendientes:
                 oc_id = oc_info.get("oc_id")
+                if oc_id is None:
+                    logger.warning(f"⚠️ ODC sin oc_id, omitiendo: {oc_info}")
+                    errores += 1
+                    resultados.append({
+                        "oc_id": None,
+                        "proveedor": oc_info.get("proveedor"),
+                        "success": False,
+                        "doc_entry": None,
+                        "doc_num": None,
+                        "error": "oc_id es None"
+                    })
+                    continue
+                
                 logger.info(f"🔄 Procesando ODC: {oc_id}")
                 
                 resultado = self.enviar_oc_a_sap(oc_repo, oc_id, warehouse_code)

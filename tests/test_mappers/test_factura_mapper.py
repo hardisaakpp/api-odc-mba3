@@ -2,7 +2,7 @@
 Tests para FacturaMapper.
 """
 
-import pytest
+import pytest  # type: ignore[reportMissingImports]
 from datetime import datetime
 
 from src.database.mappers.factura_mapper import FacturaMapper
@@ -171,6 +171,7 @@ class TestFacturaMapperToDespachoDetalle:
         
         result = FacturaMapper.to_despacho_detalle(linea, "GrabarLineasProd")
         
+        assert result is not None
         assert result["sku"] == "5-0012.9"
         assert result["nombre_producto"] == "Producto Test"
         assert result["cantidad"] == 10.0
@@ -193,6 +194,7 @@ class TestFacturaMapperToDespachoDetalle:
         
         result = FacturaMapper.to_despacho_detalle(linea, "GrabarLineasProd", sap_info)
         
+        assert result is not None
         # 10 docenas × 4 = 40 packs
         assert result["cantidad_sap"] == 40.0
         # 46.5 / 40 = 1.1625 precio por pack
@@ -231,6 +233,7 @@ class TestFacturaMapperToDespachoDetalle:
         
         result = FacturaMapper.to_despacho_detalle(linea, "GrabarLineasProd")
         
+        assert result is not None
         assert result["cantidad"] == 0
         assert result["total_linea"] == 0
         assert result["precio_unitario"] == 0

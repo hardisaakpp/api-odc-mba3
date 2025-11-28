@@ -115,6 +115,10 @@ def test_conversion(sku: str = "5-0012.9", cantidad: float = 456, total_linea: f
         # Verificar cálculos
         print("🔍 Verificación de Cálculos:")
         unidad_conversion = sap_info.get('unidad_conversion')
+        if unidad_conversion is None:
+            print("   ⚠️ No se pudo obtener unidad_conversion, saltando verificación de cálculos")
+            return
+        
         cantidad_esperada = cantidad * unidad_conversion
         precio_esperado = total_linea / cantidad_esperada if cantidad_esperada > 0 else 0
         

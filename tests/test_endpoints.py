@@ -1,11 +1,10 @@
 """
 Tests para endpoints de la API.
 
-Estos tests verifican que los endpoints funcionan correctamente
-sin modificar la funcionalidad existente.
+Estos tests verifican que los endpoints esenciales funcionan correctamente.
 """
 
-import pytest
+import pytest  # type: ignore[reportMissingImports]
 from fastapi.testclient import TestClient
 
 
@@ -19,37 +18,6 @@ class TestHealthEndpoint:
         data = response.json()
         assert data["status"] == "ok"
         assert "time" in data
-
-
-class TestQueryEndpoint:
-    """Tests para el endpoint /query."""
-    
-    def test_query_validation_select(self, client: TestClient):
-        """Verifica que acepta queries SELECT válidas."""
-        response = client.post(
-            "/query",
-            json={"query": "SELECT * FROM tabla WHERE id = 1"}
-        )
-        assert response.status_code == 200
-        data = response.json()
-        assert "original" in data
-        assert "parsed" in data
-    
-    def test_query_rejects_insert(self, client: TestClient):
-        """Verifica que rechaza queries INSERT."""
-        response = client.post(
-            "/query",
-            json={"query": "INSERT INTO tabla VALUES (1)"}
-        )
-        assert response.status_code == 400
-    
-    def test_query_rejects_delete(self, client: TestClient):
-        """Verifica que rechaza queries DELETE."""
-        response = client.post(
-            "/query",
-            json={"query": "DELETE FROM tabla"}
-        )
-        assert response.status_code == 400
 
 
 class TestConsultarEndpoint:

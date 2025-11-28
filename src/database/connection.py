@@ -58,8 +58,12 @@ def get_db_connection() -> pyodbc.Connection:
         # Verificar base de datos actual
         cursor = conn.cursor()
         cursor.execute("SELECT DB_NAME()")
-        current_db = cursor.fetchone()[0]
+        db_result = cursor.fetchone()
         cursor.close()
+        
+        if db_result is None:
+            raise ValueError("No se pudo obtener el nombre de la base de datos actual")
+        current_db = db_result[0]
         
         logger.info(f"✅ Conexión a SQL Server establecida")
         logger.info(f"   Servidor: {SQL_SERVER_SERVER}")
@@ -118,8 +122,12 @@ def get_sap_db_connection() -> pyodbc.Connection:
         # Verificar base de datos actual
         cursor = conn.cursor()
         cursor.execute("SELECT DB_NAME()")
-        current_db = cursor.fetchone()[0]
+        db_result = cursor.fetchone()
         cursor.close()
+        
+        if db_result is None:
+            raise ValueError("No se pudo obtener el nombre de la base de datos actual")
+        current_db = db_result[0]
         
         logger.info(f"✅ Conexión a SQL Server SAP establecida")
         logger.info(f"   Servidor: {SQL_SERVER_SAP_SERVER}")

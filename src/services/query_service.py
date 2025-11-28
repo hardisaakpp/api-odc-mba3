@@ -5,6 +5,7 @@ Maneja la validación, parsing y almacenamiento de consultas.
 """
 
 import logging
+from typing import Optional
 from datetime import datetime
 
 from utils import (
@@ -26,7 +27,7 @@ class QueryService:
     def process_query(
         query_text: str,
         source: str,
-        received_at: str = None
+        received_at: Optional[str] = None
     ) -> QueryResponse:
         """
         Procesa una consulta SQL: valida, parsea y guarda.

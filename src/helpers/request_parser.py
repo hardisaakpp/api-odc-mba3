@@ -6,7 +6,7 @@ Centraliza la lógica de lectura de JSON, form-data y url-encoded.
 
 import logging
 from typing import Optional, Dict, Any, Tuple
-from fastapi import Request, HTTPException
+from fastapi import Request, HTTPException, UploadFile
 
 logger = logging.getLogger(__name__)
 
@@ -64,16 +64,31 @@ class RequestParser:
         elif "multipart/form-data" in content_type or "application/x-www-form-urlencoded" in content_type:
             try:
                 form_data = await request.form()
-                query_text = form_data.get("query")
+                query_value = form_data.get("query")
+                
+                # Convertir UploadFile a str si es necesario
+                if isinstance(query_value, UploadFile):
+                    query_text = await query_value.read()
+                    query_text = query_text.decode('utf-8')
+                elif isinstance(query_value, str):
+                    query_text = query_value
+                else:
+                    query_text = None
                 
                 # Si no hay query, buscar partes individuales
                 if not query_text and form_data.get("from"):
+                    def get_form_value(key: str) -> Optional[str]:
+                        value = form_data.get(key)
+                        if isinstance(value, UploadFile):
+                            return None  # No soportamos UploadFile para partes individuales
+                        return str(value) if value is not None else None
+                    
                     parsed_parts = {
-                        "select": form_data.get("select"),
-                        "from": form_data.get("from"),
-                        "where": form_data.get("where"),
-                        "orderBy": form_data.get("orderBy"),
-                        "limit": form_data.get("limit")
+                        "select": get_form_value("select"),
+                        "from": get_form_value("from"),
+                        "where": get_form_value("where"),
+                        "orderBy": get_form_value("orderBy"),
+                        "limit": get_form_value("limit")
                     }
                 
                 metodo_usado = "FORM-DATA" if "multipart" in content_type else "URL-ENCODED"
@@ -109,7 +124,7 @@ class RequestParser:
                 )
         
         # Validar que tenemos una consulta
-        if not query_text or not query_text.strip():
+        if not query_text or not isinstance(query_text, str) or not query_text.strip():
             # Preparar información de debug
             debug_info = {}
             if "multipart/form-data" in content_type or "application/x-www-form-urlencoded" in content_type:
@@ -132,7 +147,11 @@ class RequestParser:
                 }
             )
         
-        return query_text, metodo_usado
+        # Asegurar que metodo_usado no sea None
+        if metodo_usado is None:
+            metodo_usado = "DESCONOCIDO"
+        
+        return str(query_text), str(metodo_usado)
     
     @staticmethod
     async def parse_text_from_request(request: Request) -> Tuple[str, str]:
@@ -169,7 +188,16 @@ class RequestParser:
         elif "multipart/form-data" in content_type or "application/x-www-form-urlencoded" in content_type:
             try:
                 form_data = await request.form()
-                texto_recibido = form_data.get("texto") or form_data.get("text")
+                texto_value = form_data.get("texto") or form_data.get("text")
+                
+                # Convertir UploadFile a str si es necesario
+                if isinstance(texto_value, UploadFile):
+                    texto_bytes = await texto_value.read()
+                    texto_recibido = texto_bytes.decode('utf-8')
+                elif isinstance(texto_value, str):
+                    texto_recibido = texto_value
+                else:
+                    texto_recibido = None
                 
                 if not texto_recibido:
                     # Buscar cualquier campo de texto
@@ -178,6 +206,13 @@ class RequestParser:
                         if isinstance(valor, str) and valor.strip():
                             texto_recibido = valor
                             break
+                        elif isinstance(valor, UploadFile):
+                            # Si es UploadFile, leerlo
+                            texto_bytes = await valor.read()
+                            texto_str = texto_bytes.decode('utf-8')
+                            if texto_str.strip():
+                                texto_recibido = texto_str
+                                break
                 
                 metodo_usado = "FORM-DATA" if "multipart" in content_type else "URL-ENCODED"
                 
@@ -204,7 +239,7 @@ class RequestParser:
                     logger.warning(f"No se pudo leer body: {e}")
         
         # Validar que tenemos texto
-        if not texto_recibido or (isinstance(texto_recibido, str) and not texto_recibido.strip()):
+        if not texto_recibido or not isinstance(texto_recibido, str) or not texto_recibido.strip():
             raise HTTPException(
                 status_code=400,
                 detail={
@@ -214,5 +249,9 @@ class RequestParser:
                 }
             )
         
-        return texto_recibido, metodo_usado
+        # Asegurar que metodo_usado no sea None
+        if metodo_usado is None:
+            metodo_usado = "DESCONOCIDO"
+        
+        return str(texto_recibido), str(metodo_usado)
 

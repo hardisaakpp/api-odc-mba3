@@ -4,6 +4,8 @@ Modelos Pydantic para la API de consultas MBA3.
 Define los esquemas de request y response para los endpoints.
 """
 
+from __future__ import annotations
+
 from typing import Optional, Dict, Any
 from pydantic import BaseModel, Field, field_validator
 from datetime import datetime

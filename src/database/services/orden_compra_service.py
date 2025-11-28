@@ -79,11 +79,19 @@ def copy_despacho_to_orden_compra(
         
         # 3. Mapear empresa → proveedor
         empresa = despacho_cabecera.get("empresa")
+        if empresa is None:
+            logger.error(f"❌ No se encontró 'empresa' en despacho_cabecera para despacho {despacho_id}")
+            return None
+        
         proveedor = oc_repo.get_proveedor_from_cliente(empresa)
         
         if not proveedor:
             logger.warning(f"⚠️ No se pudo obtener proveedor para empresa: {empresa}. Usando empresa como proveedor.")
             proveedor = empresa
+        
+        if proveedor is None:
+            logger.error(f"❌ No se pudo determinar proveedor para despacho {despacho_id}")
+            return None
         
         logger.debug(f"🔄 Mapeo empresa → proveedor: {empresa} → {proveedor}")
         result["proveedor"] = proveedor

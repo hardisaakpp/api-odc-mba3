@@ -13,7 +13,7 @@ import ssl
 import subprocess
 import json
 import requests
-from typing import Optional, Dict, Any, Tuple
+from typing import Optional, Dict, Any, Tuple, Union
 from datetime import datetime, timedelta
 from requests.adapters import HTTPAdapter
 
@@ -224,7 +224,7 @@ class SAPServiceLayerClient:
         logger.error(f"❌ Todos los métodos de conexión fallaron. Último error: {last_error}")
         return None, None
     
-    def _try_request_with_curl(self, method: str, url: str, **kwargs) -> Optional[requests.Response]:
+    def _try_request_with_curl(self, method: str, url: str, **kwargs) -> Optional[Union[requests.Response, Any]]:
         """
         Intenta realizar una petición usando curl como subproceso.
         

@@ -2,7 +2,7 @@
 Tests para MBA3Service.
 """
 
-import pytest
+import pytest  # type: ignore[reportMissingImports]
 from unittest.mock import patch, MagicMock
 
 from src.services.mba3_service import MBA3Service

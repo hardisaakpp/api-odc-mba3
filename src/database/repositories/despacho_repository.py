@@ -279,7 +279,11 @@ class DespachoRepository:
         
         try:
             # Generar UUID para despacho_id
-            despacho_id = str(cursor.execute("SELECT NEWID()").fetchone()[0])
+            cursor.execute("SELECT NEWID()")
+            uuid_result = cursor.fetchone()
+            if uuid_result is None:
+                raise ValueError("No se pudo generar UUID para despacho_id")
+            despacho_id = str(uuid_result[0])
             
             # SQL para insertar (incluyendo todos los campos de la tabla)
             sql = """

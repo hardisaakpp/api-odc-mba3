@@ -131,7 +131,7 @@ def parse_query(query: str) -> Tuple[Dict[str, Any], str]:
         Tupla (parsed_dict, note) donde parsed_dict contiene los campos parseados
         y note es "PARSE_OK" o motivo de error
     """
-    parsed = {
+    parsed: Dict[str, Any] = {
         "select": None,
         "from": None,
         "where": None,
@@ -178,14 +178,17 @@ def parse_query(query: str) -> Tuple[Dict[str, Any], str]:
         limit_start = limit_match.end() if limit_match else None
         
         # Extraer SELECT (entre SELECT y FROM)
-        select_part = normalized[select_start:from_match.start()].strip()
-        parsed["select"] = select_part if select_part else "*"
+        if from_match:
+            select_part = normalized[select_start:from_match.start()].strip()
+            parsed["select"] = select_part if select_part else "*"
+        else:
+            parsed["select"] = "*"
         
         # Extraer FROM (entre FROM y WHERE/ORDER BY/LIMIT/END)
         from_end = min(
-            where_match.start() if where_start else len(normalized),
-            order_by_match.start() if order_by_start else len(normalized),
-            limit_match.start() if limit_start else len(normalized)
+            where_match.start() if where_match and where_start else len(normalized),
+            order_by_match.start() if order_by_match and order_by_start else len(normalized),
+            limit_match.start() if limit_match and limit_start else len(normalized)
         )
         from_part = normalized[from_start:from_end].strip()
         parsed["from"] = from_part if from_part else None
@@ -196,15 +199,15 @@ def parse_query(query: str) -> Tuple[Dict[str, Any], str]:
         # Extraer WHERE (entre WHERE y ORDER BY/LIMIT/END)
         if where_start:
             where_end = min(
-                order_by_match.start() if order_by_start else len(normalized),
-                limit_match.start() if limit_start else len(normalized)
+                order_by_match.start() if order_by_match and order_by_start else len(normalized),
+                limit_match.start() if limit_match and limit_start else len(normalized)
             )
             where_part = normalized[where_start:where_end].strip()
             parsed["where"] = where_part if where_part else None
         
         # Extraer ORDER BY (entre ORDER BY y LIMIT/END)
         if order_by_start:
-            order_by_end = limit_match.start() if limit_start else len(normalized)
+            order_by_end = limit_match.start() if limit_match and limit_start else len(normalized)
             order_by_part = normalized[order_by_start:order_by_end].strip()
             parsed["orderBy"] = order_by_part if order_by_part else None
         

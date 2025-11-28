@@ -2,7 +2,7 @@
 import requests
 import json
 import logging
-from typing import Optional
+from typing import Optional, Union
 
 # Configurar logging básico similar a la versión anterior
 logging.basicConfig(
@@ -34,12 +34,15 @@ class MBA3Client:
         self.token: Optional[str] = None
         logger.info(f"Cliente MBA3 inicializado con URL: {self.base_url}")
 
-    def _extract_token(self, resp_json: dict) -> Optional[str]:
+    def _extract_token(self, resp_json: Union[dict, str]) -> Optional[str]:
         """
         Extrae el JWT de la respuesta del servidor.
         
         Según documentación, el JWT viene en la respuesta del login.
         Intenta varios formatos comunes.
+        
+        Args:
+            resp_json: Respuesta del servidor, puede ser un diccionario o un string
         """
         # El JWT puede venir directamente como string o en un campo
         if isinstance(resp_json, str):

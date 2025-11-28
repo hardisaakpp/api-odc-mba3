@@ -118,7 +118,11 @@ class OrdenCompraRepository:
         
         try:
             # Generar UUID para oc_id
-            oc_id = str(cursor.execute("SELECT NEWID()").fetchone()[0])
+            cursor.execute("SELECT NEWID()")
+            uuid_result = cursor.fetchone()
+            if uuid_result is None:
+                raise ValueError("No se pudo generar UUID para oc_id")
+            oc_id = str(uuid_result[0])
             
             # SQL para insertar (estructura real de la tabla)
             # Inicializar estado como 'PENDIENTE' si no se proporciona

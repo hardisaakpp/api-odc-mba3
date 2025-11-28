@@ -7,7 +7,7 @@ Esta versión usa servicios y helpers para separar la lógica de negocio.
 import logging
 from datetime import datetime
 
-from fastapi import Request, Query as FastAPIQuery
+from fastapi import Request, Query as FastAPIQuery, HTTPException
 from fastapi.responses import JSONResponse
 from typing import Optional
 
@@ -108,7 +108,7 @@ def create_endpoints(app):
             if isinstance(result, list):
                 logger.info(f"   Tipo: Lista con {len(result)} elementos")
                 if len(result) > 0:
-                    first_item = result[0]
+                    first_item = result[0]  # type: ignore[reportArgumentType]
                     if isinstance(first_item, dict):
                         campos = list(first_item.keys())
                         logger.info(f"   Campos en primera factura: {campos}")
@@ -214,7 +214,7 @@ def create_endpoints(app):
             if isinstance(result, list):
                 logger.info(f"   Tipo: Lista con {len(result)} elementos")
                 if len(result) > 0:
-                    first_item = result[0]
+                    first_item = result[0]  # type: ignore[reportArgumentType]
                     if isinstance(first_item, dict):
                         campos = list(first_item.keys())
                         logger.info(f"   Campos en primera factura: {campos}")
@@ -361,7 +361,7 @@ def create_endpoints(app):
             if isinstance(result, list):
                 logger.info(f"   Tipo: Lista con {len(result)} elementos")
                 if len(result) > 0:
-                    first_item = result[0]
+                    first_item = result[0]  # type: ignore[reportArgumentType]
                     if isinstance(first_item, dict):
                         campos = list(first_item.keys())
                         logger.info(f"   Campos en primera factura: {campos}")
@@ -397,12 +397,20 @@ def create_endpoints(app):
                     oc_repo = OrdenCompraRepository(conn)
                     
                     # Obtener despacho_ids de las facturas guardadas
-                    facturas = result if isinstance(result, list) else [result]
+                    if isinstance(result, list):
+                        facturas = result
+                    elif isinstance(result, dict):
+                        facturas = [result]
+                    else:
+                        facturas = []
+                    
                     oc_resultados = []
                     oc_exitosas = 0
                     oc_errores = 0
                     
                     for factura in facturas:
+                        if not isinstance(factura, dict):
+                            continue
                         codigo_factura = factura.get("CODIGO_FACTURA")
                         if not codigo_factura:
                             continue
@@ -894,6 +902,12 @@ def create_endpoints(app):
                 oc_pendiente = ocs_pendientes[0]
                 oc_id = oc_pendiente.get("oc_id")
                 total_pendientes = len(ocs_pendientes)
+            
+            if oc_id is None:
+                raise HTTPException(
+                    status_code=400,
+                    detail="No se pudo obtener oc_id de la ODC pendiente"
+                )
             
             logger.info(f"📤 Enviando ODC a SAP Service Layer...")
             logger.info(f"   ODC seleccionada: {oc_id}")

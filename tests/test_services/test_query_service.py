@@ -2,7 +2,7 @@
 Tests para QueryService.
 """
 
-import pytest
+import pytest  # type: ignore[reportMissingImports]
 from datetime import datetime
 from unittest.mock import patch, MagicMock
 

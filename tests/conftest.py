@@ -2,7 +2,7 @@
 Configuración compartida para tests (fixtures).
 """
 
-import pytest
+import pytest  # type: ignore[reportMissingImports]
 from unittest.mock import MagicMock
 from fastapi.testclient import TestClient
 from src.api_server import app
