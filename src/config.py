@@ -115,6 +115,10 @@ ENABLE_SAP_SERVICE_LAYER = os.getenv("ENABLE_SAP_SERVICE_LAYER", "false").lower(
 # Timeout para requests a Service Layer (segundos)
 SAP_SERVICE_LAYER_TIMEOUT = int(os.getenv("SAP_SERVICE_LAYER_TIMEOUT", "30"))
 
+# Verificación SSL (deshabilitar solo para desarrollo/pruebas con certificados autofirmados)
+# ⚠️ ADVERTENCIA: Deshabilitar verificación SSL es inseguro. Solo usar en desarrollo/pruebas.
+SAP_SERVICE_LAYER_VERIFY_SSL = os.getenv("SAP_SERVICE_LAYER_VERIFY_SSL", "true").lower() == "true"
+
 # ============================================================================
 # Configuración de Seguridad (Opcional)
 # ============================================================================

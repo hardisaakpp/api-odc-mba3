@@ -71,7 +71,6 @@ Cuando `ENABLE_AUTH=true`, estos endpoints requieren API Key:
 - ✅ `GET /consultar`
 - ✅ `GET /migrar`
 - ✅ `GET /procesar-oc`
-- ✅ `POST /enviar-oc-sap`
 - ✅ `POST /integrar-sap`
 - ✅ `GET /pruebas`
 

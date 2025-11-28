@@ -1,16 +1,20 @@
-# Integración con SAP para Conversión de Unidades
+# Integración con SAP
 
-Este documento describe la integración del sistema con SAP para realizar conversiones automáticas de unidades entre El Rayo (docenas) y Mabel (packs SAP).
+Guía completa de integración con SAP para conversión de unidades y envío de órdenes de compra.
 
 ## 📋 Resumen
 
-El sistema consulta automáticamente información de productos desde SAP (HANA) usando `OPENQUERY` desde SQL Server, y realiza conversiones de unidades:
+El sistema integra con SAP de dos formas:
+
+1. **Consultas SAP HANA** - Para conversión automática de unidades (docenas → packs)
+2. **SAP Service Layer** - Para envío de órdenes de compra (Purchase Orders)
+
+### Conversión de Unidades
 
 - **El Rayo (MBA3)**: Maneja unidades en **docenas**
 - **Mabel (SAP)**: Maneja unidades en **packs** (X1, X2, X3, etc.)
 
-### Fórmula de Conversión
-
+**Fórmula de Conversión:**
 ```
 cantidad_sap (packs) = cantidad (docenas) × unidad_conversion
 precio_unitario_sap = total_linea / cantidad_sap
@@ -92,12 +96,20 @@ ADD precio_unitario_sap DECIMAL(18, 4) NULL;
 ### Variables de Entorno (.env)
 
 ```env
-# Configuración SAP
+# SAP HANA (Consultas)
 SAP_LINKED_SERVER=MYHANADB
 SAP_DATABASE=SBO_MABEL_PROD
 SAP_SCHEMA=SBO_MABEL_PROD
 ENABLE_SAP_QUERIES=true
 SAP_CACHE_DAYS=30
+
+# SAP Service Layer (Envío de Purchase Orders)
+SAP_SERVICE_LAYER_URL=http://tu-servidor-sap:50000/b1s/v1
+SAP_SERVICE_LAYER_USERNAME=tu_usuario
+SAP_SERVICE_LAYER_PASSWORD=tu_contraseña
+SAP_SERVICE_LAYER_DATABASE=SBO_MABEL_PROD
+ENABLE_SAP_SERVICE_LAYER=true
+SAP_SERVICE_LAYER_TIMEOUT=30
 ```
 
 ### Requisitos Previos
@@ -106,6 +118,7 @@ SAP_CACHE_DAYS=30
    - Debe estar configurado un servidor vinculado llamado `[MYHANADB]` (o el nombre que configures)
    - Este servidor debe apuntar a SAP HANA
    - Debe tener permisos para ejecutar `OPENQUERY`
+   - Ver [CONFIGURACION.md](CONFIGURACION.md#configurar-servidor-vinculado-para-sap) para instrucciones
 
 2. **Ejecutar Scripts SQL:**
    ```sql
@@ -118,7 +131,7 @@ SAP_CACHE_DAYS=30
 
 ## 🔄 Flujo de Trabajo
 
-### Paso 1: Consulta SAP y Cache
+### Consulta SAP y Conversión
 
 Cuando se procesa una factura con un SKU nuevo:
 
@@ -142,7 +155,7 @@ Cuando se procesa una factura con un SKU nuevo:
 3. Obtiene la unidad de conversión desde `pack_conversion` basado en `U_IXX_PACK`
 4. Guarda/actualiza el cache en `producto_sap_cache`
 
-### Paso 2: Conversión al Guardar Detalles
+### Conversión al Guardar Detalles
 
 Cuando se guarda una línea de detalle:
 
@@ -153,81 +166,40 @@ Cuando se guarda una línea de detalle:
    - `unidad_sap = pack_sap` (X1, X2, etc.)
 3. Se guarda en `despacho_detalle` con ambos valores (original y convertido)
 
-## 📁 Estructura de Archivos
+## 🧪 Pruebas
 
-```
-src/database/
-├── clients/
-│   ├── __init__.py
-│   └── sap_client.py          # Cliente para consultar SAP
-├── repositories/
-│   ├── __init__.py
-│   ├── despacho_repository.py
-│   └── producto_sap_repository.py  # Repositorio para producto_sap_cache
-├── services/
-│   ├── __init__.py
-│   ├── factura_service.py     # Modificado para integrar SAP
-│   └── sap_service.py         # Servicio para gestionar SAP y cache
-└── mappers/
-    └── factura_mapper.py       # Modificado para calcular conversiones
+### Script de Prueba
 
-scripts/
-├── create_sap_tables.sql      # Script para crear tablas SAP
-└── add_precio_unitario_sap_column.sql  # Script para agregar columna
+```bash
+# Probar con un SKU específico
+python scripts/test_sap_query.py --sku "5-0012.9"
+
+# Probar componentes específicos
+python scripts/test_sap_query.py --test client --sku "5-0012.9"
+python scripts/test_sap_query.py --test service --sku "5-0012.9"
+python scripts/test_sap_query.py --test cache --sku "5-0012.9"
 ```
 
-## 🔧 Componentes Principales
+### Endpoints de Prueba
 
-### SAPClient
-
-Cliente para ejecutar consultas `OPENQUERY` a SAP.
-
-```python
-from src.database.clients.sap_client import SAPClient
-
-client = SAPClient()
-producto_info = client.get_producto_info("5-0012.9")
-# Retorna: {"ItemCode": "5-0012.9", "ItemName": "...", "U_IXX_PACK": "X3"}
+**Prueba Completa (con cache):**
+```
+GET http://localhost:8000/sap/test?sku=5-0012.9
 ```
 
-### SAPService
-
-Servicio de alto nivel que gestiona cache y consultas SAP.
-
-```python
-from src.database.services.sap_service import SAPService
-
-service = SAPService()
-producto_info = service.get_or_fetch_producto_info("5-0012.9")
-# Retorna información desde cache o consulta SAP si es necesario
+**Prueba Directa (sin cache):**
+```
+GET http://localhost:8000/sap/test/direct?sku=5-0012.9
 ```
 
-### ProductoSAPRepository
+### Verificar en Base de Datos
 
-Repositorio para operaciones CRUD en `producto_sap_cache`.
+```sql
+-- Ver qué hay en el cache
+SELECT * FROM producto_sap_cache WHERE sku = '5-0012.9';
 
-```python
-from src.database.repositories.producto_sap_repository import ProductoSAPRepository
-
-repository = ProductoSAPRepository(conn)
-producto = repository.find_by_sku("5-0012.9")
-```
-
-## 📊 Ejemplo de Uso
-
-Cuando se guarda una factura desde MBA3:
-
-```python
-# En factura_service.py, automáticamente:
-1. Se procesa cada línea de detalle
-2. Para cada SKU, se consulta SAP (o se usa cache)
-3. Se calculan las conversiones
-4. Se guarda en despacho_detalle con:
-   - cantidad: 456 (docenas)
-   - cantidad_sap: 1824 (packs)
-   - unidad_sap: "X3"
-   - precio_unitario: 4.65 (por docena)
-   - precio_unitario_sap: 1.1625 (por pack)
+-- Ver la unidad de conversión
+SELECT * FROM pack_conversion WHERE pack_id = 'X3';
 ```
 
 ## 🚀 Activación
@@ -267,3 +239,48 @@ ENABLE_SAP_QUERIES=false
 - Verifica que `SAP_CACHE_DAYS` esté configurado correctamente
 - Puedes forzar refresh usando `force_refresh=True` en `get_or_fetch_producto_info()`
 
+### Error: "Producto no encontrado en SAP"
+- Verifica que el SKU exista en SAP
+- Verifica que `SAP_DATABASE` y `SAP_SCHEMA` sean correctos
+- Verifica permisos en el servidor vinculado
+
+### Error: "No se pudo obtener unidad de conversión"
+- Verifica que el pack (ej: X3) exista en la tabla `pack_conversion`
+- Ejecuta `scripts/create_sap_tables.sql` para poblar los datos iniciales
+
+## 📁 Estructura de Archivos
+
+```
+src/database/
+├── clients/
+│   ├── sap_client.py          # Cliente para consultar SAP HANA
+│   └── sap_service_layer_client.py  # Cliente para SAP Service Layer
+├── repositories/
+│   ├── producto_sap_repository.py  # Repositorio para producto_sap_cache
+│   └── orden_compra_repository.py  # Repositorio para órdenes de compra
+├── services/
+│   └── sap_service.py         # Servicio para gestionar SAP y cache
+└── mappers/
+    └── sap_oc_mapper.py       # Mapeo de órdenes de compra a SAP
+
+scripts/
+├── create_sap_tables.sql      # Script para crear tablas SAP
+└── add_precio_unitario_sap_column.sql  # Script para agregar columna
+```
+
+## 📊 Ejemplo de Uso
+
+Cuando se guarda una factura desde MBA3:
+
+```python
+# En factura_service.py, automáticamente:
+1. Se procesa cada línea de detalle
+2. Para cada SKU, se consulta SAP (o se usa cache)
+3. Se calculan las conversiones
+4. Se guarda en despacho_detalle con:
+   - cantidad: 456 (docenas)
+   - cantidad_sap: 1824 (packs)
+   - unidad_sap: "X3"
+   - precio_unitario: 4.65 (por docena)
+   - precio_unitario_sap: 1.1625 (por pack)
+```

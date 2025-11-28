@@ -6,7 +6,6 @@
         <div class="navbar-actions">
           <nav class="nav-links">
             <RouterLink to="/" class="nav-link">Facturas</RouterLink>
-            <RouterLink to="/consulta" class="nav-link">Consulta SQL</RouterLink>
           </nav>
           <ThemeToggle />
         </div>

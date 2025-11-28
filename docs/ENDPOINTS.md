@@ -219,55 +219,6 @@ Ejecuta el proceso completo de los 3 primeros endpoints: consulta + guarda + cop
 
 ---
 
-### Consulta SQL Dinámica
-
-**POST `/consulta`**
-
-Ejecuta una consulta SQL personalizada contra MBA3.
-
-**Body (JSON):**
-```json
-{
-  "query": "SELECT * FROM CLNT_FACTURA_PRINCIPAL WHERE NUMERO_PEDIDO_SISTEMA='176120'"
-}
-```
-
-**GET `/consulta?query=...`**
-
-Mismo comportamiento pero con método GET.
-
----
-
-### Validar Consulta SQL
-
-**POST `/query`**
-
-Valida y parsea una consulta SQL sin ejecutarla.
-
-**Body (JSON):**
-```json
-{
-  "query": "SELECT * FROM tabla WHERE condicion"
-}
-```
-
-**Respuesta:**
-```json
-{
-  "original": "SELECT * FROM tabla",
-  "parsed": {
-    "select": "*",
-    "from": "tabla",
-    "where": "condicion"
-  },
-  "received_at": "2025-01-21T12:00:00",
-  "source": "Postman",
-  "note": "PARSE_OK"
-}
-```
-
----
-
 ### Consultar SAP
 
 **GET `/sap/test?sku=5-0012.9`**
@@ -296,59 +247,16 @@ Consulta directa a SAP sin usar cache.
 
 ---
 
-## Flujo Completo de Procesamiento
+## 📋 Flujo Completo de Procesamiento
 
-El sistema está diseñado con 4 endpoints principales que forman un flujo completo:
+El sistema está diseñado con **4 endpoints principales** que forman un flujo completo:
 
-### 1. CONSULTAR - `GET /consultar`
-**Responsabilidad:** Consultar datos desde MBA3 (solo lectura)
+1. **GET `/consultar`** - Consultar datos desde MBA3 (solo lectura)
+2. **GET `/migrar`** - Consultar y guardar en base de datos
+3. **GET `/procesar-oc`** - Copiar despachos a órdenes de compra
+4. **POST `/integrar-sap`** - Enviar ODCs a SAP Service Layer
 
-- Consulta despachos desde MBA3
-- No guarda en base de datos
-- Retorna datos en formato JSON
-
-### 2. MIGRAR - `GET /migrar`
-**Responsabilidad:** Consultar y guardar en base de datos
-
-- Consulta despachos desde MBA3
-- Guarda en `despacho_cabecera`/`despacho_detalle`
-- Retorna datos y metadata del guardado
-
-### 3. PROCESAR - `GET /procesar-oc`
-**Responsabilidad:** Copiar despachos a órdenes de compra
-
-- Busca despachos sin OC asociada
-- Copia a `orden_compra_cabecera`/`orden_compra_detalle`
-- Crea ODCs con estado `"PENDIENTE"`
-- Mapea empresa → proveedor
-
-### 4. INTEGRAR - `POST /integrar-sap`
-**Responsabilidad:** Enviar ODCs a SAP Service Layer
-
-- Busca ODCs con estado `"PENDIENTE"`
-- Convierte a formato JSON de SAP
-- Envía a SAP Service Layer
-- Actualiza estado a `"ENVIADA"` o `"ERROR"`
-
-### Flujo Recomendado
-
-```bash
-# Paso 1: Consultar (opcional, solo para verificar)
-GET /consultar
-
-# Paso 2: Migrar (consulta + guarda)
-GET /migrar
-
-# Paso 3: Procesar (copia a OC)
-GET /procesar-oc
-
-# Paso 4: Integrar (envía a SAP)
-POST /integrar-sap
-```
-
-### Endpoint de Pruebas
-
-**GET `/pruebas`** - Ejecuta los pasos 1, 2 y 3 en un solo endpoint (útil para testing).
+Para una descripción detallada del flujo completo, ver [FLUJO_COMPLETO.md](FLUJO_COMPLETO.md).
 
 ---
 

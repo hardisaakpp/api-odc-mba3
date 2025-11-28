@@ -24,7 +24,7 @@ cp .env.example .env  # Editar con tus credenciales
 
 ### Configuración
 
-Crear archivo `.env` en la raíz del proyecto:
+Crear archivo `.env` en la raíz del proyecto. Ver [docs/CONFIGURACION.md](docs/CONFIGURACION.md) para detalles completos.
 
 ```env
 # MBA3
@@ -34,8 +34,8 @@ MBA3_PWD=tu_contraseña
 
 # SQL Server
 SQL_SERVER_DRIVER={ODBC Driver 17 for SQL Server}
-SQL_SERVER_SERVER=localhost
-SQL_SERVER_DATABASE=tu_base_de_datos
+SQL_SERVER_SERVER=210.17.1.54
+SQL_SERVER_DATABASE=store_control
 SQL_SERVER_UID=tu_usuario
 SQL_SERVER_PWD=tu_contraseña
 ENABLE_SQL_SERVER_STORAGE=true
@@ -44,9 +44,8 @@ ENABLE_SQL_SERVER_STORAGE=true
 SAP_LINKED_SERVER=MYHANADB
 SAP_DATABASE=SBO_MABEL_PROD
 ENABLE_SAP_QUERIES=true
+ENABLE_SAP_SERVICE_LAYER=true
 ```
-
-Ver [docs/CONFIGURACION.md](docs/CONFIGURACION.md) para más detalles.
 
 ### Iniciar Servidor
 
@@ -100,15 +99,7 @@ mba3-consultas/
 
 - **GET `/health`** - Health check
 - **GET `/facturas`** - Obtener facturas con filtros (recomendado para frontend)
-- **GET `/pruebas`** - Proceso completo (consulta + guarda + copia a OC, sin enviar a SAP)
-- **POST `/enviar-oc-sap`** - Equivalente a `GET /procesar-oc` pero con método POST
-- **POST `/consulta`** - Ejecutar consulta SQL dinámica
-- **POST `/query`** - Validar y parsear consulta SQL
-
-### SAP
-
 - **GET `/sap/test?sku=...`** - Consultar producto en SAP (usa cache)
-- **GET `/sap/test/direct?sku=...`** - Consulta directa a SAP (sin cache)
 
 Ver [docs/ENDPOINTS.md](docs/ENDPOINTS.md) para documentación completa.
 
@@ -116,9 +107,9 @@ Ver [docs/ENDPOINTS.md](docs/ENDPOINTS.md) para documentación completa.
 
 ### Backend
 
-- ✅ Consultas a API MBA3 con autenticación JWT
+- ✅ Consultas a API MBA3 con autenticación JWT automática
 - ✅ Guardado automático en SQL Server
-- ✅ Integración con SAP HANA (OPENQUERY)
+- ✅ Integración con SAP HANA (OPENQUERY) para conversión de unidades
 - ✅ Integración con SAP Service Layer (Purchase Orders)
 - ✅ Validación de consultas SQL (solo SELECT)
 - ✅ Mapeo automático MBA3 → SQL Server
@@ -137,14 +128,16 @@ Ver [docs/ENDPOINTS.md](docs/ENDPOINTS.md) para documentación completa.
 
 ### Documentación Principal
 
-- [README de Documentación](docs/README.md) - Índice completo de documentación técnica
-- [Configuración](docs/CONFIGURACION.md) - Variables de entorno y setup
+- [Índice de Documentación](docs/README.md) - Índice completo de documentación técnica
+- [Configuración](docs/CONFIGURACION.md) - Variables de entorno y setup completo
 - [Endpoints](docs/ENDPOINTS.md) - Documentación completa de API
-- [Guía de Pruebas](docs/pruebas/README.md) - Scripts y comandos para probar funcionalidades
+- [Flujo Completo](docs/FLUJO_COMPLETO.md) - Flujo de los 4 endpoints principales
 
 ### Documentación Especializada
 
 - [Integración SAP](docs/INTEGRACION_SAP.md) - Configuración e integración con SAP
+- [Seguridad](docs/SEGURIDAD.md) - Configuración de seguridad opcional
+- [Testing](docs/TESTING.md) - Guía de pruebas
 - [Frontend](frontend/README.md) - Guía del frontend Vue.js
 
 ## 🛠️ Desarrollo
@@ -160,6 +153,9 @@ python src/main.py --query
 
 # Verificar conexión SQL Server
 python scripts/check_db_connection.py
+
+# Probar consulta SAP
+python scripts/test_sap_query.py --sku "5-0012.9"
 ```
 
 ### Testing
@@ -179,10 +175,14 @@ npm run test
 - ✅ Bloqueo de operaciones peligrosas (INSERT, UPDATE, DELETE, etc.)
 - ✅ Variables de entorno para credenciales
 - ✅ `.env` en `.gitignore`
+- ✅ Autenticación opcional mediante API Keys
+- ✅ Rate limiting opcional
+
+Ver [docs/SEGURIDAD.md](docs/SEGURIDAD.md) para más detalles.
 
 ## 📝 Notas
 
-- El JWT de MBA3 tiene tiempo de expiración limitado
+- El JWT de MBA3 se obtiene y renueva automáticamente
 - Los datos se guardan automáticamente en SQL Server si está habilitado
 - Las consultas SAP usan cache para mejorar rendimiento
 - Ver logs en consola para debugging

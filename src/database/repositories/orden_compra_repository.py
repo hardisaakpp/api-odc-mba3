@@ -27,6 +27,7 @@ class OrdenCompraRepository:
         
         Si empresa ≠ CardCode SAP, busca en la tabla cliente el mapeo.
         La tabla cliente puede tener diferentes estructuras, así que intenta varias opciones.
+        Si no encuentra en la tabla, usa un diccionario de mapeo hardcodeado como fallback.
         
         Args:
             empresa: Nombre de la empresa
@@ -36,6 +37,12 @@ class OrdenCompraRepository:
         """
         if not empresa:
             return None
+        
+        # Diccionario de mapeo hardcodeado (fallback)
+        MAPEO_EMPRESA_PROVEEDOR = {
+            "TRAYO": "P1790389219001",
+            # Agregar más mapeos aquí si es necesario en el futuro
+        }
         
         cursor = self.conn.cursor()
         try:
@@ -74,6 +81,12 @@ class OrdenCompraRepository:
             except Exception:
                 pass
             
+            # Opción 3: Usar diccionario hardcodeado como fallback
+            if empresa in MAPEO_EMPRESA_PROVEEDOR:
+                card_code = MAPEO_EMPRESA_PROVEEDOR[empresa]
+                logger.info(f"✅ Mapeo hardcodeado encontrado: {empresa} → {card_code}")
+                return card_code
+            
             # Si no se encuentra mapeo, retornar la empresa misma
             # (puede ser que ya sea el CardCode o que la tabla no exista)
             logger.debug(f"ℹ️ No se encontró mapeo para empresa '{empresa}', usando empresa como proveedor")
@@ -81,7 +94,9 @@ class OrdenCompraRepository:
             
         except Exception as e:
             logger.warning(f"⚠️ Error al buscar proveedor en tabla cliente: {e}")
-            # Si hay error, retornar empresa como fallback
+            # Si hay error, intentar diccionario hardcodeado
+            if empresa in MAPEO_EMPRESA_PROVEEDOR:
+                return MAPEO_EMPRESA_PROVEEDOR[empresa]
             return empresa
         finally:
             cursor.close()
@@ -230,6 +245,44 @@ class OrdenCompraRepository:
         finally:
             cursor.close()
     
+    def find_by_referencia_despacho(self, referencia_despacho: str) -> Optional[Dict[str, Any]]:
+        """
+        Busca una orden de compra por referencia_despacho (número de factura).
+        
+        Args:
+            referencia_despacho: Número de factura/despacho a buscar
+            
+        Returns:
+            Diccionario con datos de la OC si existe, None si no existe
+        """
+        cursor = self.conn.cursor()
+        try:
+            cursor.execute(
+                """
+                SELECT oc_id, despacho_id, proveedor, fecha_generacion,
+                       estado, numero_oc_sap, referencia_despacho, created_at
+                FROM orden_compra_cabecera
+                WHERE referencia_despacho = ?
+                """,
+                (referencia_despacho,)
+            )
+            result = cursor.fetchone()
+            if not result:
+                return None
+            
+            return {
+                "oc_id": str(result[0]),
+                "despacho_id": str(result[1]),
+                "proveedor": result[2],
+                "fecha_generacion": result[3],
+                "estado": result[4],
+                "numero_oc_sap": result[5],
+                "referencia_despacho": result[6],
+                "created_at": result[7],
+            }
+        finally:
+            cursor.close()
+    
     def get_by_estado(self, estado: str) -> List[Dict[str, Any]]:
         """
         Obtiene todas las órdenes de compra con un estado específico.
@@ -247,7 +300,7 @@ class OrdenCompraRepository:
             cursor.execute(
                 """
                 SELECT oc_id, despacho_id, proveedor, fecha_generacion,
-                       estado, numero_oc_sap, referencia_despacho, created_at, updated_at
+                       estado, numero_oc_sap, referencia_despacho, created_at
                 FROM orden_compra_cabecera
                 WHERE estado = ?
                 ORDER BY created_at DESC
@@ -267,7 +320,7 @@ class OrdenCompraRepository:
                     "numero_oc_sap": row[5],
                     "referencia_despacho": row[6],
                     "created_at": row[7],
-                    "updated_at": row[8],
+                    # updated_at no existe en la tabla, se omite
                 })
             
             return oc_list
@@ -356,8 +409,7 @@ class OrdenCompraRepository:
                 fecha_generacion = ?,
                 referencia_despacho = ?,
                 estado = ?,
-                numero_oc_sap = ?,
-                updated_at = GETDATE()
+                numero_oc_sap = ?
             WHERE oc_id = ?
             """
             
@@ -411,16 +463,14 @@ class OrdenCompraRepository:
                 sql = """
                 UPDATE orden_compra_cabecera SET
                     estado = ?,
-                    numero_oc_sap = ?,
-                    updated_at = GETDATE()
+                    numero_oc_sap = ?
                 WHERE oc_id = ?
                 """
                 values = (estado, numero_oc_sap, oc_id)
             else:
                 sql = """
                 UPDATE orden_compra_cabecera SET
-                    estado = ?,
-                    updated_at = GETDATE()
+                    estado = ?
                 WHERE oc_id = ?
                 """
                 values = (estado, oc_id)
@@ -460,11 +510,10 @@ class OrdenCompraRepository:
             cursor.execute(
                 """
                 SELECT oc_detalle_id, oc_id, sku_sap, cantidad_sap, unidad_sap,
-                       referencia_detalle, precio_unitario, total_linea, cantidad_origen,
-                       created_at, updated_at
+                       referencia_detalle, precio_unitario, total_linea, cantidad_origen
                 FROM orden_compra_detalle
                 WHERE oc_id = ?
-                ORDER BY created_at ASC
+                ORDER BY oc_detalle_id ASC
                 """,
                 (oc_id,)
             )
@@ -482,8 +531,7 @@ class OrdenCompraRepository:
                     "precio_unitario": float(row[6]) if row[6] is not None else 0.0,
                     "total_linea": float(row[7]) if row[7] is not None else 0.0,
                     "cantidad_origen": float(row[8]) if row[8] is not None else None,
-                    "created_at": row[9],
-                    "updated_at": row[10],
+                    # created_at y updated_at no existen en la tabla, se omiten
                 })
             
             return detalles

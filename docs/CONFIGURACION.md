@@ -1,6 +1,8 @@
 # Configuración
 
-## Variables de Entorno
+Guía completa de configuración del sistema MBA3 Consultas.
+
+## 📋 Variables de Entorno
 
 Crear archivo `.env` en la raíz del proyecto.
 
@@ -14,12 +16,12 @@ MBA3_DIGEST_USERNAME=tu_usuario  # Opcional
 MBA3_DIGEST_PASSWORD=tu_contraseña  # Opcional
 ```
 
-### SQL Server
+### SQL Server Principal (Almacenamiento)
 
 ```env
 SQL_SERVER_DRIVER={ODBC Driver 17 for SQL Server}
-SQL_SERVER_SERVER=localhost
-SQL_SERVER_DATABASE=tu_base_de_datos
+SQL_SERVER_SERVER=210.17.1.54
+SQL_SERVER_DATABASE=store_control
 SQL_SERVER_UID=tu_usuario
 SQL_SERVER_PWD=tu_contraseña
 ENABLE_SQL_SERVER_STORAGE=true
@@ -27,7 +29,27 @@ ENABLE_SQL_SERVER_STORAGE=true
 
 **Autenticación Windows:** Dejar `SQL_SERVER_UID` y `SQL_SERVER_PWD` vacíos.
 
-### SAP HANA (Opcional - Consultas)
+**Propósito:** Almacenar datos de MBA3 y cache de productos SAP.
+- Tablas: `despacho_cabecera`, `despacho_detalle`, `producto_sap_cache`, `pack_conversion`
+
+### SQL Server SAP (Consultas OPENQUERY) - Opcional
+
+Si usas un servidor SQL diferente para consultas SAP:
+
+```env
+SQL_SERVER_SAP_DRIVER={ODBC Driver 17 for SQL Server}
+SQL_SERVER_SAP_SERVER=10.10.100.12
+SQL_SERVER_SAP_DATABASE=STORECONTROL
+SQL_SERVER_SAP_UID=usuario
+SQL_SERVER_SAP_PWD=contraseña
+```
+
+**Nota:** Si no configuras estas variables, el sistema usará las del servidor principal como fallback.
+
+**Propósito:** Ejecutar consultas `OPENQUERY` a SAP HANA.
+- Requisito: Debe tener el servidor vinculado `[MYHANADB]` configurado
+
+### SAP HANA (Consultas)
 
 ```env
 SAP_LINKED_SERVER=MYHANADB
@@ -37,39 +59,120 @@ ENABLE_SAP_QUERIES=true
 SAP_CACHE_DAYS=30
 ```
 
-### SAP Service Layer (Opcional - Envío de Purchase Orders)
+**Requisito:** El servidor vinculado `[MYHANADB]` debe estar configurado en SQL Server. Ver sección [Configurar Servidor Vinculado](#configurar-servidor-vinculado-para-sap).
+
+### SAP Service Layer (Envío de Purchase Orders)
 
 ```env
-# URL base del Service Layer
 SAP_SERVICE_LAYER_URL=http://tu-servidor-sap:50000/b1s/v1
-
-# Credenciales de autenticación
 SAP_SERVICE_LAYER_USERNAME=tu_usuario
 SAP_SERVICE_LAYER_PASSWORD=tu_contraseña
 SAP_SERVICE_LAYER_DATABASE=SBO_MABEL_PROD
-
-# Habilitar envío de ODC a SAP Service Layer
 ENABLE_SAP_SERVICE_LAYER=true
-
-# Timeout para requests a Service Layer (segundos)
 SAP_SERVICE_LAYER_TIMEOUT=30
 ```
 
 **Nota:** Estas variables son necesarias para el endpoint `POST /integrar-sap` que envía órdenes de compra a SAP.
 
-### SQL Server SAP (Opcional)
-
-Si usas un servidor SQL diferente para consultas SAP:
+### Seguridad (Opcional)
 
 ```env
-SQL_SERVER_SAP_DRIVER={ODBC Driver 17 for SQL Server}
-SQL_SERVER_SAP_SERVER=servidor_sap
-SQL_SERVER_SAP_DATABASE=base_datos_sap
-SQL_SERVER_SAP_UID=usuario
-SQL_SERVER_SAP_PWD=contraseña
+ENABLE_AUTH=false
+API_KEY=tu-api-key-secreta
+ENABLE_RATE_LIMITING=false
+RATE_LIMIT_DEFAULT=100/minute
+ENVIRONMENT=development
+HIDE_SWAGGER_IN_PROD=true
 ```
 
-## Verificación
+Ver [SEGURIDAD.md](SEGURIDAD.md) para más detalles.
+
+## 🔧 Configurar Servidor Vinculado para SAP
+
+### Requisitos Previos
+
+1. **SQL Server Management Studio (SSMS)** instalado
+2. **Driver ODBC para SAP HANA** instalado (o driver OLE DB)
+3. **Acceso al servidor SAP HANA**
+4. **Credenciales** para conectarse a SAP HANA
+
+### Método 1: Script SQL (Recomendado)
+
+1. Conéctate a tu instancia de SQL Server en SSMS
+2. Ejecuta el script `scripts/configure_sap_linked_server.sql` o ejecuta manualmente:
+
+```sql
+-- Ajusta estos valores según tu configuración
+DECLARE @server NVARCHAR(128) = N'MYHANADB';
+DECLARE @datasrc NVARCHAR(4000) = N'10.10.100.12';  -- Tu IP de SAP
+DECLARE @catalog NVARCHAR(128) = N'SBO_MABEL_PROD';  -- Tu base de datos
+
+-- Crear servidor vinculado
+EXEC sp_addlinkedserver
+    @server = @server,
+    @srvproduct = N'HANA',
+    @provider = N'MSDASQL',
+    @datasrc = @datasrc,
+    @catalog = @catalog;
+
+-- Configurar autenticación
+EXEC sp_addlinkedsrvlogin 
+    @rmtsrvname = 'MYHANADB',
+    @useself = 'false',
+    @locallogin = NULL,
+    @rmtuser = 'SYSTEM',  -- Usuario SAP
+    @rmtpassword = 'tu_contraseña';
+```
+
+3. Verificar:
+
+```sql
+-- Ver servidores vinculados
+SELECT * FROM sys.servers WHERE name = 'MYHANADB';
+
+-- Probar conexión
+SELECT * FROM OPENQUERY([MYHANADB], 'SELECT 1 AS Test');
+```
+
+### Método 2: Interfaz Gráfica (SSMS)
+
+1. En SSMS, expande **Server Objects** → **Linked Servers**
+2. Click derecho → **New Linked Server...**
+3. **General:**
+   - Linked server: `MYHANADB`
+   - Server type: **Other data source**
+   - Provider: `Microsoft OLE DB Provider for ODBC Drivers`
+   - Product name: `HANA`
+   - Data source: `10.10.100.12` (tu IP de SAP)
+   - Catalog: `SBO_MABEL_PROD`
+4. **Security:**
+   - Selecciona **Be made using this security context**
+   - Remote login: Usuario SAP
+   - With password: Contraseña SAP
+5. **Server Options:**
+   - ✅ RPC: `True`
+   - ✅ RPC Out: `True`
+   - Connect timeout: `30`
+   - Query timeout: `30`
+
+### Verificar Configuración
+
+```sql
+-- Ver todos los servidores vinculados
+SELECT * FROM sys.servers WHERE is_linked = 1;
+
+-- Ver detalles específicos
+SELECT 
+    name AS ServerName,
+    product AS Product,
+    provider AS Provider,
+    data_source AS DataSource,
+    catalog AS Catalog
+FROM sys.servers
+WHERE name = 'MYHANADB';
+```
+
+## ✅ Verificación
 
 ```bash
 # Verificar conexión MBA3
@@ -77,9 +180,12 @@ python src/main.py --login
 
 # Verificar conexión SQL Server
 python scripts/check_db_connection.py
+
+# Probar consulta SAP
+python scripts/test_sap_query.py --sku "5-0012.9"
 ```
 
-## Solución de Problemas
+## 🔍 Solución de Problemas
 
 ### Error: "Driver ODBC no encontrado"
 - Instalar driver ODBC desde Microsoft
@@ -95,3 +201,31 @@ python scripts/check_db_connection.py
 - Verificar que el servidor esté accesible
 - Verificar la URL base
 
+### Error: "Cannot find the server 'MYHANADB'"
+- El servidor vinculado no está configurado
+- Ver sección [Configurar Servidor Vinculado](#configurar-servidor-vinculado-para-sap)
+
+### Error: "Invalid object name 'producto_sap_cache'"
+- Estás conectado al servidor SAP en lugar del servidor principal
+- Verifica que `SQL_SERVER_SERVER` y `SQL_SERVER_DATABASE` apunten al servidor principal
+
+### Error: "Provider is not registered"
+- Instala el driver ODBC o OLE DB para SAP HANA
+
+### Error: "Login failed for user"
+- Verifica las credenciales en `sp_addlinkedsrvlogin`
+- Asegúrate de que el usuario tenga permisos en SAP HANA
+
+## 📊 Resumen de Configuración
+
+| Propósito | Servidor | Base de Datos | Variables |
+|-----------|----------|---------------|-----------|
+| Almacenar datos | 210.17.1.54 | store_control | `SQL_SERVER_*` |
+| Consultas SAP | 10.10.100.12 | STORECONTROL | `SQL_SERVER_SAP_*` |
+
+## 📝 Notas Importantes
+
+1. **Nombre del servidor vinculado**: Debe coincidir exactamente con `SAP_LINKED_SERVER` en tu `.env`
+2. **IP y Puerto**: Si SAP HANA usa un puerto específico, inclúyelo: `10.10.100.12:30015`
+3. **Permisos**: Asegúrate de que el usuario tenga permisos de lectura en las tablas de SAP
+4. **Cache**: El sistema usa cache para evitar consultas repetidas a SAP (configurable con `SAP_CACHE_DAYS`)

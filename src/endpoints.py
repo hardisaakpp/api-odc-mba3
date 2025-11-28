@@ -11,10 +11,8 @@ from fastapi import Request, Query as FastAPIQuery
 from fastapi.responses import JSONResponse
 from typing import Optional
 
-from models import HealthResponse, QueryResponse
-from services.query_service import QueryService
+from models import HealthResponse
 from services.mba3_service import MBA3Service
-from helpers.request_parser import RequestParser
 from utils import get_source_from_headers
 from database.services.sap_service import SAPService
 from database.clients.sap_client import SAPClient
@@ -25,7 +23,6 @@ from database.services.oc_sap_service import OCSAPService
 from database.connection import get_db_connection
 from config import ENABLE_SAP_QUERIES, SAP_LINKED_SERVER, ENABLE_SAP_SERVICE_LAYER
 from security.auth import optional_auth
-from typing import Optional
 from fastapi import Depends
 
 logger = logging.getLogger(__name__)
@@ -51,77 +48,6 @@ def create_endpoints(app):
             "status": "ok",
             "time": datetime.now().isoformat()
         }
-    
-    
-    @app.post("/test")
-    async def test_endpoint(request: Request):
-        """
-        Endpoint de prueba simple para verificar comunicación Postman → API.
-        
-        Recibe un texto desde Postman y lo devuelve en JSON sin procesar.
-        Útil para probar que la comunicación funciona.
-        
-        Acepta:
-        - JSON: {"texto": "tu mensaje aquí"}
-        - Form-data: campo "texto"
-        - URL-encoded: campo "texto"
-        
-        Returns:
-            JSON con el texto recibido, timestamp y confirmación
-        """
-        # Parsear texto del request
-        texto_recibido, metodo_usado = await RequestParser.parse_text_from_request(request)
-        
-        # Preparar respuesta
-        respuesta = {
-            "status": "success",
-            "mensaje": "¡Comunicación Postman → API funciona correctamente!",
-            "texto_recibido": str(texto_recibido),
-            "recibido_en": datetime.now().isoformat(),
-            "tipo_contenido": request.headers.get("Content-Type", "no especificado"),
-            "metodo_identificado": metodo_usado,
-            "longitud": len(str(texto_recibido))
-        }
-        
-        # Log
-        logger.info("=" * 70)
-        logger.info(f"✅ Endpoint /test llamado exitosamente")
-        logger.info(f"📥 Texto recibido: {texto_recibido}")
-        logger.info(f"📦 Método: {metodo_usado}")
-        logger.info(f"⏰ Hora: {datetime.now().isoformat()}")
-        logger.info("=" * 70)
-        
-        return respuesta
-    
-    
-    @app.post("/query", response_model=QueryResponse)
-    async def receive_query(request: Request):
-        """
-        Endpoint para recibir consultas SQL.
-        
-        Acepta consultas en múltiples formatos:
-        - JSON: {"query": "SELECT ..."} o {"select": "...", "from": "...", ...}
-        - form-data o url-encoded: query="SELECT ..." o campos individuales
-        
-        Valida que sea solo SELECT y bloquea operaciones peligrosas.
-        Parsea la consulta y guarda el resultado en ultima_consulta.json.
-        
-        Returns:
-            JSON con la consulta original, parseada, timestamp y metadata
-        """
-        # Determinar fuente
-        source = get_source_from_headers(request)
-        
-        # Parsear consulta del request
-        query_text, metodo_usado = await RequestParser.parse_query_from_request(request)
-        
-        # Procesar consulta usando el servicio
-        response_data = QueryService.process_query(
-            query_text=query_text,
-            source=source
-        )
-        
-        return response_data
     
     
     @app.get("/consultar")
@@ -793,202 +719,10 @@ def create_endpoints(app):
                 }
             )
     
-    
-    @app.post("/enviar-oc-sap")
-    async def enviar_oc_a_sap(
-        request: Request,
-        auth: Optional[str] = Depends(optional_auth)  # Autenticación opcional
-    ):
-        """
-        Endpoint ENVIAR-OC-SAP (POST): Copia despachos a orden de compra.
-        
-        **Responsabilidad:** PROCESAR (endpoint #3 de los 4 requeridos) - Versión POST
-        
-        Este endpoint realiza:
-        1. ❌ NO consulta (ya lo hizo CONSULTAR)
-        2. ❌ NO guarda en despacho (ya lo hizo MIGRAR)
-        3. ✅ Copia despachos existentes a orden_compra_cabecera/detalle
-        4. ❌ NO envía a SAP (ese paso lo hace el endpoint INTEGRAR)
-        
-        **Características:**
-        - ✅ Busca despachos en despacho_cabecera que NO tienen OC asociada
-        - ✅ Copia cada despacho a orden_compra_cabecera/detalle
-        - ✅ Mapea empresa → proveedor desde tabla cliente
-        - ✅ Omite despachos que ya tienen OC (skip_if_exists=True)
-        - ✅ Crea las ODC con estado "PENDIENTE" (listas para enviar a SAP)
-        
-        **Ejemplo de uso:**
-        ```
-        POST /enviar-oc-sap
-        ```
-        
-        **Nota:** Este endpoint asume que los despachos ya están guardados en despacho_cabecera/detalle.
-        Es equivalente a GET /procesar-oc pero usando método POST.
-        
-        **Flujo recomendado:**
-        1. GET /consultar - Solo consulta
-        2. GET /migrar - Consulta + Guarda en despacho
-        3. POST /enviar-oc-sap - Copia despachos a ODC (estado: PENDIENTE)
-        4. POST /integrar-sap - Envía ODC a SAP usando middleware
-        
-        **Estados de ODC:**
-        - `PENDIENTE`: Creada pero no enviada a SAP (estado inicial)
-        - `ENVIADA`: Enviada exitosamente a SAP (se actualiza en endpoint INTEGRAR)
-        - `ERROR`: Error al enviar a SAP (se actualiza en endpoint INTEGRAR)
-        
-        Returns:
-            JSON con metadata del proceso de creación de ODC
-        """
-        # Determinar fuente
-        source = get_source_from_headers(request)
-        
-        # Log del proceso
-        logger.info("=" * 70)
-        logger.info(f"🔄 ENVIAR-OC-SAP (POST): Iniciado a las {datetime.now().isoformat()}")
-        logger.info(f"Fuente: {source}")
-        logger.info("Buscando despachos sin orden de compra asociada...")
-        logger.info("=" * 70)
-        
-        try:
-            # Obtener conexión y repositorios
-            conn = get_db_connection()
-            despacho_repo = DespachoRepository(conn)
-            oc_repo = OrdenCompraRepository(conn)
-            
-            # Obtener despachos que no tienen OC asociada
-            despachos_sin_oc = despacho_repo.get_despachos_sin_oc()
-            
-            if not despachos_sin_oc:
-                logger.info("ℹ️ No se encontraron despachos sin orden de compra")
-                conn.close()
-                return JSONResponse(
-                    status_code=200,
-                    content={
-                        "status": "success",
-                        "message": "No hay despachos pendientes de copiar a orden de compra",
-                        "oc_creadas": 0,
-                        "oc_errores": 0,
-                        "total_despachos": 0
-                    },
-                    headers={
-                        "X-Source": source,
-                        "X-Endpoint": "ENVIAR-OC-SAP"
-                    }
-                )
-            
-            logger.info(f"📦 Encontrados {len(despachos_sin_oc)} despachos sin OC")
-            logger.info("=" * 70)
-            logger.info("🔄 PROCESANDO: Copiando despachos a orden de compra...")
-            logger.info("=" * 70)
-            
-            # Procesar cada despacho
-            oc_resultados = []
-            oc_exitosas = 0
-            oc_errores = 0
-            
-            for idx, despacho_id in enumerate(despachos_sin_oc, 1):
-                try:
-                    logger.info(f"[{idx}/{len(despachos_sin_oc)}] Procesando despacho: {despacho_id}")
-                    
-                    # Copiar despacho a orden de compra (con upsert)
-                    oc_resultado = copy_despacho_to_orden_compra(
-                        despacho_repo=despacho_repo,
-                        oc_repo=oc_repo,
-                        despacho_id=despacho_id,
-                        upsert=True
-                    )
-                    
-                    if oc_resultado:
-                        oc_exitosas += 1
-                        oc_id = oc_resultado.get("oc_id")
-                        accion = "actualizada" if oc_resultado.get("cabecera_actualizada") else "creada"
-                        
-                        resultado_item = {
-                            "despacho_id": despacho_id,
-                            "oc_id": oc_id,
-                            "proveedor": oc_resultado.get("proveedor"),
-                            "detalles_insertados": oc_resultado.get("detalles_insertados", 0),
-                            "accion": accion,
-                            "estado": "PENDIENTE"  # Estado inicial de la ODC
-                        }
-                        
-                        logger.info(f"   ✅ OC {accion}: {oc_id} (estado: PENDIENTE)")
-                        
-                        oc_resultados.append(resultado_item)
-                    else:
-                        oc_errores += 1
-                        logger.warning(f"   ⚠️ No se pudo crear/actualizar OC para despacho: {despacho_id}")
-                        oc_resultados.append({
-                            "despacho_id": despacho_id,
-                            "error": "No se pudo crear/actualizar OC"
-                        })
-                        
-                except Exception as oc_error:
-                    oc_errores += 1
-                    logger.error(f"   ❌ Error al copiar despacho {despacho_id} a OC: {oc_error}")
-                    oc_resultados.append({
-                        "despacho_id": despacho_id,
-                        "error": str(oc_error)
-                    })
-            
-            # Cerrar conexión
-            conn.close()
-            
-            oc_status = {
-                "status": "success" if oc_errores == 0 else "partial",
-                "oc_creadas": oc_exitosas,
-                "oc_errores": oc_errores,
-                "total_procesadas": len(oc_resultados),
-                "total_despachos": len(despachos_sin_oc),
-                "detalles": oc_resultados
-            }
-            
-            logger.info("=" * 70)
-            logger.info(f"✅ ENVIAR-OC-SAP (POST) completado:")
-            logger.info(f"   Total despachos encontrados: {len(despachos_sin_oc)}")
-            logger.info(f"   OCs creadas: {oc_exitosas}")
-            logger.info(f"   Errores: {oc_errores}")
-            logger.info(f"   Estado de OCs creadas: PENDIENTE (listas para enviar a SAP)")
-            logger.info("=" * 70)
-            
-            # Preparar headers de respuesta
-            headers = {
-                "X-Source": source,
-                "X-Endpoint": "ENVIAR-OC-SAP",
-                "X-OC-Status": oc_status.get("status", "unknown"),
-                "X-OC-Creadas": str(oc_exitosas),
-                "X-OC-Errores": str(oc_errores),
-                "X-Total-Despachos": str(len(despachos_sin_oc))
-            }
-            
-            # Construir mensaje
-            mensaje = f"Proceso completado: {oc_exitosas} OCs creadas de {len(despachos_sin_oc)} despachos (estado: PENDIENTE)"
-            
-            # Retornar respuesta con metadata
-            return JSONResponse(
-                status_code=200,
-                content={
-                    "status": "success",
-                    "message": mensaje,
-                    "metadata": oc_status
-                },
-                headers=headers
-            )
-            
-        except Exception as e:
-            logger.error(f"❌ Error al procesar orden de compra: {e}", exc_info=True)
-            return JSONResponse(
-                status_code=500,
-                content={
-                    "status": "error",
-                    "message": f"Error al procesar orden de compra: {str(e)}"
-                }
-            )
-    
-    
     @app.post("/integrar-sap")
     async def integrar_sap(
         request: Request,
+        referencia_despacho: Optional[str] = FastAPIQuery(None, description="Referencia del despacho (número de factura) para buscar una OC específica. Si no se proporciona, se procesa la primera OC pendiente."),
         auth: Optional[str] = Depends(optional_auth)  # Autenticación opcional
     ):
         """
@@ -1004,14 +738,23 @@ def create_endpoints(app):
         5. ✅ Actualiza estado a "ENVIADA" o "ERROR" según resultado
         
         **Características:**
-        - ✅ Busca ODCs en orden_compra_cabecera con estado "PENDIENTE"
-        - ✅ Convierte cada ODC a formato JSON de SAP Service Layer
-        - ✅ Envía cada ODC directamente a SAP Service Layer (sin middleware)
-        - ✅ Actualiza estado y número de OC en la base de datos
-        - ✅ Retorna resumen detallado del proceso
+        - ✅ Si se proporciona `referencia_despacho`: busca esa OC específica y la envía
+        - ✅ Si NO se proporciona `referencia_despacho`: busca la primera ODC pendiente y la envía
+        - ✅ Envía UNA SOLA ODC por cada llamada al endpoint
+        - ✅ Convierte la ODC a formato JSON de SAP Service Layer
+        - ✅ Envía la ODC directamente a SAP Service Layer (sin middleware)
+        - ✅ Actualiza estado a "ENVIADA" o "ERROR" según resultado
+        - ✅ Retorna información de la ODC procesada y cantidad de pendientes restantes
         
-        **Ejemplo de uso:**
+        **Query Parameters:**
+        - `referencia_despacho` (opcional): Número de factura/despacho para buscar una OC específica
+        
+        **Ejemplos de uso:**
         ```
+        # Buscar OC específica por referencia
+        POST /integrar-sap?referencia_despacho=900125353
+        
+        # Procesar primera OC pendiente (comportamiento por defecto)
         POST /integrar-sap
         ```
         
@@ -1047,7 +790,10 @@ def create_endpoints(app):
         logger.info("=" * 70)
         logger.info(f"🚀 INTEGRAR-SAP: Iniciado a las {datetime.now().isoformat()}")
         logger.info(f"Fuente: {source}")
-        logger.info("Buscando órdenes de compra pendientes de enviar a SAP...")
+        if referencia_despacho:
+            logger.info(f"Buscando OC por referencia_despacho: {referencia_despacho}")
+        else:
+            logger.info("Buscando órdenes de compra pendientes de enviar a SAP...")
         logger.info("=" * 70)
         
         try:
@@ -1074,67 +820,174 @@ def create_endpoints(app):
             # Inicializar servicio SAP
             oc_sap_service = OCSAPService()
             
-            # Enviar todas las ODCs pendientes
-            logger.info("📤 Enviando ODCs pendientes a SAP Service Layer...")
+            # Determinar qué OC procesar
+            if referencia_despacho:
+                # Buscar OC específica por referencia_despacho
+                oc_pendiente = oc_repo.find_by_referencia_despacho(referencia_despacho)
+                
+                if not oc_pendiente:
+                    conn.close()
+                    logger.warning(f"⚠️ No se encontró OC con referencia_despacho: {referencia_despacho}")
+                    return JSONResponse(
+                        status_code=404,
+                        content={
+                            "status": "not_found",
+                            "message": f"No se encontró orden de compra con referencia: {referencia_despacho}"
+                        },
+                        headers={
+                            "X-Source": source,
+                            "X-Endpoint": "INTEGRAR-SAP"
+                        }
+                    )
+                
+                oc_id = oc_pendiente.get("oc_id")
+                estado_oc = oc_pendiente.get("estado")
+                
+                # Verificar que la OC esté en estado PENDIENTE
+                if estado_oc != "PENDIENTE":
+                    conn.close()
+                    logger.warning(f"⚠️ OC {oc_id} no está en estado PENDIENTE (estado actual: {estado_oc})")
+                    return JSONResponse(
+                        status_code=400,
+                        content={
+                            "status": "error",
+                            "message": f"La OC con referencia {referencia_despacho} no está en estado PENDIENTE (estado actual: {estado_oc})",
+                            "oc_id": oc_id,
+                            "estado_actual": estado_oc
+                        },
+                        headers={
+                            "X-Source": source,
+                            "X-Endpoint": "INTEGRAR-SAP"
+                        }
+                    )
+                
+                # Para referencia específica, no calculamos total_pendientes
+                total_pendientes = None
+                
+            else:
+                # Obtener la primera ODC pendiente (comportamiento por defecto)
+                ocs_pendientes = oc_repo.get_by_estado("PENDIENTE")
+                
+                if not ocs_pendientes:
+                    conn.close()
+                    logger.info("ℹ️ No hay órdenes de compra pendientes de enviar a SAP")
+                    return JSONResponse(
+                        status_code=200,
+                        content={
+                            "status": "success",
+                            "message": "No hay órdenes de compra pendientes de enviar a SAP",
+                            "metadata": {
+                                "total_pendientes": 0,
+                                "enviadas": 0,
+                                "errores": 0,
+                                "pendientes_restantes": 0,
+                                "detalles": []
+                            }
+                        },
+                        headers={
+                            "X-Source": source,
+                            "X-Endpoint": "INTEGRAR-SAP"
+                        }
+                    )
+                
+                # Tomar solo la primera ODC pendiente
+                oc_pendiente = ocs_pendientes[0]
+                oc_id = oc_pendiente.get("oc_id")
+                total_pendientes = len(ocs_pendientes)
+            
+            logger.info(f"📤 Enviando ODC a SAP Service Layer...")
+            logger.info(f"   ODC seleccionada: {oc_id}")
+            if referencia_despacho:
+                logger.info(f"   Referencia despacho: {referencia_despacho}")
+            if total_pendientes is not None:
+                logger.info(f"   Total pendientes restantes: {total_pendientes - 1}")
             logger.info("=" * 70)
             
-            resultado = oc_sap_service.enviar_ocs_pendientes(
+            # Enviar solo esta ODC
+            resultado = oc_sap_service.enviar_oc_a_sap(
                 oc_repo=oc_repo,
-                warehouse_code=None,  # Se puede agregar como parámetro opcional en el futuro
-                limit=None  # Procesar todas las pendientes
+                oc_id=oc_id,
+                warehouse_code=None  # Se puede agregar como parámetro opcional en el futuro
             )
             
             conn.close()
             
             # Preparar respuesta
-            total_pendientes = resultado.get("total_pendientes", 0)
-            enviadas = resultado.get("enviadas", 0)
-            errores = resultado.get("errores", 0)
-            detalles = resultado.get("detalles", [])
+            success = resultado.get("success", False)
+            error = resultado.get("error")
+            doc_entry = resultado.get("doc_entry")
+            doc_num = resultado.get("doc_num")
             
-            # Determinar status general
-            if total_pendientes == 0:
+            # Determinar status y mensaje
+            if success:
                 status_general = "success"
-                mensaje = "No hay órdenes de compra pendientes de enviar a SAP"
-            elif errores == 0:
-                status_general = "success"
-                mensaje = f"Proceso completado: {enviadas} ODC(s) enviada(s) exitosamente a SAP"
-            elif enviadas == 0:
-                status_general = "error"
-                mensaje = f"Error: No se pudo enviar ninguna ODC a SAP ({errores} error(es))"
+                mensaje = f"ODC enviada exitosamente a SAP (DocNum: {doc_num})"
+                status_code = 200
             else:
-                status_general = "partial"
-                mensaje = f"Proceso completado parcialmente: {enviadas} enviada(s), {errores} error(es)"
+                status_general = "error"
+                mensaje = f"Error al enviar ODC a SAP: {error}"
+                status_code = 500
             
             logger.info("=" * 70)
             logger.info(f"✅ INTEGRAR-SAP completado:")
-            logger.info(f"   Total ODCs pendientes: {total_pendientes}")
-            logger.info(f"   ODCs enviadas: {enviadas}")
-            logger.info(f"   Errores: {errores}")
+            logger.info(f"   ODC procesada: {oc_id}")
+            if referencia_despacho:
+                logger.info(f"   Referencia despacho: {referencia_despacho}")
+            logger.info(f"   Resultado: {'✅ Enviada' if success else '❌ Error'}")
+            if success:
+                logger.info(f"   DocEntry: {doc_entry}, DocNum: {doc_num}")
+            else:
+                logger.info(f"   Error: {error}")
+            if total_pendientes is not None:
+                logger.info(f"   Total pendientes restantes: {total_pendientes - 1}")
             logger.info("=" * 70)
+            
+            # Preparar detalles
+            detalles = [{
+                "oc_id": oc_id,
+                "proveedor": oc_pendiente.get("proveedor"),
+                "success": success,
+                "doc_entry": doc_entry,
+                "doc_num": doc_num,
+                "error": error
+            }]
             
             # Preparar headers de respuesta
             headers = {
                 "X-Source": source,
                 "X-Endpoint": "INTEGRAR-SAP",
                 "X-OC-Status": status_general,
-                "X-OC-Enviadas": str(enviadas),
-                "X-OC-Errores": str(errores),
-                "X-Total-Pendientes": str(total_pendientes)
+                "X-OC-ID": oc_id,
             }
             
-            # Retornar respuesta con metadata
+            if referencia_despacho:
+                headers["X-Referencia-Despacho"] = referencia_despacho
+            
+            if total_pendientes is not None:
+                headers["X-Total-Pendientes"] = str(total_pendientes)
+                headers["X-Pendientes-Restantes"] = str(total_pendientes - 1)
+            
+            # Preparar metadata
+            metadata = {
+                "enviadas": 1 if success else 0,
+                "errores": 1 if not success else 0,
+                "detalles": detalles
+            }
+            
+            if total_pendientes is not None:
+                metadata["total_pendientes"] = total_pendientes
+                metadata["pendientes_restantes"] = total_pendientes - 1
+            
+            if referencia_despacho:
+                metadata["referencia_despacho"] = referencia_despacho
+            
+            # Retornar respuesta
             return JSONResponse(
-                status_code=200 if status_general != "error" else 500,
+                status_code=status_code,
                 content={
                     "status": status_general,
                     "message": mensaje,
-                    "metadata": {
-                        "total_pendientes": total_pendientes,
-                        "enviadas": enviadas,
-                        "errores": errores,
-                        "detalles": detalles
-                    }
+                    "metadata": metadata
                 },
                 headers=headers
             )

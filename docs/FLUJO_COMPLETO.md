@@ -86,7 +86,7 @@ GET /migrar
 
 ---
 
-### 3. PROCESAR - `GET /procesar-oc` o `POST /enviar-oc-sap`
+### 3. PROCESAR - `GET /procesar-oc`
 
 **Responsabilidad:** Copiar despachos a órdenes de compra
 
@@ -104,8 +104,6 @@ GET /migrar
 **Ejemplo:**
 ```bash
 GET /procesar-oc
-# O
-POST /enviar-oc-sap  # Equivalente pero con método POST
 ```
 
 **Respuesta:**
@@ -134,6 +132,8 @@ POST /enviar-oc-sap  # Equivalente pero con método POST
 
 **Estados de ODC:**
 - `PENDIENTE`: Creada pero no enviada a SAP (estado inicial)
+
+**📖 Para detalles técnicos del mapeo de campos y estructura de tablas, ver [ORDEN_COMPRA_COPIA.md](ORDEN_COMPRA_COPIA.md)**
 
 ---
 
@@ -343,4 +343,5 @@ ORDER BY updated_at DESC;
 - [Endpoints](ENDPOINTS.md) - Documentación completa de todos los endpoints
 - [Configuración](CONFIGURACION.md) - Variables de entorno y setup
 - [Integración SAP](INTEGRACION_SAP.md) - Configuración e integración con SAP
+- [Orden de Compra](ORDEN_COMPRA_COPIA.md) - Detalles técnicos del mapeo de campos (Paso 3)
 

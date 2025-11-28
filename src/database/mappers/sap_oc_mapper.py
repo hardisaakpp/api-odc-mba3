@@ -92,13 +92,23 @@ class SAPOCMapper:
         if not document_lines:
             raise ValueError("No hay líneas válidas para la orden de compra")
         
+        # Obtener CardCode y agregar prefijo 'P' si no lo tiene (convención SAP: proveedores tienen prefijo 'P')
+        proveedor = oc_cabecera.get("proveedor")
+        if proveedor:
+            proveedor = str(proveedor).strip()
+            if not proveedor.startswith('P'):
+                proveedor_original = proveedor
+                proveedor = f"P{proveedor}"
+                logger.info(f"🔄 CardCode convertido con prefijo 'P': {proveedor_original} → {proveedor}")
+        
         # Construir JSON completo
         purchase_order = {
-            "CardCode": oc_cabecera.get("proveedor"),
+            "CardCode": proveedor,
             "DocDate": fecha,
             "DocDueDate": fecha,  # Por defecto igual a DocDate, se puede calcular según lógica
             "TaxDate": fecha,
             "Comments": f"Ref: {oc_cabecera.get('referencia_despacho', 'N/A')}",
+            "U_ORIGEN": "C",  # Campo hardcodeado para identificar el sistema origen
             "DocumentLines": document_lines
         }
         
@@ -106,6 +116,6 @@ class SAPOCMapper:
         if not purchase_order.get("CardCode"):
             raise ValueError("CardCode (proveedor) es requerido")
         
-        logger.debug(f"✅ Purchase Order JSON construido: {len(document_lines)} líneas")
+        logger.debug(f"✅ Purchase Order JSON construido: {len(document_lines)} líneas, CardCode: {proveedor}")
         return purchase_order
 

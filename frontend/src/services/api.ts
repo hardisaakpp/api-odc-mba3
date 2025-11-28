@@ -48,59 +48,6 @@ export const facturasApi = {
     return response.data
   },
 
-  /**
-   * Ejecuta una consulta SQL dinámica contra MBA3
-   */
-  async executeQuery(query: string): Promise<Factura[]> {
-    const params = new URLSearchParams()
-    params.append('query', query)
-    
-    const url = `/consulta?${params.toString()}`
-    
-    console.log('='.repeat(70))
-    console.log('🌐 GET /consulta - Ejecutando consulta SQL')
-    console.log('🌐 URL:', `${API_URL}${url}`)
-    console.log('🌐 Query:', query)
-    console.log('='.repeat(70))
-    
-    const response = await apiClient.get<Factura[]>(url)
-    
-    // Log detallado de la respuesta para debugging (similar a Postman)
-    if (Array.isArray(response.data) && response.data.length > 0) {
-      const firstFactura = response.data[0]
-      const campos = Object.keys(firstFactura)
-      
-      console.log('='.repeat(70))
-      console.log('📊 RESPUESTA DE /consulta:')
-      console.log(`   Total facturas recibidas: ${response.data.length}`)
-      console.log(`   Campos en primera factura: ${campos.length} campos`)
-      console.log(`   Lista de campos:`, campos)
-      console.log('')
-      console.log('📋 PRIMERA FACTURA COMPLETA:')
-      console.log(JSON.stringify(firstFactura, null, 2))
-      console.log('')
-      console.log('📋 TODAS LAS FACTURAS (array completo):')
-      console.log(JSON.stringify(response.data, null, 2))
-      console.log('='.repeat(70))
-      
-      if (campos.length === 1) {
-        console.error('❌ PROBLEMA CRÍTICO: Solo se recibió 1 campo desde el backend')
-        console.error('❌ Campo recibido:', campos[0])
-        console.error('❌ Esto significa que el backend solo está devolviendo un campo')
-      } else {
-        console.log('✅ Se recibieron múltiples campos desde el backend')
-      }
-    } else if (Array.isArray(response.data) && response.data.length === 0) {
-      console.log('='.repeat(70))
-      console.log('📊 RESPUESTA DE /consulta:')
-      console.log('   ⚠️ La consulta se ejecutó correctamente pero no se encontraron resultados')
-      console.log('='.repeat(70))
-    } else {
-      console.warn('⚠️ Respuesta inesperada:', response.data)
-    }
-    
-    return response.data
-  }
 }
 
 export default apiClient

@@ -25,15 +25,13 @@ Ver [PRUEBAS_POWERSHELL.md](PRUEBAS_POWERSHELL.md) para comandos individuales de
 ## 📝 Orden de Pruebas
 
 1. **Health Check** - Verificar que el servidor esté funcionando
-2. **Test Endpoint** - Probar comunicación básica
-3. **Validar Consulta SQL** - Validar sintaxis SQL
-4. **Ejecutar Consulta SQL** - Ejecutar consultas contra MBA3
-5. **Consultar Despachos** - Consultar sin guardar
-6. **Migrar Despachos** - Consultar y guardar en BD
-7. **Procesar Orden de Compra** - Copiar a OC
-8. **Proceso Completo** - Flujo completo end-to-end
-9. **Consultar Facturas** - Endpoint principal con filtros
-10. **Integración SAP** - Consultar productos en SAP
+2. **Consultar Despachos** - Consultar sin guardar
+3. **Migrar Despachos** - Consultar y guardar en BD
+4. **Procesar Orden de Compra** - Copiar a OC
+5. **Proceso Completo** - Flujo completo end-to-end
+6. **Consultar Facturas** - Endpoint principal con filtros
+7. **Consultar SAP** - Consultar productos en SAP
+8. **Integrar con SAP** - Enviar ODCs a SAP
 
 ## ⚠️ Pre-requisitos
 

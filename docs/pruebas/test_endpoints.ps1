@@ -48,48 +48,44 @@ Write-Host "1. HEALTH CHECK" -ForegroundColor Magenta
 Test-Endpoint -Name "Health Check" -Uri "http://localhost:8000/health" -Method "Get"
 Start-Sleep -Seconds 1
 
-# 2. Test Endpoint
-Write-Host "2. TEST ENDPOINT" -ForegroundColor Magenta
-Test-Endpoint -Name "Test Endpoint" -Uri "http://localhost:8000/test" -Method "Post" -Body @{texto = "Prueba desde PowerShell"}
-Start-Sleep -Seconds 1
-
-# 3. Validar Consulta SQL
-Write-Host "3. VALIDAR CONSULTA SQL (POST /query)" -ForegroundColor Magenta
-Test-Endpoint -Name "Validar Query" -Uri "http://localhost:8000/query" -Method "Post" -Body @{
-    query = "SELECT CODIGO_FACTURA, NUMERO_FACTURA FROM CLNT_FACTURA_PRINCIPAL WHERE NUMERO_PEDIDO_SISTEMA='176120'"
-}
-Start-Sleep -Seconds 1
-
-# 4. Ejecutar Consulta SQL (POST)
-Write-Host "4. EJECUTAR CONSULTA SQL (POST /consulta)" -ForegroundColor Magenta
-Test-Endpoint -Name "Ejecutar Consulta POST" -Uri "http://localhost:8000/consulta" -Method "Post" -Body @{
-    query = "SELECT CODIGO_FACTURA, NUMERO_FACTURA, EMPRESA FROM CLNT_FACTURA_PRINCIPAL WHERE NUMERO_PEDIDO_SISTEMA='176120'"
-}
-Start-Sleep -Seconds 2
-
-# 5. Consultar Despachos
-Write-Host "5. CONSULTAR DESPACHOS (GET /consultar)" -ForegroundColor Magenta
+# 2. Consultar Despachos
+Write-Host "2. CONSULTAR DESPACHOS (GET /consultar)" -ForegroundColor Magenta
 Test-Endpoint -Name "Consultar Despachos" -Uri "http://localhost:8000/consultar" -Method "Get"
 Start-Sleep -Seconds 2
 
-# 6. Migrar Despachos
-Write-Host "6. MIGRAR DESPACHOS (GET /migrar)" -ForegroundColor Magenta
+# 3. Migrar Despachos
+Write-Host "3. MIGRAR DESPACHOS (GET /migrar)" -ForegroundColor Magenta
 Test-Endpoint -Name "Migrar Despachos" -Uri "http://localhost:8000/migrar" -Method "Get"
 Start-Sleep -Seconds 2
 
-# 7. Consultar Facturas
-Write-Host "7. CONSULTAR FACTURAS (GET /facturas)" -ForegroundColor Magenta
+# 4. Procesar Orden de Compra
+Write-Host "4. PROCESAR ORDEN DE COMPRA (GET /procesar-oc)" -ForegroundColor Magenta
+Test-Endpoint -Name "Procesar OC" -Uri "http://localhost:8000/procesar-oc" -Method "Get"
+Start-Sleep -Seconds 2
+
+# 5. Proceso Completo
+Write-Host "5. PROCESO COMPLETO (GET /pruebas)" -ForegroundColor Magenta
+Test-Endpoint -Name "Proceso Completo" -Uri "http://localhost:8000/pruebas" -Method "Get"
+Start-Sleep -Seconds 2
+
+# 6. Consultar Facturas
+Write-Host "6. CONSULTAR FACTURAS (GET /facturas)" -ForegroundColor Magenta
 Test-Endpoint -Name "Consultar Facturas" -Uri "http://localhost:8000/facturas" -Method "Get"
 Start-Sleep -Seconds 1
 
-# 8. Consultar Facturas con Filtros
-Write-Host "8. CONSULTAR FACTURAS CON FILTROS" -ForegroundColor Magenta
+# 7. Consultar Facturas con Filtros
+Write-Host "7. CONSULTAR FACTURAS CON FILTROS" -ForegroundColor Magenta
 Test-Endpoint -Name "Facturas con Filtros" -Uri "http://localhost:8000/facturas?anulada=false&confirmado=true&remision_facturada=false" -Method "Get"
 Start-Sleep -Seconds 1
 
-# 9. Consultar SAP (si está habilitado)
-Write-Host "9. CONSULTAR SAP" -ForegroundColor Magenta
+# 8. Consultar SAP (si está habilitado)
+Write-Host "8. CONSULTAR SAP" -ForegroundColor Magenta
 Test-Endpoint -Name "Consultar SAP" -Uri "http://localhost:8000/sap/test?sku=5-0012.9" -Method "Get"
+Start-Sleep -Seconds 1
+
+# 9. Integrar con SAP
+Write-Host "9. INTEGRAR CON SAP (POST /integrar-sap)" -ForegroundColor Magenta
+Test-Endpoint -Name "Integrar SAP" -Uri "http://localhost:8000/integrar-sap" -Method "Post"
 Start-Sleep -Seconds 1
 
 Write-Host "========================================" -ForegroundColor Cyan

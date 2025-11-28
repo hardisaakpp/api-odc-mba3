@@ -2,6 +2,8 @@
 
 Este documento describe el proceso que copia datos desde `despacho_cabecera`/`despacho_detalle` hacia `orden_compra_cabecera`/`orden_compra_detalle`.
 
+**Nota:** Este proceso corresponde al **Paso 3** del flujo completo. Para ver el contexto completo del flujo, ver [FLUJO_COMPLETO.md](FLUJO_COMPLETO.md).
+
 ## 📋 Mapeo de Campos
 
 ### Cabecera: `despacho_cabecera` → `orden_compra_cabecera`
@@ -168,5 +170,7 @@ CREATE TABLE orden_compra_detalle (
     FOREIGN KEY (oc_id) REFERENCES orden_compra_cabecera(oc_id)
 );
 ```
+
+
 
 

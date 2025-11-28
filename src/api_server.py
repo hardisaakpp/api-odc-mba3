@@ -1,19 +1,22 @@
 """
-API HTTP para recibir, validar y ejecutar consultas SQL contra MBA3.
+API HTTP para consultar y gestionar facturas desde MBA3, con integración a SQL Server y SAP.
 
-Servicio FastAPI que recibe consultas SQL (SELECT) desde Postman, las valida,
-y las ejecuta contra MBA3 usando MBA3APIClient.
+Servicio FastAPI que proporciona endpoints para:
+- Consultar y migrar despachos desde MBA3
+- Procesar órdenes de compra
+- Integrar con SAP Service Layer
 
 Esta versión usa una arquitectura mejorada con:
 - Capa de servicios para lógica de negocio
-- Helpers para parsing de requests
+- Repositorios para acceso a datos
 - Exception handlers centralizados
 
-Endpoints disponibles:
-- /consulta: Ejecuta consultas dinámicas contra MBA3 y retorna el resultado JSON
-- /query: Recibe y valida consultas SQL (solo validación y almacenamiento)
-- /health: Health check del servicio
-- /test: Endpoint de prueba para verificar comunicación Postman → API
+Endpoints principales:
+- GET /consultar: Consulta despachos desde MBA3 (solo lectura)
+- GET /migrar: Consulta y guarda en base de datos
+- GET /procesar-oc: Copia despachos a órdenes de compra
+- POST /integrar-sap: Envía ODCs a SAP Service Layer
+- GET /health: Health check del servicio
 """
 
 import logging
