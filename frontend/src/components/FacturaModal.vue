@@ -1,160 +1,134 @@
 <template>
-  <Teleport to="body">
-    <div class="modal-overlay" @click.self="$emit('close')">
-      <div class="modal-content">
-        <div class="modal-header">
-        <h2>Detalle de Pre-Factura</h2>
-        <button @click="$emit('close')" class="btn-close">&times;</button>
+  <div class="modal-overlay" @click.self="close">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h2>Detalles de Factura</h2>
+        <button @click="close" class="close-btn">&times;</button>
       </div>
       
       <div class="modal-body">
-        <div v-if="factura" class="factura-info">
-          <h3>Información General</h3>
-          <div class="info-grid">
-            <div class="info-item">
-              <label>Código Pre-Factura:</label>
-              <span>{{ factura.CODIGO_FACTURA || '-' }}</span>
-            </div>
-            <div class="info-item">
-              <label>Empresa:</label>
-              <span>{{ factura.EMPRESA || '-' }}</span>
-            </div>
-            <div class="info-item">
-              <label>Cliente:</label>
-              <span>{{ factura.CODIGO_CLIENTE || '-' }}</span>
-            </div>
-            <div class="info-item">
-              <label>Fecha:</label>
-              <span>{{ formatDate(factura.FECHA_FACTURA) }}</span>
-            </div>
-            <div class="info-item">
-              <label>Tipo:</label>
-              <span>{{ factura.TIPO_DOCUMENTO || '-' }}</span>
-            </div>
-            <div class="info-item">
-              <label>N° Pedido Sistema:</label>
-              <span>{{ factura.NUMERO_PEDIDO_SISTEMA ?? '-' }}</span>
-            </div>
-            <div class="info-item">
-              <label>N° Orden:</label>
-              <span>{{ factura.NUMERO_ORDEN ?? '-' }}</span>
-            </div>
-            <div class="info-item">
-              <label>N° Factura:</label>
-              <span>{{ factura.NUMERO_FACTURA ?? '-' }}</span>
-            </div>
-            <div class="info-item">
-              <label>Código Bodega:</label>
-              <span>{{ factura.CODIGO_BODEGA || '-' }}</span>
-            </div>
-            <div class="info-item">
-              <label>Código Despacho:</label>
-              <span>{{ factura.CODIGO_DESPACHO ?? '-' }}</span>
-            </div>
-            <div class="info-item">
-              <label>Orden Compra:</label>
-              <span>{{ factura.ORDEN_COMPRA || '-' }}</span>
-            </div>
-            <div class="info-item">
-              <label>Estado:</label>
-              <span>
-                <span v-if="factura.ANULADA" class="badge badge-danger">Anulada</span>
-                <span v-else-if="factura.CONFIRMADO" class="badge badge-success">Confirmada</span>
-                <span v-else class="badge badge-warning">Pendiente</span>
-              </span>
-            </div>
-            <div class="info-item">
-              <label>Remisión Facturada:</label>
-              <span>
-                <span v-if="factura.Remision_Facturada" class="badge badge-success">Sí</span>
-                <span v-else class="badge badge-secondary">No</span>
-              </span>
-            </div>
-            <div class="info-item">
-              <label>ID Factura Relacionada:</label>
-              <span>{{ factura.NumIDFacturaRelacionada ?? '-' }}</span>
-            </div>
+        <div class="detail-grid">
+          <div class="detail-item">
+            <label>Código Factura</label>
+            <span class="font-mono">{{ factura.CODIGO_FACTURA }}</span>
           </div>
-        </div>
-        
-        <div v-if="factura && factura.ObjDatosFactura" class="lineas-section">
-          <h3>Líneas de Pre-Factura</h3>
-          <LineasList :objDatosFactura="factura.ObjDatosFactura" />
-        </div>
-        <div v-else-if="factura" class="no-lineas">
-          <p>No hay líneas de detalle disponibles</p>
-        </div>
-        <div v-else class="no-lineas">
-          <p>Cargando información...</p>
+          
+          <div class="detail-item">
+            <label>Número Factura</label>
+            <span>{{ factura.NUMERO_FACTURA }}</span>
+          </div>
+          
+          <div class="detail-item">
+            <label>Empresa</label>
+            <span>{{ factura.EMPRESA }}</span>
+          </div>
+          
+          <div class="detail-item">
+            <label>Código Cliente</label>
+            <span>{{ factura.CODIGO_CLIENTE }}</span>
+          </div>
+          
+          <div class="detail-item">
+            <label>Fecha Factura</label>
+            <span>{{ formatDate(factura.FECHA_FACTURA) }}</span>
+          </div>
+          
+          <div class="detail-item">
+            <label>Tipo Documento</label>
+            <span>{{ factura.TIPO_DOCUMENTO }}</span>
+          </div>
+          
+          <div class="detail-item">
+            <label>Número Orden</label>
+            <span>{{ factura.NUMERO_ORDEN || '-' }}</span>
+          </div>
+          
+          <div class="detail-item">
+            <label>Número Pedido Sistema</label>
+            <span>{{ factura.NUMERO_PEDIDO_SISTEMA || '-' }}</span>
+          </div>
+          
+          <div class="detail-item">
+            <label>Código Despacho</label>
+            <span>{{ factura.CODIGO_DESPACHO || '0' }}</span>
+          </div>
+          
+          <div class="detail-item">
+            <label>Código Bodega</label>
+            <span>{{ factura.CODIGO_BODEGA || '-' }}</span>
+          </div>
+          
+          <div class="detail-item">
+            <label>Orden Compra</label>
+            <span>{{ factura.ORDEN_COMPRA || '-' }}</span>
+          </div>
+          
+          <div class="detail-item">
+            <label>Orden Compra Cliente</label>
+            <span>{{ factura.ORDEN_COMPRA_CLIENTE || '-' }}</span>
+          </div>
+          
+          <div class="detail-item">
+            <label>Anulada</label>
+            <span :class="factura.ANULADA === 'true' ? 'text-error' : 'text-success'">
+              {{ factura.ANULADA === 'true' ? 'Sí' : 'No' }}
+            </span>
+          </div>
+          
+          <div class="detail-item">
+            <label>Confirmado</label>
+            <span :class="factura.CONFIRMADO === 'true' ? 'text-success' : 'text-warning'">
+              {{ factura.CONFIRMADO === 'true' ? 'Sí' : 'No' }}
+            </span>
+          </div>
+          
+          <div class="detail-item">
+            <label>Remisión Facturada</label>
+            <span>{{ factura.Remision_Facturada === 'true' ? 'Sí' : 'No' }}</span>
+          </div>
+          
+          <div class="detail-item full-width">
+            <label>ObjDatosFactura</label>
+            <span class="obj-datos">{{ factura.ObjDatosFactura || 'N/A' }}</span>
+          </div>
         </div>
       </div>
       
-        <div class="modal-footer">
-          <button @click="$emit('close')" class="btn-close-modal">Cerrar</button>
-        </div>
+      <div class="modal-footer">
+        <button @click="close" class="btn btn-primary">Cerrar</button>
       </div>
     </div>
-  </Teleport>
+  </div>
 </template>
 
 <script setup lang="ts">
-import { watch, onUnmounted } from 'vue'
 import type { Factura } from '@/types/factura'
-import LineasList from './LineasList.vue'
 
-const props = defineProps<{
-  factura: Factura | null
+defineProps<{
+  factura: Factura
 }>()
 
 const emit = defineEmits<{
   close: []
 }>()
 
-function formatDate(dateString?: string): string {
+function close() {
+  emit('close')
+}
+
+function formatDate(dateString: string): string {
   if (!dateString) return '-'
   try {
-    return new Date(dateString).toLocaleDateString('es-ES', {
+    const date = new Date(dateString)
+    return date.toLocaleDateString('es-ES', {
       year: 'numeric',
       month: 'long',
       day: 'numeric'
     })
   } catch {
-    return dateString || '-'
+    return dateString
   }
 }
-
-// Manejar escape key para cerrar el modal
-function handleEscape(event: KeyboardEvent) {
-  if (event.key === 'Escape') {
-    emit('close')
-  }
-}
-
-// Watch combinado: Log de información y manejo de escape key
-watch(() => props.factura, (newFactura) => {
-  if (newFactura) {
-    // Log resumido para verificar campos
-    const campos = Object.keys(newFactura)
-    console.log('📦 Modal - Total campos:', campos.length)
-    if (campos.length === 1) {
-      console.warn('⚠️ PROBLEMA: Solo hay 1 campo en el modal:', campos)
-      console.warn('⚠️ Datos completos:', JSON.stringify(newFactura, null, 2))
-    } else {
-      console.log('✅ Campos en modal:', campos)
-    }
-    
-    // Agregar listener de escape cuando el modal está abierto
-    window.addEventListener('keydown', handleEscape)
-  } else {
-    // Remover listener cuando el modal está cerrado
-    window.removeEventListener('keydown', handleEscape)
-  }
-}, { immediate: true })
-
-// Limpiar listener cuando el componente se desmonta
-onUnmounted(() => {
-  window.removeEventListener('keydown', handleEscape)
-})
 </script>
 
 <style scoped>
@@ -164,49 +138,26 @@ onUnmounted(() => {
   left: 0;
   right: 0;
   bottom: 0;
-  background-color: rgba(0, 0, 0, 0.5);
+  background: rgba(0, 0, 0, 0.6);
   display: flex;
   align-items: center;
   justify-content: center;
   z-index: 1000;
-  padding: 1rem;
-  animation: fadeIn 0.2s ease;
-}
-
-@keyframes fadeIn {
-  from {
-    opacity: 0;
-  }
-  to {
-    opacity: 1;
-  }
+  padding: 2rem;
+  backdrop-filter: blur(4px);
 }
 
 .modal-content {
-  background: var(--bg-secondary);
-  border-radius: 8px;
-  max-width: 1000px;
+  background: var(--bg-primary);
+  border-radius: 12px;
+  max-width: 800px;
   width: 100%;
   max-height: 90vh;
-  overflow: hidden;
   display: flex;
   flex-direction: column;
-  box-shadow: 0 4px 6px var(--shadow);
+  box-shadow: var(--shadow-lg);
   border: 1px solid var(--border-color);
-  transition: all 0.3s ease;
-  animation: slideUp 0.3s ease;
-  position: relative;
-}
-
-@keyframes slideUp {
-  from {
-    transform: translateY(20px);
-    opacity: 0;
-  }
-  to {
-    transform: translateY(0);
-    opacity: 1;
-  }
+  transition: background-color 0.3s ease, border-color 0.3s ease;
 }
 
 .modal-header {
@@ -215,124 +166,125 @@ onUnmounted(() => {
   align-items: center;
   padding: 1.5rem;
   border-bottom: 1px solid var(--border-color);
-  background-color: #34495e;
-  color: white;
-  flex-shrink: 0;
-}
-
-.dark .modal-header {
-  background-color: var(--bg-tertiary);
-  border-bottom-color: var(--border-color);
 }
 
 .modal-header h2 {
   margin: 0;
+  font-size: 1.5rem;
+  color: var(--text-primary);
 }
 
-.btn-close {
+.close-btn {
   background: none;
   border: none;
   font-size: 2rem;
-  color: white;
+  color: var(--text-light);
   cursor: pointer;
   line-height: 1;
   padding: 0;
-  width: 30px;
-  height: 30px;
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  transition: all 0.2s;
 }
 
-.btn-close:hover {
-  opacity: 0.7;
+.close-btn:hover {
+  background: var(--bg-secondary);
+  color: var(--text-primary);
 }
 
 .modal-body {
-  flex: 1;
-  overflow-y: auto;
   padding: 1.5rem;
-  color: var(--text-primary);
-  min-height: 200px;
+  overflow-y: auto;
+  flex: 1;
 }
 
-.factura-info h3,
-.lineas-section h3 {
-  margin: 0 0 1rem 0;
-  color: var(--text-primary);
-}
-
-.info-grid {
+.detail-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
-  gap: 1rem;
-  margin-bottom: 2rem;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 1.5rem;
 }
 
-.info-item {
+.detail-item {
   display: flex;
   flex-direction: column;
-  gap: 0.25rem;
+  gap: 0.5rem;
 }
 
-.info-item label {
-  font-weight: 600;
-  color: var(--text-secondary);
-  font-size: 0.875rem;
+.detail-item.full-width {
+  grid-column: 1 / -1;
 }
 
-.info-item span {
-  color: var(--text-primary);
-  min-height: 1.2rem;
-  display: block;
-}
-
-.badge {
-  display: inline-block;
-  padding: 0.25rem 0.75rem;
-  border-radius: 12px;
+.detail-item label {
   font-size: 0.75rem;
   font-weight: 600;
-  text-transform: uppercase;
-}
-
-.badge-success {
-  background-color: #27ae60;
-  color: white;
-}
-
-.badge-danger {
-  background-color: #e74c3c;
-  color: white;
-}
-
-.badge-warning {
-  background-color: #f39c12;
-  color: white;
-}
-
-.no-lineas {
-  text-align: center;
-  padding: 2rem;
   color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.detail-item span {
+  font-size: 1rem;
+  color: var(--text-primary);
+  word-break: break-word;
+}
+
+.font-mono {
+  font-family: 'Courier New', monospace;
+}
+
+.text-success {
+  color: #27ae60;
+  font-weight: 500;
+}
+
+.text-error {
+  color: #e74c3c;
+  font-weight: 500;
+}
+
+.text-warning {
+  color: #f39c12;
+  font-weight: 500;
+}
+
+.obj-datos {
+  font-family: 'Courier New', monospace;
+  font-size: 0.875rem;
+  background: var(--bg-secondary);
+  padding: 0.75rem;
+  border-radius: 6px;
+  word-break: break-all;
+  border: 1px solid var(--border-color);
 }
 
 .modal-footer {
-  padding: 1rem 1.5rem;
+  padding: 1.5rem;
   border-top: 1px solid var(--border-color);
   display: flex;
   justify-content: flex-end;
-  flex-shrink: 0;
 }
 
-.btn-close-modal {
-  padding: 0.75rem 1.5rem;
-  background-color: #95a5a6;
-  color: white;
+.btn {
+  padding: 0.625rem 1.25rem;
   border: none;
-  border-radius: 4px;
+  border-radius: 6px;
+  font-size: 0.9rem;
+  font-weight: 500;
   cursor: pointer;
+  transition: all 0.2s;
 }
 
-.btn-close-modal:hover {
-  background-color: #7f8c8d;
+.btn-primary {
+  background: #3498db;
+  color: white;
+}
+
+.btn-primary:hover {
+  background: #2980b9;
 }
 </style>
 

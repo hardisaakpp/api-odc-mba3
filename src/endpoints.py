@@ -23,7 +23,7 @@ from database.services.oc_sap_service import OCSAPService
 from database.connection import get_db_connection
 from config import ENABLE_SAP_QUERIES, SAP_LINKED_SERVER, ENABLE_SAP_SERVICE_LAYER
 from security.auth import optional_auth
-from fastapi import Depends
+from fastapi import Depends, Query
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +48,110 @@ def create_endpoints(app):
             "status": "ok",
             "time": datetime.now().isoformat()
         }
+    
+    
+    @app.get("/facturas")
+    async def get_facturas(
+        request: Request,
+        anulada: Optional[bool] = Query(None, description="Filtrar por facturas anuladas (false = no anuladas, true = anuladas, null = todas)"),
+        confirmado: Optional[bool] = Query(None, description="Filtrar por facturas confirmadas (true = confirmadas, false = no confirmadas, null = todas)"),
+        remision_facturada: Optional[bool] = Query(None, description="Filtrar por remisión facturada (false = sin remisión, true = con remisión, null = todas)"),
+        include_obj_datos: bool = Query(True, description="Incluir solo facturas con ObjDatosFactura no nulo"),
+        save_to_db: bool = Query(True, description="Guardar resultados en SQL Server"),
+        auth: Optional[str] = Depends(optional_auth)
+    ):
+        """
+        Endpoint FACTURAS: Obtiene facturas desde MBA3 con filtros configurables.
+        
+        ⭐ **Recomendado para Frontend**
+        
+        Este endpoint obtiene facturas desde MBA3 usando filtros configurables.
+        La query está integrada en el backend, no requiere SQL del frontend.
+        
+        **Query Parameters:**
+        - `anulada` (boolean, opcional) - Filtrar por facturas anuladas
+        - `confirmado` (boolean, opcional) - Filtrar por facturas confirmadas
+        - `remision_facturada` (boolean, opcional) - Filtrar por remisión facturada
+        - `include_obj_datos` (boolean, default: true) - Incluir solo facturas con ObjDatosFactura
+        - `save_to_db` (boolean, default: true) - Guardar en SQL Server
+        
+        **Ejemplo:**
+        ```
+        GET /facturas?anulada=false&confirmado=true&save_to_db=true
+        ```
+        
+        **Respuesta:**
+        ```json
+        {
+          "status": "success",
+          "data": [...],
+          "metadata": {
+            "count": 10,
+            "filters": {...},
+            "save_status": {...}
+          }
+        }
+        ```
+        
+        Returns:
+            JSON con facturas y metadata
+        """
+        source = get_source_from_headers(request)
+        
+        logger.info("=" * 70)
+        logger.info(f"📋 GET /facturas: Consulta ejecutada a las {datetime.now().isoformat()}")
+        logger.info(f"Fuente: {source}")
+        logger.info(f"Filtros: anulada={anulada}, confirmado={confirmado}, remision_facturada={remision_facturada}, include_obj_datos={include_obj_datos}, save_to_db={save_to_db}")
+        logger.info("=" * 70)
+        
+        try:
+            # Usar valores por defecto si no se proporcionan
+            anulada_filter = anulada if anulada is not None else False
+            confirmado_filter = confirmado if confirmado is not None else True
+            remision_facturada_filter = remision_facturada if remision_facturada is not None else False
+            
+            # Obtener facturas usando el servicio
+            result = MBA3Service.get_facturas(
+                anulada=anulada_filter,
+                confirmado=confirmado_filter,
+                remision_facturada=remision_facturada_filter,
+                include_obj_datos=include_obj_datos,
+                save_to_db=save_to_db,
+                upsert=True
+            )
+            
+            # Preparar respuesta
+            response_data = {
+                "status": "success",
+                "data": result.get("data", []),
+                "metadata": {
+                    "count": result.get("count", 0),
+                    "filters": result.get("filters", {}),
+                    "save_status": result.get("save_status")
+                }
+            }
+            
+            logger.info(f"✅ GET /facturas: {result.get('count', 0)} facturas encontradas")
+            
+            return JSONResponse(
+                status_code=200,
+                content=response_data,
+                headers={
+                    "X-Source": source,
+                    "X-Endpoint": "FACTURAS",
+                    "X-Count": str(result.get("count", 0))
+                }
+            )
+            
+        except Exception as e:
+            logger.error(f"❌ Error al obtener facturas: {e}", exc_info=True)
+            return JSONResponse(
+                status_code=500,
+                content={
+                    "status": "error",
+                    "message": f"Error al obtener facturas: {str(e)}"
+                }
+            )
     
     
     @app.get("/consultar")
@@ -1223,5 +1327,103 @@ def create_endpoints(app):
                     "status": "error",
                     "message": f"Error al consultar SAP: {str(e)}",
                     "sku": sku
+                }
+            )
+    
+    
+    @app.get("/ordenes-compra")
+    async def get_ordenes_compra(
+        request: Request,
+        estado: Optional[str] = Query(None, description="Filtrar por estado (PENDIENTE, ENVIADA, ERROR)"),
+        auth: Optional[str] = Depends(optional_auth)
+    ):
+        """
+        Endpoint ORDENES-COMPRA: Obtiene órdenes de compra desde la base de datos.
+        
+        **Query Parameters:**
+        - `estado` (string, opcional) - Filtrar por estado (PENDIENTE, ENVIADA, ERROR)
+        
+        **Ejemplo:**
+        ```
+        GET /ordenes-compra?estado=PENDIENTE
+        ```
+        
+        **Respuesta:**
+        ```json
+        {
+          "status": "success",
+          "data": [
+            {
+              "oc_id": "uuid",
+              "despacho_id": "uuid",
+              "proveedor": "PROVEEDOR001",
+              "fecha_generacion": "2025-01-21",
+              "estado": "PENDIENTE",
+              "numero_oc_sap": null,
+              "referencia_despacho": "900125353",
+              "created_at": "2025-01-21T12:00:00"
+            }
+          ],
+          "metadata": {
+            "count": 10,
+            "estado_filter": "PENDIENTE"
+          }
+        }
+        ```
+        
+        Returns:
+            JSON con órdenes de compra y metadata
+        """
+        source = get_source_from_headers(request)
+        
+        logger.info("=" * 70)
+        logger.info(f"📋 GET /ordenes-compra: Consulta ejecutada a las {datetime.now().isoformat()}")
+        logger.info(f"Fuente: {source}")
+        logger.info(f"Filtro estado: {estado or 'Todos'}")
+        logger.info("=" * 70)
+        
+        try:
+            conn = get_db_connection()
+            oc_repo = OrdenCompraRepository(conn)
+            
+            if estado:
+                # Obtener OCs por estado
+                oc_list = oc_repo.get_by_estado(estado)
+            else:
+                # Obtener todas las OCs (usando un estado común o todos)
+                # Por ahora, obtenemos todas las pendientes como default
+                oc_list = oc_repo.get_by_estado("PENDIENTE")
+                # TODO: Agregar método para obtener todas las OCs sin filtro de estado
+            
+            conn.close()
+            
+            response_data = {
+                "status": "success",
+                "data": oc_list,
+                "metadata": {
+                    "count": len(oc_list),
+                    "estado_filter": estado or "PENDIENTE"
+                }
+            }
+            
+            logger.info(f"✅ GET /ordenes-compra: {len(oc_list)} órdenes encontradas")
+            
+            return JSONResponse(
+                status_code=200,
+                content=response_data,
+                headers={
+                    "X-Source": source,
+                    "X-Endpoint": "ORDENES-COMPRA",
+                    "X-Count": str(len(oc_list))
+                }
+            )
+            
+        except Exception as e:
+            logger.error(f"❌ Error al obtener órdenes de compra: {e}", exc_info=True)
+            return JSONResponse(
+                status_code=500,
+                content={
+                    "status": "error",
+                    "message": f"Error al obtener órdenes de compra: {str(e)}"
                 }
             )

@@ -1,127 +1,132 @@
 <template>
   <div id="app">
     <nav class="navbar">
-      <div class="container">
-        <h1 class="navbar-brand">MBA3 - Gestión de Pre-Facturas</h1>
-        <div class="navbar-actions">
-          <nav class="nav-links">
-            <RouterLink to="/" class="nav-link">Facturas</RouterLink>
-          </nav>
+      <div class="nav-container">
+        <div class="nav-brand">
+          <h1 class="nav-title">MBA3 Consultas</h1>
+        </div>
+        <div class="nav-links">
+          <router-link to="/" class="nav-link">
+            <span>📊</span>
+            Dashboard
+          </router-link>
+          <router-link to="/facturas" class="nav-link">
+            <span>📋</span>
+            Facturas
+          </router-link>
+          <router-link to="/ordenes-compra" class="nav-link">
+            <span>🛒</span>
+            Órdenes de Compra
+          </router-link>
+          <router-link to="/proceso" class="nav-link">
+            <span>⚙️</span>
+            Proceso Completo
+          </router-link>
           <ThemeToggle />
         </div>
       </div>
     </nav>
-    
-    <main class="container">
-      <RouterView />
+    <main class="main-content">
+      <router-view />
     </main>
-    
-    <footer class="footer">
-      <div class="container">
-        <p>&copy; 2025 MBA3 Consultas</p>
-      </div>
-    </footer>
   </div>
 </template>
 
 <script setup lang="ts">
-import { RouterView, RouterLink } from 'vue-router'
 import ThemeToggle from '@/components/ThemeToggle.vue'
-import { useThemeStore } from '@/stores/theme'
-
-// Inicializar el tema
-const themeStore = useThemeStore()
 </script>
 
 <style scoped>
 #app {
   min-height: 100vh;
-  display: flex;
-  flex-direction: column;
-  transition: background-color 0.3s ease, color 0.3s ease;
+  background: var(--bg-secondary);
+  transition: background-color 0.3s ease;
 }
 
 .navbar {
-  background-color: #2c3e50;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
   color: white;
   padding: 1rem 0;
-  box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+  box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+  position: sticky;
+  top: 0;
+  z-index: 100;
+}
+
+.nav-container {
+  max-width: 1400px;
+  margin: 0 auto;
+  padding: 0 2rem;
   display: flex;
   justify-content: space-between;
   align-items: center;
 }
 
-.navbar .container {
+.nav-brand {
   display: flex;
-  justify-content: space-between;
   align-items: center;
-  width: 100%;
 }
 
-.navbar-actions {
-  display: flex;
-  align-items: center;
-  gap: 1.5rem;
+.nav-title {
+  margin: 0;
+  font-size: 1.5rem;
+  font-weight: 700;
+  letter-spacing: -0.5px;
 }
 
 .nav-links {
   display: flex;
-  gap: 1rem;
+  gap: 0.5rem;
 }
 
 .nav-link {
   color: white;
   text-decoration: none;
-  padding: 0.5rem 1rem;
-  border-radius: 4px;
-  transition: background-color 0.2s;
+  padding: 0.75rem 1.25rem;
+  border-radius: 8px;
+  transition: all 0.2s;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-weight: 500;
+  font-size: 0.95rem;
 }
 
 .nav-link:hover {
-  background-color: rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.15);
+  transform: translateY(-1px);
 }
 
 .nav-link.router-link-active {
-  background-color: rgba(255, 255, 255, 0.2);
-  font-weight: 600;
+  background: rgba(255, 255, 255, 0.2);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
 }
 
-.navbar-brand {
-  margin: 0;
-  font-size: 1.5rem;
-}
-
-:global(.dark) .navbar {
-  background-color: #1a1a1a;
-  border-bottom: 1px solid #333;
-}
-
-.container {
-  max-width: 1200px;
+.main-content {
+  max-width: 1400px;
   margin: 0 auto;
-  padding: 0 1rem;
-  flex: 1;
+  padding: 2rem;
+  min-height: calc(100vh - 80px);
 }
 
-main.container {
-  padding: 2rem 1rem;
-}
+@media (max-width: 768px) {
+  .nav-container {
+    flex-direction: column;
+    gap: 1rem;
+  }
 
-.footer {
-  background-color: #34495e;
-  color: white;
-  padding: 1rem 0;
-  margin-top: auto;
-}
+  .nav-links {
+    flex-wrap: wrap;
+    justify-content: center;
+  }
 
-:global(.dark) .footer {
-  background-color: #1a1a1a;
-  border-top: 1px solid #333;
-}
+  .nav-link {
+    padding: 0.5rem 1rem;
+    font-size: 0.875rem;
+  }
 
-.footer p {
-  margin: 0;
-  text-align: center;
+  .main-content {
+    padding: 1rem;
+  }
 }
 </style>
-

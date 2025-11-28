@@ -1,49 +1,62 @@
 <template>
   <div class="table-container">
-    <table class="factura-table">
-      <thead>
-        <tr>
-          <th>Código Pre-Factura</th>
-          <th>Empresa</th>
-          <th>Cliente</th>
-          <th>Fecha</th>
-          <th>Tipo</th>
-          <th>N° Pedido</th>
-          <th>Estado</th>
-          <th>Acciones</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr v-if="facturas.length === 0">
-          <td colspan="8" class="no-data">No se encontraron pre-facturas</td>
-        </tr>
-        <tr v-for="factura in facturas" :key="factura.CODIGO_FACTURA" class="factura-row">
-          <td>{{ factura.CODIGO_FACTURA }}</td>
-          <td>{{ factura.EMPRESA }}</td>
-          <td>{{ factura.CODIGO_CLIENTE }}</td>
-          <td>{{ formatDate(factura.FECHA_FACTURA) }}</td>
-          <td>
-            <span :class="['badge', getTipoClass(factura.TIPO_DOCUMENTO)]">
-              {{ factura.TIPO_DOCUMENTO }}
-            </span>
-          </td>
-          <td>{{ factura.NUMERO_PEDIDO_SISTEMA }}</td>
-          <td>
-            <span v-if="factura.ANULADA" class="badge badge-danger">Anulada</span>
-            <span v-else-if="factura.CONFIRMADO" class="badge badge-success">Confirmada</span>
-            <span v-else class="badge badge-warning">Pendiente</span>
-          </td>
-          <td>
-            <button @click="viewDetails(factura)" class="btn-view">Ver Detalles</button>
-          </td>
-        </tr>
-      </tbody>
-    </table>
-    
-    <FacturaModal
+    <div class="table-header">
+      <h2>Facturas Encontradas</h2>
+      <div class="table-info">
+        <span class="count-badge">{{ facturas.length }} facturas</span>
+        <span v-if="metadata?.save_status" class="save-status">
+          Guardadas: {{ metadata.save_status.facturas_guardadas || 0 }} | 
+          Actualizadas: {{ metadata.save_status.facturas_actualizadas || 0 }}
+        </span>
+      </div>
+    </div>
+
+    <div v-if="facturas.length === 0" class="empty-state">
+      <p>No se encontraron facturas con los filtros seleccionados</p>
+    </div>
+
+    <div v-else class="table-wrapper">
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>Código Factura</th>
+            <th>Número Factura</th>
+            <th>Empresa</th>
+            <th>Cliente</th>
+            <th>Fecha</th>
+            <th>Estado</th>
+            <th>Acciones</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr v-for="factura in facturas" :key="factura.CODIGO_FACTURA" class="table-row">
+            <td class="font-mono">{{ factura.CODIGO_FACTURA }}</td>
+            <td>{{ factura.NUMERO_FACTURA }}</td>
+            <td>{{ factura.EMPRESA }}</td>
+            <td>{{ factura.CODIGO_CLIENTE }}</td>
+            <td>{{ formatDate(factura.FECHA_FACTURA) }}</td>
+            <td>
+              <span :class="getStatusClass(factura)">
+                {{ getStatusText(factura) }}
+              </span>
+            </td>
+            <td>
+              <button 
+                @click="openModal(factura)" 
+                class="btn-view"
+              >
+                Ver Detalles
+              </button>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <FacturaModal 
       v-if="selectedFactura"
       :factura="selectedFactura"
-      @close="selectedFactura = null"
+      @close="closeModal"
     />
   </div>
 </template>
@@ -55,143 +68,165 @@ import FacturaModal from './FacturaModal.vue'
 
 defineProps<{
   facturas: Factura[]
+  metadata?: any
 }>()
 
 const selectedFactura = ref<Factura | null>(null)
 
-function formatDate(dateString?: string): string {
+function formatDate(dateString: string): string {
   if (!dateString) return '-'
-  return new Date(dateString).toLocaleDateString('es-ES')
+  try {
+    const date = new Date(dateString)
+    return date.toLocaleDateString('es-ES')
+  } catch {
+    return dateString
+  }
 }
 
-function getTipoClass(tipo?: string): string {
-  const tipos: Record<string, string> = {
-    'FACT': 'badge-primary',
-    'REM': 'badge-info'
-  }
-  return tipos[tipo || ''] || 'badge-secondary'
+function getStatusClass(factura: Factura): string {
+  if (factura.ANULADA === 'true') return 'status-badge status-error'
+  if (factura.CONFIRMADO === 'true') return 'status-badge status-success'
+  return 'status-badge status-warning'
 }
 
-function viewDetails(factura: Factura) {
-  // Log resumido para verificar campos
-  const campos = Object.keys(factura)
-  console.log('🔍 Factura seleccionada - Total campos:', campos.length)
-  if (campos.length === 1) {
-    console.warn('⚠️ PROBLEMA: Solo hay 1 campo en la factura:', campos)
-    console.warn('⚠️ Datos:', JSON.stringify(factura, null, 2))
-  } else {
-    console.log('✅ Campos disponibles:', campos)
-  }
-  
+function getStatusText(factura: Factura): string {
+  if (factura.ANULADA === 'true') return 'Anulada'
+  if (factura.CONFIRMADO === 'true') return 'Confirmada'
+  return 'Pendiente'
+}
+
+function openModal(factura: Factura) {
   selectedFactura.value = factura
+}
+
+function closeModal() {
+  selectedFactura.value = null
 }
 </script>
 
 <style scoped>
 .table-container {
-  background: var(--bg-secondary);
-  border-radius: 8px;
-  overflow: hidden;
-  box-shadow: 0 2px 4px var(--shadow);
+  background: var(--bg-primary);
+  border-radius: 12px;
+  padding: 1.5rem;
+  box-shadow: var(--shadow-md);
   border: 1px solid var(--border-color);
-  transition: all 0.3s ease;
+  transition: background-color 0.3s ease, border-color 0.3s ease;
 }
 
-.factura-table {
+.table-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 1.5rem;
+  padding-bottom: 1rem;
+  border-bottom: 2px solid var(--border-color);
+}
+
+.table-header h2 {
+  margin: 0;
+  font-size: 1.5rem;
+  color: var(--text-primary);
+}
+
+.table-info {
+  display: flex;
+  gap: 1rem;
+  align-items: center;
+}
+
+.count-badge {
+  background: #3498db;
+  color: white;
+  padding: 0.5rem 1rem;
+  border-radius: 20px;
+  font-size: 0.875rem;
+  font-weight: 500;
+}
+
+.save-status {
+  font-size: 0.875rem;
+  color: var(--text-secondary);
+}
+
+.empty-state {
+  text-align: center;
+  padding: 3rem;
+  color: var(--text-light);
+}
+
+.table-wrapper {
+  overflow-x: auto;
+}
+
+.data-table {
   width: 100%;
   border-collapse: collapse;
 }
 
-.factura-table thead {
-  background-color: #34495e;
-  color: white;
+.data-table thead {
+  background: var(--bg-secondary);
 }
 
-.dark .factura-table thead {
-  background-color: var(--bg-tertiary);
-  color: var(--text-primary);
-}
-
-.factura-table th {
+.data-table th {
   padding: 1rem;
   text-align: left;
   font-weight: 600;
-  text-transform: uppercase;
-  font-size: 0.875rem;
-}
-
-.factura-table tbody tr {
-  border-bottom: 1px solid var(--border-color);
-  transition: background-color 0.2s;
   color: var(--text-primary);
+  font-size: 0.875rem;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
 }
 
-.factura-table tbody tr:hover {
-  background-color: var(--bg-tertiary);
-}
-
-.factura-table td {
+.data-table td {
   padding: 1rem;
+  border-bottom: 1px solid var(--border-color);
 }
 
-.no-data {
-  text-align: center;
-  padding: 2rem;
-  color: var(--text-secondary);
+.table-row:hover {
+  background: var(--bg-secondary);
 }
 
-.badge {
+.font-mono {
+  font-family: 'Courier New', monospace;
+  font-size: 0.9rem;
+}
+
+.status-badge {
   display: inline-block;
   padding: 0.25rem 0.75rem;
   border-radius: 12px;
   font-size: 0.75rem;
-  font-weight: 600;
-  text-transform: uppercase;
+  font-weight: 500;
 }
 
-.badge-primary {
-  background-color: #3498db;
-  color: white;
+.status-success {
+  background: #d4edda;
+  color: #155724;
 }
 
-.badge-info {
-  background-color: #17a2b8;
-  color: white;
+.status-warning {
+  background: #fff3cd;
+  color: #856404;
 }
 
-.badge-success {
-  background-color: #27ae60;
-  color: white;
-}
-
-.badge-danger {
-  background-color: #e74c3c;
-  color: white;
-}
-
-.badge-warning {
-  background-color: #f39c12;
-  color: white;
-}
-
-.badge-secondary {
-  background-color: #95a5a6;
-  color: white;
+.status-error {
+  background: #f8d7da;
+  color: #721c24;
 }
 
 .btn-view {
-  padding: 0.5rem 1rem;
-  background-color: #3498db;
+  background: #3498db;
   color: white;
   border: none;
-  border-radius: 4px;
+  padding: 0.5rem 1rem;
+  border-radius: 6px;
   cursor: pointer;
   font-size: 0.875rem;
-  transition: background-color 0.2s;
+  transition: background 0.2s;
 }
 
 .btn-view:hover {
-  background-color: #2980b9;
+  background: #2980b9;
 }
 </style>
-

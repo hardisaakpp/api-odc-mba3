@@ -1,72 +1,74 @@
-# Frontend Vue.js
+# MBA3 Consultas - Frontend
 
-Frontend moderno desarrollado con Vue.js 3, TypeScript, Pinia y Vue Router.
+Frontend moderno desarrollado con Vue.js 3 + TypeScript para la gestión de facturas y órdenes de compra desde MBA3.
 
 ## 🚀 Inicio Rápido
 
+### Instalación
+
 ```bash
-# Instalar dependencias
 npm install
+```
 
-# Configurar API (opcional)
-echo "VITE_API_URL=http://localhost:8000" > .env.local
+### Desarrollo
 
-# Iniciar desarrollo
+```bash
 npm run dev
 ```
 
-Frontend disponible en: http://localhost:5173
+La aplicación estará disponible en `http://localhost:5173`
 
-## 📁 Estructura
+### Build para Producción
+
+```bash
+npm run build
+```
+
+### Preview de Producción
+
+```bash
+npm run preview
+```
+
+## 📁 Estructura del Proyecto
 
 ```
 frontend/
 ├── src/
-│   ├── views/          # Vistas principales
-│   │   ├── FacturasView.vue
-│   │   └── ConsultaView.vue
-│   ├── components/     # Componentes reutilizables
-│   │   ├── FacturaTable.vue
-│   │   ├── FacturaFilters.vue
-│   │   ├── FacturaModal.vue
-│   │   └── Pagination.vue
-│   ├── stores/         # Estado global (Pinia)
-│   │   ├── facturas.ts
-│   │   └── theme.ts
-│   ├── services/       # Servicios API
-│   │   └── api.ts
-│   └── types/         # Tipos TypeScript
-│       └── factura.ts
+│   ├── assets/          # Estilos globales
+│   ├── components/      # Componentes reutilizables
+│   ├── views/           # Vistas principales
+│   ├── services/        # Servicios API
+│   ├── stores/          # Stores de Pinia
+│   ├── types/           # Tipos TypeScript
+│   ├── router/          # Configuración de rutas
+│   ├── App.vue          # Componente raíz
+│   └── main.ts          # Punto de entrada
 ```
 
-## 🎯 Funcionalidades
+## 🎨 Características
 
-- ✅ Vista de facturas con filtros configurables
-- ✅ Consulta SQL dinámica
-- ✅ Tabla interactiva con paginación
-- ✅ Modal de detalles completos
-- ✅ Tema claro/oscuro
-- ✅ Visualización de líneas agrupadas
+- ✅ Vue.js 3 con Composition API
+- ✅ TypeScript para type safety
+- ✅ Pinia para gestión de estado
+- ✅ Vue Router para navegación
+- ✅ Diseño moderno y responsive
+- ✅ Integración completa con API FastAPI
 
-## 📝 Scripts
+## 🔌 Configuración
 
-- `npm run dev` - Servidor de desarrollo
-- `npm run build` - Compilar para producción
-- `npm run preview` - Previsualizar build
-- `npm run lint` - Ejecutar linter
-
-## ⚙️ Configuración
-
-Crear `.env.local`:
+Crea un archivo `.env` en la raíz del proyecto:
 
 ```env
-VITE_API_URL=http://localhost:8000
+VITE_API_BASE_URL=http://localhost:8000
 ```
 
-## 🔗 Integración con Backend
+## 📚 Tecnologías
 
-El frontend consume:
-- **GET `/facturas`** - Obtener facturas con filtros
-- **GET `/consulta?query=...`** - Ejecutar consulta SQL
+- Vue 3
+- TypeScript
+- Vite
+- Pinia
+- Vue Router
+- Axios
 
-Ver [docs/ENDPOINTS.md](../docs/ENDPOINTS.md) para más detalles.

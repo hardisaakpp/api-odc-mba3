@@ -1,170 +1,220 @@
 <template>
   <div class="filters-card">
-    <h2>Filtros</h2>
-    <form @submit.prevent="applyFilters" class="filters-form">
+    <h3 class="filters-title">Filtros de Búsqueda</h3>
+    <div class="filters-grid">
       <div class="filter-group">
-        <label>
-          <input
-            type="checkbox"
-            v-model="onlyNotAnuladas"
-          />
-          Solo no anuladas
-        </label>
+        <label class="filter-label">Anulada</label>
+        <select 
+          v-model="localFilters.anulada" 
+          class="filter-select"
+          @change="emitUpdate"
+        >
+          <option :value="null">Todas</option>
+          <option :value="false">No anuladas</option>
+          <option :value="true">Anuladas</option>
+        </select>
       </div>
-      
+
       <div class="filter-group">
-        <label>
-          <input
-            type="checkbox"
-            v-model="onlyConfirmadas"
-          />
-          Solo confirmadas
-        </label>
+        <label class="filter-label">Confirmado</label>
+        <select 
+          v-model="localFilters.confirmado" 
+          class="filter-select"
+          @change="emitUpdate"
+        >
+          <option :value="null">Todas</option>
+          <option :value="true">Confirmadas</option>
+          <option :value="false">No confirmadas</option>
+        </select>
       </div>
-      
+
       <div class="filter-group">
-        <label>
-          <input
-            type="checkbox"
-            v-model="onlySinRemision"
-          />
-          Sin remisión facturada
-        </label>
+        <label class="filter-label">Remisión Facturada</label>
+        <select 
+          v-model="localFilters.remision_facturada" 
+          class="filter-select"
+          @change="emitUpdate"
+        >
+          <option :value="null">Todas</option>
+          <option :value="false">Sin remisión</option>
+          <option :value="true">Con remisión</option>
+        </select>
       </div>
-      
-      <div class="filter-group">
-        <label>
-          <input
-            type="checkbox"
+
+      <div class="filter-group checkbox-group">
+        <label class="checkbox-label">
+          <input 
+            type="checkbox" 
             v-model="localFilters.include_obj_datos"
+            @change="emitUpdate"
+            class="checkbox-input"
           />
-          Solo con ObjDatosFactura
+          <span>Incluir solo con ObjDatosFactura</span>
         </label>
       </div>
-      
-      <div class="filter-actions">
-        <button type="submit" class="btn-primary">Aplicar Filtros</button>
-        <button type="button" @click="resetFilters" class="btn-secondary">Restablecer</button>
+
+      <div class="filter-group checkbox-group">
+        <label class="checkbox-label">
+          <input 
+            type="checkbox" 
+            v-model="localFilters.save_to_db"
+            @change="emitUpdate"
+            class="checkbox-input"
+          />
+          <span>Guardar en base de datos</span>
+        </label>
       </div>
-    </form>
+    </div>
+
+    <div class="filters-actions">
+      <button @click="handleReset" class="btn btn-secondary">Resetear</button>
+      <button @click="handleApply" class="btn btn-primary">Aplicar Filtros</button>
+    </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, watch } from 'vue'
 import type { FacturaFilters } from '@/types/factura'
 
-const emit = defineEmits<{
-  filter: [filters: FacturaFilters]
+const props = defineProps<{
+  filters: FacturaFilters
 }>()
 
-const onlyNotAnuladas = ref(true)
-const onlyConfirmadas = ref(true)
-const onlySinRemision = ref(true)
+const emit = defineEmits<{
+  'update-filters': [filters: Partial<FacturaFilters>]
+  'reset': []
+}>()
 
-const localFilters = ref<FacturaFilters>({
-  anulada: false,
-  confirmado: true,
-  remision_facturada: false,
-  include_obj_datos: true,
-  save_to_db: true
-})
+const localFilters = ref<FacturaFilters>({ ...props.filters })
 
-const computedFilters = computed<FacturaFilters>(() => ({
-  anulada: onlyNotAnuladas.value ? false : undefined,
-  confirmado: onlyConfirmadas.value ? true : undefined,
-  remision_facturada: onlySinRemision.value ? false : undefined,
-  include_obj_datos: localFilters.value.include_obj_datos,
-  save_to_db: localFilters.value.save_to_db
-}))
+watch(() => props.filters, (newFilters) => {
+  localFilters.value = { ...newFilters }
+}, { deep: true })
 
-function applyFilters() {
-  emit('filter', computedFilters.value)
+function emitUpdate() {
+  emit('update-filters', { ...localFilters.value })
 }
 
-function resetFilters() {
-  onlyNotAnuladas.value = true
-  onlyConfirmadas.value = true
-  onlySinRemision.value = true
-  localFilters.value.include_obj_datos = true
-  localFilters.value.save_to_db = true
-  applyFilters()
+function handleApply() {
+  emit('update-filters', { ...localFilters.value })
+}
+
+function handleReset() {
+  emit('reset')
 }
 </script>
 
 <style scoped>
 .filters-card {
-  background: var(--bg-secondary);
-  border: 1px solid var(--border-color);
-  border-radius: 8px;
+  background: var(--bg-primary);
+  border-radius: 12px;
   padding: 1.5rem;
+  box-shadow: var(--shadow-md);
   margin-bottom: 2rem;
-  box-shadow: 0 2px 4px var(--shadow);
-  transition: all 0.3s ease;
+  border: 1px solid var(--border-color);
+  transition: background-color 0.3s ease, border-color 0.3s ease;
 }
 
-.filters-card h2 {
-  margin: 0 0 1rem 0;
+.filters-title {
+  margin: 0 0 1.5rem 0;
+  font-size: 1.25rem;
+  font-weight: 600;
   color: var(--text-primary);
-  font-size: 1.2rem;
 }
 
-.filters-form {
+.filters-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-  gap: 1rem;
+  gap: 1.5rem;
+  margin-bottom: 1.5rem;
 }
 
 .filter-group {
   display: flex;
-  align-items: center;
+  flex-direction: column;
 }
 
-.filter-group label {
+.filter-label {
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--text-secondary);
+  margin-bottom: 0.5rem;
+}
+
+.filter-select {
+  padding: 0.625rem;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  font-size: 0.9rem;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  cursor: pointer;
+  transition: border-color 0.2s, background-color 0.3s ease, color 0.3s ease;
+}
+
+.filter-select:hover {
+  border-color: #3498db;
+}
+
+.filter-select:focus {
+  outline: none;
+  border-color: #3498db;
+  box-shadow: 0 0 0 3px rgba(52, 152, 219, 0.1);
+}
+
+.checkbox-group {
+  justify-content: center;
+}
+
+.checkbox-label {
   display: flex;
   align-items: center;
   gap: 0.5rem;
   cursor: pointer;
+  font-size: 0.9rem;
+  color: var(--text-secondary);
 }
 
-.filter-group input[type="checkbox"] {
+.checkbox-input {
   width: 18px;
   height: 18px;
   cursor: pointer;
 }
 
-.filter-actions {
-  grid-column: 1 / -1;
+.filters-actions {
   display: flex;
   gap: 1rem;
-  margin-top: 1rem;
+  justify-content: flex-end;
+  padding-top: 1rem;
+  border-top: 1px solid var(--border-color);
 }
 
-.btn-primary, .btn-secondary {
-  padding: 0.75rem 1.5rem;
+.btn {
+  padding: 0.625rem 1.25rem;
   border: none;
-  border-radius: 4px;
+  border-radius: 6px;
+  font-size: 0.9rem;
+  font-weight: 500;
   cursor: pointer;
-  font-size: 1rem;
-  transition: background-color 0.2s;
+  transition: all 0.2s;
 }
 
 .btn-primary {
-  background-color: #3498db;
+  background: #3498db;
   color: white;
 }
 
 .btn-primary:hover {
-  background-color: #2980b9;
+  background: #2980b9;
 }
 
 .btn-secondary {
-  background-color: #95a5a6;
+  background: #95a5a6;
   color: white;
 }
 
 .btn-secondary:hover {
-  background-color: #7f8c8d;
+  background: #7f8c8d;
 }
 </style>
-
