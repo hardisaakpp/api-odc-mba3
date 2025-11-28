@@ -82,6 +82,14 @@ class OCSAPService:
             if not oc_detalles:
                 result["error"] = f"No se encontraron detalles para la ODC: {oc_id}"
                 logger.error(f"❌ {result['error']}")
+                
+                # Actualizar estado a ERROR
+                try:
+                    oc_repo.update_estado(oc_id, "ERROR")
+                    logger.info(f"✅ Estado actualizado a ERROR para ODC: {oc_id}")
+                except Exception as e:
+                    logger.warning(f"⚠️ No se pudo actualizar estado a ERROR: {e}")
+                
                 return result
             
             logger.info(f"📦 Preparando envío de ODC {oc_id} a SAP ({len(oc_detalles)} líneas)")
@@ -96,10 +104,26 @@ class OCSAPService:
             except ValueError as e:
                 result["error"] = f"Error al construir JSON de SAP: {str(e)}"
                 logger.error(f"❌ {result['error']}")
+                
+                # Actualizar estado a ERROR
+                try:
+                    oc_repo.update_estado(oc_id, "ERROR")
+                    logger.info(f"✅ Estado actualizado a ERROR para ODC: {oc_id}")
+                except Exception as update_error:
+                    logger.warning(f"⚠️ No se pudo actualizar estado a ERROR: {update_error}")
+                
                 return result
             except Exception as e:
                 result["error"] = f"Error inesperado al construir JSON: {str(e)}"
                 logger.error(f"❌ {result['error']}", exc_info=True)
+                
+                # Actualizar estado a ERROR
+                try:
+                    oc_repo.update_estado(oc_id, "ERROR")
+                    logger.info(f"✅ Estado actualizado a ERROR para ODC: {oc_id}")
+                except Exception as update_error:
+                    logger.warning(f"⚠️ No se pudo actualizar estado a ERROR: {update_error}")
+                
                 return result
             
             # 3.5. Guardar JSON en archivo para debugging (fase de pruebas)
@@ -128,6 +152,14 @@ class OCSAPService:
             if not sap_response:
                 result["error"] = "No se recibió respuesta de SAP Service Layer"
                 logger.error(f"❌ {result['error']}")
+                
+                # Actualizar estado a ERROR
+                try:
+                    oc_repo.update_estado(oc_id, "ERROR")
+                    logger.info(f"✅ Estado actualizado a ERROR para ODC: {oc_id}")
+                except Exception as update_error:
+                    logger.warning(f"⚠️ No se pudo actualizar estado a ERROR: {update_error}")
+                
                 return result
             
             if not sap_response.get("success"):
@@ -138,8 +170,9 @@ class OCSAPService:
                 # Actualizar estado a ERROR
                 try:
                     oc_repo.update_estado(oc_id, "ERROR")
-                except:
-                    pass
+                    logger.info(f"✅ Estado actualizado a ERROR para ODC: {oc_id}")
+                except Exception as update_error:
+                    logger.warning(f"⚠️ No se pudo actualizar estado a ERROR: {update_error}")
                 
                 return result
             
@@ -181,8 +214,9 @@ class OCSAPService:
             # Intentar actualizar estado a ERROR
             try:
                 oc_repo.update_estado(oc_id, "ERROR")
-            except:
-                pass
+                logger.info(f"✅ Estado actualizado a ERROR para ODC: {oc_id}")
+            except Exception as update_error:
+                logger.warning(f"⚠️ No se pudo actualizar estado a ERROR: {update_error}")
             
             return result
     
