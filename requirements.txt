@@ -21,4 +21,5 @@ httpx>=0.25.0  # Para testing de FastAPI
 
 # Dependencias para Seguridad (opcional)
 slowapi>=0.1.9  # Rate limiting
+PyJWT>=2.8.0  # JWT authentication para integración con SCNexus.Core
 

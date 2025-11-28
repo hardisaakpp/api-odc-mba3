@@ -129,6 +129,17 @@ SAP_SERVICE_LAYER_VERIFY_SSL = os.getenv("SAP_SERVICE_LAYER_VERIFY_SSL", "true")
 ENABLE_AUTH = os.getenv("ENABLE_AUTH", "false").lower() == "true"
 API_KEY = os.getenv("API_KEY", "")  # API Key requerida si ENABLE_AUTH=true
 
+# Autenticación JWT (integración con SCNexus.Core)
+# ⚠️ DEBE SER LA MISMA CLAVE DEL CORE
+# Configura estas variables en .env para que coincidan con appsettings.json del Core
+JWT_SECRET = os.getenv('JWT_SECRET', 'clave_super_secreta_para_jwt_12345')
+JWT_ISSUER = os.getenv('JWT_ISSUER', 'SCNexus.Core')
+JWT_AUDIENCE = os.getenv('JWT_AUDIENCE', 'SCNexus.Users')
+
+# Habilitar autenticación JWT (requiere token válido del Core)
+# Cuando está habilitado, los endpoints protegidos requerirán JWT válido
+ENABLE_JWT_AUTH = os.getenv("ENABLE_JWT_AUTH", "false").lower() == "true"
+
 # Rate Limiting (límite de requests)
 ENABLE_RATE_LIMITING = os.getenv("ENABLE_RATE_LIMITING", "false").lower() == "true"
 RATE_LIMIT_DEFAULT = os.getenv("RATE_LIMIT_DEFAULT", "100/minute")  # Límite por defecto

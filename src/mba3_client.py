@@ -3,6 +3,7 @@ import requests
 import json
 import logging
 from typing import Optional, Union
+from exceptions import MBA3ConnectionError
 
 # Configurar logging básico similar a la versión anterior
 logging.basicConfig(
@@ -198,6 +199,29 @@ class MBA3Client:
                 logger.info(f"JWT (primeros 50 caracteres): {token[:50]}...")
                 return token
                 
+            except requests.exceptions.ConnectionError as e:
+                error_msg = (
+                    f"No se pudo conectar al servidor MBA3 en {url}.\n"
+                    f"Error: {str(e)}\n\n"
+                    f"Posibles causas:\n"
+                    f"- El servidor MBA3 no está disponible o no está ejecutándose\n"
+                    f"- El servidor está en una red diferente o no es accesible desde este equipo\n"
+                    f"- Verifica la configuración de MBA3_BASE_URL en tu archivo .env\n"
+                    f"- Verifica que el firewall permita la conexión"
+                )
+                logger.error(error_msg, exc_info=True)
+                raise MBA3ConnectionError(error_msg)
+            except requests.exceptions.Timeout as e:
+                error_msg = (
+                    f"Timeout al conectar con el servidor MBA3 en {url}.\n"
+                    f"El servidor no respondió a tiempo.\n\n"
+                    f"Posibles causas:\n"
+                    f"- El servidor está sobrecargado\n"
+                    f"- Problemas de red\n"
+                    f"- El servidor está inactivo o no responde"
+                )
+                logger.error(error_msg, exc_info=True)
+                raise MBA3ConnectionError(error_msg)
             except requests.exceptions.HTTPError as e:
                 logger.error(f"Error HTTP en login (intento {i}): {e}")
                 if e.response is not None:
@@ -215,8 +239,20 @@ class MBA3Client:
                 
             except ValueError as e:
                 raise
-                
+            except MBA3ConnectionError:
+                # Re-lanzar errores de conexión sin modificar
+                raise
             except Exception as e:
+                # Verificar si es un error de conexión por el mensaje
+                error_str = str(e).lower()
+                if any(keyword in error_str for keyword in ['connection', 'refused', 'unreachable', 'no connection', 'failed to establish']):
+                    error_msg = (
+                        f"No se pudo conectar al servidor MBA3 en {url}.\n"
+                        f"Error: {str(e)}\n\n"
+                        f"Verifica que el servidor MBA3 esté disponible y accesible."
+                    )
+                    logger.error(error_msg, exc_info=True)
+                    raise MBA3ConnectionError(error_msg)
                 logger.error(f"Error inesperado en intento {i}: {e}")
                 if i == len(payloads_to_try):
                     raise

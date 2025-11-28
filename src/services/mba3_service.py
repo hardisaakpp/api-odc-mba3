@@ -9,7 +9,7 @@ from typing import Dict, Any, Optional
 
 from query_handler import get_mba3_client
 from utils import validate_query
-from exceptions import QueryValidationError, MBA3QueryError
+from exceptions import QueryValidationError, MBA3QueryError, MBA3ConnectionError
 
 logger = logging.getLogger(__name__)
 
@@ -245,6 +245,9 @@ class MBA3Service:
             
             return result
             
+        except MBA3ConnectionError:
+            # Re-lanzar errores de conexión sin modificar
+            raise
         except MBA3QueryError:
             raise
         except QueryValidationError:

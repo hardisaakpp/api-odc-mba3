@@ -23,7 +23,9 @@ from database.services.oc_sap_service import OCSAPService
 from database.connection import get_db_connection
 from config import ENABLE_SAP_QUERIES, SAP_LINKED_SERVER, ENABLE_SAP_SERVICE_LAYER
 from security.auth import optional_auth
+from security.jwt_auth import verify_jwt_token
 from fastapi import Depends, Query
+from exceptions import MBA3ConnectionError, MBA3QueryError
 
 logger = logging.getLogger(__name__)
 
@@ -143,6 +145,29 @@ def create_endpoints(app):
                 }
             )
             
+        except MBA3ConnectionError as e:
+            logger.error(f"❌ Error de conexión con MBA3: {e}", exc_info=True)
+            return JSONResponse(
+                status_code=503,
+                content={
+                    "status": "error",
+                    "message": f"No se pudo conectar al servidor MBA3",
+                    "detail": str(e),
+                    "type": "connection_error",
+                    "hint": "Verifica que el servidor MBA3 esté disponible y accesible. Revisa la configuración de MBA3_BASE_URL en tu archivo .env"
+                }
+            )
+        except MBA3QueryError as e:
+            logger.error(f"❌ Error al ejecutar consulta en MBA3: {e}", exc_info=True)
+            return JSONResponse(
+                status_code=500,
+                content={
+                    "status": "error",
+                    "message": f"Error al ejecutar consulta en MBA3",
+                    "detail": str(e),
+                    "type": "query_error"
+                }
+            )
         except Exception as e:
             logger.error(f"❌ Error al obtener facturas: {e}", exc_info=True)
             return JSONResponse(
@@ -157,7 +182,7 @@ def create_endpoints(app):
     @app.get("/consultar")
     async def consultar_despachos(
         request: Request,
-        auth: Optional[str] = Depends(optional_auth)  # Autenticación opcional
+        user: dict = Depends(verify_jwt_token)  # Autenticación JWT requerida
     ):
         """
         Endpoint CONSULTAR: Ejecuta consulta predefinida y muestra resultados.
@@ -193,6 +218,10 @@ def create_endpoints(app):
         
         # Determinar fuente
         source = get_source_from_headers(request)
+        
+        # Log de usuario autenticado
+        username = user.get('username', 'unknown') if user else 'unknown'
+        logger.info(f"👤 Usuario autenticado: {username}")
         
         # Log de la consulta
         logger.info("=" * 70)
@@ -246,6 +275,29 @@ def create_endpoints(app):
                 headers=headers
             )
             
+        except MBA3ConnectionError as e:
+            logger.error(f"❌ Error de conexión con MBA3: {e}", exc_info=True)
+            return JSONResponse(
+                status_code=503,
+                content={
+                    "status": "error",
+                    "message": f"No se pudo conectar al servidor MBA3",
+                    "detail": str(e),
+                    "type": "connection_error",
+                    "hint": "Verifica que el servidor MBA3 esté disponible y accesible. Revisa la configuración de MBA3_BASE_URL en tu archivo .env"
+                }
+            )
+        except MBA3QueryError as e:
+            logger.error(f"❌ Error al ejecutar consulta en MBA3: {e}", exc_info=True)
+            return JSONResponse(
+                status_code=500,
+                content={
+                    "status": "error",
+                    "message": f"Error al ejecutar consulta en MBA3",
+                    "detail": str(e),
+                    "type": "query_error"
+                }
+            )
         except Exception as e:
             logger.error(f"❌ Error al ejecutar consulta: {e}", exc_info=True)
             return JSONResponse(
@@ -260,7 +312,7 @@ def create_endpoints(app):
     @app.get("/migrar")
     async def migrar_despachos(
         request: Request,
-        auth: Optional[str] = Depends(optional_auth)  # Autenticación opcional
+        user: dict = Depends(verify_jwt_token)  # Autenticación JWT requerida
     ):
         """
         Endpoint MIGRAR: Ejecuta consulta predefinida y guarda en despacho_cabecera/detalle.
@@ -299,6 +351,10 @@ def create_endpoints(app):
         
         # Determinar fuente
         source = get_source_from_headers(request)
+        
+        # Log de usuario autenticado
+        username = user.get('username', 'unknown') if user else 'unknown'
+        logger.info(f"👤 Usuario autenticado: {username}")
         
         # Log de la consulta predefinida
         logger.info("=" * 70)
@@ -379,6 +435,29 @@ def create_endpoints(app):
                 headers=headers
             )
             
+        except MBA3ConnectionError as e:
+            logger.error(f"❌ Error de conexión con MBA3: {e}", exc_info=True)
+            return JSONResponse(
+                status_code=503,
+                content={
+                    "status": "error",
+                    "message": f"No se pudo conectar al servidor MBA3",
+                    "detail": str(e),
+                    "type": "connection_error",
+                    "hint": "Verifica que el servidor MBA3 esté disponible y accesible. Revisa la configuración de MBA3_BASE_URL en tu archivo .env"
+                }
+            )
+        except MBA3QueryError as e:
+            logger.error(f"❌ Error al ejecutar consulta en MBA3: {e}", exc_info=True)
+            return JSONResponse(
+                status_code=500,
+                content={
+                    "status": "error",
+                    "message": f"Error al ejecutar consulta en MBA3",
+                    "detail": str(e),
+                    "type": "query_error"
+                }
+            )
         except Exception as e:
             logger.error(f"❌ Error al ejecutar migración: {e}", exc_info=True)
             return JSONResponse(
@@ -393,7 +472,7 @@ def create_endpoints(app):
     @app.get("/pruebas")
     async def ejecutar_pruebas(
         request: Request,
-        auth: Optional[str] = Depends(optional_auth)  # Autenticación opcional
+        user: dict = Depends(verify_jwt_token)  # Autenticación JWT requerida
     ):
         """
         Endpoint de PRUEBAS: Ejecuta el proceso completo de los 3 primeros endpoints.
@@ -446,6 +525,10 @@ def create_endpoints(app):
         
         # Determinar fuente
         source = get_source_from_headers(request)
+        
+        # Log de usuario autenticado
+        username = user.get('username', 'unknown') if user else 'unknown'
+        logger.info(f"👤 Usuario autenticado: {username}")
         
         # Log de la consulta predefinida
         logger.info("=" * 70)
@@ -629,6 +712,29 @@ def create_endpoints(app):
                 headers=headers
             )
             
+        except MBA3ConnectionError as e:
+            logger.error(f"❌ Error de conexión con MBA3: {e}", exc_info=True)
+            return JSONResponse(
+                status_code=503,
+                content={
+                    "status": "error",
+                    "message": f"No se pudo conectar al servidor MBA3",
+                    "detail": str(e),
+                    "type": "connection_error",
+                    "hint": "Verifica que el servidor MBA3 esté disponible y accesible. Revisa la configuración de MBA3_BASE_URL en tu archivo .env"
+                }
+            )
+        except MBA3QueryError as e:
+            logger.error(f"❌ Error al ejecutar consulta en MBA3: {e}", exc_info=True)
+            return JSONResponse(
+                status_code=500,
+                content={
+                    "status": "error",
+                    "message": f"Error al ejecutar consulta en MBA3",
+                    "detail": str(e),
+                    "type": "query_error"
+                }
+            )
         except Exception as e:
             logger.error(f"❌ Error al ejecutar consulta predefinida: {e}", exc_info=True)
             return JSONResponse(
@@ -643,7 +749,7 @@ def create_endpoints(app):
     @app.get("/procesar-oc")
     async def procesar_orden_compra(
         request: Request,
-        auth: Optional[str] = Depends(optional_auth)  # Autenticación opcional
+        user: dict = Depends(verify_jwt_token)  # Autenticación JWT requerida
     ):
         """
         Endpoint PROCESAR-OC: Copia despachos a orden de compra.
@@ -687,6 +793,10 @@ def create_endpoints(app):
         """
         # Determinar fuente
         source = get_source_from_headers(request)
+        
+        # Log de usuario autenticado
+        username = user.get('username', 'unknown') if user else 'unknown'
+        logger.info(f"👤 Usuario autenticado: {username}")
         
         # Log del proceso
         logger.info("=" * 70)
@@ -835,7 +945,7 @@ def create_endpoints(app):
     async def integrar_sap(
         request: Request,
         referencia_despacho: Optional[str] = FastAPIQuery(None, description="Referencia del despacho (número de factura) para buscar una OC específica. Si no se proporciona, se procesa la primera OC pendiente."),
-        auth: Optional[str] = Depends(optional_auth)  # Autenticación opcional
+        user: dict = Depends(verify_jwt_token)  # Autenticación JWT requerida
     ):
         """
         Endpoint INTEGRAR-SAP: Envía órdenes de compra a SAP Service Layer.
@@ -897,6 +1007,10 @@ def create_endpoints(app):
         """
         # Determinar fuente
         source = get_source_from_headers(request)
+        
+        # Log de usuario autenticado
+        username = user.get('username', 'unknown') if user else 'unknown'
+        logger.info(f"👤 Usuario autenticado: {username}")
         
         # Log del proceso
         logger.info("=" * 70)

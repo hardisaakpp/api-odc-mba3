@@ -5,8 +5,26 @@ Repositorio para operaciones CRUD de órdenes de compra en SQL Server.
 import logging
 import pyodbc
 from typing import Optional, Dict, Any, List
+from datetime import date, datetime
 
 logger = logging.getLogger(__name__)
+
+
+def serialize_date(value):
+    """
+    Convierte un objeto date o datetime a string ISO format para JSON serialization.
+    
+    Args:
+        value: Objeto date, datetime, o None
+        
+    Returns:
+        String en formato ISO o None
+    """
+    if value is None:
+        return None
+    if isinstance(value, (date, datetime)):
+        return value.isoformat()
+    return value
 
 
 class OrdenCompraRepository:
@@ -278,11 +296,11 @@ class OrdenCompraRepository:
                 "oc_id": str(result[0]),
                 "despacho_id": str(result[1]),
                 "proveedor": result[2],
-                "fecha_generacion": result[3],
+                "fecha_generacion": serialize_date(result[3]),
                 "estado": result[4],
                 "numero_oc_sap": result[5],
                 "referencia_despacho": result[6],
-                "created_at": result[7],
+                "created_at": serialize_date(result[7]),
             }
         finally:
             cursor.close()
@@ -319,11 +337,11 @@ class OrdenCompraRepository:
                     "oc_id": str(row[0]),
                     "despacho_id": str(row[1]),
                     "proveedor": row[2],
-                    "fecha_generacion": row[3],
+                    "fecha_generacion": serialize_date(row[3]),
                     "estado": row[4],
                     "numero_oc_sap": row[5],
                     "referencia_despacho": row[6],
-                    "created_at": row[7],
+                    "created_at": serialize_date(row[7]),
                     # updated_at no existe en la tabla, se omite
                 })
             
@@ -360,7 +378,7 @@ class OrdenCompraRepository:
                 "oc_id": str(result[0]),
                 "despacho_id": str(result[1]),
                 "proveedor": result[2],
-                "fecha_generacion": result[3],
+                "fecha_generacion": serialize_date(result[3]),
                 "estado": result[4],
                 "numero_oc_sap": result[5],
                 "referencia_despacho": result[6],

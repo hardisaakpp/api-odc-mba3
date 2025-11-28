@@ -13,7 +13,7 @@ import json
 import logging
 from typing import Dict, Any, Optional
 from mba3_client import MBA3Client
-from exceptions import MBA3QueryError
+from exceptions import MBA3QueryError, MBA3ConnectionError
 
 logger = logging.getLogger(__name__)
 
@@ -246,6 +246,30 @@ class MBA3APIClient:
         except MBA3QueryError:
             # Re-lanzar excepciones de MBA3QueryError sin modificar
             raise
+        except requests.exceptions.ConnectionError as e:
+            # Detectar errores de conexión (servidor no disponible, conexión rechazada, etc.)
+            error_msg = (
+                f"No se pudo conectar al servidor MBA3 en {self.base_url}.\n"
+                f"Error: {str(e)}\n\n"
+                f"Posibles causas:\n"
+                f"- El servidor MBA3 no está disponible o no está ejecutándose\n"
+                f"- El servidor está en una red diferente o no es accesible desde este equipo\n"
+                f"- Verifica la configuración de MBA3_BASE_URL en tu archivo .env\n"
+                f"- Verifica que el firewall permita la conexión al puerto {self.base_url.split(':')[-1] if ':' in self.base_url else '8081'}"
+            )
+            logger.error(error_msg, exc_info=True)
+            raise MBA3ConnectionError(error_msg)
+        except requests.exceptions.Timeout as e:
+            error_msg = (
+                f"Timeout al conectar con el servidor MBA3 en {self.base_url}.\n"
+                f"El servidor no respondió a tiempo.\n\n"
+                f"Posibles causas:\n"
+                f"- El servidor está sobrecargado\n"
+                f"- Problemas de red\n"
+                f"- El servidor está inactivo o no responde"
+            )
+            logger.error(error_msg, exc_info=True)
+            raise MBA3ConnectionError(error_msg)
         except requests.exceptions.HTTPError as e:
             error_detail = ""
             if hasattr(e, 'response') and e.response:
@@ -255,7 +279,18 @@ class MBA3APIClient:
             raise MBA3QueryError(error_msg)
             
         except requests.exceptions.RequestException as e:
-            error_msg = f"Error en la petición a MBA3: {str(e)}"
-            logger.error(error_msg, exc_info=True)
-            raise MBA3QueryError(error_msg)
+            # Verificar si es un error de conexión por el mensaje
+            error_str = str(e).lower()
+            if any(keyword in error_str for keyword in ['connection', 'refused', 'unreachable', 'no connection', 'failed to establish']):
+                error_msg = (
+                    f"No se pudo conectar al servidor MBA3 en {self.base_url}.\n"
+                    f"Error: {str(e)}\n\n"
+                    f"Verifica que el servidor MBA3 esté disponible y accesible."
+                )
+                logger.error(error_msg, exc_info=True)
+                raise MBA3ConnectionError(error_msg)
+            else:
+                error_msg = f"Error en la petición a MBA3: {str(e)}"
+                logger.error(error_msg, exc_info=True)
+                raise MBA3QueryError(error_msg)
 
