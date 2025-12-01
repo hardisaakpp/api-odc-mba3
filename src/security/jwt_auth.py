@@ -84,7 +84,28 @@ async def verify_jwt_token(
         # Almacenar usuario en el request state (FastAPI)
         request.state.current_user = current_user
         
-        logger.debug(f"✅ Token JWT válido para usuario: {current_user.get('username')}")
+        # 🔍 LOGGING TEMPORAL PARA DEBUG - Ver información del token
+        username = current_user.get('username', 'unknown')
+        extracted_permissions = current_user.get('permissions', [])
+        extracted_roles = current_user.get('roles', [])
+        all_claims_keys = list(data.keys())
+        
+        logger.info("=" * 80)
+        logger.info(f"🔍 [DEBUG JWT] Token válido para usuario: {username}")
+        logger.info(f"🔍 [DEBUG JWT] Roles extraídos: {extracted_roles}")
+        logger.info(f"🔍 [DEBUG JWT] Permisos extraídos: {extracted_permissions}")
+        logger.info(f"🔍 [DEBUG JWT] Total de claims en el token: {len(all_claims_keys)}")
+        logger.info(f"🔍 [DEBUG JWT] Todas las claves del token: {all_claims_keys}")
+        
+        # Buscar cualquier clave que pueda contener permisos
+        permission_like_keys = [k for k in all_claims_keys if 'permission' in k.lower() or 'claim' in k.lower()]
+        if permission_like_keys:
+            logger.info(f"🔍 [DEBUG JWT] Claves que contienen 'permission' o 'claim': {permission_like_keys}")
+            for key in permission_like_keys:
+                logger.info(f"🔍 [DEBUG JWT]   - {key}: {data.get(key)}")
+        
+        logger.info("=" * 80)
+        logger.debug(f"✅ Token JWT válido para usuario: {username}")
         return current_user
         
     except jwt.ExpiredSignatureError:
@@ -143,9 +164,13 @@ def _extract_permissions(data: Dict[str, Any]) -> list:
     permission_keys = [
         'permission',
         'permissions',
-        'http://schemas.microsoft.com/ws/2008/06/identity/claims/role'
+        'Permission',
+        'Permissions',
+        'http://schemas.microsoft.com/ws/2008/06/identity/claims/role',
+        # Buscar en todas las claves que contengan 'permission'
     ]
     
+    # Primero buscar en claves específicas
     for key in permission_keys:
         if key in data:
             value = data[key]
@@ -153,6 +178,21 @@ def _extract_permissions(data: Dict[str, Any]) -> list:
                 permissions.extend(value)
             elif isinstance(value, str):
                 permissions.append(value)
+    
+    # También buscar en cualquier clave que contenga 'permission' (case insensitive)
+    for key, value in data.items():
+        if 'permission' in key.lower() and key not in permission_keys:
+            if isinstance(value, list):
+                permissions.extend(value)
+            elif isinstance(value, str):
+                permissions.append(value)
+    
+    # 🔍 LOGGING TEMPORAL PARA DEBUG
+    if permissions:
+        logger.info(f"🔍 [DEBUG EXTRACT] Permisos encontrados: {permissions}")
+    else:
+        logger.warning(f"🔍 [DEBUG EXTRACT] ⚠️ No se encontraron permisos en el token")
+        logger.warning(f"🔍 [DEBUG EXTRACT] Claves disponibles: {list(data.keys())}")
     
     return permissions
 
@@ -211,17 +251,41 @@ def require_permission(permission_key: str):
             )
         
         permissions = user.get('permissions', [])
+        roles = user.get('roles', [])
+        
+        # 🔍 LOGGING TEMPORAL PARA DEBUG - Ver validación de permisos
+        username = user.get('username', 'unknown')
+        logger.info("=" * 80)
+        logger.info(f"🔍 [DEBUG PERMISSION] Validando permiso para usuario: {username}")
+        logger.info(f"🔍 [DEBUG PERMISSION] Permiso requerido: '{permission_key}'")
+        logger.info(f"🔍 [DEBUG PERMISSION] Roles del usuario: {roles}")
+        logger.info(f"🔍 [DEBUG PERMISSION] Permisos disponibles en el token: {permissions}")
+        logger.info(f"🔍 [DEBUG PERMISSION] Tipo de permisos: {type(permissions)}")
+        
+        # ✅ Permitir acceso automático a usuarios con rol 'Admin'
+        is_admin = 'Admin' in roles or 'Admin' in permissions
+        if is_admin:
+            logger.info(f"✅ [DEBUG PERMISSION] Usuario {username} es Admin - acceso permitido automáticamente")
+            logger.info("=" * 80)
+            return
+        
+        logger.info(f"🔍 [DEBUG PERMISSION] ¿Permiso encontrado? {permission_key in permissions}")
         
         if permission_key not in permissions:
-            username = user.get('username', 'unknown')
             logger.warning(
                 f"❌ Permiso denegado: usuario {username} "
                 f"intentó acceder sin permiso '{permission_key}'"
             )
+            logger.warning(f"🔍 [DEBUG PERMISSION] Permisos disponibles: {permissions}")
+            logger.warning(f"🔍 [DEBUG PERMISSION] Comparación exacta falló. Verificar formato del permiso.")
+            logger.info("=" * 80)
             raise HTTPException(
                 status_code=403,
-                detail=f"Permiso denegado: se requiere '{permission_key}'"
+                detail=f"Permiso denegado: se requiere '{permission_key}'. Permisos disponibles: {permissions}"
             )
+        
+        logger.info(f"✅ [DEBUG PERMISSION] Permiso '{permission_key}' validado correctamente")
+        logger.info("=" * 80)
     
     return permission_checker
 
@@ -268,4 +332,5 @@ def require_role(role_name: str):
             )
     
     return role_checker
+
 

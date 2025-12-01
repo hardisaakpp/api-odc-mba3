@@ -23,7 +23,7 @@ from database.services.oc_sap_service import OCSAPService
 from database.connection import get_db_connection
 from config import ENABLE_SAP_QUERIES, SAP_LINKED_SERVER, ENABLE_SAP_SERVICE_LAYER
 from security.auth import optional_auth
-from security.jwt_auth import verify_jwt_token
+from security.jwt_auth import verify_jwt_token, require_permission
 from fastapi import Depends, Query
 from exceptions import MBA3ConnectionError, MBA3QueryError
 
@@ -60,7 +60,8 @@ def create_endpoints(app):
         remision_facturada: Optional[bool] = Query(None, description="Filtrar por remisión facturada (false = sin remisión, true = con remisión, null = todas)"),
         include_obj_datos: bool = Query(True, description="Incluir solo facturas con ObjDatosFactura no nulo"),
         save_to_db: bool = Query(True, description="Guardar resultados en SQL Server"),
-        auth: Optional[str] = Depends(optional_auth)
+        user: dict = Depends(verify_jwt_token),
+        _: None = Depends(require_permission('mba3-consultas.facturas.view'))
     ):
         """
         Endpoint FACTURAS: Obtiene facturas desde MBA3 con filtros configurables.
@@ -182,7 +183,8 @@ def create_endpoints(app):
     @app.get("/consultar")
     async def consultar_despachos(
         request: Request,
-        user: dict = Depends(verify_jwt_token)  # Autenticación JWT requerida
+        user: dict = Depends(verify_jwt_token),
+        _: None = Depends(require_permission('mba3-consultas.proceso.execute'))
     ):
         """
         Endpoint CONSULTAR: Ejecuta consulta predefinida y muestra resultados.
@@ -312,7 +314,8 @@ def create_endpoints(app):
     @app.get("/migrar")
     async def migrar_despachos(
         request: Request,
-        user: dict = Depends(verify_jwt_token)  # Autenticación JWT requerida
+        user: dict = Depends(verify_jwt_token),
+        _: None = Depends(require_permission('mba3-consultas.proceso.execute'))
     ):
         """
         Endpoint MIGRAR: Ejecuta consulta predefinida y guarda en despacho_cabecera/detalle.
@@ -472,7 +475,8 @@ def create_endpoints(app):
     @app.get("/pruebas")
     async def ejecutar_pruebas(
         request: Request,
-        user: dict = Depends(verify_jwt_token)  # Autenticación JWT requerida
+        user: dict = Depends(verify_jwt_token),
+        _: None = Depends(require_permission('mba3-consultas.proceso.execute'))
     ):
         """
         Endpoint de PRUEBAS: Ejecuta el proceso completo de los 3 primeros endpoints.
@@ -749,7 +753,8 @@ def create_endpoints(app):
     @app.get("/procesar-oc")
     async def procesar_orden_compra(
         request: Request,
-        user: dict = Depends(verify_jwt_token)  # Autenticación JWT requerida
+        user: dict = Depends(verify_jwt_token),
+        _: None = Depends(require_permission('mba3-consultas.proceso.execute'))
     ):
         """
         Endpoint PROCESAR-OC: Copia despachos a orden de compra.
@@ -945,7 +950,8 @@ def create_endpoints(app):
     async def integrar_sap(
         request: Request,
         referencia_despacho: Optional[str] = FastAPIQuery(None, description="Referencia del despacho (número de factura) para buscar una OC específica. Si no se proporciona, se procesa la primera OC pendiente."),
-        user: dict = Depends(verify_jwt_token)  # Autenticación JWT requerida
+        user: dict = Depends(verify_jwt_token),
+        _: None = Depends(require_permission('mba3-consultas.proceso.execute'))
     ):
         """
         Endpoint INTEGRAR-SAP: Envía órdenes de compra a SAP Service Layer.
@@ -1449,7 +1455,8 @@ def create_endpoints(app):
     async def get_ordenes_compra(
         request: Request,
         estado: Optional[str] = Query(None, description="Filtrar por estado (PENDIENTE, ENVIADA, ERROR)"),
-        auth: Optional[str] = Depends(optional_auth)
+        user: dict = Depends(verify_jwt_token),
+        _: None = Depends(require_permission('mba3-consultas.ordenes-compra.view'))
     ):
         """
         Endpoint ORDENES-COMPRA: Obtiene órdenes de compra desde la base de datos.

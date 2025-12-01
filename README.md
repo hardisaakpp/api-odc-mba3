@@ -45,6 +45,12 @@ SAP_LINKED_SERVER=MYHANADB
 SAP_DATABASE=SBO_MABEL_PROD
 ENABLE_SAP_QUERIES=true
 ENABLE_SAP_SERVICE_LAYER=true
+
+# JWT Authentication (integración con SCNexus.Core)
+JWT_SECRET=clave_super_secreta_para_jwt_12345
+JWT_ISSUER=SCNexus.Core
+JWT_AUDIENCE=SCNexus.Users
+ENABLE_JWT_AUTH=true
 ```
 
 ### Iniciar Servidor

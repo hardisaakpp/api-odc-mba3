@@ -272,3 +272,4 @@ curl -X GET http://localhost:8000/facturas \
 - Verifica que el header `Authorization` esté presente
 - Verifica el formato: `Bearer <token>` (con espacio entre "Bearer" y el token)
 
+
