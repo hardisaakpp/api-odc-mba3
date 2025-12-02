@@ -946,6 +946,140 @@ def create_endpoints(app):
                 }
             )
     
+    @app.get("/despachos/count")
+    async def get_despachos_count(
+        request: Request,
+        limit: Optional[int] = Query(None, description="Número máximo de registros a retornar (opcional)"),
+        user: dict = Depends(verify_jwt_token),
+        _: None = Depends(require_permission('mba3-consultas.facturas.view'))
+    ):
+        """
+        Endpoint para obtener el conteo y información detallada de despachos con sus órdenes de compra.
+        
+        **Responsabilidad:** Consultar estado (solo lectura)
+        
+        **Características:**
+        - ✅ Cuenta despachos en despacho_cabecera que NO tienen OC asociada
+        - ✅ Devuelve información detallada de todas las tablas relacionadas:
+          - despacho_cabecera (información de cabecera del despacho)
+          - despacho_detalle (líneas de detalle del despacho)
+          - orden_compra_cabecera (información de cabecera de OC si existe)
+          - orden_compra_detalle (líneas de detalle de OC si existe)
+        - ✅ Útil para mostrar información completa en el frontend
+        - ✅ Permisos: solo lectura (view), no requiere execute
+        
+        **Query Parameters:**
+        - `limit` (int, opcional) - Número máximo de registros a retornar
+        
+        **Ejemplo de uso:**
+        ```
+        GET /despachos/count
+        GET /despachos/count?limit=10
+        ```
+        
+        **Respuesta:**
+        ```json
+        {
+          "count": 5,
+          "disponible": true,
+          "despachos": [
+            {
+              "despacho_id": "uuid",
+              "empresa": "EMPRESA001",
+              "numero_factura": "FAC-001",
+              "fecha_despacho": "2025-01-21",
+              "despacho_detalles": [
+                {
+                  "detalle_id": "uuid",
+                  "sku": "SKU001",
+                  "cantidad_docena_mba3": 10,
+                  "precio_unitario_mba3": 100.0,
+                  "total_linea_mba3": 1000.0
+                }
+              ],
+              "orden_compra_info": {
+                "oc_id": "uuid",
+                "proveedor": "PROVEEDOR001",
+                "estado": "PENDIENTE",
+                "numero_oc_sap": null,
+                "oc_detalles": [
+                  {
+                    "oc_detalle_id": "uuid",
+                    "sku_sap": "SKU001",
+                    "cantidad_sap": 40.0,
+                    "precio_unitario": 25.0,
+                    "total_linea": 1000.0
+                  }
+                ]
+              }
+            }
+          ]
+        }
+        ```
+        
+        **Nota:** Este endpoint solo consulta el estado, no ejecuta ningún proceso.
+        Para procesar los despachos, usar el endpoint GET /procesar-oc.
+        
+        Returns:
+            JSON con conteo, disponibilidad e información detallada de despachos y OCs
+        """
+        source = get_source_from_headers(request)
+        
+        try:
+            conn = get_db_connection()
+            despacho_repo = DespachoRepository(conn)
+            oc_repo = OrdenCompraRepository(conn)
+            
+            # Contar despachos sin OC (misma lógica que usa /procesar-oc)
+            count = despacho_repo.count_despachos_sin_oc()
+            
+            # Obtener información detallada de despachos con sus OCs
+            despachos_info = despacho_repo.get_despachos_con_info_oc(limit=limit)
+            
+            # Agregar detalles de OC para cada despacho que tenga OC
+            for despacho in despachos_info:
+                if despacho.get("orden_compra_info") and despacho["orden_compra_info"].get("oc_id"):
+                    oc_id = despacho["orden_compra_info"]["oc_id"]
+                    try:
+                        oc_detalles = oc_repo.get_detalles(oc_id)
+                        despacho["orden_compra_info"]["oc_detalles"] = oc_detalles
+                    except Exception as e:
+                        logger.warning(f"⚠️ Error al obtener detalles de OC {oc_id}: {e}")
+                        despacho["orden_compra_info"]["oc_detalles"] = []
+            
+            conn.close()
+            
+            disponible = count > 0
+            
+            logger.debug(f"📊 GET /despachos/count: {count} despachos disponibles, {len(despachos_info)} registros retornados")
+            
+            return JSONResponse(
+                status_code=200,
+                content={
+                    "count": count,
+                    "disponible": disponible,
+                    "despachos": despachos_info
+                },
+                headers={
+                    "X-Source": source,
+                    "X-Endpoint": "DESPACHOS-COUNT",
+                    "X-Count": str(count)
+                }
+            )
+            
+        except Exception as e:
+            logger.error(f"❌ Error al obtener información de despachos: {e}", exc_info=True)
+            return JSONResponse(
+                status_code=500,
+                content={
+                    "status": "error",
+                    "message": f"Error al obtener información de despachos: {str(e)}",
+                    "count": 0,
+                    "disponible": False,
+                    "despachos": []
+                }
+            )
+    
     @app.post("/integrar-sap")
     async def integrar_sap(
         request: Request,

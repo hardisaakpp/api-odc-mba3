@@ -273,3 +273,5 @@ curl -X GET http://localhost:8000/facturas \
 - Verifica el formato: `Bearer <token>` (con espacio entre "Bearer" y el token)
 
 
+
+

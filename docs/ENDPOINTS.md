@@ -81,6 +81,94 @@ Consulta desde MBA3 y guarda en `despacho_cabecera`/`despacho_detalle`.
 
 ---
 
+### Contar Despachos Disponibles
+
+**GET `/despachos/count`**
+
+Obtiene el conteo y información detallada de despachos con sus órdenes de compra asociadas.
+
+**Características:**
+- ✅ Cuenta despachos en `despacho_cabecera` que NO tienen OC asociada
+- ✅ Devuelve información detallada de todas las tablas relacionadas:
+  - `despacho_cabecera` (información de cabecera del despacho)
+  - `despacho_detalle` (líneas de detalle del despacho)
+  - `orden_compra_cabecera` (información de cabecera de OC si existe)
+  - `orden_compra_detalle` (líneas de detalle de OC si existe)
+- ✅ Permite mostrar información completa en el frontend
+- ✅ Permisos: solo lectura (`mba3-consultas.facturas.view`)
+
+**Query Parameters:**
+- `limit` (int, opcional) - Número máximo de registros a retornar
+
+**Ejemplo:**
+```bash
+curl "http://localhost:8000/despachos/count"
+curl "http://localhost:8000/despachos/count?limit=10"
+```
+
+**Respuesta:**
+```json
+{
+  "count": 5,
+  "disponible": true,
+  "despachos": [
+    {
+      "despacho_id": "uuid",
+      "empresa": "EMPRESA001",
+      "codigo_cliente": "CLI001",
+      "numero_factura": "FAC-001",
+      "fecha_despacho": "2025-01-21",
+      "fecha_factura": "2025-01-21",
+      "codigo_factura": "FAC-001",
+      "anulada": false,
+      "confirmado": true,
+      "despacho_detalles": [
+        {
+          "detalle_id": "uuid",
+          "sku": "SKU001",
+          "cantidad_docena_mba3": 10,
+          "precio_unitario_mba3": 100.0,
+          "total_linea_mba3": 1000.0,
+          "cantidad_pack_sap": 40.0,
+          "unidad_sap": "X3",
+          "precio_unitario_sap": 25.0,
+          "nombre_producto": "Producto Ejemplo",
+          "tipo_linea": "GrabarLineasProd"
+        }
+      ],
+      "orden_compra_info": {
+        "oc_id": "uuid",
+        "proveedor": "PROVEEDOR001",
+        "estado": "PENDIENTE",
+        "numero_oc_sap": null,
+        "fecha_generacion": "2025-01-21",
+        "referencia_despacho": "FAC-001",
+        "oc_detalles": [
+          {
+            "oc_detalle_id": "uuid",
+            "sku_sap": "SKU001",
+            "cantidad_sap": 40.0,
+            "unidad_sap": "X3",
+            "precio_unitario": 25.0,
+            "total_linea": 1000.0,
+            "cantidad_origen": 10.0,
+            "referencia_detalle": "uuid-del-despacho-detalle"
+          }
+        ]
+      }
+    }
+  ]
+}
+```
+
+**Uso en Frontend:**
+Este endpoint permite:
+- Verificar si hay despachos disponibles antes de ejecutar `/procesar-oc`
+- Mostrar información detallada de despachos y sus órdenes de compra en la interfaz
+- Habilitar o deshabilitar el botón de procesamiento automáticamente
+
+---
+
 ### Procesar Orden de Compra
 
 **GET `/procesar-oc`**

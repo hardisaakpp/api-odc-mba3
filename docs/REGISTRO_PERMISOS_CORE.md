@@ -122,6 +122,7 @@ Content-Type: application/json
 | Endpoint | Método | Permiso Requerido |
 |----------|--------|-------------------|
 | `/facturas` | GET | `mba3-consultas.facturas.view` |
+| `/despachos/count` | GET | `mba3-consultas.facturas.view` |
 | `/consultar` | GET | `mba3-consultas.proceso.execute` |
 | `/migrar` | GET | `mba3-consultas.proceso.execute` |
 | `/pruebas` | GET | `mba3-consultas.proceso.execute` |
@@ -158,4 +159,6 @@ Después de registrar y asignar los permisos:
 - Los permisos se asignan a **roles**, no directamente a usuarios
 - Los usuarios obtienen permisos a través de sus roles
 - Después de asignar permisos, los usuarios deben **hacer login nuevamente** para obtener tokens actualizados
+
+
 

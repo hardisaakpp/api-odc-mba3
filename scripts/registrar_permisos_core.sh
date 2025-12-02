@@ -137,3 +137,5 @@ echo -e "${YELLOW}⚠️  IMPORTANTE: Los usuarios deben hacer login nuevamente$
 echo -e "${YELLOW}   para obtener tokens con los nuevos permisos.${NC}"
 echo ""
 
+
+

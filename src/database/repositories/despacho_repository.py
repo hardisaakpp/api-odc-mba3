@@ -5,8 +5,44 @@ Repositorio para operaciones CRUD de despachos en SQL Server.
 import logging
 import pyodbc
 from typing import Optional, Dict, Any, List
+from datetime import date, datetime
 
 logger = logging.getLogger(__name__)
+
+
+def serialize_date(value):
+    """
+    Convierte un objeto date o datetime a string ISO format para JSON serialization.
+    
+    Args:
+        value: Objeto date, datetime, o None
+        
+    Returns:
+        String en formato ISO o None
+    """
+    if value is None:
+        return None
+    if isinstance(value, (date, datetime)):
+        return value.isoformat()
+    return value
+
+
+def serialize_decimal(value):
+    """
+    Convierte un objeto Decimal de pyodbc a float para JSON serialization.
+    
+    Args:
+        value: Objeto Decimal, float, int, o None
+        
+    Returns:
+        float o None
+    """
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 class DespachoRepository:
@@ -453,17 +489,17 @@ class DespachoRepository:
                     "detalle_id": str(row[0]),
                     "despacho_id": str(row[1]),
                     "sku": row[2],
-                    "cantidad_docena_mba3": row[3],
-                    "subtotal_sap": row[4],
-                    "cantidad_pack_sap": row[5],
+                    "cantidad_docena_mba3": serialize_decimal(row[3]),
+                    "subtotal_sap": serialize_decimal(row[4]),
+                    "cantidad_pack_sap": serialize_decimal(row[5]),
                     "unidad_sap": row[6],
-                    "precio_unitario_mba3": row[7],
-                    "descuento": row[8],
-                    "total_linea_mba3": row[9],
-                    "impuesto": row[10],
+                    "precio_unitario_mba3": serialize_decimal(row[7]),
+                    "descuento": serialize_decimal(row[8]),
+                    "total_linea_mba3": serialize_decimal(row[9]),
+                    "impuesto": serialize_decimal(row[10]),
                     "nombre_producto": row[11],
                     "tipo_linea": row[12],
-                    "precio_unitario_sap": row[13],
+                    "precio_unitario_sap": serialize_decimal(row[13]),
                 })
             
             return detalles
@@ -490,6 +526,130 @@ class DespachoRepository:
             )
             results = cursor.fetchall()
             return [str(row[0]) for row in results]
+        finally:
+            cursor.close()
+    
+    def count_despachos_sin_oc(self) -> int:
+        """
+        Cuenta los despachos que no tienen una orden de compra asociada.
+        
+        Returns:
+            Número de despachos disponibles para procesar
+        """
+        cursor = self.conn.cursor()
+        try:
+            cursor.execute(
+                """
+                SELECT COUNT(dc.despacho_id)
+                FROM despacho_cabecera dc
+                LEFT JOIN orden_compra_cabecera oc ON dc.despacho_id = oc.despacho_id
+                WHERE oc.despacho_id IS NULL
+                """
+            )
+            result = cursor.fetchone()
+            return result[0] if result else 0
+        finally:
+            cursor.close()
+    
+    def get_despachos_con_info_oc(self, limit: Optional[int] = None) -> List[Dict[str, Any]]:
+        """
+        Obtiene información detallada de despachos junto con sus órdenes de compra asociadas.
+        
+        Incluye información de ambas tablas (despacho_cabecera y orden_compra_cabecera)
+        y sus respectivos detalles (despacho_detalle y orden_compra_detalle).
+        Si un despacho no tiene OC asociada, los campos de OC serán None.
+        
+        Args:
+            limit: Número máximo de registros a retornar (opcional, para paginación)
+            
+        Returns:
+            Lista de diccionarios con información combinada de despachos, OCs y sus detalles
+        """
+        cursor = self.conn.cursor()
+        try:
+            # Query con LEFT JOIN para obtener despachos con y sin OC
+            sql = """
+                SELECT 
+                    dc.despacho_id,
+                    dc.empresa,
+                    dc.codigo_cliente,
+                    dc.fecha_despacho,
+                    dc.codigo_factura,
+                    dc.anulada,
+                    dc.numero_pedido_sistema,
+                    dc.numero_orden,
+                    dc.numero_factura,
+                    dc.tipo_documento,
+                    dc.orden_compra,
+                    dc.orden_compra_cliente,
+                    dc.remision_facturada,
+                    dc.num_id_factura_relacionada,
+                    dc.fecha_factura,
+                    dc.codigo_despacho,
+                    dc.codigo_bodega,
+                    dc.confirmado,
+                    dc.created_at AS despacho_created_at,
+                    dc.updated_at AS despacho_updated_at,
+                    oc.oc_id,
+                    oc.proveedor,
+                    oc.fecha_generacion,
+                    oc.referencia_despacho,
+                    oc.estado AS oc_estado,
+                    oc.numero_oc_sap,
+                    oc.created_at AS oc_created_at
+                FROM despacho_cabecera dc
+                LEFT JOIN orden_compra_cabecera oc ON dc.despacho_id = oc.despacho_id
+                ORDER BY dc.created_at DESC
+            """
+            
+            # Aplicar límite si se especifica (validado por FastAPI como int opcional)
+            if limit and isinstance(limit, int) and limit > 0:
+                sql += f" OFFSET 0 ROWS FETCH NEXT {limit} ROWS ONLY"
+            
+            cursor.execute(sql)
+            results = cursor.fetchall()
+            
+            despachos = []
+            for row in results:
+                despacho_id = str(row[0])
+                oc_id = str(row[20]) if row[20] else None
+                
+                despacho_info = {
+                    "despacho_id": despacho_id,
+                    "empresa": row[1],
+                    "codigo_cliente": row[2],
+                    "fecha_despacho": serialize_date(row[3]),
+                    "codigo_factura": row[4],
+                    "anulada": bool(row[5]) if row[5] is not None else None,
+                    "numero_pedido_sistema": row[6],
+                    "numero_orden": row[7],
+                    "numero_factura": row[8],
+                    "tipo_documento": row[9],
+                    "orden_compra": row[10],  # Campo de despacho_cabecera
+                    "orden_compra_cliente": row[11],
+                    "remision_facturada": bool(row[12]) if row[12] is not None else None,
+                    "num_id_factura_relacionada": row[13],
+                    "fecha_factura": serialize_date(row[14]),
+                    "codigo_despacho": row[15],
+                    "codigo_bodega": row[16],
+                    "confirmado": bool(row[17]) if row[17] is not None else None,
+                    "despacho_created_at": serialize_date(row[18]),
+                    "despacho_updated_at": serialize_date(row[19]),
+                    # Obtener detalles del despacho
+                    "despacho_detalles": self.get_detalles(despacho_id),
+                    "orden_compra_info": {
+                        "oc_id": oc_id,
+                        "proveedor": row[21],
+                        "fecha_generacion": serialize_date(row[22]),
+                        "referencia_despacho": row[23],
+                        "estado": row[24],
+                        "numero_oc_sap": row[25],
+                        "oc_created_at": serialize_date(row[26])
+                    } if oc_id else None
+                }
+                despachos.append(despacho_info)
+            
+            return despachos
         finally:
             cursor.close()
 
