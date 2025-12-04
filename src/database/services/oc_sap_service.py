@@ -6,9 +6,7 @@ Este servicio orquesta la construcción del JSON y el envío de ODC a SAP.
 
 import logging
 import json
-import os
 from typing import Optional, Dict, Any
-from datetime import datetime
 
 from ..repositories.orden_compra_repository import OrdenCompraRepository
 from ..clients.sap_service_layer_client import SAPServiceLayerClient
@@ -66,30 +64,35 @@ class OCSAPService:
             # 1. Obtener cabecera de la ODC
             oc_cabecera = oc_repo.get_existing_cabecera(oc_id)
             if not oc_cabecera:
-                result["error"] = f"No se encontró orden de compra con ID: {oc_id}"
+                error_msg = f"No se encontró orden de compra con ID: {oc_id}"
+                result["error"] = error_msg
+                result["error_message"] = error_msg  # Alias para compatibilidad con frontend
+                result["error_source"] = "BACKEND"
                 logger.error(f"❌ {result['error']}")
                 return result
             
             # Verificar que esté en estado PENDIENTE
             estado_actual = oc_cabecera.get("estado")
             if estado_actual != "PENDIENTE":
-                result["error"] = f"La ODC no está en estado PENDIENTE (estado actual: {estado_actual})"
+                error_msg = f"La ODC no está en estado PENDIENTE (estado actual: {estado_actual})"
+                result["error"] = error_msg
+                result["error_message"] = error_msg  # Alias para compatibilidad con frontend
+                result["error_source"] = "BACKEND"
                 logger.warning(f"⚠️ {result['error']}")
                 return result
             
             # 2. Obtener detalles de la ODC
             oc_detalles = oc_repo.get_detalles(oc_id)
             if not oc_detalles:
-                result["error"] = f"No se encontraron detalles para la ODC: {oc_id}"
+                error_msg = f"No se encontraron detalles para la ODC: {oc_id}"
+                result["error"] = error_msg
+                result["error_message"] = error_msg  # Alias para compatibilidad con frontend
+                result["error_source"] = "BACKEND"  # Indicar que el error viene del backend
                 logger.error(f"❌ {result['error']}")
-                
-                # Actualizar estado a ERROR
                 try:
                     oc_repo.update_estado(oc_id, "ERROR")
-                    logger.info(f"✅ Estado actualizado a ERROR para ODC: {oc_id}")
-                except Exception as e:
-                    logger.warning(f"⚠️ No se pudo actualizar estado a ERROR: {e}")
-                
+                except Exception:
+                    pass
                 return result
             
             logger.info(f"📦 Preparando envío de ODC {oc_id} a SAP ({len(oc_detalles)} líneas)")
@@ -102,83 +105,73 @@ class OCSAPService:
                     warehouse_code
                 )
             except ValueError as e:
-                result["error"] = f"Error al construir JSON de SAP: {str(e)}"
-                logger.error(f"❌ {result['error']}")
-                
-                # Actualizar estado a ERROR
+                error_msg = f"Error al construir JSON de SAP: {str(e)}"
+                result["error"] = error_msg
+                result["error_message"] = error_msg  # Alias para compatibilidad con frontend
+                result["error_source"] = "BACKEND"
+                logger.error(f"❌ Error al construir JSON: {result['error']}")
                 try:
                     oc_repo.update_estado(oc_id, "ERROR")
-                    logger.info(f"✅ Estado actualizado a ERROR para ODC: {oc_id}")
-                except Exception as update_error:
-                    logger.warning(f"⚠️ No se pudo actualizar estado a ERROR: {update_error}")
-                
+                except Exception:
+                    pass
                 return result
             except Exception as e:
-                result["error"] = f"Error inesperado al construir JSON: {str(e)}"
-                logger.error(f"❌ {result['error']}", exc_info=True)
-                
-                # Actualizar estado a ERROR
+                error_msg = f"Error inesperado al construir JSON: {str(e)}"
+                result["error"] = error_msg
+                result["error_message"] = error_msg  # Alias para compatibilidad con frontend
+                result["error_source"] = "BACKEND"
+                logger.error(f"❌ Error inesperado: {result['error']}", exc_info=True)
                 try:
                     oc_repo.update_estado(oc_id, "ERROR")
-                    logger.info(f"✅ Estado actualizado a ERROR para ODC: {oc_id}")
-                except Exception as update_error:
-                    logger.warning(f"⚠️ No se pudo actualizar estado a ERROR: {update_error}")
-                
+                except Exception:
+                    pass
                 return result
-            
-            # 3.5. Guardar JSON en archivo para debugging (fase de pruebas)
-            try:
-                debug_dir = "debug/odc_json"
-                os.makedirs(debug_dir, exist_ok=True)
-                
-                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                proveedor_clean = oc_cabecera.get("proveedor", "UNKNOWN").replace("/", "_").replace("\\", "_")
-                filename = f"oc_{oc_id[:8]}_{proveedor_clean}_{timestamp}.json"
-                filepath = os.path.join(debug_dir, filename)
-                
-                # Guardar JSON con formato legible
-                with open(filepath, "w", encoding="utf-8") as f:
-                    json.dump(purchase_order_json, f, indent=2, ensure_ascii=False)
-                
-                logger.info(f"💾 JSON guardado para debugging: {filepath}")
-                result["debug_file"] = filepath
-            except Exception as e:
-                # No fallar si no se puede guardar el archivo de debug
-                logger.warning(f"⚠️ No se pudo guardar archivo de debugging: {e}")
             
             # 4. Enviar a SAP Service Layer
+            logger.info(f"🔄 Enviando ODC {oc_id} a SAP Service Layer...")
             sap_response = self.sap_client.create_purchase_order(purchase_order_json)
             
             if not sap_response:
-                result["error"] = "No se recibió respuesta de SAP Service Layer"
+                error_msg = "No se recibió respuesta de SAP Service Layer"
+                result["error"] = error_msg
+                result["error_message"] = error_msg  # Alias para compatibilidad con frontend
+                result["error_source"] = "SAP_CONNECTION"
                 logger.error(f"❌ {result['error']}")
-                
-                # Actualizar estado a ERROR
                 try:
                     oc_repo.update_estado(oc_id, "ERROR")
-                    logger.info(f"✅ Estado actualizado a ERROR para ODC: {oc_id}")
-                except Exception as update_error:
-                    logger.warning(f"⚠️ No se pudo actualizar estado a ERROR: {update_error}")
-                
+                except Exception:
+                    pass
                 return result
             
             if not sap_response.get("success"):
+                # Extraer información detallada del error de SAP
                 error_msg = sap_response.get("error", "Error desconocido")
-                result["error"] = f"Error al crear Purchase Order en SAP: {error_msg}"
-                logger.error(f"❌ {result['error']}")
+                error_code = sap_response.get("error_code")  # Código de error de SAP (ej: -4013)
+                sap_error_details = sap_response.get("sap_error_details")  # Respuesta completa de SAP
                 
-                # Actualizar estado a ERROR
+                # Construir mensaje de error con código si está disponible
+                if error_code:
+                    error_final = f"{error_msg} (Código SAP: {error_code})"
+                else:
+                    error_final = f"Error al crear Purchase Order en SAP: {error_msg}"
+                
+                result["error"] = error_final
+                result["error_message"] = error_final  # Alias para compatibilidad con frontend
+                result["error_code"] = error_code
+                result["sap_error_details"] = sap_error_details
+                result["error_source"] = "SAP"  # Indicar que el error viene de SAP
+                
+                logger.error(f"❌ {result['error']}")
                 try:
                     oc_repo.update_estado(oc_id, "ERROR")
-                    logger.info(f"✅ Estado actualizado a ERROR para ODC: {oc_id}")
-                except Exception as update_error:
-                    logger.warning(f"⚠️ No se pudo actualizar estado a ERROR: {update_error}")
-                
+                except Exception:
+                    pass
                 return result
             
             # 5. Actualizar estado y número de OC en la base de datos
             doc_entry = sap_response.get("doc_entry")
             doc_num = sap_response.get("doc_num")
+            sap_response_data = sap_response.get("data")  # Respuesta completa de SAP
             
             try:
                 # Actualizar estado a ENVIADA y guardar número de OC de SAP
@@ -191,11 +184,10 @@ class OCSAPService:
                 result["success"] = True
                 result["doc_entry"] = doc_entry
                 result["doc_num"] = doc_num
+                result["sap_response"] = sap_response_data  # Agregar respuesta completa de SAP
+                result["error_source"] = None  # Sin error
                 
-                logger.info(
-                    f"✅ ODC {oc_id} enviada exitosamente a SAP: "
-                    f"DocEntry={doc_entry}, DocNum={doc_num}"
-                )
+                logger.info(f"✅ ODC {oc_id} enviada exitosamente: DocNum={doc_num}")
                 
             except Exception as e:
                 # Aunque falló la actualización, la OC se creó en SAP
@@ -203,21 +195,21 @@ class OCSAPService:
                 result["success"] = True
                 result["doc_entry"] = doc_entry
                 result["doc_num"] = doc_num
+                result["sap_response"] = sap_response_data  # Agregar respuesta completa de SAP
                 result["error"] = f"Advertencia: Error al actualizar estado: {str(e)}"
             
             return result
             
         except Exception as e:
-            result["error"] = f"Error inesperado: {str(e)}"
+            error_msg = f"Error inesperado: {str(e)}"
+            result["error"] = error_msg
+            result["error_message"] = error_msg  # Alias para compatibilidad con frontend
+            result["error_source"] = "BACKEND"
             logger.error(f"❌ Error al enviar ODC a SAP: {e}", exc_info=True)
-            
-            # Intentar actualizar estado a ERROR
             try:
                 oc_repo.update_estado(oc_id, "ERROR")
-                logger.info(f"✅ Estado actualizado a ERROR para ODC: {oc_id}")
-            except Exception as update_error:
-                logger.warning(f"⚠️ No se pudo actualizar estado a ERROR: {update_error}")
-            
+            except Exception:
+                pass
             return result
     
     def enviar_ocs_pendientes(
@@ -259,7 +251,7 @@ class OCSAPService:
                     "detalles": []
                 }
             
-            logger.info(f"📦 Encontradas {len(ocs_pendientes)} ODC pendientes")
+            logger.info(f"📦 Procesando {len(ocs_pendientes)} ODC pendientes")
             
             resultados = []
             enviadas = 0
@@ -268,7 +260,7 @@ class OCSAPService:
             for oc_info in ocs_pendientes:
                 oc_id = oc_info.get("oc_id")
                 if oc_id is None:
-                    logger.warning(f"⚠️ ODC sin oc_id, omitiendo: {oc_info}")
+                    logger.warning(f"⚠️ ODC sin oc_id, omitiendo")
                     errores += 1
                     resultados.append({
                         "oc_id": None,
@@ -279,8 +271,6 @@ class OCSAPService:
                         "error": "oc_id es None"
                     })
                     continue
-                
-                logger.info(f"🔄 Procesando ODC: {oc_id}")
                 
                 resultado = self.enviar_oc_a_sap(oc_repo, oc_id, warehouse_code)
                 resultados.append({
@@ -297,10 +287,7 @@ class OCSAPService:
                 else:
                     errores += 1
             
-            logger.info(
-                f"✅ Proceso completado: {enviadas} enviadas, {errores} errores "
-                f"de {len(ocs_pendientes)} ODC pendientes"
-            )
+            logger.info(f"✅ Proceso completado: {enviadas} enviadas, {errores} errores de {len(ocs_pendientes)} ODC")
             
             return {
                 "total_pendientes": len(ocs_pendientes),

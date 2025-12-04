@@ -112,15 +112,13 @@ class MBA3Client:
         
         print("\n============================================================")
         print("PASO 1: Creando LOGIN para obtener JWT (sesión)")
-        print("============================================================")
-        logger.info(f"Intentando login con código: {codigo[:3]}***")
-        logger.info(f"URL: {url}")
+        logger.info(f"🔐 Intentando login con código: {codigo[:3]}***")
         
         last_error = None
         
         for i, payload in enumerate(payloads_to_try, 1):
             try:
-                logger.info(f"Intento {i}: Enviando payload: {list(payload.keys())}")
+                logger.debug(f"Intento {i}/{len(payloads_to_try)}: Enviando payload con campos: {list(payload.keys())}")
 
                 # CONVERTIR a JSON string y calcular longitud EXPLÍCITAMENTE
                 json_payload = json.dumps(payload, ensure_ascii=False)
@@ -133,14 +131,14 @@ class MBA3Client:
                     timeout=timeout
                 )
                 
-                logger.info(f"Status code: {resp.status_code}")
+                logger.debug(f"Status code: {resp.status_code}")
                 
                 try:
                     body = resp.json()
-                    logger.info(f"Response JSON: {json.dumps(body, indent=2, ensure_ascii=False)}")
+                    logger.debug(f"Response recibida (tipo: JSON)")
                 except Exception:
                     body = resp.text
-                    logger.info(f"Response (texto): {body}")
+                    logger.debug(f"Response recibida (tipo: texto)")
                 
                 if resp.status_code != 200:
                     error_msg = f"Status {resp.status_code}"

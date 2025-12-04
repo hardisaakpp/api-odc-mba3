@@ -472,21 +472,40 @@ class SAPServiceLayerClient:
                     "data": result
                 }
             else:
+                # Procesar error de SAP
                 error_msg = f"Error al crear Purchase Order: {response.status_code}"
+                error_code = None
+                error_details = None
+                
                 try:
                     error_body = response.json()
                     error_detail = error_body.get("error", {})
-                    error_msg = error_detail.get("message", {}).get("value", error_msg)
+                    
+                    # Extraer mensaje de error de SAP
+                    if isinstance(error_detail.get("message"), dict):
+                        error_msg = error_detail.get("message", {}).get("value", error_msg)
+                    elif isinstance(error_detail.get("message"), str):
+                        error_msg = error_detail.get("message", error_msg)
+                    
+                    # Extraer código de error de SAP
                     error_code = error_detail.get("code", "")
+                    
+                    # Guardar detalles completos del error para debugging
+                    error_details = error_body
+                    
                     logger.error(f"❌ {error_msg} (Código: {error_code})")
-                except:
-                    error_msg = f"{error_msg} - {response.text}"
+                except Exception as e:
+                    # Si no se puede parsear JSON, usar texto de respuesta
+                    error_msg = f"{error_msg} - {response.text[:500]}"  # Limitar a 500 caracteres
                     logger.error(f"❌ {error_msg}")
+                    logger.debug(f"Error al parsear respuesta de error: {e}")
                 
                 return {
                     "success": False,
                     "error": error_msg,
-                    "status_code": response.status_code
+                    "error_code": error_code,  # Código de error de SAP (ej: -4013)
+                    "status_code": response.status_code,
+                    "sap_error_details": error_details  # Respuesta completa de SAP para debugging
                 }
                 
         except requests.exceptions.RequestException as e:

@@ -30,7 +30,8 @@ from config import (
     ENABLE_CORS_RESTRICTION,
     CORS_ALLOWED_ORIGINS,
     ENVIRONMENT,
-    HIDE_SWAGGER_IN_PROD
+    HIDE_SWAGGER_IN_PROD,
+    ENABLE_SQL_SERVER_STORAGE
 )
 from security.rate_limit import setup_rate_limiting
 
@@ -88,6 +89,67 @@ setup_exception_handlers(app)
 
 # Registrar todos los endpoints
 create_endpoints(app)
+
+
+@app.on_event("startup")
+async def startup_event():
+    """
+    Evento de inicio que inicializa recursos críticos antes de aceptar peticiones.
+    
+    Esto resuelve el problema del error 500 en la primera llamada al hacer warm-up de:
+    - Cliente MBA3 (inicialización y login)
+    - Conexión a SQL Server (si está habilitada)
+    """
+    logger.info("=" * 70)
+    logger.info("🚀 Inicializando recursos críticos...")
+    logger.info("=" * 70)
+    
+    # 1. Inicializar cliente MBA3 (warm-up)
+    try:
+        logger.info("📡 Inicializando cliente MBA3...")
+        from query_handler import get_mba3_client
+        
+        client = get_mba3_client()
+        logger.info("✅ Cliente MBA3 inicializado")
+        
+        # Intentar hacer login para verificar que funciona
+        if client.login():
+            logger.info("✅ Login MBA3 exitoso - JWT obtenido")
+        else:
+            logger.warning("⚠️ No se pudo hacer login en MBA3, pero el cliente está inicializado")
+            logger.warning("   El login se intentará automáticamente en la primera consulta")
+    except Exception as e:
+        logger.error(f"❌ Error al inicializar cliente MBA3: {e}")
+        logger.error("   El sistema intentará inicializarlo en la primera consulta")
+        logger.error("   Esto puede causar un error 500 en la primera llamada")
+    
+    # 2. Verificar conexión a SQL Server (si está habilitada)
+    if ENABLE_SQL_SERVER_STORAGE:
+        try:
+            logger.info("💾 Verificando conexión a SQL Server...")
+            from database.connection import get_db_connection
+            
+            conn = get_db_connection()
+            if conn:
+                # Verificar que la conexión funciona
+                cursor = conn.cursor()
+                cursor.execute("SELECT 1")
+                cursor.fetchone()
+                cursor.close()
+                conn.close()
+                logger.info("✅ Conexión a SQL Server verificada")
+            else:
+                logger.warning("⚠️ No se pudo establecer conexión a SQL Server")
+        except Exception as e:
+            logger.error(f"❌ Error al verificar conexión a SQL Server: {e}")
+            logger.error("   El sistema intentará conectarse en la primera operación")
+            logger.error("   Esto puede causar un error 500 en la primera llamada")
+    else:
+        logger.info("⏭️ SQL Server storage deshabilitado (ENABLE_SQL_SERVER_STORAGE=false)")
+    
+    logger.info("=" * 70)
+    logger.info("✅ Inicialización completada - Servidor listo para recibir peticiones")
+    logger.info("=" * 70)
 
 
 if __name__ == "__main__":

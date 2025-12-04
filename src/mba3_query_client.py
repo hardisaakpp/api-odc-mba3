@@ -11,6 +11,7 @@ import requests
 from requests.auth import HTTPDigestAuth
 import json
 import logging
+import time
 from typing import Dict, Any, Optional
 from mba3_client import MBA3Client
 from exceptions import MBA3QueryError, MBA3ConnectionError
@@ -38,6 +39,7 @@ class MBA3APIClient:
         self.service_password = service_password
         self.jwt_token = None
         self.session = requests.Session()
+        self.last_login_time = None  # Rastrear cuándo se hizo el último login
         
         # Si se proporcionan credenciales Digest, configurarlas
         if digest_username and digest_password:
@@ -58,6 +60,7 @@ class MBA3APIClient:
             token = self.login_client.login(self.service_code, self.service_password)
             if token:
                 self.jwt_token = token
+                self.last_login_time = time.time()
                 logger.info(f"Login exitoso. JWT obtenido (primeros 50 caracteres): {self.jwt_token[:50]}...")
                 return True
             return False
@@ -78,11 +81,20 @@ class MBA3APIClient:
             Respuesta JSON de la API como diccionario, o None si hay error
         """
         # Si require_jwt es True y no hay JWT, intentar hacer login primero
+        just_logged_in = False
         if require_jwt and not self.jwt_token:
+            logger.info("No hay JWT disponible. Intentando hacer login...")
             if not self.login():
                 logger.warning("No se pudo obtener JWT. Intentando consulta directa sin JWT...")
                 # Intentar sin JWT (el Digest Auth podría ser suficiente)
                 return self.execute_query(query, require_jwt=False)
+            else:
+                logger.info("✅ JWT obtenido exitosamente")
+                just_logged_in = True
+                # Agregar un pequeño delay después del login para que MBA3 procese el JWT
+                # Esto resuelve el problema de "Object or Collection Expected" en la primera consulta
+                logger.info("⏳ Esperando 0.5 segundos después del login para que MBA3 procese el JWT...")
+                time.sleep(0.5)
         
         url = f"{self.base_url}/ws_Consulta_externa_MBA3/"
         
@@ -189,6 +201,9 @@ class MBA3APIClient:
         headers = {}
         if self.jwt_token:
             headers['Authorization'] = self.jwt_token
+            logger.debug(f"JWT presente en headers (primeros 50 caracteres): {self.jwt_token[:50]}...")
+        else:
+            logger.warning("⚠️ No hay JWT disponible para esta consulta")
         
         try:
             response = self.session.post(
@@ -227,6 +242,109 @@ class MBA3APIClient:
                                 return {'raw_response': response.text}
                 
                 error_msg = f"Error 401 - No autorizado. Verifica tus credenciales. Respuesta: {response.text[:500]}"
+                logger.error(error_msg)
+                raise MBA3QueryError(error_msg)
+            elif response.status_code == 500:
+                # Error 500 del servidor MBA3 - puede ser por JWT inválido o problema del servidor
+                # Detectar si es el error específico "Object or Collection Expected" que ocurre
+                # cuando se intenta usar el JWT inmediatamente después del login
+                error_text = response.text.lower() if response.text else ""
+                is_object_collection_error = "object or collection expected" in error_text
+                
+                max_retries = 3
+                retry_delay = 1  # Segundos base
+                
+                # Si es el error específico de "Object or Collection Expected", usar delay más largo
+                if is_object_collection_error:
+                    logger.warning("⚠️ Detectado error 'Object or Collection Expected' - MBA3 necesita más tiempo para procesar el JWT")
+                    retry_delay = 1.5  # Delay más largo para este error específico
+                
+                for retry_attempt in range(max_retries):
+                    logger.warning(f"Error 500 del servidor MBA3. Intento de recuperación {retry_attempt + 1}/{max_retries}...")
+                    
+                    # Esperar un poco antes de reintentar (exponential backoff)
+                    if retry_attempt > 0:
+                        wait_time = retry_delay * (2 ** (retry_attempt - 1))
+                        logger.info(f"Esperando {wait_time} segundos antes del siguiente intento...")
+                        time.sleep(wait_time)
+                    
+                    # Intentar hacer login nuevamente
+                    if self.login():
+                        headers['Authorization'] = self.jwt_token
+                        # Si es el error específico o acabamos de hacer login, esperar un poco más
+                        if is_object_collection_error or (self.last_login_time and (time.time() - self.last_login_time) < 2):
+                            wait_after_login = 1.0 if is_object_collection_error else 0.5
+                            logger.info(f"⏳ Esperando {wait_after_login} segundos después del login para que MBA3 procese el JWT...")
+                            time.sleep(wait_after_login)
+                        
+                        logger.info(f"Login exitoso. Reintentando consulta (intento {retry_attempt + 1}/{max_retries})...")
+                        # Reintentar la consulta con nuevo JWT
+                        response = self.session.post(
+                            url,
+                            data=form_data,
+                            headers=headers,
+                            timeout=30
+                        )
+                        if response.status_code == 200:
+                            try:
+                                logger.info(f"✅ Consulta exitosa después del reintento {retry_attempt + 1}")
+                                return response.json()
+                            except json.JSONDecodeError:
+                                return {'raw_response': response.text}
+                        elif response.status_code == 500:
+                            # Verificar si sigue siendo el mismo error
+                            new_error_text = response.text.lower() if response.text else ""
+                            is_still_object_error = "object or collection expected" in new_error_text
+                            
+                            # Si sigue fallando con 500, continuar con el siguiente intento
+                            logger.warning(f"Intento {retry_attempt + 1} falló con 500. Continuando...")
+                            if retry_attempt == max_retries - 1:
+                                # Último intento falló
+                                error_detail = response.text[:1000] if response.text else "Sin respuesta del servidor"
+                                error_msg = (
+                                    f"Error HTTP 500 persistente en MBA3 después de {max_retries} intentos de recuperación.\n"
+                                    f"Consulta: {query}\n"
+                                    f"Respuesta del servidor: {error_detail}\n\n"
+                                    f"Esto indica un problema en el servidor MBA3, no en la autenticación."
+                                )
+                                logger.error(error_msg)
+                                raise MBA3QueryError(error_msg)
+                            # Si sigue siendo el error de "Object or Collection Expected", aumentar el delay
+                            if is_still_object_error:
+                                retry_delay = 2.0  # Delay aún más largo
+                            continue
+                        else:
+                            # Otro código de error, no es 500
+                            error_detail = response.text[:1000] if response.text else "Sin respuesta del servidor"
+                            error_msg = (
+                                f"Error HTTP {response.status_code} al ejecutar consulta en MBA3 después de reintento.\n"
+                                f"Consulta: {query}\n"
+                                f"Respuesta del servidor: {error_detail}"
+                            )
+                            logger.error(error_msg)
+                            raise MBA3QueryError(error_msg)
+                    else:
+                        logger.warning(f"No se pudo hacer login en intento {retry_attempt + 1}")
+                        if retry_attempt == max_retries - 1:
+                            # Último intento, no se pudo hacer login
+                            error_detail = response.text[:1000] if response.text else "Sin respuesta del servidor"
+                            error_msg = (
+                                f"Error HTTP 500 al ejecutar consulta en MBA3.\n"
+                                f"Consulta: {query}\n"
+                                f"Respuesta del servidor: {error_detail}\n\n"
+                                f"No se pudo hacer login después de {max_retries} intentos."
+                            )
+                            logger.error(error_msg)
+                            raise MBA3QueryError(error_msg)
+                
+                # Si llegamos aquí, todos los intentos fallaron
+                error_detail = response.text[:1000] if response.text else "Sin respuesta del servidor"
+                error_msg = (
+                    f"Error HTTP 500 persistente en MBA3 después de {max_retries} intentos.\n"
+                    f"Consulta: {query}\n"
+                    f"Respuesta del servidor: {error_detail}\n\n"
+                    f"Esto indica un problema en el servidor MBA3."
+                )
                 logger.error(error_msg)
                 raise MBA3QueryError(error_msg)
             else:

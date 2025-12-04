@@ -5,7 +5,7 @@ Maneja la comunicación con MBA3 y el guardado en SQL Server.
 """
 
 import logging
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, Union, List
 
 from query_handler import get_mba3_client
 from utils import validate_query
@@ -118,34 +118,21 @@ class MBA3Service:
             include_obj_datos=include_obj_datos
         )
         
-        # Log de la query que se va a ejecutar
-        logger.info("=" * 70)
-        logger.info(f"🔍 Query que se ejecutará en get_facturas:")
-        logger.info(query)
-        logger.info("=" * 70)
-        
         # Ejecutar query
+        logger.info(f"🔍 Ejecutando consulta de facturas (filtros: anulada={anulada}, confirmado={confirmado}, remision_facturada={remision_facturada})")
         result = MBA3Service.execute_query(query)
         
-        # Log detallado del resultado
-        logger.info("=" * 70)
-        logger.info(f"📦 Resultado de execute_query:")
-        logger.info(f"   Tipo: {type(result)}")
-        if isinstance(result, list) and len(result) > 0:
-            logger.info(f"   Total elementos: {len(result)}")
-            # Type narrowing: result es una lista no vacía aquí
-            first = result[0]  # type: ignore[reportArgumentType]
-            logger.info(f"   Tipo primer elemento: {type(first)}")
-            if isinstance(first, dict):
-                campos = list(first.keys())
-                logger.info(f"   Campos en primera factura: {campos}")
-                logger.info(f"   Total campos: {len(campos)}")
-                if len(campos) == 1:
-                    logger.error(f"   ⚠️ PROBLEMA: Solo hay 1 campo: {campos}")
-                # Mostrar algunos valores
-                for campo in campos[:5]:
-                    logger.info(f"   {campo}: {first.get(campo)}")
-        logger.info("=" * 70)
+        # Log resumido del resultado
+        if isinstance(result, list):
+            logger.info(f"✅ Consulta completada: {len(result)} facturas obtenidas")
+            if len(result) > 0:
+                first_item = result[0]
+                if isinstance(first_item, dict):
+                    campos = list(first_item.keys())
+                    if len(campos) == 1:
+                        logger.error(f"⚠️ PROBLEMA: Solo se obtuvo 1 campo: {campos}")
+        else:
+            logger.info(f"✅ Consulta completada: resultado tipo {type(result)}")
         
         # Guardar en base de datos si está habilitado
         # Capturar cualquier error para que no afecte la respuesta de las facturas
@@ -180,7 +167,7 @@ class MBA3Service:
         }
     
     @staticmethod
-    def execute_query(query_text: str) -> Dict[str, Any]:
+    def execute_query(query_text: str) -> Union[List[Dict[str, Any]], Dict[str, Any]]:
         """
         Ejecuta una consulta SQL contra MBA3.
         
@@ -188,7 +175,7 @@ class MBA3Service:
             query_text: Consulta SQL a ejecutar
             
         Returns:
-            Resultado de la consulta como diccionario
+            Resultado de la consulta como lista de diccionarios o diccionario
             
         Raises:
             ValueError: Si la consulta no es válida
@@ -198,11 +185,6 @@ class MBA3Service:
         is_valid, validation_message = validate_query(query_text)
         if not is_valid:
             raise QueryValidationError(validation_message)
-        
-        # Log de la consulta
-        logger.info("=" * 70)
-        logger.info(f"Ejecutando consulta contra MBA3: {query_text}")
-        logger.info("=" * 70)
         
         # Obtener cliente MBA3
         client = get_mba3_client()
@@ -217,31 +199,17 @@ class MBA3Service:
                     "Verifica la consulta SQL y la conexión con MBA3."
                 )
             
-            # Log detallado del resultado de MBA3
-            logger.info("=" * 70)
-            logger.info("✅ Consulta ejecutada exitosamente contra MBA3")
-            logger.info(f"   Tipo de resultado: {type(result)}")
+            # Log resumido del resultado
             if isinstance(result, list):
-                logger.info(f"   Total de registros: {len(result)}")
-                if len(result) > 0:
-                    first = result[0]
-                    logger.info(f"   Tipo primer elemento: {type(first)}")
-                    if isinstance(first, dict):
-                        campos = list(first.keys())
-                        logger.info(f"   Campos devueltos por MBA3: {campos}")
-                        logger.info(f"   Total campos: {len(campos)}")
-                        if len(campos) == 1:
-                            logger.error(f"   ⚠️ PROBLEMA: MBA3 solo devolvió 1 campo: {campos}")
-                            logger.error(f"   ⚠️ Datos completos: {first}")
-                        else:
-                            # Mostrar primeros 5 campos como ejemplo
-                            for campo in campos[:5]:
-                                logger.info(f"   {campo}: {first.get(campo)}")
+                logger.info(f"✅ Consulta MBA3 exitosa: {len(result)} registros")
+                if len(result) > 0 and isinstance(result[0], dict):
+                    campos = list(result[0].keys())
+                    if len(campos) == 1:
+                        logger.error(f"⚠️ PROBLEMA: MBA3 solo devolvió 1 campo: {campos}")
             elif isinstance(result, dict):
-                logger.info(f"   Resultado tipo: diccionario")
-                campos = list(result.keys())
-                logger.info(f"   Campos: {campos}")
-            logger.info("=" * 70)
+                logger.info(f"✅ Consulta MBA3 exitosa: resultado tipo diccionario ({len(result)} campos)")
+            else:
+                logger.info(f"✅ Consulta MBA3 exitosa: resultado tipo {type(result)}")
             
             return result
             
@@ -257,7 +225,7 @@ class MBA3Service:
             raise MBA3QueryError(f"Error al ejecutar consulta contra MBA3: {str(e)}")
     
     @staticmethod
-    def save_to_database(result: Dict[str, Any], upsert: bool = False) -> Optional[Dict[str, Any]]:
+    def save_to_database(result: Any, upsert: bool = False) -> Optional[Dict[str, Any]]:
         """
         Guarda el resultado de MBA3 en SQL Server.
         
@@ -265,7 +233,7 @@ class MBA3Service:
         la respuesta principal de las facturas.
         
         Args:
-            result: Resultado de la consulta MBA3
+            result: Resultado de la consulta MBA3 (puede ser list o dict)
             upsert: Si True, actualiza si existe; si False, inserta siempre
             
         Returns:
@@ -274,7 +242,6 @@ class MBA3Service:
         try:
             from database import save_mba3_data_to_sql_server
             
-            logger.info("💾 Guardando datos en SQL Server...")
             save_status = save_mba3_data_to_sql_server(
                 result,
                 upsert=upsert,
@@ -282,15 +249,11 @@ class MBA3Service:
             )
             
             if save_status.get("status") == "success":
-                logger.info(f"✅ Datos guardados exitosamente en SQL Server")
-                logger.info(f"   Facturas guardadas: {save_status.get('facturas_guardadas', 0)}")
-                logger.info(f"   Total detalles: {save_status.get('total_detalles', 0)}")
+                logger.info(f"✅ Datos guardados en SQL Server: {save_status.get('facturas_guardadas', 0)} facturas, {save_status.get('total_detalles', 0)} detalles")
             elif save_status.get("status") == "partial":
-                logger.warning(f"⚠️ Datos guardados parcialmente en SQL Server")
-                logger.warning(f"   Guardadas: {save_status.get('facturas_guardadas', 0)}")
-                logger.warning(f"   Errores: {save_status.get('facturas_error', 0)}")
+                logger.warning(f"⚠️ Guardado parcial: {save_status.get('facturas_guardadas', 0)} guardadas, {save_status.get('facturas_error', 0)} errores")
             elif save_status.get("status") == "disabled":
-                logger.info("⏭️ Guardado en SQL Server deshabilitado")
+                logger.debug("⏭️ Guardado en SQL Server deshabilitado")
                 return None
             elif save_status.get("status") == "error":
                 logger.error(f"❌ Error al guardar en SQL Server: {save_status.get('errors', [])}")

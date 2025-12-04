@@ -84,27 +84,8 @@ async def verify_jwt_token(
         # Almacenar usuario en el request state (FastAPI)
         request.state.current_user = current_user
         
-        # 🔍 LOGGING TEMPORAL PARA DEBUG - Ver información del token
+        # Log resumido de autenticación
         username = current_user.get('username', 'unknown')
-        extracted_permissions = current_user.get('permissions', [])
-        extracted_roles = current_user.get('roles', [])
-        all_claims_keys = list(data.keys())
-        
-        logger.info("=" * 80)
-        logger.info(f"🔍 [DEBUG JWT] Token válido para usuario: {username}")
-        logger.info(f"🔍 [DEBUG JWT] Roles extraídos: {extracted_roles}")
-        logger.info(f"🔍 [DEBUG JWT] Permisos extraídos: {extracted_permissions}")
-        logger.info(f"🔍 [DEBUG JWT] Total de claims en el token: {len(all_claims_keys)}")
-        logger.info(f"🔍 [DEBUG JWT] Todas las claves del token: {all_claims_keys}")
-        
-        # Buscar cualquier clave que pueda contener permisos
-        permission_like_keys = [k for k in all_claims_keys if 'permission' in k.lower() or 'claim' in k.lower()]
-        if permission_like_keys:
-            logger.info(f"🔍 [DEBUG JWT] Claves que contienen 'permission' o 'claim': {permission_like_keys}")
-            for key in permission_like_keys:
-                logger.info(f"🔍 [DEBUG JWT]   - {key}: {data.get(key)}")
-        
-        logger.info("=" * 80)
         logger.debug(f"✅ Token JWT válido para usuario: {username}")
         return current_user
         

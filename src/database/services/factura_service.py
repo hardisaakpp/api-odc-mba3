@@ -223,14 +223,11 @@ def save_mba3_data_to_sql_server(
             }
         
         stats["total_facturas"] = len(facturas)
-        logger.info(f"📦 Procesando {stats['total_facturas']} factura(s) de MBA3...")
+        logger.info(f"📦 Procesando {stats['total_facturas']} factura(s)...")
         
         # Procesar cada factura
         for idx, factura in enumerate(facturas, 1):
             try:
-                codigo_factura = factura.get("CODIGO_FACTURA", f"Factura-{idx}")
-                logger.info(f"[{idx}/{stats['total_facturas']}] Procesando: {codigo_factura}")
-                
                 result = save_mba3_factura(repository, factura, upsert=upsert)
                 
                 if result["status"] == "success":
@@ -266,12 +263,7 @@ def save_mba3_data_to_sql_server(
         else:
             stats["status"] = "error"
         
-        logger.info("=" * 70)
-        logger.info(f"✅ Proceso completado:")
-        logger.info(f"   Total facturas: {stats['total_facturas']}")
-        logger.info(f"   Guardadas (nuevas): {stats['facturas_guardadas']}")
-        logger.info(f"   Actualizadas: {stats['facturas_actualizadas']}")
-        logger.info(f"   Errores: {stats['facturas_error']}")
+        logger.info(f"✅ Proceso completado: {stats['facturas_guardadas']} guardadas, {stats['facturas_actualizadas']} actualizadas, {stats['facturas_error']} errores de {stats['total_facturas']} totales")
         logger.info(f"   Total detalles: {stats['total_detalles']}")
         logger.info("=" * 70)
         

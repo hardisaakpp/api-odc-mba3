@@ -592,4 +592,56 @@ class OrdenCompraRepository:
             raise
         finally:
             cursor.close()
+    
+    def delete_cabecera(self, oc_id: str) -> bool:
+        """
+        Elimina una orden de compra completa (detalles y cabecera).
+        
+        Primero elimina los detalles y luego la cabecera para respetar
+        las restricciones de clave foránea.
+        
+        Args:
+            oc_id: UUID de la orden de compra a eliminar
+            
+        Returns:
+            True si se eliminó correctamente, False si no se encontró
+            
+        Raises:
+            Exception: Si falla la eliminación
+        """
+        cursor = self.conn.cursor()
+        
+        try:
+            # Verificar que la OC existe
+            existing = self.get_existing_cabecera(oc_id)
+            if not existing:
+                logger.warning(f"⚠️ No se encontró orden de compra para eliminar: {oc_id}")
+                return False
+            
+            # 1. Eliminar detalles primero (por restricciones de FK)
+            detalles_eliminados = self.delete_detalles(oc_id)
+            logger.debug(f"   → {detalles_eliminados} detalles eliminados")
+            
+            # 2. Eliminar cabecera
+            cursor.execute(
+                "DELETE FROM orden_compra_cabecera WHERE oc_id = ?",
+                (oc_id,)
+            )
+            rows_deleted = cursor.rowcount
+            self.conn.commit()
+            
+            if rows_deleted > 0:
+                logger.info(f"✅ Orden de compra eliminada: {oc_id} (detalles: {detalles_eliminados})")
+                return True
+            else:
+                logger.warning(f"⚠️ No se pudo eliminar orden de compra: {oc_id}")
+                return False
+                
+        except Exception as e:
+            self.conn.rollback()
+            logger.error(f"❌ Error al eliminar orden de compra: {e}")
+            logger.error(f"   OC ID: {oc_id}")
+            raise
+        finally:
+            cursor.close()
 

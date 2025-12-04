@@ -63,13 +63,8 @@ class QueryService:
             "note": parse_note
         }
         
-        # Log
-        logger.info("=" * 70)
-        logger.info(f"Consulta recibida a las {received_at}")
-        logger.info(f"Fuente: {source}")
-        logger.info(f"Consulta original: {query_text}")
-        logger.info(f"Parseo: {parse_note}")
-        logger.info("=" * 70)
+        # Log resumido
+        logger.info(f"📝 Consulta recibida desde {source}: {parse_note}")
         
         # Guardar en archivo
         save_query_to_file(response_data)
