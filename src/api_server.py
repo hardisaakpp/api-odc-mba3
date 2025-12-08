@@ -50,6 +50,37 @@ app = FastAPI(
     # Ocultar Swagger en producción si está configurado
     docs_url="/docs" if not (ENVIRONMENT == "production" and HIDE_SWAGGER_IN_PROD) else None,
     redoc_url="/redoc" if not (ENVIRONMENT == "production" and HIDE_SWAGGER_IN_PROD) else None,
+    # Agregar descripciones de tags para organizar Swagger
+    openapi_tags=[
+        {
+            "name": "Sistema",
+            "description": "Endpoints de salud y estado del sistema"
+        },
+        {
+            "name": "Consultas MBA3",
+            "description": "Endpoints para consultar y migrar datos desde MBA3"
+        },
+        {
+            "name": "Procesamiento",
+            "description": "Endpoints para procesar despachos y órdenes de compra"
+        },
+        {
+            "name": "Integración SAP",
+            "description": "Endpoints para integrar con SAP Service Layer y HANA"
+        },
+        {
+            "name": "Órdenes de Compra",
+            "description": "Endpoints para gestionar órdenes de compra"
+        },
+        {
+            "name": "Historial",
+            "description": "Endpoints para consultar historial y logs"
+        },
+        {
+            "name": "Pruebas",
+            "description": "Endpoints de prueba y debugging"
+        }
+    ]
 )
 
 # Configurar CORS (restrictivo o permisivo según configuración)

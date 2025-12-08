@@ -40,7 +40,7 @@ def create_endpoints(app):
         app: Instancia de FastAPI
     """
     
-    @app.get("/health", response_model=HealthResponse)
+    @app.get("/health", response_model=HealthResponse, tags=["Sistema"])
     async def health_check():
         """
         Endpoint de health check.
@@ -54,7 +54,7 @@ def create_endpoints(app):
         }
     
     
-    @app.get("/facturas")
+    @app.get("/facturas", tags=["Consultas MBA3"])
     async def get_facturas(
         request: Request,
         anulada: Optional[bool] = Query(None, description="Filtrar por facturas anuladas (false = no anuladas, true = anuladas, null = todas)"),
@@ -182,7 +182,7 @@ def create_endpoints(app):
             )
     
     
-    @app.get("/consultar")
+    @app.get("/consultar", tags=["Consultas MBA3"])
     async def consultar_despachos(
         request: Request,
         user: dict = Depends(verify_jwt_token),
@@ -313,7 +313,7 @@ def create_endpoints(app):
             )
     
     
-    @app.get("/migrar")
+    @app.get("/migrar", tags=["Consultas MBA3"])
     async def migrar_despachos(
         request: Request,
         user: dict = Depends(verify_jwt_token),
@@ -539,7 +539,7 @@ def create_endpoints(app):
             )
     
     
-    @app.get("/pruebas")
+    @app.get("/pruebas", tags=["Pruebas"])
     async def ejecutar_pruebas(
         request: Request,
         user: dict = Depends(verify_jwt_token),
@@ -793,7 +793,7 @@ def create_endpoints(app):
             )
     
     
-    @app.get("/procesar-oc")
+    @app.get("/procesar-oc", tags=["Procesamiento"])
     async def procesar_orden_compra(
         request: Request,
         despacho_id: Optional[List[str]] = Query(None, description="UUID(s) del despacho a procesar. Puede especificarse múltiples veces (ej: ?despacho_id=xxx&despacho_id=yyy). Si no se proporciona, procesa todos los despachos sin OC."),
@@ -1065,7 +1065,7 @@ def create_endpoints(app):
                 }
             )
     
-    @app.get("/despachos/count")
+    @app.get("/despachos/count", tags=["Procesamiento"])
     async def get_despachos_count(
         request: Request,
         limit: Optional[int] = Query(None, description="Número máximo de registros a retornar (opcional)"),
@@ -1199,7 +1199,7 @@ def create_endpoints(app):
                 }
             )
     
-    @app.get("/despachos/{despacho_id}/detalles")
+    @app.get("/despachos/{despacho_id}/detalles", tags=["Procesamiento"])
     async def get_despacho_detalles(
         request: Request,
         despacho_id: str,
@@ -1301,7 +1301,7 @@ def create_endpoints(app):
                 }
             )
     
-    @app.post("/integrar-sap")
+    @app.post("/integrar-sap", tags=["Integración SAP"])
     async def integrar_sap(
         request: Request,
         oc_id: Optional[List[str]] = Query(None, description="UUID(s) de la(s) orden(es) de compra a enviar. Puede especificarse múltiples veces (ej: ?oc_id=xxx&oc_id=yyy)."),
@@ -1806,7 +1806,7 @@ def create_endpoints(app):
             )
     
     
-    @app.get("/historial-ordenes")
+    @app.get("/historial-ordenes", tags=["Historial"])
     async def get_historial_ordenes(
         request: Request,
         oc_id: Optional[str] = Query(None, description="Filtrar por UUID de orden de compra"),
@@ -1972,7 +1972,7 @@ def create_endpoints(app):
             )
     
     
-    @app.get("/sap/test")
+    @app.get("/sap/test", tags=["Integración SAP"])
     async def test_sap_query(
         request: Request,
         sku: str = FastAPIQuery(..., description="SKU del producto a consultar en SAP (ej: 5-0012.9)")
@@ -2098,7 +2098,7 @@ def create_endpoints(app):
             )
     
     
-    @app.get("/sap/test/direct")
+    @app.get("/sap/test/direct", tags=["Integración SAP"])
     async def test_sap_direct(
         request: Request,
         sku: str = FastAPIQuery(..., description="SKU del producto a consultar directamente en SAP")
@@ -2178,7 +2178,7 @@ def create_endpoints(app):
             )
     
     
-    @app.get("/ordenes-compra")
+    @app.get("/ordenes-compra", tags=["Órdenes de Compra"])
     async def get_ordenes_compra(
         request: Request,
         estado: Optional[str] = Query(None, description="Filtrar por estado (PENDIENTE, ENVIADA, ERROR)"),
@@ -2277,7 +2277,7 @@ def create_endpoints(app):
             )
     
     
-    @app.get("/ordenes-compra/logs")
+    @app.get("/ordenes-compra/logs", tags=["Órdenes de Compra"])
     async def get_ordenes_compra_logs(
         request: Request,
         page: Optional[int] = Query(1, description="Número de página (empezando en 1)"),
@@ -2456,7 +2456,7 @@ def create_endpoints(app):
                 }
             )
     
-    @app.delete("/ordenes-compra/{oc_id}")
+    @app.delete("/ordenes-compra/{oc_id}", tags=["Órdenes de Compra"])
     async def delete_orden_compra(
         request: Request,
         oc_id: str,
@@ -2586,7 +2586,7 @@ def create_endpoints(app):
                 }
             )
     
-    @app.delete("/ordenes-compra")
+    @app.delete("/ordenes-compra", tags=["Órdenes de Compra"])
     async def delete_ordenes_compra(
         request: Request,
         oc_id: Optional[List[str]] = Query(None, description="UUID(s) de la(s) orden(es) de compra a eliminar. Puede especificarse múltiples veces (ej: ?oc_id=id1&oc_id=id2)."),
