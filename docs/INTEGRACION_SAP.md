@@ -17,14 +17,17 @@ El sistema integra con SAP de dos formas:
 **Fórmula de Conversión:**
 ```
 cantidad_sap (packs) = cantidad (docenas) × unidad_conversion
-precio_unitario_sap = total_linea / cantidad_sap
+precio_unitario_sap = precio_unitario_mba3 / unidad_conversion
+subtotal_sap = cantidad_sap × precio_unitario_sap
 ```
 
 **Ejemplo:**
 - Docenas: 456
 - Pack SAP: X3 → Unidad de conversión: 4
 - Packs: 456 × 4 = 1824 packs
-- Precio unitario: 2120.4 / 1824 = 1.1625
+- precio_unitario_mba3: 4.65 (por docena - El Rayo)
+- precio_unitario_sap: 4.65 / 4 = 1.1625 (por pack - Mabel Trading)
+- subtotal_sap: 1824 × 1.1625 = 2120.4
 
 ## 🗄️ Estructura de Tablas
 
@@ -162,7 +165,8 @@ Cuando se guarda una línea de detalle:
 1. Se consulta información SAP del SKU (usando cache si está disponible)
 2. Si hay información SAP:
    - `cantidad_sap = cantidad × unidad_conversion`
-   - `precio_unitario_sap = total_linea / cantidad_sap`
+   - `precio_unitario_sap = precio_unitario_mba3 / unidad_conversion`
+   - `subtotal_sap = cantidad_sap × precio_unitario_sap`
    - `unidad_sap = pack_sap` (X1, X2, etc.)
 3. Se guarda en `despacho_detalle` con ambos valores (original y convertido)
 
@@ -281,6 +285,7 @@ Cuando se guarda una factura desde MBA3:
    - cantidad: 456 (docenas)
    - cantidad_sap: 1824 (packs)
    - unidad_sap: "X3"
-   - precio_unitario: 4.65 (por docena)
-   - precio_unitario_sap: 1.1625 (por pack)
+   - precio_unitario: 4.65 (por docena - El Rayo)
+   - precio_unitario_sap: 1.1625 (por pack - Mabel Trading: 4.65 / 4)
+   - subtotal_sap: 2120.4 (1824 × 1.1625)
 ```

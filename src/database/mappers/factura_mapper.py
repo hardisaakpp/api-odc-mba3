@@ -150,14 +150,15 @@ class FacturaMapper:
         
         Si se proporciona información SAP, calcula las conversiones automáticamente:
         - cantidad_pack_sap = cantidad_docena_mba3 (docenas) × unidad_conversion
-        - precio_unitario_sap = total_linea_mba3 / cantidad_pack_sap
+        - precio_unitario_sap = precio_unitario_mba3 / unidad_conversion
+        - subtotal_sap = cantidad_pack_sap × precio_unitario_sap
         
         Mapeo de campos a columnas de la tabla:
         - cantidad → cantidad_docena_mba3 (docenas de El Rayo)
         - cantidad_sap → cantidad_pack_sap (packs convertidos para Mabel)
         - precio_unitario → precio_unitario_mba3 (precio por docena)
         - total_linea → total_linea_mba3 (total de la línea)
-        - total_producto → subtotal_sap (subtotal para SAP)
+        - total_producto → subtotal_sap (subtotal para SAP, calculado)
         
         Args:
             linea: Diccionario con datos de línea de factura
@@ -180,10 +181,13 @@ class FacturaMapper:
         
         total_linea = linea.get("TotalLinea") or 0
         cantidad = linea.get("Cantidad") or 0
+        # precio_unitario_mba3: precio unitario de El Rayo (por docena)
+        precio_unitario_mba3 = linea.get("PrecioUnitario") or 0
         
         # Calcular conversiones SAP si hay información disponible
         cantidad_sap = None
         precio_unitario_sap = None
+        subtotal_sap = None
         unidad_sap = None
         
         if sap_info and cantidad > 0:
@@ -194,9 +198,13 @@ class FacturaMapper:
                 # Calcular cantidad en packs: docenas × unidad_conversion = packs
                 cantidad_sap = cantidad * unidad_conversion
                 
-                # Calcular precio unitario en packs: total_linea / cantidad_sap
-                if cantidad_sap > 0:
-                    precio_unitario_sap = total_linea / cantidad_sap
+                # Calcular precio unitario Mabel Trading: precio_unitario_mba3 / unidad_conversion
+                if precio_unitario_mba3 > 0 and unidad_conversion > 0:
+                    precio_unitario_sap = precio_unitario_mba3 / unidad_conversion
+                    
+                    # Calcular subtotal Mabel Trading: cantidad_pack × precio_unitario_sap
+                    if cantidad_sap > 0:
+                        subtotal_sap = cantidad_sap * precio_unitario_sap
                 
                 unidad_sap = pack_sap
                 
@@ -206,14 +214,15 @@ class FacturaMapper:
                 logger.debug(
                     f"   🔄 Conversión para {codigo}: "
                     f"{cantidad} docenas × {unidad_conversion} = {cantidad_sap:.2f} packs, "
-                    f"Precio: {total_linea:.2f} / {cantidad_sap:.2f} = {precio_unitario_sap:.4f}"
+                    f"Precio unitario Mabel: {precio_unitario_mba3:.2f} / {unidad_conversion} = {precio_unitario_sap:.4f}, "
+                    f"Subtotal: {cantidad_sap:.2f} × {precio_unitario_sap:.4f} = {subtotal_sap:.2f}"
                 )
         
         return {
             # Campos que vienen de MBA3
             "sku": codigo,
             "cantidad": cantidad,  # Docenas de El Rayo -> cantidad_docena_mba3
-            "precio_unitario": linea.get("PrecioUnitario") or 0,  # Precio por docena -> precio_unitario_mba3
+            "precio_unitario": precio_unitario_mba3,  # precio_unitario_mba3 - Precio por docena (El Rayo)
             "total_linea": total_linea,  # total_linea_mba3
             "descuento": linea.get("Descuento") or 0,
             "tipo_linea": tipo_linea,
@@ -221,12 +230,12 @@ class FacturaMapper:
             "impuesto": linea.get("Impuesto"),
             
             # Campos calculados o derivados
-            "total_producto": total_linea,  # subtotal_sap (por defecto igual a total_linea)
+            "total_producto": subtotal_sap if subtotal_sap is not None else total_linea,  # subtotal_sap (calculado o igual a total_linea si no hay conversión)
             
             # Campos de conversión SAP
             "cantidad_sap": cantidad_sap,  # cantidad_pack_sap - Packs convertidos para Mabel
             "unidad_sap": unidad_sap,  # unidad_sap - Pack usado (X1, X2, X3, etc.)
-            "precio_unitario_sap": precio_unitario_sap,  # precio_unitario_sap - Precio por pack
+            "precio_unitario_sap": precio_unitario_sap,  # precio_unitario_sap - Precio por pack (Mabel Trading)
         }
 
 

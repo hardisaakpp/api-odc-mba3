@@ -180,10 +180,11 @@ class TestFacturaMapperToDespachoDetalle:
         assert result["tipo_linea"] == "GrabarLineasProd"
     
     def test_to_despacho_detalle_with_sap_info(self):
-        """Test que calcula conversiones SAP correctamente."""
+        """Test que calcula conversiones SAP correctamente con nueva lógica."""
         linea = {
             "Codigo": "5-0012.9",
             "Cantidad": 10.0,  # 10 docenas
+            "PrecioUnitario": 4.65,  # Precio por docena (El Rayo)
             "TotalLinea": 46.5
         }
         
@@ -197,8 +198,11 @@ class TestFacturaMapperToDespachoDetalle:
         assert result is not None
         # 10 docenas × 4 = 40 packs
         assert result["cantidad_sap"] == 40.0
-        # 46.5 / 40 = 1.1625 precio por pack
+        # Nueva lógica: precio_unitario_sap = precio_unitario_mba3 / unidad_conversion
+        # 4.65 / 4 = 1.1625 precio por pack (Mabel Trading)
         assert result["precio_unitario_sap"] == pytest.approx(1.1625, rel=1e-3)
+        # subtotal_sap = cantidad_sap × precio_unitario_sap = 40 × 1.1625 = 46.5
+        assert result["total_producto"] == pytest.approx(46.5, rel=1e-3)  # subtotal_sap
         assert result["unidad_sap"] == "X3"
     
     def test_to_despacho_detalle_without_codigo(self):

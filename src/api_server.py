@@ -21,8 +21,16 @@ Endpoints principales:
 
 import logging
 import uvicorn
+import sys
+from pathlib import Path
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+
+# Agregar el directorio src al PYTHONPATH si no está
+# Esto permite ejecutar el script directamente con: python src/api_server.py
+src_dir = Path(__file__).parent
+if str(src_dir) not in sys.path:
+    sys.path.insert(0, str(src_dir))
 
 from endpoints import create_endpoints
 from middleware.exception_handlers import setup_exception_handlers

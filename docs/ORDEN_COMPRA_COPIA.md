@@ -117,7 +117,7 @@ La tabla `cliente` puede tener diferentes estructuras. El sistema intenta:
 ## 📝 Notas Importantes
 
 1. **Validación de Detalles**: Solo se copian detalles que tengan `sku_sap` y `cantidad_sap` válidos
-2. **Cálculo de Precio**: Si `precio_unitario_sap` no existe, se calcula como `total_linea / cantidad_sap`
+2. **Cálculo de Precio**: `precio_unitario_sap` ya viene calculado desde `despacho_detalle` usando la fórmula: `precio_unitario_mba3 / unidad_conversion`. Si no existe, se calcula como fallback: `total_linea / cantidad_sap`
 3. **Fecha de Generación**: Se usa `fecha_factura` si existe, sino `fecha_despacho`
 4. **Prevención de Duplicados**: Por defecto, no copia si ya existe una OC para el despacho (`skip_if_exists=True`)
 

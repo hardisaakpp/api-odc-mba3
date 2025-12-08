@@ -55,8 +55,8 @@ class OrdenCompraMapper:
         - sku → sku_sap (ItemCode de SAP)
         - cantidad_pack_sap → cantidad_sap
         - unidad_sap → unidad_sap
-        - precio_unitario_sap → precio_unitario
-        - total_linea_mba3 o subtotal_sap → total_linea
+        - precio_unitario_sap → precio_unitario (ya calculado con nueva lógica: precio_unitario_el_rayo / unidad_conversion)
+        - subtotal_sap o total_linea_mba3 → total_linea (preferir subtotal_sap que es calculado)
         - cantidad_docena_mba3 → cantidad_origen
         - descuento → descuento
         
@@ -67,14 +67,16 @@ class OrdenCompraMapper:
         Returns:
             Diccionario con datos para insertar en orden_compra_detalle
         """
-        # Usar total_linea_mba3 si existe, sino subtotal_sap
-        total_linea = despacho_detalle.get("total_linea_mba3") or despacho_detalle.get("subtotal_sap")
+        # Preferir subtotal_sap (calculado) sobre total_linea_mba3
+        total_linea = despacho_detalle.get("subtotal_sap") or despacho_detalle.get("total_linea_mba3")
         
-        # Usar precio_unitario_sap si existe, sino calcular desde total_linea y cantidad_sap
+        # Usar precio_unitario_sap si existe (ya calculado con nueva lógica)
+        # Solo calcular como fallback si no existe (caso legacy)
         precio_unitario = despacho_detalle.get("precio_unitario_sap")
         if precio_unitario is None:
             cantidad_sap = despacho_detalle.get("cantidad_pack_sap")
             if cantidad_sap and cantidad_sap > 0 and total_linea:
+                # Fallback: calcular desde total_linea y cantidad_sap (lógica antigua)
                 precio_unitario = total_linea / cantidad_sap
         
         return {
