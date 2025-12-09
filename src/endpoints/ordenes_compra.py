@@ -224,10 +224,8 @@ def register_ordenes_compra_endpoints(app: FastAPI):
                 # Obtener OCs por estado
                 oc_list = oc_repo.get_by_estado(estado)
             else:
-                # Obtener todas las OCs (usando un estado común o todos)
-                # Por ahora, obtenemos todas las pendientes como default
-                oc_list = oc_repo.get_by_estado("PENDIENTE")
-                # TODO: Agregar método para obtener todas las OCs sin filtro de estado
+                # Obtener todas las OCs sin filtro de estado
+                oc_list = oc_repo.get_all()
             
             conn.close()
             

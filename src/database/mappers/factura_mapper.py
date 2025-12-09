@@ -230,7 +230,9 @@ class FacturaMapper:
             "impuesto": linea.get("Impuesto"),
             
             # Campos calculados o derivados
-            "total_producto": subtotal_sap if subtotal_sap is not None else total_linea,  # subtotal_sap (calculado o igual a total_linea si no hay conversión)
+            # subtotal_sap solo debe tener valor si hay conversión SAP válida
+            # (es decir, si cantidad_sap y precio_unitario_sap están disponibles)
+            "total_producto": subtotal_sap,  # subtotal_sap - NULL si no hay conversión SAP
             
             # Campos de conversión SAP
             "cantidad_sap": cantidad_sap,  # cantidad_pack_sap - Packs convertidos para Mabel

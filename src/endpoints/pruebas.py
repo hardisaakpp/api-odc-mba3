@@ -15,6 +15,7 @@ from database.services.orden_compra_service import copy_despacho_to_orden_compra
 from database.connection import get_db_connection
 from security.jwt_auth import verify_jwt_token, require_permission
 from exceptions import MBA3ConnectionError, MBA3QueryError
+from config import MBA3_QUERY_PREDEFINIDA
 
 logger = logging.getLogger(__name__)
 
@@ -79,8 +80,8 @@ def register_pruebas_endpoints(app: FastAPI):
         Returns:
             JSON con datos de MBA3 y metadata del proceso completo
         """
-        # Query predefinida integrada en el backend
-        query_predefinida = "SELECT CODIGO_FACTURA,ANULADA,NUMERO_PEDIDO_SISTEMA,NUMERO_ORDEN,NUMERO_FACTURA,CODIGO_DESPACHO,EMPRESA,CODIGO_CLIENTE,FECHA_FACTURA,TIPO_DOCUMENTO,ObjDatosFactura,ORDEN_COMPRA,ORDEN_COMPRA_CLIENTE,Remision_Facturada,NumIDFacturaRelacionada,CONFIRMADO,CODIGO_BODEGA FROM CLNT_FACTURA_PRINCIPAL WHERE TIPO_DOCUMENTO='REM' AND ANULADA='false' AND CONFIRMADO='true' AND Remision_Facturada='false' AND CODIGO_DESPACHO=0 AND NUMERO_FACTURA > 0 AND ObjDatosFactura IS NOT NULL"
+        # Usar query predefinida desde configuración
+        query_predefinida = MBA3_QUERY_PREDEFINIDA
         
         # Determinar fuente
         source = get_source_from_headers(request)

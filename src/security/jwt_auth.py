@@ -12,7 +12,7 @@ import jwt
 from fastapi import HTTPException, Security, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
-from config import JWT_SECRET, JWT_ISSUER, JWT_AUDIENCE
+from config import JWT_SECRET, JWT_ISSUER, JWT_AUDIENCE, ENVIRONMENT
 
 logger = logging.getLogger(__name__)
 
@@ -168,12 +168,13 @@ def _extract_permissions(data: Dict[str, Any]) -> list:
             elif isinstance(value, str):
                 permissions.append(value)
     
-    # 🔍 LOGGING TEMPORAL PARA DEBUG
-    if permissions:
-        logger.info(f"🔍 [DEBUG EXTRACT] Permisos encontrados: {permissions}")
-    else:
-        logger.warning(f"🔍 [DEBUG EXTRACT] ⚠️ No se encontraron permisos en el token")
-        logger.warning(f"🔍 [DEBUG EXTRACT] Claves disponibles: {list(data.keys())}")
+    # Logging de debug solo en desarrollo
+    if ENVIRONMENT == "development":
+        if permissions:
+            logger.debug(f"🔍 [DEBUG EXTRACT] Permisos encontrados: {permissions}")
+        else:
+            logger.debug(f"🔍 [DEBUG EXTRACT] ⚠️ No se encontraron permisos en el token")
+            logger.debug(f"🔍 [DEBUG EXTRACT] Claves disponibles: {list(data.keys())}")
     
     return permissions
 
@@ -233,40 +234,45 @@ def require_permission(permission_key: str):
         
         permissions = user.get('permissions', [])
         roles = user.get('roles', [])
-        
-        # 🔍 LOGGING TEMPORAL PARA DEBUG - Ver validación de permisos
         username = user.get('username', 'unknown')
-        logger.info("=" * 80)
-        logger.info(f"🔍 [DEBUG PERMISSION] Validando permiso para usuario: {username}")
-        logger.info(f"🔍 [DEBUG PERMISSION] Permiso requerido: '{permission_key}'")
-        logger.info(f"🔍 [DEBUG PERMISSION] Roles del usuario: {roles}")
-        logger.info(f"🔍 [DEBUG PERMISSION] Permisos disponibles en el token: {permissions}")
-        logger.info(f"🔍 [DEBUG PERMISSION] Tipo de permisos: {type(permissions)}")
+        
+        # Logging de debug solo en desarrollo
+        if ENVIRONMENT == "development":
+            logger.debug("=" * 80)
+            logger.debug(f"🔍 [DEBUG PERMISSION] Validando permiso para usuario: {username}")
+            logger.debug(f"🔍 [DEBUG PERMISSION] Permiso requerido: '{permission_key}'")
+            logger.debug(f"🔍 [DEBUG PERMISSION] Roles del usuario: {roles}")
+            logger.debug(f"🔍 [DEBUG PERMISSION] Permisos disponibles en el token: {permissions}")
+            logger.debug(f"🔍 [DEBUG PERMISSION] Tipo de permisos: {type(permissions)}")
         
         # ✅ Permitir acceso automático a usuarios con rol 'Admin'
         is_admin = 'Admin' in roles or 'Admin' in permissions
         if is_admin:
-            logger.info(f"✅ [DEBUG PERMISSION] Usuario {username} es Admin - acceso permitido automáticamente")
-            logger.info("=" * 80)
+            if ENVIRONMENT == "development":
+                logger.debug(f"✅ [DEBUG PERMISSION] Usuario {username} es Admin - acceso permitido automáticamente")
+                logger.debug("=" * 80)
             return
         
-        logger.info(f"🔍 [DEBUG PERMISSION] ¿Permiso encontrado? {permission_key in permissions}")
+        if ENVIRONMENT == "development":
+            logger.debug(f"🔍 [DEBUG PERMISSION] ¿Permiso encontrado? {permission_key in permissions}")
         
         if permission_key not in permissions:
             logger.warning(
                 f"❌ Permiso denegado: usuario {username} "
                 f"intentó acceder sin permiso '{permission_key}'"
             )
-            logger.warning(f"🔍 [DEBUG PERMISSION] Permisos disponibles: {permissions}")
-            logger.warning(f"🔍 [DEBUG PERMISSION] Comparación exacta falló. Verificar formato del permiso.")
-            logger.info("=" * 80)
+            if ENVIRONMENT == "development":
+                logger.debug(f"🔍 [DEBUG PERMISSION] Permisos disponibles: {permissions}")
+                logger.debug(f"🔍 [DEBUG PERMISSION] Comparación exacta falló. Verificar formato del permiso.")
+                logger.debug("=" * 80)
             raise HTTPException(
                 status_code=403,
                 detail=f"Permiso denegado: se requiere '{permission_key}'. Permisos disponibles: {permissions}"
             )
         
-        logger.info(f"✅ [DEBUG PERMISSION] Permiso '{permission_key}' validado correctamente")
-        logger.info("=" * 80)
+        if ENVIRONMENT == "development":
+            logger.debug(f"✅ [DEBUG PERMISSION] Permiso '{permission_key}' validado correctamente")
+            logger.debug("=" * 80)
     
     return permission_checker
 

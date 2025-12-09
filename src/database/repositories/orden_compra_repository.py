@@ -349,6 +349,44 @@ class OrdenCompraRepository:
         finally:
             cursor.close()
     
+    def get_all(self) -> List[Dict[str, Any]]:
+        """
+        Obtiene todas las órdenes de compra sin filtro de estado.
+        
+        Útil para consultar todas las ODC independientemente de su estado.
+        
+        Returns:
+            Lista de diccionarios con información de todas las ODC
+        """
+        cursor = self.conn.cursor()
+        try:
+            cursor.execute(
+                """
+                SELECT oc_id, despacho_id, proveedor, fecha_generacion,
+                       estado, numero_oc_sap, referencia_despacho, created_at
+                FROM orden_compra_cabecera
+                ORDER BY created_at DESC
+                """
+            )
+            results = cursor.fetchall()
+            
+            oc_list = []
+            for row in results:
+                oc_list.append({
+                    "oc_id": str(row[0]),
+                    "despacho_id": str(row[1]),
+                    "proveedor": row[2],
+                    "fecha_generacion": serialize_date(row[3]),
+                    "estado": row[4],
+                    "numero_oc_sap": row[5],
+                    "referencia_despacho": row[6],
+                    "created_at": serialize_date(row[7]),
+                })
+            
+            return oc_list
+        finally:
+            cursor.close()
+    
     def get_existing_cabecera(self, oc_id: str) -> Optional[Dict[str, Any]]:
         """
         Obtiene los datos existentes de una cabecera de orden de compra.

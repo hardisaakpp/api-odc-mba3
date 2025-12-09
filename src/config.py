@@ -152,3 +152,19 @@ CORS_ALLOWED_ORIGINS = os.getenv("CORS_ALLOWED_ORIGINS", "*").split(",")  # List
 ENVIRONMENT = os.getenv("ENVIRONMENT", "development")  # development, staging, production
 HIDE_SWAGGER_IN_PROD = os.getenv("HIDE_SWAGGER_IN_PROD", "true").lower() == "true"
 
+# ============================================================================
+# Queries Predefinidas
+# ============================================================================
+# Query SQL predefinida para consultar facturas desde MBA3
+# Usada en los endpoints /consultar y /migrar
+MBA3_QUERY_PREDEFINIDA = (
+    "SELECT CODIGO_FACTURA,ANULADA,NUMERO_PEDIDO_SISTEMA,NUMERO_ORDEN,NUMERO_FACTURA,"
+    "CODIGO_DESPACHO,EMPRESA,CODIGO_CLIENTE,FECHA_FACTURA,TIPO_DOCUMENTO,ObjDatosFactura,"
+    "ORDEN_COMPRA,ORDEN_COMPRA_CLIENTE,Remision_Facturada,NumIDFacturaRelacionada,"
+    "CONFIRMADO,CODIGO_BODEGA "
+    "FROM CLNT_FACTURA_PRINCIPAL "
+    "WHERE TIPO_DOCUMENTO='REM' AND ANULADA='false' AND CONFIRMADO='true' "
+    "AND Remision_Facturada='false' AND CODIGO_DESPACHO=0 AND NUMERO_FACTURA > 0 "
+    "AND ObjDatosFactura IS NOT NULL"
+)
+
