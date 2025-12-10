@@ -2,7 +2,7 @@
 Cliente para consultar información de productos desde SAP (HANA) usando OPENQUERY.
 
 Este cliente ejecuta consultas OPENQUERY desde SQL Server hacia SAP HANA
-para obtener información de productos (ItemCode, ItemName, U_IXX_PACK).
+para obtener información de productos (ItemCode, ItemName, U_IXX_PACK, ItmsGrpNam).
 """
 
 import logging
@@ -75,7 +75,8 @@ class SAPClient:
             {
                 "ItemCode": "5-0012.9",
                 "ItemName": "Nombre del producto",
-                "U_IXX_PACK": "X3"
+                "U_IXX_PACK": "X3",
+                "ItmsGrpNam": "R-MEDIAS"
             }
             O None si no se encuentra o hay error
             
@@ -104,14 +105,17 @@ class SAPClient:
         SELECT 
             T0."ItemCode",
             T0."ItemName",
-            T0."U_IXX_PACK"
+            T0."U_IXX_PACK",
+            T0."ItmsGrpNam"
         FROM OPENQUERY([{SAP_LINKED_SERVER}], '
             SELECT 
-                "ItemCode",
-                "ItemName",
-                "U_IXX_PACK"
-            FROM "{SAP_DATABASE}"."OITM"
-            WHERE "ItemCode" = ''{item_code_escaped}''
+                T0."ItemCode",
+                T0."ItemName",
+                T0."U_IXX_PACK",
+                T1."ItmsGrpNam"
+            FROM "{SAP_DATABASE}"."OITM" T0
+            LEFT JOIN "{SAP_DATABASE}"."OITB" T1 ON T0."ItmsGrpCod" = T1."ItmsGrpCod"
+            WHERE T0."ItemCode" = ''{item_code_escaped}''
         ') T0;
         """
         
@@ -130,8 +134,9 @@ class SAPClient:
                     "ItemCode": result[0] if result[0] else None,
                     "ItemName": result[1] if result[1] else None,
                     "U_IXX_PACK": result[2] if result[2] else None,
+                    "ItmsGrpNam": result[3] if result[3] else None,
                 }
-                logger.info(f"✅ Producto encontrado en SAP: {item_code_normalized} - Pack: {producto_info.get('U_IXX_PACK')}")
+                logger.info(f"✅ Producto encontrado en SAP: {item_code_normalized} - Pack: {producto_info.get('U_IXX_PACK')}, Grupo: {producto_info.get('ItmsGrpNam')}")
                 return producto_info
             else:
                 logger.warning(f"⚠️ Producto no encontrado en SAP: {item_code_normalized}")

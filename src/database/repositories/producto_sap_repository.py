@@ -44,6 +44,7 @@ class ProductoSAPRepository:
                     pack_sap,
                     unidad_conversion,
                     pack_id,
+                    grupo_articulos,
                     ultima_consulta,
                     activo,
                     created_at,
@@ -64,10 +65,11 @@ class ProductoSAPRepository:
                     "pack_sap": result[4],
                     "unidad_conversion": float(result[5]) if result[5] is not None else None,
                     "pack_id": result[6],
-                    "ultima_consulta": result[7],
-                    "activo": bool(result[8]),
-                    "created_at": result[9],
-                    "updated_at": result[10],
+                    "grupo_articulos": result[7],
+                    "ultima_consulta": result[8],
+                    "activo": bool(result[9]),
+                    "created_at": result[10],
+                    "updated_at": result[11],
                 }
             return None
         finally:
@@ -115,6 +117,7 @@ class ProductoSAPRepository:
                 - pack_sap: Pack de SAP (X1, X2, etc.)
                 - unidad_conversion: Unidad de conversión calculada
                 - pack_id: ID del pack en pack_conversion
+                - grupo_articulos: Nombre del grupo de artículos (ItmsGrpNam)
                 
         Returns:
             True si se insertó/actualizó correctamente
@@ -138,6 +141,7 @@ class ProductoSAPRepository:
                     pack_sap = ?,
                     unidad_conversion = ?,
                     pack_id = ?,
+                    grupo_articulos = ?,
                     ultima_consulta = GETDATE(),
                     updated_at = GETDATE()
                 WHERE sku = ? AND activo = 1
@@ -149,6 +153,7 @@ class ProductoSAPRepository:
                     producto_data.get("pack_sap"),
                     producto_data.get("unidad_conversion"),
                     producto_data.get("pack_id"),
+                    producto_data.get("grupo_articulos"),
                     sku,
                 )
                 
@@ -166,11 +171,12 @@ class ProductoSAPRepository:
                     pack_sap,
                     unidad_conversion,
                     pack_id,
+                    grupo_articulos,
                     ultima_consulta,
                     activo,
                     created_at,
                     updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, GETDATE(), 1, GETDATE(), GETDATE())
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, GETDATE(), 1, GETDATE(), GETDATE())
                 """
                 
                 values = (
@@ -180,6 +186,7 @@ class ProductoSAPRepository:
                     producto_data.get("pack_sap"),
                     producto_data.get("unidad_conversion"),
                     producto_data.get("pack_id"),
+                    producto_data.get("grupo_articulos"),
                 )
                 
                 cursor.execute(sql, values)

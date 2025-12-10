@@ -43,7 +43,8 @@ class SAPService:
                 "item_name": "Nombre del producto",
                 "pack_sap": "X3",
                 "unidad_conversion": 4.0,
-                "pack_id": "X3"
+                "pack_id": "X3",
+                "grupo_articulos": "R-MEDIAS"
             }
             O None si no se encuentra o hay error
         """
@@ -74,6 +75,7 @@ class SAPService:
                             "pack_sap": producto["pack_sap"],
                             "unidad_conversion": producto["unidad_conversion"],
                             "pack_id": producto["pack_id"],
+                            "grupo_articulos": producto.get("grupo_articulos"),
                         }
             
             # Cache no válido o force_refresh=True, consultar SAP
@@ -98,6 +100,7 @@ class SAPService:
                 "pack_sap": pack_sap,
                 "unidad_conversion": unidad_conversion,
                 "pack_id": pack_sap,  # pack_id es igual a pack_sap
+                "grupo_articulos": sap_info.get("ItmsGrpNam"),
             }
             
             # Guardar/actualizar en cache
