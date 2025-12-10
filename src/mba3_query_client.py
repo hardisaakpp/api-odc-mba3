@@ -91,10 +91,21 @@ class MBA3APIClient:
             else:
                 logger.info("✅ JWT obtenido exitosamente")
                 just_logged_in = True
-                # Agregar un pequeño delay después del login para que MBA3 procese el JWT
+                # Agregar un delay después del login para que MBA3 procese el JWT
                 # Esto resuelve el problema de "Object or Collection Expected" en la primera consulta
-                logger.info("⏳ Esperando 0.5 segundos después del login para que MBA3 procese el JWT...")
-                time.sleep(0.5)
+                # Aumentado a 2 segundos para dar más tiempo al servidor MBA3
+                logger.info("⏳ Esperando 2.0 segundos después del login para que MBA3 procese el JWT...")
+                time.sleep(2.0)
+        
+        # Verificar si el JWT es "fresco" (obtenido recientemente)
+        # Si fue obtenido hace menos de 5 segundos, esperar un poco más
+        # Esto resuelve el problema cuando el JWT viene del startup y se usa inmediatamente
+        if self.jwt_token and self.last_login_time:
+            time_since_login = time.time() - self.last_login_time
+            if time_since_login < 5.0:  # JWT obtenido hace menos de 5 segundos
+                wait_time = 5.0 - time_since_login  # Esperar el tiempo restante
+                logger.info(f"⏳ JWT reciente (obtenido hace {time_since_login:.1f}s). Esperando {wait_time:.1f} segundos adicionales para que MBA3 lo procese...")
+                time.sleep(wait_time)
         
         url = f"{self.base_url}/ws_Consulta_externa_MBA3/"
         
@@ -195,6 +206,17 @@ class MBA3APIClient:
         logger.debug(f"Form-data a enviar: {form_data}")
         logger.info(f"Ejecutando consulta - Tabla: {from_table}, WHERE: {where_clause or 'N/A'}")
         
+        # Validar que los campos requeridos no estén vacíos
+        if not select_fields or select_fields.strip() == "":
+            logger.warning("⚠️ Campo 'select' está vacío, usando '*' por defecto")
+            select_fields = "*"
+            form_data['select'] = select_fields
+        
+        if not from_table or from_table.strip() == "":
+            error_msg = "No se pudo determinar la tabla desde la consulta SQL. Campo 'from' está vacío."
+            logger.error(error_msg)
+            raise MBA3QueryError(error_msg)
+        
         # Preparar headers con el JWT
         # Según el código JavaScript: xhr.setRequestHeader("Authorization", localStorage.jwt);
         # El JWT se envía directamente en el header Authorization, sin prefijo "Bearer"
@@ -202,6 +224,14 @@ class MBA3APIClient:
         if self.jwt_token:
             headers['Authorization'] = self.jwt_token
             logger.debug(f"JWT presente en headers (primeros 50 caracteres): {self.jwt_token[:50]}...")
+            # Validar que el JWT no esté vacío
+            if not self.jwt_token.strip():
+                logger.error("⚠️ JWT está vacío, intentando obtener nuevo JWT...")
+                if not self.login():
+                    logger.error("❌ No se pudo obtener nuevo JWT")
+                else:
+                    headers['Authorization'] = self.jwt_token
+                    logger.info("✅ Nuevo JWT obtenido")
         else:
             logger.warning("⚠️ No hay JWT disponible para esta consulta")
         
@@ -257,7 +287,7 @@ class MBA3APIClient:
                 # Si es el error específico de "Object or Collection Expected", usar delay más largo
                 if is_object_collection_error:
                     logger.warning("⚠️ Detectado error 'Object or Collection Expected' - MBA3 necesita más tiempo para procesar el JWT")
-                    retry_delay = 1.5  # Delay más largo para este error específico
+                    retry_delay = 3.0  # Delay más largo para este error específico (aumentado de 1.5 a 3.0)
                 
                 for retry_attempt in range(max_retries):
                     logger.warning(f"Error 500 del servidor MBA3. Intento de recuperación {retry_attempt + 1}/{max_retries}...")
@@ -273,7 +303,7 @@ class MBA3APIClient:
                         headers['Authorization'] = self.jwt_token
                         # Si es el error específico o acabamos de hacer login, esperar un poco más
                         if is_object_collection_error or (self.last_login_time and (time.time() - self.last_login_time) < 2):
-                            wait_after_login = 1.0 if is_object_collection_error else 0.5
+                            wait_after_login = 3.0 if is_object_collection_error else 2.0
                             logger.info(f"⏳ Esperando {wait_after_login} segundos después del login para que MBA3 procese el JWT...")
                             time.sleep(wait_after_login)
                         
@@ -311,7 +341,7 @@ class MBA3APIClient:
                                 raise MBA3QueryError(error_msg)
                             # Si sigue siendo el error de "Object or Collection Expected", aumentar el delay
                             if is_still_object_error:
-                                retry_delay = 2.0  # Delay aún más largo
+                                retry_delay = 5.0  # Delay aún más largo (aumentado de 2.0 a 5.0)
                             continue
                         else:
                             # Otro código de error, no es 500

@@ -186,9 +186,39 @@ async def startup_event():
     else:
         logger.info("⏭️ SQL Server storage deshabilitado (ENABLE_SQL_SERVER_STORAGE=false)")
     
+    # 3. Iniciar tarea de migración automática con filtro de fecha
+    try:
+        logger.info("🤖 Iniciando tarea de migración automática...")
+        from tasks.auto_migrate import start_auto_migrate
+        from config import AUTO_MIGRATE_INTERVAL_MINUTES, ENABLE_AUTO_MIGRATE, AUTO_MIGRATE_DATE_FILTER_DAYS
+        
+        if ENABLE_AUTO_MIGRATE:
+            interval = AUTO_MIGRATE_INTERVAL_MINUTES
+            start_auto_migrate(interval_minutes=interval)
+            logger.info(f"✅ Tarea de migración automática iniciada (cada {interval} minutos)")
+            logger.info(f"   Filtro de fecha: últimos {AUTO_MIGRATE_DATE_FILTER_DAYS} días")
+        else:
+            logger.info("⏭️ Migración automática deshabilitada (ENABLE_AUTO_MIGRATE=false)")
+            logger.info("   La migración manual sigue disponible mediante endpoint /migrar/completo")
+    except ImportError:
+        logger.warning("⚠️ Módulo tasks.auto_migrate no disponible. Migración automática deshabilitada.")
+    except Exception as e:
+        logger.error(f"❌ Error al iniciar migración automática: {e}")
+        logger.error("   La migración manual seguirá funcionando")
+    
     logger.info("=" * 70)
     logger.info("✅ Inicialización completada - Servidor listo para recibir peticiones")
     logger.info("=" * 70)
+
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """
+    Evento de cierre del servidor.
+    """
+    logger.info("🛑 Cerrando servidor...")
+    # Tarea de migración automática deshabilitada - no hay tareas en segundo plano que detener
+    logger.info("✅ Servidor cerrado")
 
 
 if __name__ == "__main__":

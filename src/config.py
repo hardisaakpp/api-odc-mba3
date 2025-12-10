@@ -153,6 +153,48 @@ ENVIRONMENT = os.getenv("ENVIRONMENT", "development")  # development, staging, p
 HIDE_SWAGGER_IN_PROD = os.getenv("HIDE_SWAGGER_IN_PROD", "true").lower() == "true"
 
 # ============================================================================
+# Configuración de Migración Automática
+# ============================================================================
+# Habilitar migración automática (ejecuta /migrar cada N minutos)
+ENABLE_AUTO_MIGRATE = os.getenv("ENABLE_AUTO_MIGRATE", "true").lower() == "true"
+
+# Intervalo en minutos entre ejecuciones automáticas
+# Desarrollo/Pruebas: 5 minutos (para pruebas)
+# Producción: 15 minutos (configurar en .env)
+if ENVIRONMENT == "production":
+    AUTO_MIGRATE_INTERVAL_MINUTES = int(os.getenv("AUTO_MIGRATE_INTERVAL_MINUTES", "15"))
+else:
+    AUTO_MIGRATE_INTERVAL_MINUTES = int(os.getenv("AUTO_MIGRATE_INTERVAL_MINUTES", "5"))
+
+# Días hacia atrás para el filtro de fecha en migración automática
+# Desarrollo/Pruebas: 60 días (2 meses)
+# Producción: 60 días (2 meses) - configurable en .env
+if ENVIRONMENT == "production":
+    AUTO_MIGRATE_DATE_FILTER_DAYS = int(os.getenv("AUTO_MIGRATE_DATE_FILTER_DAYS", "60"))
+else:
+    AUTO_MIGRATE_DATE_FILTER_DAYS = int(os.getenv("AUTO_MIGRATE_DATE_FILTER_DAYS", "60"))
+
+# ============================================================================
+# Configuración de Notificaciones por Email
+# ============================================================================
+# Habilitar notificaciones por correo electrónico
+ENABLE_EMAIL_NOTIFICATIONS = os.getenv("ENABLE_EMAIL_NOTIFICATIONS", "true").lower() == "true"
+
+# Configuración SMTP (Outlook)
+EMAIL_SMTP_SERVER = os.getenv("EMAIL_SMTP_SERVER", "mabeltrading-com-ec.mail.protection.outlook.com")
+EMAIL_SMTP_PORT = int(os.getenv("EMAIL_SMTP_PORT", "25"))  # Puerto 25 para relay interno (sin TLS)
+EMAIL_SMTP_USER = os.getenv("EMAIL_SMTP_USER", "")
+EMAIL_SMTP_PASSWORD = os.getenv("EMAIL_SMTP_PASSWORD", "")  # Vacío para relay interno sin autenticación
+
+# Direcciones de correo
+EMAIL_FROM = os.getenv("EMAIL_FROM", "integrationsap@mabeltrading.com.ec")
+# Nombre del remitente para los correos
+EMAIL_FROM_NAME = os.getenv("EMAIL_FROM_NAME", "INTEGRACIÓN SAP")
+# EMAIL_TO puede ser múltiples separados por coma
+_email_to_str = os.getenv("EMAIL_TO", "cortiz@mabeltrading.com.ec")
+EMAIL_TO = [email.strip() for email in _email_to_str.split(",") if email.strip()]
+
+# ============================================================================
 # Queries Predefinidas
 # ============================================================================
 # Query SQL predefinida para consultar facturas desde MBA3
