@@ -33,7 +33,8 @@ TIPOS_LINEAS = [
 def save_mba3_factura(
     repository: DespachoRepository,
     factura: Dict[str, Any],
-    upsert: bool = False
+    upsert: bool = False,
+    homologacion_service: Optional[Any] = None
 ) -> Dict[str, Any]:
     """
     Guarda una factura completa de MBA3 en SQL Server (cabecera + detalles).
@@ -114,9 +115,17 @@ def save_mba3_factura(
                                             f"Pack={sap_info.get('pack_sap')}, "
                                             f"Unidad={sap_info.get('unidad_conversion')}"
                                         )
+                                    else:
+                                        # Producto no encontrado en SAP - detectar como no homologado
+                                        if homologacion_service:
+                                            homologacion_service.detectar_producto_no_homologado(codigo)
+                                        logger.debug(f"   ⚠️ Producto no encontrado en SAP: {codigo}")
                                 except Exception as sap_error:
                                     # No fallar si no se puede consultar SAP, continuar sin conversión
                                     logger.warning(f"   ⚠️ Error al consultar SAP para {codigo}: {sap_error}")
+                                    # También detectar como no homologado si hay error
+                                    if homologacion_service:
+                                        homologacion_service.detectar_producto_no_homologado(codigo)
                             
                             # Transformar línea con información SAP si está disponible
                             detalle = FacturaMapper.to_despacho_detalle(linea, tipo_linea, sap_info=sap_info)
@@ -157,7 +166,8 @@ def save_mba3_factura(
 def save_mba3_data_to_sql_server(
     mba3_json_result: Any,
     upsert: bool = False,
-    continue_on_error: bool = True
+    continue_on_error: bool = True,
+    homologacion_service: Optional[Any] = None
 ) -> Dict[str, Any]:
     """
     Guarda el resultado JSON de MBA3 en SQL Server.
@@ -228,7 +238,7 @@ def save_mba3_data_to_sql_server(
         # Procesar cada factura
         for idx, factura in enumerate(facturas, 1):
             try:
-                result = save_mba3_factura(repository, factura, upsert=upsert)
+                result = save_mba3_factura(repository, factura, upsert=upsert, homologacion_service=homologacion_service)
                 
                 if result["status"] == "success":
                     if result.get("cabecera_actualizada"):

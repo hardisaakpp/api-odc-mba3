@@ -225,7 +225,7 @@ class MBA3Service:
             raise MBA3QueryError(f"Error al ejecutar consulta contra MBA3: {str(e)}")
     
     @staticmethod
-    def save_to_database(result: Any, upsert: bool = False) -> Optional[Dict[str, Any]]:
+    def save_to_database(result: Any, upsert: bool = False, homologacion_service: Optional[Any] = None) -> Optional[Dict[str, Any]]:
         """
         Guarda el resultado de MBA3 en SQL Server.
         
@@ -235,6 +235,7 @@ class MBA3Service:
         Args:
             result: Resultado de la consulta MBA3 (puede ser list o dict)
             upsert: Si True, actualiza si existe; si False, inserta siempre
+            homologacion_service: Servicio de homologación para detectar productos no homologados (opcional)
             
         Returns:
             Dict con estadísticas del guardado, o None si está deshabilitado o hay error
@@ -245,7 +246,8 @@ class MBA3Service:
             save_status = save_mba3_data_to_sql_server(
                 result,
                 upsert=upsert,
-                continue_on_error=True
+                continue_on_error=True,
+                homologacion_service=homologacion_service
             )
             
             if save_status.get("status") == "success":

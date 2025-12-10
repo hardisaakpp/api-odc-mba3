@@ -19,7 +19,9 @@ from endpoints.despachos_migrar import build_query_with_date_filter
 # Importar excepciones para detectar errores específicos
 from exceptions import MBA3QueryError
 # Importar funciones de notificación por email
-from utils.email_notifier import send_migration_notification, send_error_notification
+from utils.email_notifier import send_migration_notification, send_error_notification, send_homologacion_notification
+# Importar servicio de homologación
+from database.services.homologacion_service import HomologacionService
 
 logger = logging.getLogger(__name__)
 
@@ -168,11 +170,16 @@ async def execute_auto_migration():
         total_registros = len(result) if isinstance(result, list) else (1 if result else 0)
         logger.info(f"📊 Registros obtenidos: {total_registros}")
         
+        # Inicializar servicio de homologación para detectar productos no homologados
+        homologacion_service = HomologacionService()
+        homologacion_service.limpiar_detecciones()  # Limpiar detecciones previas
+        
         # Guardar en base de datos
         logger.info("💾 Guardando en despacho_cabecera/detalle...")
         save_status = None
         try:
-            save_status = MBA3Service.save_to_database(result, upsert=True)
+            # Pasar el servicio de homologación para detectar productos no homologados
+            save_status = MBA3Service.save_to_database(result, upsert=True, homologacion_service=homologacion_service)
             
             if save_status:
                 facturas_guardadas = save_status.get('facturas_guardadas', 0)
@@ -196,6 +203,37 @@ async def execute_auto_migration():
                     )
                 else:
                     logger.info("⏭️ No hay nuevos registros, no se envía email")
+                
+                # Verificar productos nuevos no homologados y notificar
+                try:
+                    productos_nuevos = homologacion_service.get_productos_no_homologados_nuevos()
+                    if productos_nuevos:
+                        logger.info(f"⚠️ Detectados {len(productos_nuevos)} productos NUEVOS no homologados")
+                        
+                        # Obtener estadísticas para el reporte
+                        todos_productos = homologacion_service.get_todos_productos_no_homologados()
+                        estadisticas = todos_productos.get("estadisticas", {})
+                        
+                        # Enviar notificación por email
+                        logger.info("📧 Enviando notificación de productos no homologados...")
+                        email_enviado = send_homologacion_notification(
+                            productos_no_homologados=productos_nuevos,
+                            estadisticas=estadisticas,
+                            fecha_ejecucion=fecha_ejecucion
+                        )
+                        
+                        # Registrar productos como notificados solo si el email se envió correctamente
+                        if email_enviado:
+                            skus_notificados = [p["sku"] for p in productos_nuevos]
+                            registrados = homologacion_service.registrar_productos_notificados(skus_notificados)
+                            logger.info(f"✅ Registrados {registrados} productos como notificados")
+                        else:
+                            logger.warning("⚠️ Email no se envió, productos no se registraron como notificados")
+                    else:
+                        logger.debug("✅ No hay productos nuevos no homologados para notificar")
+                except Exception as homologacion_error:
+                    # No fallar la migración si hay error en homologación
+                    logger.warning(f"⚠️ Error al verificar productos no homologados: {homologacion_error}")
                     
         except Exception as save_error:
             logger.error(f"❌ Error al guardar en SQL Server: {save_error}", exc_info=True)

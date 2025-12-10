@@ -45,7 +45,8 @@ else:
 # Exportar funciones del módulo email_notifier
 from .email_notifier import (
     send_migration_notification,
-    send_error_notification
+    send_error_notification,
+    send_homologacion_notification
 )
 
 __all__ = [
@@ -56,5 +57,6 @@ __all__ = [
     "save_query_to_file",
     "build_query_from_parts",
     "send_migration_notification",
-    "send_error_notification"
+    "send_error_notification",
+    "send_homologacion_notification"
 ]
