@@ -117,7 +117,7 @@ class ProductoSAPRepository:
                 - pack_sap: Pack de SAP (X1, X2, etc.)
                 - unidad_conversion: Unidad de conversión calculada
                 - pack_id: ID del pack en pack_conversion
-                - grupo_articulos: Nombre del grupo de artículos (ItmsGrpNam)
+                - grupo_articulos: Grupo de artículos (ItmsGrpNam)
                 
         Returns:
             True si se insertó/actualizó correctamente

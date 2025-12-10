@@ -172,7 +172,8 @@ class SAPClient:
                 "5-0012.9": {
                     "ItemCode": "5-0012.9",
                     "ItemName": "Nombre",
-                    "U_IXX_PACK": "X3"
+                    "U_IXX_PACK": "X3",
+                    "ItmsGrpNam": "R-MEDIAS"
                 },
                 ...
             }

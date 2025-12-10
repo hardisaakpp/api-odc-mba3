@@ -170,9 +170,9 @@ else:
 # Desarrollo/Pruebas: 60 días (2 meses)
 # Producción: 60 días (2 meses) - configurable en .env
 if ENVIRONMENT == "production":
-    AUTO_MIGRATE_DATE_FILTER_DAYS = int(os.getenv("AUTO_MIGRATE_DATE_FILTER_DAYS", "60"))
+    AUTO_MIGRATE_DATE_FILTER_DAYS = int(os.getenv("AUTO_MIGRATE_DATE_FILTER_DAYS", "360"))
 else:
-    AUTO_MIGRATE_DATE_FILTER_DAYS = int(os.getenv("AUTO_MIGRATE_DATE_FILTER_DAYS", "60"))
+    AUTO_MIGRATE_DATE_FILTER_DAYS = int(os.getenv("AUTO_MIGRATE_DATE_FILTER_DAYS", "360"))
 
 # ============================================================================
 # Configuración de Notificaciones por Email

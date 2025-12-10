@@ -104,12 +104,20 @@ class SAPService:
             }
             
             # Guardar/actualizar en cache
-            repository.insert_or_update(producto_data)
-            
-            logger.info(
-                f"✅ Información SAP obtenida y cacheada para {sku}: "
-                f"Pack={pack_sap}, Unidad={unidad_conversion}"
-            )
+            try:
+                repository.insert_or_update(producto_data)
+                logger.info(
+                    f"✅ Información SAP obtenida y cacheada para {sku}: "
+                    f"Pack={pack_sap}, Unidad={unidad_conversion}, Grupo={producto_data.get('grupo_articulos')}"
+                )
+            except Exception as cache_error:
+                # Log específico del error de cache, pero continuar retornando la información
+                logger.warning(
+                    f"⚠️ Error al guardar en cache para {sku}: {cache_error}. "
+                    f"Continuando sin cachear, pero retornando información SAP obtenida."
+                )
+                # No retornar None, retornar la información aunque no se cachee
+                # (el error ya se logueó en insert_or_update también)
             
             return producto_data
             

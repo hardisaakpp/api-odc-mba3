@@ -148,13 +148,10 @@ class FacturaMapper:
         """
         Transforma una línea de factura MBA3 a formato de despacho_detalle.
         
-        Si se proporciona información SAP, calcula las conversiones automáticamente SOLO para productos
-        de los grupos "R-MEDIAS" y "RD-INDUM MEDIAS":
+        Si se proporciona información SAP, calcula las conversiones automáticamente:
         - cantidad_pack_sap = cantidad_docena_mba3 (docenas) × unidad_conversion
         - precio_unitario_sap = precio_unitario_mba3 / unidad_conversion
         - subtotal_sap = cantidad_pack_sap × precio_unitario_sap
-        
-        Para productos de otros grupos, se mantienen las unidades originales (no se convierte).
         
         Mapeo de campos a columnas de la tabla:
         - cantidad → cantidad_docena_mba3 (docenas de El Rayo)
@@ -189,22 +186,21 @@ class FacturaMapper:
         precio_unitario_mba3 = linea.get("PrecioUnitario") or 0
         
         # Calcular conversiones SAP si hay información disponible
-        # IMPORTANTE: Solo se aplica conversión para grupos R-MEDIAS y RD-INDUM MEDIAS
         cantidad_sap = None
         precio_unitario_sap = None
         subtotal_sap = None
         unidad_sap = None
         
-        # Grupos permitidos para conversión de unidades
-        grupos_permitidos = ["R-MEDIAS", "RD-INDUM MEDIAS"]
+        # Grupos permitidos para conversión
+        GRUPOS_PERMITIDOS = ["R-MEDIAS", "RD-INDUM MEDIAS"]
         
         if sap_info and cantidad > 0:
-            grupo_articulos = sap_info.get("grupo_articulos")
             unidad_conversion = sap_info.get("unidad_conversion")
             pack_sap = sap_info.get("pack_sap")
+            grupo_articulos = sap_info.get("grupo_articulos")
             
-            # Verificar si el producto pertenece a un grupo permitido para conversión
-            debe_convertir = grupo_articulos in grupos_permitidos
+            # Solo convertir si pertenece a los grupos permitidos
+            debe_convertir = grupo_articulos in GRUPOS_PERMITIDOS if grupo_articulos else False
             
             if debe_convertir and unidad_conversion is not None and unidad_conversion > 0:
                 # Calcular cantidad en packs: docenas × unidad_conversion = packs
@@ -224,18 +220,18 @@ class FacturaMapper:
                 import logging
                 logger = logging.getLogger(__name__)
                 logger.debug(
-                    f"   🔄 Conversión aplicada para {codigo} (Grupo: {grupo_articulos}): "
+                    f"   🔄 Conversión para {codigo} (Grupo: {grupo_articulos}): "
                     f"{cantidad} docenas × {unidad_conversion} = {cantidad_sap:.2f} packs, "
                     f"Precio unitario Mabel: {precio_unitario_mba3:.2f} / {unidad_conversion} = {precio_unitario_sap:.4f}, "
                     f"Subtotal: {cantidad_sap:.2f} × {precio_unitario_sap:.4f} = {subtotal_sap:.2f}"
                 )
-            elif grupo_articulos:
-                # Producto de otro grupo - no se convierte
+            elif grupo_articulos and grupo_articulos not in GRUPOS_PERMITIDOS:
+                # Log cuando NO se convierte porque no pertenece a grupos permitidos
                 import logging
                 logger = logging.getLogger(__name__)
                 logger.debug(
-                    f"   ⏭️ Sin conversión para {codigo} (Grupo: {grupo_articulos}): "
-                    f"Mantiene unidades originales (docenas)"
+                    f"   ⏭️ Sin conversión para {codigo}: Grupo '{grupo_articulos}' no está en grupos permitidos "
+                    f"({GRUPOS_PERMITIDOS})"
                 )
         
         return {
