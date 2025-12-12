@@ -568,6 +568,9 @@ class DespachoRepository:
         cursor = self.conn.cursor()
         try:
             # Query con LEFT JOIN para obtener despachos con y sin OC
+            # El JOIN considera tanto despacho_id como referencia_despacho (codigo_factura)
+            # para ser más robusto y consistente con la lógica del frontend
+            # Usa subconsulta para evitar duplicados y priorizar OC por despacho_id
             sql = """
                 SELECT 
                     dc.despacho_id,
@@ -598,7 +601,24 @@ class DespachoRepository:
                     oc.numero_oc_sap,
                     oc.created_at AS oc_created_at
                 FROM despacho_cabecera dc
-                LEFT JOIN orden_compra_cabecera oc ON dc.despacho_id = oc.despacho_id
+                OUTER APPLY (
+                    SELECT TOP 1 
+                        oc_inner.oc_id,
+                        oc_inner.proveedor,
+                        oc_inner.fecha_generacion,
+                        oc_inner.referencia_despacho,
+                        oc_inner.estado,
+                        oc_inner.numero_oc_sap,
+                        oc_inner.created_at
+                    FROM orden_compra_cabecera oc_inner
+                    WHERE (
+                        oc_inner.despacho_id = dc.despacho_id 
+                        OR oc_inner.referencia_despacho = dc.codigo_factura
+                    )
+                    ORDER BY 
+                        CASE WHEN oc_inner.despacho_id = dc.despacho_id THEN 1 ELSE 2 END,
+                        oc_inner.created_at DESC
+                ) oc
                 ORDER BY dc.created_at DESC
             """
             
@@ -613,6 +633,7 @@ class DespachoRepository:
             for row in results:
                 despacho_id = str(row[0])
                 oc_id = str(row[20]) if row[20] else None
+                tiene_odc = oc_id is not None
                 
                 despacho_info = {
                     "despacho_id": despacho_id,
@@ -635,6 +656,9 @@ class DespachoRepository:
                     "confirmado": bool(row[17]) if row[17] is not None else None,
                     "despacho_created_at": serialize_date(row[18]),
                     "despacho_updated_at": serialize_date(row[19]),
+                    # Campos para indicar si tiene ODC (mejora para frontend)
+                    "tiene_odc": tiene_odc,
+                    "oc_id": oc_id,
                     # Obtener detalles del despacho
                     "despacho_detalles": self.get_detalles(despacho_id),
                     "orden_compra_info": {

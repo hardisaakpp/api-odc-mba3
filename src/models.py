@@ -152,3 +152,34 @@ class FacturaMBA3(BaseModel):
         # Permitir campos adicionales que puedan venir de MBA3
         extra = "allow"
 
+
+# ============================================================================
+# Modelos para Preferencias de Usuario
+# ============================================================================
+
+class TablePreferencesDto(BaseModel):
+    """Modelo para las preferencias de una tabla (formato del frontend)."""
+    
+    visibleColumns: list[str] = Field(..., description="Lista de columnas visibles")
+    columnOrder: list[str] = Field(..., description="Orden de columnas")
+    filters: Optional[Dict[str, Any]] = Field(None, description="Filtros aplicados")
+    pageSize: Optional[int] = Field(None, description="Tamaño de página")
+
+
+class SavePreferencesRequest(BaseModel):
+    """Modelo para el request de guardar preferencias."""
+    
+    preferences: TablePreferencesDto
+
+
+class PreferencesResponse(BaseModel):
+    """Modelo de respuesta para obtener preferencias de una tabla."""
+    
+    preferences: Optional[TablePreferencesDto] = None
+
+
+class AllPreferencesResponse(BaseModel):
+    """Modelo de respuesta para obtener todas las preferencias."""
+    
+    preferences: Dict[str, TablePreferencesDto]
+

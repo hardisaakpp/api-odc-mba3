@@ -12,6 +12,7 @@ from .despachos import register_despachos_endpoints
 from .sap import register_sap_endpoints
 from .ordenes_compra import register_ordenes_compra_endpoints
 from .pruebas import register_pruebas_endpoints
+from .user_preferences import register_user_preferences_endpoints
 
 
 def create_endpoints(app: FastAPI):
@@ -41,6 +42,9 @@ def create_endpoints(app: FastAPI):
     
     # Registrar endpoints de pruebas (migrado)
     register_pruebas_endpoints(app)
+    
+    # Registrar endpoints de preferencias de usuario
+    register_user_preferences_endpoints(app)
     
     # ✅ TODOS LOS ENDPOINTS HAN SIDO MIGRADOS
     # Ya no es necesario importar el módulo legacy

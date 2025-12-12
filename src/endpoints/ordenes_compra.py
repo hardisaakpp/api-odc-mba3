@@ -440,6 +440,7 @@ def register_ordenes_compra_endpoints(app: FastAPI):
         - ✅ Elimina la orden de compra completa (detalles y cabecera)
         - ✅ Elimina primero los detalles y luego la cabecera (por restricciones FK)
         - ✅ Retorna error si la orden no existe
+        - ✅ No permite eliminar ODC creadas desde despachos (tienen despacho_id)
         - ✅ Permisos: requiere permiso de eliminación
         
         **Path Parameters:**
@@ -469,6 +470,16 @@ def register_ordenes_compra_endpoints(app: FastAPI):
         }
         ```
         
+        **Respuesta si no se puede eliminar (creada desde despacho):**
+        ```json
+        {
+          "status": "error",
+          "message": "No se puede eliminar una orden de compra creada desde un despacho",
+          "oc_id": "DD7D7A51-9E57-44D4-9A8F-4A05427A8325",
+          "despacho_id": "ABC123-DEF456-GHI789"
+        }
+        ```
+        
         Returns:
             JSON con el resultado de la eliminación
         """
@@ -494,6 +505,24 @@ def register_ordenes_compra_endpoints(app: FastAPI):
                         "status": "error",
                         "message": "Orden de compra no encontrada",
                         "oc_id": oc_id
+                    },
+                    headers={
+                        "X-Source": source,
+                        "X-Endpoint": "DELETE-ORDEN-COMPRA"
+                    }
+                )
+            
+            # Validar que la ODC no fue creada desde un despacho (no se puede eliminar)
+            if existing.get("despacho_id"):
+                conn.close()
+                logger.warning(f"⚠️ No se puede eliminar orden de compra creada desde despacho: {oc_id}")
+                return JSONResponse(
+                    status_code=403,
+                    content={
+                        "status": "error",
+                        "message": "No se puede eliminar una orden de compra creada desde un despacho",
+                        "oc_id": oc_id,
+                        "despacho_id": existing.get("despacho_id")
                     },
                     headers={
                         "X-Source": source,
@@ -570,6 +599,7 @@ def register_ordenes_compra_endpoints(app: FastAPI):
         - ✅ Elimina múltiples órdenes de compra en una sola operación
         - ✅ Elimina primero los detalles y luego las cabeceras (por restricciones FK)
         - ✅ Retorna información detallada de cada eliminación
+        - ✅ No permite eliminar ODC creadas desde despachos (tienen despacho_id)
         - ✅ Continúa procesando aunque alguna falle
         - ✅ Permisos: requiere permiso de eliminación
         
@@ -648,6 +678,7 @@ def register_ordenes_compra_endpoints(app: FastAPI):
             eliminadas = 0
             errores = 0
             no_encontradas = 0
+            no_permitidas = 0
             
             for oc_id_item in oc_ids_list:
                 try:
@@ -660,6 +691,19 @@ def register_ordenes_compra_endpoints(app: FastAPI):
                             "oc_id": oc_id_item,
                             "status": "not_found",
                             "message": "Orden de compra no encontrada",
+                            "detalles_eliminados": 0
+                        })
+                        continue
+                    
+                    # Validar que la ODC no fue creada desde un despacho (no se puede eliminar)
+                    if existing.get("despacho_id"):
+                        no_permitidas += 1
+                        logger.warning(f"⚠️ No se puede eliminar orden de compra creada desde despacho: {oc_id_item}")
+                        resultados.append({
+                            "oc_id": oc_id_item,
+                            "status": "forbidden",
+                            "message": "No se puede eliminar una orden de compra creada desde un despacho",
+                            "despacho_id": existing.get("despacho_id"),
                             "detalles_eliminados": 0
                         })
                         continue
@@ -703,13 +747,15 @@ def register_ordenes_compra_endpoints(app: FastAPI):
             conn.close()
             
             # Determinar status general
-            status_general = "success" if errores == 0 and no_encontradas == 0 else "partial"
+            status_general = "success" if errores == 0 and no_encontradas == 0 and no_permitidas == 0 else "partial"
             if eliminadas == 0:
                 status_general = "error"
             
             mensaje = f"Proceso completado: {eliminadas} órdenes eliminadas de {len(oc_ids_list)} solicitadas"
             if no_encontradas > 0:
                 mensaje += f", {no_encontradas} no encontradas"
+            if no_permitidas > 0:
+                mensaje += f", {no_permitidas} no permitidas (creadas desde despacho)"
             if errores > 0:
                 mensaje += f", {errores} errores"
             
@@ -718,6 +764,7 @@ def register_ordenes_compra_endpoints(app: FastAPI):
             logger.info(f"   Total solicitadas: {len(oc_ids_list)}")
             logger.info(f"   Eliminadas: {eliminadas}")
             logger.info(f"   No encontradas: {no_encontradas}")
+            logger.info(f"   No permitidas (creadas desde despacho): {no_permitidas}")
             logger.info(f"   Errores: {errores}")
             logger.info("=" * 70)
             
@@ -731,6 +778,7 @@ def register_ordenes_compra_endpoints(app: FastAPI):
                         "eliminadas": eliminadas,
                         "errores": errores,
                         "no_encontradas": no_encontradas,
+                        "no_permitidas": no_permitidas,
                         "detalles": resultados
                     }
                 },
@@ -740,7 +788,8 @@ def register_ordenes_compra_endpoints(app: FastAPI):
                     "X-Total-Solicitadas": str(len(oc_ids_list)),
                     "X-Eliminadas": str(eliminadas),
                     "X-Errores": str(errores),
-                    "X-No-Encontradas": str(no_encontradas)
+                    "X-No-Encontradas": str(no_encontradas),
+                    "X-No-Permitidas": str(no_permitidas)
                 }
             )
             
