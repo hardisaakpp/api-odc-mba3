@@ -219,4 +219,93 @@ class UserPreferencesRepository:
         finally:
             if cursor:
                 cursor.close()
+    
+    def get_sidebar_preferences(self, user_id: str) -> Optional[Dict]:
+        """
+        Obtiene las preferencias del sidebar para un usuario.
+        
+        Args:
+            user_id: ID del usuario
+            
+        Returns:
+            Diccionario con preferencias del sidebar o None si no existen
+        """
+        cursor = None
+        try:
+            cursor = self.conn.cursor()
+            
+            # Usamos TableId = 'sidebar' y almacenamos las preferencias en Filters como JSON
+            cursor.execute("""
+                SELECT Filters
+                FROM UserPreferences
+                WHERE UserId = ? AND TableId = 'sidebar'
+            """, (user_id,))
+            
+            row = cursor.fetchone()
+            
+            if row and row[0]:
+                # Las preferencias del sidebar se almacenan en Filters como JSON
+                sidebar_prefs = json.loads(row[0])
+                return sidebar_prefs
+            
+            return None
+            
+        except Exception as e:
+            logger.error(f"Error al obtener preferencias del sidebar: {e}")
+            raise
+        finally:
+            if cursor:
+                cursor.close()
+    
+    def save_sidebar_preferences(self, user_id: str, preferences: Dict) -> None:
+        """
+        Guarda o actualiza las preferencias del sidebar.
+        
+        Args:
+            user_id: ID del usuario
+            preferences: Diccionario con preferencias del sidebar (debe contener 'collapsed')
+        """
+        cursor = None
+        try:
+            cursor = self.conn.cursor()
+            
+            # Almacenamos las preferencias del sidebar en Filters como JSON
+            # Usamos TableId = 'sidebar' y dejamos los otros campos con valores por defecto
+            sidebar_prefs_json = json.dumps(preferences)
+            
+            # Verificar si ya existe
+            cursor.execute("""
+                SELECT Id FROM UserPreferences
+                WHERE UserId = ? AND TableId = 'sidebar'
+            """, (user_id,))
+            
+            existing = cursor.fetchone()
+            
+            if existing:
+                # Actualizar
+                cursor.execute("""
+                    UPDATE UserPreferences
+                    SET Filters = ?,
+                        UpdatedAt = GETUTCDATE()
+                    WHERE UserId = ? AND TableId = 'sidebar'
+                """, (sidebar_prefs_json, user_id))
+            else:
+                # Insertar - usamos valores por defecto para los campos de tabla
+                cursor.execute("""
+                    INSERT INTO UserPreferences 
+                    (UserId, TableId, VisibleColumns, ColumnOrder, Filters, PageSize, CreatedAt, UpdatedAt)
+                    VALUES (?, 'sidebar', '[]', '[]', ?, NULL, GETUTCDATE(), GETUTCDATE())
+                """, (user_id, sidebar_prefs_json))
+            
+            self.conn.commit()
+            logger.info(f"Preferencias del sidebar guardadas para usuario {user_id}")
+            
+        except Exception as e:
+            if self.conn:
+                self.conn.rollback()
+            logger.error(f"Error al guardar preferencias del sidebar: {e}")
+            raise
+        finally:
+            if cursor:
+                cursor.close()
 

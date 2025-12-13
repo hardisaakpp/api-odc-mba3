@@ -73,3 +73,5 @@ GO
 PRINT 'Script completado. Verificar que todos los objetos se crearon correctamente.';
 GO
 
+
+

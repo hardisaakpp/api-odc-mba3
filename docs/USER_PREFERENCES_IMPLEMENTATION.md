@@ -285,3 +285,5 @@ Elimina las preferencias de una tabla.
 - El formato de respuesta coincide exactamente con lo esperado por el frontend
 - El sistema funciona de forma híbrida: localStorage en el frontend + sincronización con backend
 
+
+

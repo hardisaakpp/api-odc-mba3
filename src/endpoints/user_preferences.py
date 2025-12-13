@@ -14,13 +14,19 @@ from models import (
     SavePreferencesRequest,
     PreferencesResponse,
     AllPreferencesResponse,
-    TablePreferencesDto
+    TablePreferencesDto,
+    SidebarPreferencesDto,
+    SaveSidebarPreferencesRequest,
+    SidebarPreferencesResponse
 )
 
 logger = logging.getLogger(__name__)
 
 # Validar tableId permitidos
 VALID_TABLE_IDS = ["despachos", "ordenes-compra", "historial-ordenes"]
+
+# Exportar función principal para el linter
+__all__ = ["register_user_preferences_endpoints"]
 
 
 def validate_table_id(table_id: str):
@@ -317,6 +323,140 @@ def register_user_preferences_endpoints(app: FastAPI):
             raise HTTPException(
                 status_code=500,
                 detail=f"Error al eliminar preferencias: {str(e)}"
+            )
+        finally:
+            if conn:
+                conn.close()
+    
+    @app.get("/api/users/preferences/sidebar",
+             response_model=SidebarPreferencesResponse,
+             tags=["Preferencias de Usuario"])
+    async def get_sidebar_preferences(
+        request: Request,
+        user: Dict = Depends(verify_jwt_token)
+    ):
+        """
+        Obtiene las preferencias del sidebar para el usuario actual.
+        
+        **Headers requeridos:**
+        - `Authorization: Bearer {token}` - Token JWT válido
+        
+        **Respuesta exitosa (200):**
+        ```json
+        {
+          "preferences": {
+            "collapsed": true
+          }
+        }
+        ```
+        
+        **Si no existen preferencias:**
+        ```json
+        {
+          "preferences": null
+        }
+        ```
+        """
+        user_id = user.get('id')
+        if not user_id:
+            raise HTTPException(
+                status_code=401,
+                detail="No se pudo obtener el ID del usuario del token"
+            )
+        
+        conn = None
+        try:
+            conn = get_db_connection()
+            repository = UserPreferencesRepository(conn)
+            preferences = repository.get_sidebar_preferences(user_id)
+            
+            if preferences:
+                return SidebarPreferencesResponse(
+                    preferences=SidebarPreferencesDto(**preferences)
+                )
+            else:
+                return SidebarPreferencesResponse(preferences=None)
+                
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"Error al obtener preferencias del sidebar: {e}")
+            raise HTTPException(
+                status_code=500,
+                detail=f"Error al obtener preferencias del sidebar: {str(e)}"
+            )
+        finally:
+            if conn:
+                conn.close()
+    
+    @app.post("/api/users/preferences/sidebar",
+              tags=["Preferencias de Usuario"])
+    async def save_sidebar_preferences(
+        request_body: SaveSidebarPreferencesRequest,
+        request: Request,
+        user: Dict = Depends(verify_jwt_token)
+    ):
+        """
+        Guarda o actualiza las preferencias del sidebar.
+        
+        **Headers requeridos:**
+        - `Authorization: Bearer {token}` - Token JWT válido
+        - `Content-Type: application/json`
+        
+        **Body:**
+        ```json
+        {
+          "preferences": {
+            "collapsed": false
+          }
+        }
+        ```
+        
+        **Respuesta exitosa (200):**
+        ```json
+        {
+          "success": true,
+          "message": "Preferencias del sidebar guardadas correctamente"
+        }
+        ```
+        """
+        user_id = user.get('id')
+        if not user_id:
+            raise HTTPException(
+                status_code=401,
+                detail="No se pudo obtener el ID del usuario del token"
+            )
+        
+        # Validar datos
+        prefs = request_body.preferences
+        if prefs.collapsed is None:
+            raise HTTPException(
+                status_code=400,
+                detail="collapsed es requerido"
+            )
+        
+        conn = None
+        try:
+            conn = get_db_connection()
+            repository = UserPreferencesRepository(conn)
+            
+            repository.save_sidebar_preferences(
+                user_id,
+                prefs.dict(exclude_none=True)
+            )
+            
+            return {
+                "success": True,
+                "message": "Preferencias del sidebar guardadas correctamente"
+            }
+            
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"Error al guardar preferencias del sidebar: {e}")
+            raise HTTPException(
+                status_code=500,
+                detail=f"Error al guardar preferencias del sidebar: {str(e)}"
             )
         finally:
             if conn:

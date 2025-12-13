@@ -183,3 +183,25 @@ class AllPreferencesResponse(BaseModel):
     
     preferences: Dict[str, TablePreferencesDto]
 
+
+# ============================================================================
+# Modelos para Preferencias del Sidebar
+# ============================================================================
+
+class SidebarPreferencesDto(BaseModel):
+    """Modelo para las preferencias del sidebar."""
+    
+    collapsed: bool = Field(..., description="Estado colapsado del sidebar")
+
+
+class SaveSidebarPreferencesRequest(BaseModel):
+    """Modelo para el request de guardar preferencias del sidebar."""
+    
+    preferences: SidebarPreferencesDto
+
+
+class SidebarPreferencesResponse(BaseModel):
+    """Modelo de respuesta para obtener preferencias del sidebar."""
+    
+    preferences: Optional[SidebarPreferencesDto] = None
+
