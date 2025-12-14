@@ -3,8 +3,9 @@ Exception handlers centralizados para FastAPI.
 """
 
 import logging
-from fastapi import FastAPI, Request, status
+from fastapi import FastAPI, Request, status, HTTPException
 from fastapi.responses import JSONResponse
+from fastapi.exceptions import RequestValidationError
 
 from exceptions import QueryValidationError, MBA3ConnectionError, MBA3QueryError
 
@@ -13,6 +14,66 @@ logger = logging.getLogger(__name__)
 
 def setup_exception_handlers(app: FastAPI):
     """Configura los exception handlers para la aplicación."""
+    
+    @app.exception_handler(RequestValidationError)
+    async def validation_exception_handler(request: Request, exc: RequestValidationError):
+        """
+        Maneja errores de validación de Pydantic (422).
+        
+        Esto ocurre cuando el body del request no coincide con el modelo esperado.
+        """
+        # Obtener el body del request para logging
+        body = None
+        try:
+            body = await request.body()
+            if body:
+                body_str = body.decode('utf-8')[:500]  # Primeros 500 caracteres
+                logger.error(f"❌ Error de validación de request (422)")
+                logger.error(f"   URL: {request.url}")
+                logger.error(f"   Method: {request.method}")
+                logger.error(f"   Body recibido: {body_str}")
+        except Exception:
+            pass
+        
+        logger.error(f"❌ Errores de validación: {exc.errors()}")
+        
+        return JSONResponse(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            content={
+                "error": "Error de validación del request",
+                "type": "validation_error",
+                "details": exc.errors(),
+                "body_received": body.decode('utf-8')[:200] if body else None
+            }
+        )
+    
+    @app.exception_handler(HTTPException)
+    async def http_exception_handler(request: Request, exc: HTTPException):
+        """
+        Maneja errores HTTPException (401, 403, 404, etc.).
+        
+        Esto asegura que los errores HTTP se manejen correctamente
+        y se logueen apropiadamente.
+        """
+        # Logging detallado para errores de autenticación/autorización
+        if exc.status_code in (401, 403):
+            logger.warning(f"❌ Error de autenticación/autorización ({exc.status_code})")
+            logger.warning(f"   URL: {request.url}")
+            logger.warning(f"   Method: {request.method}")
+            logger.warning(f"   Detail: {exc.detail}")
+        elif exc.status_code == 404:
+            logger.debug(f"🔍 Recurso no encontrado (404): {request.url}")
+        else:
+            logger.warning(f"⚠️ HTTPException ({exc.status_code}): {exc.detail}")
+        
+        return JSONResponse(
+            status_code=exc.status_code,
+            content={
+                "error": exc.detail,
+                "type": "http_exception",
+                "status_code": exc.status_code
+            }
+        )
     
     @app.exception_handler(ValueError)
     async def value_error_handler(request: Request, exc: ValueError):

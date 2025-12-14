@@ -3,8 +3,9 @@ Endpoints relacionados con gestión de órdenes de compra.
 """
 
 import logging
-from datetime import datetime
-from typing import Optional, List
+import threading
+from datetime import datetime, timedelta
+from typing import Optional, List, Dict, Any
 from fastapi import FastAPI, Request, Query, Depends
 from fastapi.responses import JSONResponse
 
@@ -15,6 +16,72 @@ from database.connection import get_db_connection
 from security.jwt_auth import verify_jwt_token, require_permission
 
 logger = logging.getLogger(__name__)
+
+# ============================================================================
+# Sistema de Caché para /ordenes-compra
+# ============================================================================
+
+# Caché thread-safe para órdenes de compra
+_oc_cache_lock = threading.Lock()
+_ordenes_compra_cache: Dict[str, Any] = {}
+_oc_cache_ttl_seconds = 30  # 30 segundos de caché
+
+
+def get_cached_ordenes_compra(estado: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """
+    Obtiene órdenes de compra del caché si aún es válido.
+    
+    Args:
+        estado: Estado filtrado (para diferenciar cachés)
+        
+    Returns:
+        Datos del caché si son válidos, None en caso contrario
+    """
+    with _oc_cache_lock:
+        cache_key = f"ordenes_compra_{estado or 'all'}"
+        now = datetime.now()
+        
+        if cache_key in _ordenes_compra_cache:
+            cached_data = _ordenes_compra_cache[cache_key]
+            cached_time = cached_data.get('timestamp')
+            
+            if cached_time and (now - cached_time).total_seconds() < _oc_cache_ttl_seconds:
+                logger.debug(f"📦 Cache HIT para /ordenes-compra (estado={estado})")
+                return cached_data.get('data')
+            else:
+                # Caché expirado, eliminarlo
+                del _ordenes_compra_cache[cache_key]
+                logger.debug(f"⏰ Cache EXPIRED para /ordenes-compra (estado={estado})")
+        
+        logger.debug(f"📭 Cache MISS para /ordenes-compra (estado={estado})")
+        return None
+
+
+def set_cached_ordenes_compra(data: Dict[str, Any], estado: Optional[str] = None):
+    """
+    Guarda datos en el caché.
+    
+    Args:
+        data: Datos a guardar en caché
+        estado: Estado filtrado (para diferenciar cachés)
+    """
+    with _oc_cache_lock:
+        cache_key = f"ordenes_compra_{estado or 'all'}"
+        _ordenes_compra_cache[cache_key] = {
+            'data': data,
+            'timestamp': datetime.now()
+        }
+        logger.debug(f"💾 Cache SAVED para /ordenes-compra (estado={estado})")
+
+
+def invalidate_ordenes_compra_cache():
+    """
+    Invalida el caché de órdenes de compra.
+    Útil cuando se actualizan datos (migración automática, creación de OC, etc.)
+    """
+    with _oc_cache_lock:
+        _ordenes_compra_cache.clear()
+        logger.info("🗑️ Cache invalidado para /ordenes-compra")
 
 
 def register_ordenes_compra_endpoints(app: FastAPI):
@@ -210,6 +277,21 @@ def register_ordenes_compra_endpoints(app: FastAPI):
         """
         source = get_source_from_headers(request)
         
+        # Intentar obtener del caché primero
+        cached_result = get_cached_ordenes_compra(estado=estado)
+        if cached_result:
+            logger.debug("📦 Retornando datos desde caché")
+            return JSONResponse(
+                status_code=200,
+                content=cached_result,
+                headers={
+                    "X-Source": source,
+                    "X-Endpoint": "ORDENES-COMPRA",
+                    "X-Count": str(cached_result.get("metadata", {}).get("count", 0)),
+                    "X-Cache": "HIT"
+                }
+            )
+        
         logger.info("=" * 70)
         logger.info(f"📋 GET /ordenes-compra: Consulta ejecutada a las {datetime.now().isoformat()}")
         logger.info(f"Fuente: {source}")
@@ -238,6 +320,9 @@ def register_ordenes_compra_endpoints(app: FastAPI):
                 }
             }
             
+            # Guardar en caché
+            set_cached_ordenes_compra(response_data, estado=estado)
+            
             logger.info(f"✅ GET /ordenes-compra: {len(oc_list)} órdenes encontradas")
             
             return JSONResponse(
@@ -246,7 +331,8 @@ def register_ordenes_compra_endpoints(app: FastAPI):
                 headers={
                     "X-Source": source,
                     "X-Endpoint": "ORDENES-COMPRA",
-                    "X-Count": str(len(oc_list))
+                    "X-Count": str(len(oc_list)),
+                    "X-Cache": "MISS"
                 }
             )
             

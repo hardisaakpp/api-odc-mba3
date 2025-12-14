@@ -233,6 +233,19 @@ def register_procesar_endpoint(app: FastAPI):
             # Cerrar conexión
             conn.close()
             
+            # Invalidar caché si se crearon OCs (los datos han cambiado)
+            if oc_exitosas > 0:
+                try:
+                    from endpoints.despachos_info import invalidate_despachos_cache
+                    from endpoints.ordenes_compra import invalidate_ordenes_compra_cache
+                    
+                    invalidate_despachos_cache()
+                    invalidate_ordenes_compra_cache()
+                    logger.debug("🗑️ Caché invalidado después de crear órdenes de compra")
+                except Exception as cache_error:
+                    # No fallar el proceso si hay error al invalidar caché
+                    logger.warning(f"⚠️ Error al invalidar caché: {cache_error}")
+            
             oc_status = {
                 "status": "success" if oc_errores == 0 else "partial",
                 "oc_creadas": oc_exitosas,

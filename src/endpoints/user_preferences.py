@@ -39,6 +39,88 @@ def validate_table_id(table_id: str):
     return table_id
 
 
+def get_user_id_or_username(user: Dict) -> str:
+    """
+    Obtiene el ID del usuario, o usa username como fallback.
+    
+    Esto hace el código más robusto cuando el token JWT no incluye
+    el claim 'id' esperado, usando 'username' como identificador alternativo.
+    También busca en raw_claims si está disponible.
+    
+    Args:
+        user: Diccionario con información del usuario del JWT
+        
+    Returns:
+        ID del usuario o username como fallback (como string)
+        
+    Raises:
+        HTTPException: Si no hay ni id ni username disponible
+    """
+    # Logging detallado para diagnóstico
+    logger.debug(f"🔍 Buscando user_id. Keys disponibles en user: {list(user.keys())}")
+    
+    # Intentar obtener id directamente
+    user_id = user.get('id')
+    if user_id:
+        logger.debug(f"✅ user_id encontrado: {user_id}")
+        return str(user_id)
+    
+    # Fallback a username si id no está disponible
+    username = user.get('username')
+    if username:
+        logger.warning(f"⚠️ user.id no disponible, usando username como fallback: {username}")
+        return str(username)
+    
+    # Buscar en raw_claims si está disponible
+    raw_claims = user.get('raw_claims', {})
+    if raw_claims:
+        logger.debug(f"🔍 Buscando en raw_claims. Keys disponibles: {list(raw_claims.keys())[:10]}...")
+        
+        # Buscar en diferentes claims comunes
+        possible_id_keys = [
+            'sub',  # Subject (estándar JWT)
+            'userId',
+            'user_id',
+            'id',
+            'nameidentifier',
+            'http://schemas.xmlsoap.org/ws/2005/05/identity/claims/nameidentifier',
+            'http://schemas.microsoft.com/ws/2008/06/identity/claims/nameidentifier',
+        ]
+        
+        for key in possible_id_keys:
+            value = raw_claims.get(key)
+            if value:
+                logger.info(f"✅ user_id encontrado en raw_claims['{key}']: {value}")
+                return str(value)
+        
+        # Buscar username en raw_claims
+        possible_username_keys = [
+            'name',
+            'username',
+            'user_name',
+            'preferred_username',
+            'http://schemas.xmlsoap.org/ws/2005/05/identity/claims/name',
+            'http://schemas.microsoft.com/ws/2008/06/identity/claims/name',
+        ]
+        
+        for key in possible_username_keys:
+            value = raw_claims.get(key)
+            if value:
+                logger.warning(f"⚠️ user_id no encontrado, usando username de raw_claims['{key}'] como fallback: {value}")
+                return str(value)
+    
+    # Si no se encontró nada, lanzar error con información detallada
+    available_keys = list(user.keys())
+    logger.error(f"❌ No se pudo obtener user_id. Keys disponibles en user: {available_keys}")
+    if raw_claims:
+        logger.error(f"   Keys disponibles en raw_claims: {list(raw_claims.keys())[:20]}")
+    
+    raise HTTPException(
+        status_code=401,
+        detail=f"No se pudo obtener el ID o username del usuario del token. Keys disponibles: {available_keys}"
+    )
+
+
 def register_user_preferences_endpoints(app: FastAPI):
     """
     Registra los endpoints de preferencias de usuario en la aplicación FastAPI.
@@ -46,6 +128,234 @@ def register_user_preferences_endpoints(app: FastAPI):
     Args:
         app: Instancia de FastAPI
     """
+    
+    # IMPORTANTE: Las rutas específicas deben registrarse ANTES de las rutas con parámetros dinámicos
+    # para que FastAPI las procese correctamente
+    
+    @app.get("/api/users/preferences",
+             response_model=AllPreferencesResponse,
+             tags=["Preferencias de Usuario"])
+    async def get_all_preferences(
+        request: Request,
+        user: Dict = Depends(verify_jwt_token)
+    ):
+        """
+        Obtiene todas las preferencias del usuario actual.
+        
+        **Headers requeridos:**
+        - `Authorization: Bearer {token}` - Token JWT válido
+        
+        **Respuesta exitosa (200):**
+        ```json
+        {
+          "preferences": {
+            "despachos": {
+              "visibleColumns": ["codigo_factura", "numero_factura"],
+              "columnOrder": ["codigo_factura", "numero_factura"],
+              "filters": {},
+              "pageSize": 10
+            },
+            "ordenes-compra": {
+              "visibleColumns": ["oc_id", "fecha_generacion"],
+              "columnOrder": ["oc_id", "fecha_generacion"],
+              "filters": {},
+              "pageSize": 10
+            }
+          }
+        }
+        ```
+        """
+        user_id = user.get('id')
+        if not user_id:
+            raise HTTPException(
+                status_code=401,
+                detail="No se pudo obtener el ID del usuario del token"
+            )
+        
+        conn = None
+        try:
+            conn = get_db_connection()
+            repository = UserPreferencesRepository(conn)
+            all_prefs = repository.get_all_preferences(user_id)
+            
+            # Convertir a DTOs
+            preferences_dict = {
+                table_id: TablePreferencesDto(**prefs)
+                for table_id, prefs in all_prefs.items()
+            }
+            
+            return AllPreferencesResponse(preferences=preferences_dict)
+            
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"Error al obtener todas las preferencias: {e}")
+            raise HTTPException(
+                status_code=500,
+                detail=f"Error al obtener preferencias: {str(e)}"
+            )
+        finally:
+            if conn:
+                conn.close()
+    
+    @app.get("/api/users/preferences/sidebar",
+             response_model=SidebarPreferencesResponse,
+             tags=["Preferencias de Usuario"])
+    async def get_sidebar_preferences(
+        request: Request,
+        user: Dict = Depends(verify_jwt_token)
+    ):
+        """
+        Obtiene las preferencias del sidebar para el usuario actual.
+        
+        **Headers requeridos:**
+        - `Authorization: Bearer {token}` - Token JWT válido
+        
+        **Respuesta exitosa (200):**
+        ```json
+        {
+          "preferences": {
+            "collapsed": true
+          }
+        }
+        ```
+        
+        **Si no existen preferencias:**
+        ```json
+        {
+          "preferences": null
+        }
+        ```
+        """
+        # Logging para diagnóstico
+        logger.info(f"🔍 GET /api/users/preferences/sidebar: Iniciado")
+        logger.debug(f"   User object keys: {list(user.keys()) if user else 'None'}")
+        
+        # Usar función helper para obtener user_id con fallback a username
+        try:
+            user_id = get_user_id_or_username(user)
+            logger.debug(f"   User ID obtenido: {user_id}")
+        except HTTPException as e:
+            logger.error(f"❌ Error al obtener user_id: {e.detail}")
+            raise
+        
+        conn = None
+        try:
+            conn = get_db_connection()
+            repository = UserPreferencesRepository(conn)
+            preferences = repository.get_sidebar_preferences(user_id)
+            
+            if preferences:
+                return SidebarPreferencesResponse(
+                    preferences=SidebarPreferencesDto(**preferences)
+                )
+            else:
+                return SidebarPreferencesResponse(preferences=None)
+                
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"Error al obtener preferencias del sidebar: {e}")
+            raise HTTPException(
+                status_code=500,
+                detail=f"Error al obtener preferencias del sidebar: {str(e)}"
+            )
+        finally:
+            if conn:
+                conn.close()
+    
+    @app.post("/api/users/preferences/sidebar",
+              tags=["Preferencias de Usuario"])
+    async def save_sidebar_preferences(
+        request_body: SaveSidebarPreferencesRequest,
+        request: Request,
+        user: Dict = Depends(verify_jwt_token)
+    ):
+        """
+        Guarda o actualiza las preferencias del sidebar.
+        
+        **Headers requeridos:**
+        - `Authorization: Bearer {token}` - Token JWT válido
+        - `Content-Type: application/json`
+        
+        **Body:**
+        ```json
+        {
+          "preferences": {
+            "collapsed": false
+          }
+        }
+        ```
+        
+        **Respuesta exitosa (200):**
+        ```json
+        {
+          "success": true,
+          "message": "Preferencias del sidebar guardadas correctamente"
+        }
+        ```
+        """
+        # Logging para diagnóstico
+        logger.info(f"🔍 POST /api/users/preferences/sidebar: Iniciado")
+        logger.debug(f"   User object keys: {list(user.keys()) if user else 'None'}")
+        logger.debug(f"   Request body type: {type(request_body)}")
+        logger.debug(f"   Request body: {request_body}")
+        
+        # Usar función helper para obtener user_id con fallback a username
+        try:
+            user_id = get_user_id_or_username(user)
+            logger.debug(f"   User ID obtenido: {user_id}")
+        except HTTPException as e:
+            logger.error(f"❌ Error al obtener user_id: {e.detail}")
+            raise
+        
+        # Validar datos - el model_validator ya normalizó y validó los datos
+        # preferences debería ser un SidebarPreferencesDto después de la validación
+        if isinstance(request_body.preferences, SidebarPreferencesDto):
+            prefs = request_body.preferences
+            logger.debug(f"   Preferences recibidas (SidebarPreferencesDto validado): {prefs}")
+        elif isinstance(request_body.preferences, dict):
+            # Si todavía es un dict (no debería pasar, pero por seguridad)
+            prefs = SidebarPreferencesDto(**request_body.preferences)
+            logger.debug(f"   Preferences convertidas desde dict: {prefs}")
+        elif request_body.collapsed is not None:
+            # Formato alternativo: crear preferences desde collapsed
+            prefs = SidebarPreferencesDto(collapsed=request_body.collapsed)
+            logger.debug(f"   Preferences creadas desde formato alternativo: {prefs}")
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail="Se requiere 'preferences.collapsed' o 'collapsed' en el request"
+            )
+        
+        logger.debug(f"   Collapsed value: {prefs.collapsed} (type: {type(prefs.collapsed)})")
+        
+        conn = None
+        try:
+            conn = get_db_connection()
+            repository = UserPreferencesRepository(conn)
+            
+            repository.save_sidebar_preferences(
+                user_id,
+                prefs.dict(exclude_none=True)
+            )
+            
+            return {
+                "success": True,
+                "message": "Preferencias del sidebar guardadas correctamente"
+            }
+            
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"Error al guardar preferencias del sidebar: {e}")
+            raise HTTPException(
+                status_code=500,
+                detail=f"Error al guardar preferencias del sidebar: {str(e)}"
+            )
+        finally:
+            if conn:
+                conn.close()
     
     @app.get("/api/users/preferences/{table_id}", 
              response_model=PreferencesResponse,
@@ -200,72 +510,6 @@ def register_user_preferences_endpoints(app: FastAPI):
             if conn:
                 conn.close()
     
-    @app.get("/api/users/preferences",
-             response_model=AllPreferencesResponse,
-             tags=["Preferencias de Usuario"])
-    async def get_all_preferences(
-        request: Request,
-        user: Dict = Depends(verify_jwt_token)
-    ):
-        """
-        Obtiene todas las preferencias del usuario actual.
-        
-        **Headers requeridos:**
-        - `Authorization: Bearer {token}` - Token JWT válido
-        
-        **Respuesta exitosa (200):**
-        ```json
-        {
-          "preferences": {
-            "despachos": {
-              "visibleColumns": ["codigo_factura", "numero_factura"],
-              "columnOrder": ["codigo_factura", "numero_factura"],
-              "filters": {},
-              "pageSize": 10
-            },
-            "ordenes-compra": {
-              "visibleColumns": ["oc_id", "fecha_generacion"],
-              "columnOrder": ["oc_id", "fecha_generacion"],
-              "filters": {},
-              "pageSize": 10
-            }
-          }
-        }
-        ```
-        """
-        user_id = user.get('id')
-        if not user_id:
-            raise HTTPException(
-                status_code=401,
-                detail="No se pudo obtener el ID del usuario del token"
-            )
-        
-        conn = None
-        try:
-            conn = get_db_connection()
-            repository = UserPreferencesRepository(conn)
-            all_prefs = repository.get_all_preferences(user_id)
-            
-            # Convertir a DTOs
-            preferences_dict = {
-                table_id: TablePreferencesDto(**prefs)
-                for table_id, prefs in all_prefs.items()
-            }
-            
-            return AllPreferencesResponse(preferences=preferences_dict)
-            
-        except HTTPException:
-            raise
-        except Exception as e:
-            logger.error(f"Error al obtener todas las preferencias: {e}")
-            raise HTTPException(
-                status_code=500,
-                detail=f"Error al obtener preferencias: {str(e)}"
-            )
-        finally:
-            if conn:
-                conn.close()
-    
     @app.delete("/api/users/preferences/{table_id}",
                 tags=["Preferencias de Usuario"])
     async def delete_table_preferences(
@@ -323,140 +567,6 @@ def register_user_preferences_endpoints(app: FastAPI):
             raise HTTPException(
                 status_code=500,
                 detail=f"Error al eliminar preferencias: {str(e)}"
-            )
-        finally:
-            if conn:
-                conn.close()
-    
-    @app.get("/api/users/preferences/sidebar",
-             response_model=SidebarPreferencesResponse,
-             tags=["Preferencias de Usuario"])
-    async def get_sidebar_preferences(
-        request: Request,
-        user: Dict = Depends(verify_jwt_token)
-    ):
-        """
-        Obtiene las preferencias del sidebar para el usuario actual.
-        
-        **Headers requeridos:**
-        - `Authorization: Bearer {token}` - Token JWT válido
-        
-        **Respuesta exitosa (200):**
-        ```json
-        {
-          "preferences": {
-            "collapsed": true
-          }
-        }
-        ```
-        
-        **Si no existen preferencias:**
-        ```json
-        {
-          "preferences": null
-        }
-        ```
-        """
-        user_id = user.get('id')
-        if not user_id:
-            raise HTTPException(
-                status_code=401,
-                detail="No se pudo obtener el ID del usuario del token"
-            )
-        
-        conn = None
-        try:
-            conn = get_db_connection()
-            repository = UserPreferencesRepository(conn)
-            preferences = repository.get_sidebar_preferences(user_id)
-            
-            if preferences:
-                return SidebarPreferencesResponse(
-                    preferences=SidebarPreferencesDto(**preferences)
-                )
-            else:
-                return SidebarPreferencesResponse(preferences=None)
-                
-        except HTTPException:
-            raise
-        except Exception as e:
-            logger.error(f"Error al obtener preferencias del sidebar: {e}")
-            raise HTTPException(
-                status_code=500,
-                detail=f"Error al obtener preferencias del sidebar: {str(e)}"
-            )
-        finally:
-            if conn:
-                conn.close()
-    
-    @app.post("/api/users/preferences/sidebar",
-              tags=["Preferencias de Usuario"])
-    async def save_sidebar_preferences(
-        request_body: SaveSidebarPreferencesRequest,
-        request: Request,
-        user: Dict = Depends(verify_jwt_token)
-    ):
-        """
-        Guarda o actualiza las preferencias del sidebar.
-        
-        **Headers requeridos:**
-        - `Authorization: Bearer {token}` - Token JWT válido
-        - `Content-Type: application/json`
-        
-        **Body:**
-        ```json
-        {
-          "preferences": {
-            "collapsed": false
-          }
-        }
-        ```
-        
-        **Respuesta exitosa (200):**
-        ```json
-        {
-          "success": true,
-          "message": "Preferencias del sidebar guardadas correctamente"
-        }
-        ```
-        """
-        user_id = user.get('id')
-        if not user_id:
-            raise HTTPException(
-                status_code=401,
-                detail="No se pudo obtener el ID del usuario del token"
-            )
-        
-        # Validar datos
-        prefs = request_body.preferences
-        if prefs.collapsed is None:
-            raise HTTPException(
-                status_code=400,
-                detail="collapsed es requerido"
-            )
-        
-        conn = None
-        try:
-            conn = get_db_connection()
-            repository = UserPreferencesRepository(conn)
-            
-            repository.save_sidebar_preferences(
-                user_id,
-                prefs.dict(exclude_none=True)
-            )
-            
-            return {
-                "success": True,
-                "message": "Preferencias del sidebar guardadas correctamente"
-            }
-            
-        except HTTPException:
-            raise
-        except Exception as e:
-            logger.error(f"Error al guardar preferencias del sidebar: {e}")
-            raise HTTPException(
-                status_code=500,
-                detail=f"Error al guardar preferencias del sidebar: {str(e)}"
             )
         finally:
             if conn:

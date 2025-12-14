@@ -6,8 +6,8 @@ Define los esquemas de request y response para los endpoints.
 
 from __future__ import annotations
 
-from typing import Optional, Dict, Any
-from pydantic import BaseModel, Field, field_validator
+from typing import Optional, Dict, Any, Union
+from pydantic import BaseModel, Field, field_validator, model_validator
 from datetime import datetime
 
 
@@ -192,12 +192,92 @@ class SidebarPreferencesDto(BaseModel):
     """Modelo para las preferencias del sidebar."""
     
     collapsed: bool = Field(..., description="Estado colapsado del sidebar")
+    
+    @field_validator('collapsed', mode='before')
+    @classmethod
+    def convert_collapsed(cls, v):
+        """
+        Convierte diferentes formatos a boolean para mayor flexibilidad.
+        
+        Acepta:
+        - boolean: True/False
+        - string: "true", "false", "1", "0", "yes", "no", "on", "off"
+        - int: 1 (True), 0 (False)
+        
+        Args:
+            v: Valor a convertir
+            
+        Returns:
+            bool: Valor convertido a boolean
+        """
+        if isinstance(v, bool):
+            return v
+        if isinstance(v, str):
+            # Convertir strings comunes a boolean
+            v_lower = v.lower().strip()
+            if v_lower in ('true', '1', 'yes', 'on', 'si', 'sí'):
+                return True
+            if v_lower in ('false', '0', 'no', 'off'):
+                return False
+            # Si no coincide, intentar convertir directamente
+            try:
+                return bool(int(v))
+            except (ValueError, TypeError):
+                pass
+        if isinstance(v, int):
+            return bool(v)
+        # Si no se puede convertir, retornar el valor original
+        # Pydantic validará si es boolean después
+        return v
 
 
 class SaveSidebarPreferencesRequest(BaseModel):
-    """Modelo para el request de guardar preferencias del sidebar."""
+    """
+    Modelo para el request de guardar preferencias del sidebar.
     
-    preferences: SidebarPreferencesDto
+    Acepta dos formatos:
+    1. Formato estándar: {"preferences": {"collapsed": true}}
+    2. Formato alternativo: {"collapsed": true}
+    """
+    
+    preferences: Optional[Dict[str, Any]] = None  # Usar Dict para mayor flexibilidad
+    collapsed: Optional[bool] = None  # Permitir formato alternativo: {collapsed: true}
+    
+    class Config:
+        # Permitir campos adicionales para mayor flexibilidad
+        extra = "allow"
+    
+    @model_validator(mode='after')
+    def validate_and_normalize(self):
+        """
+        Valida y normaliza los datos después de la validación inicial.
+        
+        Convierte el formato alternativo al estándar y valida que
+        preferences sea un SidebarPreferencesDto válido.
+        """
+        # Si viene con formato alternativo (collapsed directamente), convertirlo
+        if self.preferences is None and self.collapsed is not None:
+            self.preferences = {'collapsed': self.collapsed}
+        
+        # Si preferences es un dict, validarlo como SidebarPreferencesDto
+        if isinstance(self.preferences, dict):
+            # Validar que tenga collapsed
+            if 'collapsed' not in self.preferences:
+                raise ValueError("'preferences.collapsed' es requerido")
+            # Convertir a SidebarPreferencesDto para validación
+            try:
+                # Crear instancia de SidebarPreferencesDto para validar
+                sidebar_prefs = SidebarPreferencesDto(**self.preferences)
+                # Reemplazar el dict con el objeto validado
+                self.preferences = sidebar_prefs
+            except Exception as e:
+                raise ValueError(f"Error al validar preferences: {str(e)}")
+        
+        # Validar que al menos preferences o collapsed esté presente
+        if self.preferences is None and self.collapsed is None:
+            raise ValueError("Se requiere 'preferences' o 'collapsed' en el request")
+        
+        return self
 
 
 class SidebarPreferencesResponse(BaseModel):

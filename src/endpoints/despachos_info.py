@@ -3,8 +3,9 @@ Endpoints para consultar información de despachos (solo lectura).
 """
 
 import logging
-from datetime import datetime
-from typing import Optional
+import threading
+from datetime import datetime, timedelta
+from typing import Optional, Dict, Any
 from fastapi import FastAPI, Request, Query, Depends
 from fastapi.responses import JSONResponse
 
@@ -15,6 +16,72 @@ from database.connection import get_db_connection
 from security.jwt_auth import verify_jwt_token, require_permission
 
 logger = logging.getLogger(__name__)
+
+# ============================================================================
+# Sistema de Caché para /despachos/count
+# ============================================================================
+
+# Caché thread-safe para despachos
+_cache_lock = threading.Lock()
+_despachos_cache: Dict[str, Any] = {}
+_cache_ttl_seconds = 30  # 30 segundos de caché
+
+
+def get_cached_despachos(limit: Optional[int] = None) -> Optional[Dict[str, Any]]:
+    """
+    Obtiene despachos del caché si aún es válido.
+    
+    Args:
+        limit: Límite de registros (para diferenciar cachés)
+        
+    Returns:
+        Datos del caché si son válidos, None en caso contrario
+    """
+    with _cache_lock:
+        cache_key = f"despachos_{limit or 'all'}"
+        now = datetime.now()
+        
+        if cache_key in _despachos_cache:
+            cached_data = _despachos_cache[cache_key]
+            cached_time = cached_data.get('timestamp')
+            
+            if cached_time and (now - cached_time).total_seconds() < _cache_ttl_seconds:
+                logger.debug(f"📦 Cache HIT para /despachos/count (limit={limit})")
+                return cached_data.get('data')
+            else:
+                # Caché expirado, eliminarlo
+                del _despachos_cache[cache_key]
+                logger.debug(f"⏰ Cache EXPIRED para /despachos/count (limit={limit})")
+        
+        logger.debug(f"📭 Cache MISS para /despachos/count (limit={limit})")
+        return None
+
+
+def set_cached_despachos(data: Dict[str, Any], limit: Optional[int] = None):
+    """
+    Guarda datos en el caché.
+    
+    Args:
+        data: Datos a guardar en caché
+        limit: Límite de registros (para diferenciar cachés)
+    """
+    with _cache_lock:
+        cache_key = f"despachos_{limit or 'all'}"
+        _despachos_cache[cache_key] = {
+            'data': data,
+            'timestamp': datetime.now()
+        }
+        logger.debug(f"💾 Cache SAVED para /despachos/count (limit={limit})")
+
+
+def invalidate_despachos_cache():
+    """
+    Invalida el caché de despachos.
+    Útil cuando se actualizan datos (migración automática, etc.)
+    """
+    with _cache_lock:
+        _despachos_cache.clear()
+        logger.info("🗑️ Cache invalidado para /despachos/count")
 
 
 def register_info_endpoints(app: FastAPI):
@@ -72,6 +139,21 @@ def register_info_endpoints(app: FastAPI):
         """
         source = get_source_from_headers(request)
         
+        # Intentar obtener del caché primero
+        cached_result = get_cached_despachos(limit=limit)
+        if cached_result:
+            logger.debug("📦 Retornando datos desde caché")
+            return JSONResponse(
+                status_code=200,
+                content=cached_result,
+                headers={
+                    "X-Source": source,
+                    "X-Endpoint": "DESPACHOS-COUNT",
+                    "X-Count": str(cached_result.get("count", 0)),
+                    "X-Cache": "HIT"
+                }
+            )
+        
         try:
             conn = get_db_connection()
             despacho_repo = DespachoRepository(conn)
@@ -100,17 +182,23 @@ def register_info_endpoints(app: FastAPI):
             
             logger.debug(f"📊 GET /despachos/count: {count} despachos disponibles, {len(despachos_info)} registros retornados")
             
+            result = {
+                "count": count,
+                "disponible": disponible,
+                "despachos": despachos_info
+            }
+            
+            # Guardar en caché
+            set_cached_despachos(result, limit=limit)
+            
             return JSONResponse(
                 status_code=200,
-                content={
-                    "count": count,
-                    "disponible": disponible,
-                    "despachos": despachos_info
-                },
+                content=result,
                 headers={
                     "X-Source": source,
                     "X-Endpoint": "DESPACHOS-COUNT",
-                    "X-Count": str(count)
+                    "X-Count": str(count),
+                    "X-Cache": "MISS"
                 }
             )
             

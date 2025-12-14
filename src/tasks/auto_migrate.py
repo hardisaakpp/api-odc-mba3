@@ -12,7 +12,12 @@ from config import (
     MBA3_QUERY_PREDEFINIDA,
     AUTO_MIGRATE_INTERVAL_MINUTES,
     AUTO_MIGRATE_DATE_FILTER_DAYS,
-    ENABLE_AUTO_MIGRATE
+    ENABLE_AUTO_MIGRATE,
+    MBA3_BASE_URL,
+    MBA3_SERVICE_CODE,
+    MBA3_SERVICE_PASSWORD,
+    MBA3_DIGEST_USERNAME,
+    MBA3_DIGEST_PASSWORD
 )
 # Importar función para construir query con filtro de fecha
 from endpoints.despachos_migrar import build_query_with_date_filter
@@ -22,12 +27,43 @@ from exceptions import MBA3QueryError
 from utils.email_notifier import send_migration_notification, send_error_notification, send_homologacion_notification
 # Importar servicio de homologación
 from database.services.homologacion_service import HomologacionService
+# Importar cliente MBA3 dedicado para el proceso automatizado
+from mba3_query_client import MBA3APIClient
 
 logger = logging.getLogger(__name__)
 
 # Variable global para controlar si la tarea está activa
 _auto_migrate_task: Optional[asyncio.Task] = None
 _auto_migrate_enabled = False
+
+# Cliente MBA3 dedicado para el proceso automatizado (separado del singleton)
+# Esto evita bloqueos con las peticiones del usuario
+_auto_migrate_client: Optional[MBA3APIClient] = None
+
+
+def get_auto_migrate_client() -> MBA3APIClient:
+    """
+    Obtiene un cliente MBA3 dedicado para el proceso automatizado.
+    
+    Este cliente es independiente del singleton usado por las peticiones del usuario,
+    lo que permite que el proceso automatizado no bloquee las peticiones del usuario
+    y viceversa.
+    
+    Returns:
+        Instancia de MBA3APIClient configurada con las credenciales
+    """
+    global _auto_migrate_client
+    if _auto_migrate_client is None:
+        logger.info("🔧 Inicializando cliente MBA3 dedicado para migración automática...")
+        _auto_migrate_client = MBA3APIClient(
+            base_url=MBA3_BASE_URL,
+            service_code=MBA3_SERVICE_CODE,
+            service_password=MBA3_SERVICE_PASSWORD,
+            digest_username=MBA3_DIGEST_USERNAME,
+            digest_password=MBA3_DIGEST_PASSWORD
+        )
+        logger.info("✅ Cliente MBA3 para migración automática inicializado (independiente del singleton)")
+    return _auto_migrate_client
 
 
 def filter_by_date(result: Any, days: int) -> Any:
@@ -125,11 +161,22 @@ async def execute_auto_migration():
         logger.info(f"📅 Aplicando filtro de fecha: últimos {AUTO_MIGRATE_DATE_FILTER_DAYS} días")
         logger.info(f"Query: {query_with_filter[:200]}...")  # Primeros 200 caracteres
         
-        # Ejecutar consulta con filtro de fecha
+        # Ejecutar consulta con filtro de fecha usando cliente dedicado
+        # Esto evita bloqueos con las peticiones del usuario que usan el singleton
         # Si falla con "Object or Collection Expected", esperar y reintentar (como en ejecución manual)
         result = None
         try:
-            result = MBA3Service.execute_query(query_with_filter)
+            # Usar cliente dedicado en lugar del singleton para evitar bloqueos
+            client = get_auto_migrate_client()
+            result = client.execute_query(query_with_filter, require_jwt=True)
+            
+            # Normalizar resultado
+            if result is None:
+                logger.warning("⚠️ La consulta retornó None. Usando lista vacía.")
+                result = []
+            elif not isinstance(result, (list, dict)):
+                logger.warning(f"⚠️ Tipo de resultado inesperado: {type(result)}. Convirtiendo a lista.")
+                result = [result] if result else []
         except MBA3QueryError as query_error:
             # Detectar si es el error específico "Object or Collection Expected"
             error_message = str(query_error).lower()
@@ -144,7 +191,18 @@ async def execute_auto_migration():
                 is_retry = True  # Marcamos que estamos en el segundo intento
                 logger.info("🔄 Reintentando consulta después de espera...")
                 try:
-                    result = MBA3Service.execute_query(query_with_filter)
+                    # Usar cliente dedicado en lugar del singleton
+                    client = get_auto_migrate_client()
+                    result = client.execute_query(query_with_filter, require_jwt=True)
+                    
+                    # Normalizar resultado
+                    if result is None:
+                        logger.warning("⚠️ La consulta retornó None. Usando lista vacía.")
+                        result = []
+                    elif not isinstance(result, (list, dict)):
+                        logger.warning(f"⚠️ Tipo de resultado inesperado: {type(result)}. Convirtiendo a lista.")
+                        result = [result] if result else []
+                    
                     logger.info("✅ Reintento exitoso")
                 except MBA3QueryError as retry_error:
                     # Si falla en el segundo intento, notificar error
@@ -158,14 +216,6 @@ async def execute_auto_migration():
                 # Si es otro error en el primer intento, no notificar (solo notificar en segundo intento)
                 logger.error(f"❌ Error inesperado en primer intento: {query_error}")
                 raise
-        
-        # Normalizar resultado
-        if result is None:
-            logger.warning("⚠️ La consulta retornó None. Usando lista vacía.")
-            result = []
-        elif not isinstance(result, (list, dict)):
-            logger.warning(f"⚠️ Tipo de resultado inesperado: {type(result)}. Convirtiendo a lista.")
-            result = [result] if result else []
         
         total_registros = len(result) if isinstance(result, list) else (1 if result else 0)
         logger.info(f"📊 Registros obtenidos: {total_registros}")
@@ -234,6 +284,19 @@ async def execute_auto_migration():
                 except Exception as homologacion_error:
                     # No fallar la migración si hay error en homologación
                     logger.warning(f"⚠️ Error al verificar productos no homologados: {homologacion_error}")
+                
+                # Invalidar caché después de actualizar datos
+                # Esto asegura que el usuario vea los datos más recientes
+                try:
+                    from endpoints.despachos_info import invalidate_despachos_cache
+                    from endpoints.ordenes_compra import invalidate_ordenes_compra_cache
+                    
+                    invalidate_despachos_cache()
+                    invalidate_ordenes_compra_cache()
+                    logger.debug("🗑️ Caché invalidado después de migración automática")
+                except Exception as cache_error:
+                    # No fallar la migración si hay error al invalidar caché
+                    logger.warning(f"⚠️ Error al invalidar caché: {cache_error}")
                     
         except Exception as save_error:
             logger.error(f"❌ Error al guardar en SQL Server: {save_error}", exc_info=True)
