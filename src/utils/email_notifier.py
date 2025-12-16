@@ -324,7 +324,13 @@ def send_homologacion_notification(
             no_homologados = len(productos_no_homologados)
             porcentaje = 0.0
         
-        # Crear tabla HTML de productos (máximo 20 para no saturar el email)
+        # Separar productos por tipo de problema
+        productos_no_existen = [p for p in productos_no_homologados if p.get("tipo_problema") == "no_existe"]
+        productos_mismatch = [p for p in productos_no_homologados if p.get("tipo_problema") == "mismatch"]
+        productos_error = [p for p in productos_no_homologados if p.get("tipo_problema") == "error"]
+        productos_sin_tipo = [p for p in productos_no_homologados if not p.get("tipo_problema")]
+        
+        # Crear tabla HTML de productos con distinción de tipo (máximo 20 para no saturar el email)
         productos_mostrar = productos_no_homologados[:20]
         productos_tabla = ""
         for idx, producto in enumerate(productos_mostrar, 1):
@@ -334,12 +340,26 @@ def send_homologacion_notification(
             total_docenas = producto.get("total_docenas", 0.0)
             total_valor = producto.get("total_valor", 0.0)
             ultima_aparicion = producto.get("ultima_aparicion", "N/A")
+            tipo_problema = producto.get("tipo_problema", "no_existe")
+            item_code_sap = producto.get("item_code_sap")
+            
+            # Determinar descripción del problema y color
+            if tipo_problema == "mismatch":
+                problema_desc = f"MISMATCH<br><small>ItemCode SAP: {item_code_sap}</small>"
+                problema_color = "#ff9800"  # Naranja
+            elif tipo_problema == "error":
+                problema_desc = "Error al consultar"
+                problema_color = "#f44336"  # Rojo
+            else:
+                problema_desc = "No existe en SAP"
+                problema_color = "#2196F3"  # Azul
             
             productos_tabla += f"""
             <tr>
                 <td>{idx}</td>
                 <td><strong>{sku}</strong></td>
                 <td>{nombre}</td>
+                <td style="background-color: {problema_color}; color: white; font-weight: bold; padding: 5px; border-radius: 3px;">{problema_desc}</td>
                 <td>{veces_usado}</td>
                 <td>{total_docenas:.2f}</td>
                 <td>${total_valor:.2f}</td>
@@ -350,11 +370,22 @@ def send_homologacion_notification(
         if len(productos_no_homologados) > 20:
             productos_tabla += f"""
             <tr>
-                <td colspan="7" style="text-align: center; font-style: italic;">
+                <td colspan="8" style="text-align: center; font-style: italic;">
                     ... y {len(productos_no_homologados) - 20} producto(s) más
                 </td>
             </tr>
             """
+        
+        # Crear resumen por tipo de problema
+        resumen_tipos = ""
+        if productos_mismatch:
+            resumen_tipos += f"<li><strong style='color: #ff9800;'>Mismatch (SKU ≠ ItemCode):</strong> {len(productos_mismatch)} producto(s)</li>"
+        if productos_no_existen:
+            resumen_tipos += f"<li><strong style='color: #2196F3;'>No existe en SAP:</strong> {len(productos_no_existen)} producto(s)</li>"
+        if productos_error:
+            resumen_tipos += f"<li><strong style='color: #f44336;'>Error al consultar:</strong> {len(productos_error)} producto(s)</li>"
+        if productos_sin_tipo:
+            resumen_tipos += f"<li><strong>Sin clasificar:</strong> {len(productos_sin_tipo)} producto(s)</li>"
         
         # Crear cuerpo del mensaje HTML
         body_html = f"""
@@ -373,6 +404,7 @@ def send_homologacion_notification(
                 tr:hover {{ background-color: #f5f5f5; }}
                 .footer {{ text-align: center; color: #666; font-size: 12px; margin-top: 20px; }}
                 .warning {{ background-color: #fff3cd; border: 1px solid #ffc107; padding: 15px; margin: 15px 0; border-radius: 5px; }}
+                .mismatch-warning {{ background-color: #ffe0b2; border: 1px solid #ff9800; padding: 15px; margin: 15px 0; border-radius: 5px; }}
             </style>
         </head>
         <body>
@@ -381,13 +413,24 @@ def send_homologacion_notification(
                     <h2>⚠️ Productos NO Homologados Detectados</h2>
                 </div>
                 <div class="content">
-                    <p>Se han detectado productos de MBA3 que <strong>NO están homologados en SAP</strong>.</p>
+                    <p>Se han detectado productos de MBA3 que <strong>NO están homologados en SAP</strong> o tienen problemas de coincidencia.</p>
+                    
+                    <div class="stats">
+                        <h3>📊 Resumen por Tipo de Problema</h3>
+                        <ul>
+                            {resumen_tipos if resumen_tipos else "<li>Sin productos para mostrar</li>"}
+                        </ul>
+                    </div>
                     
                     <div class="warning">
                         <strong>⚠️ ACCIÓN REQUERIDA:</strong><br>
-                        Estos productos deben ser creados en SAP con el mismo ItemCode (SKU) para que 
-                        el sistema pueda procesar las órdenes de compra correctamente.
+                        <ul>
+                            <li><strong>Productos que no existen:</strong> Deben ser creados en SAP con el mismo ItemCode (SKU) para que el sistema pueda procesar las órdenes de compra correctamente.</li>
+                            <li><strong>Productos con Mismatch:</strong> El SKU de MBA3 no coincide con el ItemCode de SAP. Se requiere corregir la homologación para que coincidan exactamente.</li>
+                        </ul>
                     </div>
+                    
+                    {f'<div class="mismatch-warning"><strong>🔴 ATENCIÓN - Productos con Mismatch:</strong><br>Los productos marcados como "MISMATCH" tienen un SKU en MBA3 que no coincide con el ItemCode en SAP. Estos productos <strong>NO recibirán conversiones automáticas</strong> hasta que se corrija la homologación.</div>' if productos_mismatch else ''}
                     
                     <div class="stats">
                         <h3>📊 Estadísticas de Homologación</h3>
@@ -407,6 +450,7 @@ def send_homologacion_notification(
                                     <th>#</th>
                                     <th>SKU</th>
                                     <th>Nombre Producto</th>
+                                    <th>Tipo de Problema</th>
                                     <th>Veces Usado</th>
                                     <th>Total Docenas</th>
                                     <th>Total Valor</th>
@@ -458,10 +502,21 @@ def send_homologacion_notification(
             total_docenas = producto.get("total_docenas", 0.0)
             total_valor = producto.get("total_valor", 0.0)
             ultima_aparicion = producto.get("ultima_aparicion", "N/A")
+            tipo_problema = producto.get("tipo_problema", "no_existe")
+            item_code_sap = producto.get("item_code_sap")
+            
+            # Determinar descripción del problema
+            if tipo_problema == "mismatch":
+                problema_desc = f"MISMATCH - ItemCode SAP: {item_code_sap}"
+            elif tipo_problema == "error":
+                problema_desc = "Error al consultar"
+            else:
+                problema_desc = "No existe en SAP"
             
             body_text += f"""
         {idx}. SKU: {sku}
            Nombre: {nombre}
+           Tipo de Problema: {problema_desc}
            Veces Usado: {veces_usado}
            Total Docenas: {total_docenas:.2f}
            Total Valor: ${total_valor:.2f}
@@ -492,6 +547,8 @@ def send_homologacion_notification(
             csv_writer.writerow([
                 'SKU',
                 'Nombre Producto',
+                'Tipo de Problema',
+                'ItemCode SAP',
                 'Veces Usado',
                 'Total Docenas',
                 'Total Valor',
@@ -501,9 +558,22 @@ def send_homologacion_notification(
             
             # Escribir datos de todos los productos (no solo los primeros 20)
             for producto in productos_no_homologados:
+                tipo_problema = producto.get("tipo_problema", "no_existe")
+                item_code_sap = producto.get("item_code_sap", "")
+                
+                # Determinar descripción del problema
+                if tipo_problema == "mismatch":
+                    problema_desc = "MISMATCH"
+                elif tipo_problema == "error":
+                    problema_desc = "Error al consultar"
+                else:
+                    problema_desc = "No existe en SAP"
+                
                 csv_writer.writerow([
                     producto.get("sku", "N/A"),
                     producto.get("nombre_producto", "Sin nombre"),
+                    problema_desc,
+                    item_code_sap,
                     producto.get("veces_usado", 0),
                     f"{producto.get('total_docenas', 0.0):.2f}",
                     f"{producto.get('total_valor', 0.0):.2f}",

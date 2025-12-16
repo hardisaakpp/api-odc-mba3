@@ -110,22 +110,60 @@ def save_mba3_factura(
                                 try:
                                     sap_info = sap_service.get_or_fetch_producto_info(codigo)
                                     if sap_info:
-                                        logger.debug(
-                                            f"   → SAP info para {codigo}: "
-                                            f"Pack={sap_info.get('pack_sap')}, "
-                                            f"Unidad={sap_info.get('unidad_conversion')}"
-                                        )
+                                        # Verificar si es un error (diccionario con _error=True)
+                                        if sap_info.get("_error"):
+                                            tipo_problema = sap_info.get("_error_type", "no_existe")
+                                            item_code_sap = sap_info.get("_item_code_sap")
+                                            
+                                            # Detectar como no homologado con información del tipo de problema
+                                            if homologacion_service:
+                                                info_adicional = {}
+                                                if item_code_sap:
+                                                    info_adicional["item_code_sap"] = item_code_sap
+                                                
+                                                homologacion_service.detectar_producto_no_homologado(
+                                                    codigo,
+                                                    tipo_problema=tipo_problema,
+                                                    info_adicional=info_adicional if info_adicional else None
+                                                )
+                                            
+                                            if tipo_problema == "mismatch":
+                                                logger.warning(
+                                                    f"   ⚠️ MISMATCH: SKU MBA3='{codigo}' "
+                                                    f"no coincide con ItemCode SAP='{item_code_sap}'"
+                                                )
+                                            elif tipo_problema == "no_existe":
+                                                logger.debug(f"   ⚠️ Producto no encontrado en SAP: {codigo}")
+                                            else:
+                                                logger.warning(f"   ⚠️ Error al consultar SAP para {codigo}")
+                                            
+                                            # Establecer sap_info a None para que no se usen conversiones
+                                            sap_info = None
+                                        else:
+                                            # Producto encontrado y válido
+                                            logger.debug(
+                                                f"   → SAP info para {codigo}: "
+                                                f"Pack={sap_info.get('pack_sap')}, "
+                                                f"Unidad={sap_info.get('unidad_conversion')}"
+                                            )
                                     else:
                                         # Producto no encontrado en SAP - detectar como no homologado
                                         if homologacion_service:
-                                            homologacion_service.detectar_producto_no_homologado(codigo)
+                                            homologacion_service.detectar_producto_no_homologado(
+                                                codigo,
+                                                tipo_problema="no_existe"
+                                            )
                                         logger.debug(f"   ⚠️ Producto no encontrado en SAP: {codigo}")
                                 except Exception as sap_error:
                                     # No fallar si no se puede consultar SAP, continuar sin conversión
                                     logger.warning(f"   ⚠️ Error al consultar SAP para {codigo}: {sap_error}")
                                     # También detectar como no homologado si hay error
                                     if homologacion_service:
-                                        homologacion_service.detectar_producto_no_homologado(codigo)
+                                        homologacion_service.detectar_producto_no_homologado(
+                                            codigo,
+                                            tipo_problema="error",
+                                            info_adicional={"error_message": str(sap_error)}
+                                        )
                             
                             # Transformar línea con información SAP si está disponible
                             detalle = FacturaMapper.to_despacho_detalle(linea, tipo_linea, sap_info=sap_info)

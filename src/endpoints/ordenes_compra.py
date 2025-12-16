@@ -4,6 +4,7 @@ Endpoints relacionados con gestión de órdenes de compra.
 
 import logging
 import threading
+import asyncio
 from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Any
 from fastapi import FastAPI, Request, Query, Depends
@@ -152,55 +153,70 @@ def register_ordenes_compra_endpoints(app: FastAPI):
         source = get_source_from_headers(request)
         
         try:
-            conn = get_db_connection()
-            log_repo = SAPIntegrationLogRepository(conn)
-            
-            # Parsear fechas si se proporcionan
-            fecha_desde_dt = None
-            fecha_hasta_dt = None
-            
-            if fecha_desde:
+            # Función helper que se ejecutará en thread pool para no bloquear el event loop
+            def _query_historial_helper(oc_id_param, referencia_despacho_param, proveedor_param,
+                                       fecha_desde_param, fecha_hasta_param, nivel_log_param,
+                                       success_param, limit_param, offset_param):
+                """Función helper que ejecuta la consulta en thread separado"""
+                conn = get_db_connection()
                 try:
-                    fecha_desde_dt = datetime.strptime(fecha_desde, "%Y-%m-%d")
-                except ValueError:
-                    conn.close()
-                    return JSONResponse(
-                        status_code=400,
-                        content={
-                            "status": "error",
-                            "message": "Formato de fecha_desde inválido. Use YYYY-MM-DD"
-                        }
+                    log_repo = SAPIntegrationLogRepository(conn)
+                    
+                    # Parsear fechas si se proporcionan
+                    fecha_desde_dt = None
+                    fecha_hasta_dt = None
+                    
+                    if fecha_desde_param:
+                        try:
+                            fecha_desde_dt = datetime.strptime(fecha_desde_param, "%Y-%m-%d")
+                        except ValueError:
+                            return {"error": "Formato de fecha_desde inválido. Use YYYY-MM-DD"}
+                    
+                    if fecha_hasta_param:
+                        try:
+                            fecha_hasta_dt = datetime.strptime(fecha_hasta_param, "%Y-%m-%d")
+                            # Agregar 23:59:59 para incluir todo el día
+                            fecha_hasta_dt = fecha_hasta_dt.replace(hour=23, minute=59, second=59)
+                        except ValueError:
+                            return {"error": "Formato de fecha_hasta inválido. Use YYYY-MM-DD"}
+                    
+                    # Obtener historial
+                    result = log_repo.get_historial_ordenes(
+                        oc_id=oc_id_param,
+                        referencia_despacho=referencia_despacho_param,
+                        proveedor=proveedor_param,
+                        fecha_desde=fecha_desde_dt,
+                        fecha_hasta=fecha_hasta_dt,
+                        nivel_log=nivel_log_param,
+                        success=success_param,
+                        limit=limit_param,
+                        offset=offset_param
                     )
-            
-            if fecha_hasta:
-                try:
-                    fecha_hasta_dt = datetime.strptime(fecha_hasta, "%Y-%m-%d")
-                    # Agregar 23:59:59 para incluir todo el día
-                    fecha_hasta_dt = fecha_hasta_dt.replace(hour=23, minute=59, second=59)
-                except ValueError:
+                    
+                    return {"result": result}
+                finally:
                     conn.close()
-                    return JSONResponse(
-                        status_code=400,
-                        content={
-                            "status": "error",
-                            "message": "Formato de fecha_hasta inválido. Use YYYY-MM-DD"
-                        }
-                    )
             
-            # Obtener historial
-            result = log_repo.get_historial_ordenes(
-                oc_id=oc_id,
-                referencia_despacho=referencia_despacho,
-                proveedor=proveedor,
-                fecha_desde=fecha_desde_dt,
-                fecha_hasta=fecha_hasta_dt,
-                nivel_log=nivel_log,
-                success=success,
-                limit=limit,
-                offset=offset
+            # Ejecutar consulta en thread pool para no bloquear el event loop
+            logger.debug("🔄 Ejecutando consulta de historial en thread pool (no bloquea otras peticiones)...")
+            query_result = await asyncio.to_thread(
+                _query_historial_helper,
+                oc_id, referencia_despacho, proveedor,
+                fecha_desde, fecha_hasta, nivel_log,
+                success, limit, offset
             )
             
-            conn.close()
+            # Verificar si hubo error de validación
+            if "error" in query_result:
+                return JSONResponse(
+                    status_code=400,
+                    content={
+                        "status": "error",
+                        "message": query_result["error"]
+                    }
+                )
+            
+            result = query_result["result"]
             
             # Preparar respuesta
             has_more = (offset or 0) + len(result["data"]) < result["total"]
@@ -299,17 +315,27 @@ def register_ordenes_compra_endpoints(app: FastAPI):
         logger.info("=" * 70)
         
         try:
-            conn = get_db_connection()
-            oc_repo = OrdenCompraRepository(conn)
+            # Función helper que se ejecutará en thread pool para no bloquear el event loop
+            def _query_ordenes_compra(estado_param: Optional[str]):
+                """Función helper que ejecuta la consulta en thread separado"""
+                conn = get_db_connection()
+                try:
+                    oc_repo = OrdenCompraRepository(conn)
+                    
+                    if estado_param:
+                        # Obtener OCs por estado
+                        oc_list = oc_repo.get_by_estado(estado_param)
+                    else:
+                        # Obtener todas las OCs sin filtro de estado
+                        oc_list = oc_repo.get_all()
+                    
+                    return oc_list
+                finally:
+                    conn.close()
             
-            if estado:
-                # Obtener OCs por estado
-                oc_list = oc_repo.get_by_estado(estado)
-            else:
-                # Obtener todas las OCs sin filtro de estado
-                oc_list = oc_repo.get_all()
-            
-            conn.close()
+            # Ejecutar consulta en thread pool para no bloquear el event loop
+            logger.debug("🔄 Ejecutando consulta de BD en thread pool (no bloquea otras peticiones)...")
+            oc_list = await asyncio.to_thread(_query_ordenes_compra, estado)
             
             response_data = {
                 "status": "success",
@@ -408,61 +434,78 @@ def register_ordenes_compra_endpoints(app: FastAPI):
         source = get_source_from_headers(request)
         
         try:
-            conn = get_db_connection()
-            log_repo = SAPIntegrationLogRepository(conn)
-            
-            # Convertir page/pageSize a offset/limit
-            page_num = page or 1
-            page_size = pageSize or 50
-            offset = (page_num - 1) * page_size
-            limit = page_size
-            
-            # Parsear fechas si se proporcionan
-            fecha_desde_dt = None
-            fecha_hasta_dt = None
-            
-            if fecha_desde:
+            # Función helper que se ejecutará en thread pool para no bloquear el event loop
+            def _query_historial_logs(page_param, page_size_param, oc_id_param, referencia_despacho_param,
+                                     proveedor_param, fecha_desde_param, fecha_hasta_param,
+                                     nivel_log_param, success_param):
+                """Función helper que ejecuta la consulta en thread separado"""
+                conn = get_db_connection()
                 try:
-                    fecha_desde_dt = datetime.strptime(fecha_desde, "%Y-%m-%d")
-                except ValueError:
-                    conn.close()
-                    return JSONResponse(
-                        status_code=400,
-                        content={
-                            "status": "error",
-                            "message": "Formato de fecha_desde inválido. Use YYYY-MM-DD"
-                        }
+                    log_repo = SAPIntegrationLogRepository(conn)
+                    
+                    # Convertir page/pageSize a offset/limit
+                    page_num = page_param or 1
+                    page_size = page_size_param or 50
+                    offset = (page_num - 1) * page_size
+                    limit = page_size
+                    
+                    # Parsear fechas si se proporcionan
+                    fecha_desde_dt = None
+                    fecha_hasta_dt = None
+                    
+                    if fecha_desde_param:
+                        try:
+                            fecha_desde_dt = datetime.strptime(fecha_desde_param, "%Y-%m-%d")
+                        except ValueError:
+                            return {"error": "Formato de fecha_desde inválido. Use YYYY-MM-DD"}
+                    
+                    if fecha_hasta_param:
+                        try:
+                            fecha_hasta_dt = datetime.strptime(fecha_hasta_param, "%Y-%m-%d")
+                            # Agregar 23:59:59 para incluir todo el día
+                            fecha_hasta_dt = fecha_hasta_dt.replace(hour=23, minute=59, second=59)
+                        except ValueError:
+                            return {"error": "Formato de fecha_hasta inválido. Use YYYY-MM-DD"}
+                    
+                    # Obtener historial
+                    result = log_repo.get_historial_ordenes(
+                        oc_id=oc_id_param,
+                        referencia_despacho=referencia_despacho_param,
+                        proveedor=proveedor_param,
+                        fecha_desde=fecha_desde_dt,
+                        fecha_hasta=fecha_hasta_dt,
+                        nivel_log=nivel_log_param,
+                        success=success_param,
+                        limit=limit,
+                        offset=offset
                     )
-            
-            if fecha_hasta:
-                try:
-                    fecha_hasta_dt = datetime.strptime(fecha_hasta, "%Y-%m-%d")
-                    # Agregar 23:59:59 para incluir todo el día
-                    fecha_hasta_dt = fecha_hasta_dt.replace(hour=23, minute=59, second=59)
-                except ValueError:
+                    
+                    return {"result": result, "page_num": page_num, "page_size": page_size}
+                finally:
                     conn.close()
-                    return JSONResponse(
-                        status_code=400,
-                        content={
-                            "status": "error",
-                            "message": "Formato de fecha_hasta inválido. Use YYYY-MM-DD"
-                        }
-                    )
             
-            # Obtener historial
-            result = log_repo.get_historial_ordenes(
-                oc_id=oc_id,
-                referencia_despacho=referencia_despacho,
-                proveedor=proveedor,
-                fecha_desde=fecha_desde_dt,
-                fecha_hasta=fecha_hasta_dt,
-                nivel_log=nivel_log,
-                success=success,
-                limit=limit,
-                offset=offset
+            # Ejecutar consulta en thread pool para no bloquear el event loop
+            logger.debug("🔄 Ejecutando consulta de historial en thread pool (no bloquea otras peticiones)...")
+            query_result = await asyncio.to_thread(
+                _query_historial_logs,
+                page, pageSize, oc_id, referencia_despacho,
+                proveedor, fecha_desde, fecha_hasta,
+                nivel_log, success
             )
             
-            conn.close()
+            # Verificar si hubo error de validación
+            if "error" in query_result:
+                return JSONResponse(
+                    status_code=400,
+                    content={
+                        "status": "error",
+                        "message": query_result["error"]
+                    }
+                )
+            
+            result = query_result["result"]
+            page_num = query_result["page_num"]
+            page_size = query_result["page_size"]
             
             # Calcular total de páginas
             total = result["total"]

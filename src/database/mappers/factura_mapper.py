@@ -194,7 +194,10 @@ class FacturaMapper:
         # Grupos permitidos para conversión
         GRUPOS_PERMITIDOS = ["R-MEDIAS", "RD-INDUM MEDIAS"]
         
-        if sap_info and cantidad > 0:
+        # Verificar si sap_info es válido (no es None y no tiene error)
+        sap_info_valido = sap_info and not sap_info.get("_error", False)
+        
+        if sap_info_valido and cantidad > 0:
             unidad_conversion = sap_info.get("unidad_conversion")
             pack_sap = sap_info.get("pack_sap")
             grupo_articulos = sap_info.get("grupo_articulos")

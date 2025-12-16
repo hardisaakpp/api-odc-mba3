@@ -28,11 +28,15 @@ class SAPService:
         Este método:
         1. Busca en el cache si existe y es válido
         2. Si no existe o expiró, consulta SAP
-        3. Guarda/actualiza el cache con la información obtenida
-        4. Retorna la información del producto
+        3. Valida que el SKU de MBA3 coincida exactamente con el ItemCode de SAP
+        4. Guarda/actualiza el cache con la información obtenida (solo si hay coincidencia)
+        5. Retorna la información del producto
+        
+        IMPORTANTE: Si el SKU de MBA3 no coincide con el ItemCode de SAP, retorna None
+        para evitar realizar conversiones incorrectas.
         
         Args:
-            sku: SKU del producto a consultar
+            sku: SKU del producto a consultar (desde MBA3)
             force_refresh: Si True, fuerza la consulta a SAP incluso si el cache es válido
             
         Returns:
@@ -46,7 +50,10 @@ class SAPService:
                 "pack_id": "X3",
                 "grupo_articulos": "R-MEDIAS"
             }
-            O None si no se encuentra o hay error
+            O None si:
+            - No se encuentra en SAP
+            - El SKU de MBA3 no coincide con el ItemCode de SAP (mismatch)
+            - Hay error al consultar
         """
         if not self.enabled:
             logger.debug(f"⏭️ Servicio SAP deshabilitado para SKU: {sku}")
@@ -67,6 +74,24 @@ class SAPService:
                 if cache_valid:
                     producto = repository.find_by_sku(sku)
                     if producto:
+                        # Validar que el SKU de MBA3 coincida con el ItemCode de SAP
+                        item_code_cached = producto.get("item_code", "").strip()
+                        sku_normalized = sku.strip()
+                        
+                        if item_code_cached.lower() != sku_normalized.lower():
+                            logger.warning(
+                                f"⚠️ MISMATCH detectado en cache: SKU MBA3='{sku_normalized}' "
+                                f"no coincide con ItemCode SAP='{item_code_cached}'. "
+                                f"No se realizarán conversiones para este producto."
+                            )
+                            # Retornar diccionario especial para indicar mismatch
+                            return {
+                                "_error": True,
+                                "_error_type": "mismatch",
+                                "_sku": sku_normalized,
+                                "_item_code_sap": item_code_cached
+                            }
+                        
                         logger.debug(f"📦 Información de {sku} obtenida del cache")
                         return {
                             "sku": producto["sku"],
@@ -84,7 +109,31 @@ class SAPService:
             
             if not sap_info:
                 logger.warning(f"⚠️ No se encontró información en SAP para SKU: {sku}")
-                return None
+                # Retornar diccionario especial para indicar que no existe en SAP
+                return {
+                    "_error": True,
+                    "_error_type": "no_existe",
+                    "_sku": sku,
+                    "_item_code_sap": None
+                }
+            
+            # ✅ VALIDACIÓN: Verificar que el SKU de MBA3 coincida con el ItemCode de SAP
+            item_code_sap = sap_info.get("ItemCode", "").strip()
+            sku_normalized = sku.strip()
+            
+            if item_code_sap.lower() != sku_normalized.lower():
+                logger.warning(
+                    f"⚠️ MISMATCH detectado: SKU MBA3='{sku_normalized}' "
+                    f"no coincide con ItemCode SAP='{item_code_sap}'. "
+                    f"No se realizarán conversiones para este producto."
+                )
+                # Retornar diccionario especial para indicar mismatch
+                return {
+                    "_error": True,
+                    "_error_type": "mismatch",
+                    "_sku": sku_normalized,
+                    "_item_code_sap": item_code_sap
+                }
             
             # Obtener unidad de conversión desde pack_conversion
             pack_sap = sap_info.get("U_IXX_PACK")
@@ -123,7 +172,14 @@ class SAPService:
             
         except Exception as e:
             logger.error(f"❌ Error al obtener información SAP para {sku}: {e}", exc_info=True)
-            return None
+            # Retornar diccionario especial para indicar error
+            return {
+                "_error": True,
+                "_error_type": "error",
+                "_sku": sku,
+                "_item_code_sap": None,
+                "_error_message": str(e)
+            }
         finally:
             if conn:
                 try:

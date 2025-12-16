@@ -18,20 +18,31 @@ class HomologacionService:
     def __init__(self):
         """Inicializa el servicio de homologación."""
         self._productos_no_homologados_detectados: Set[str] = set()
+        # Diccionario para almacenar el tipo de problema por SKU
+        # Clave: SKU, Valor: "no_existe" | "mismatch" | "error"
+        self._tipos_problema: Dict[str, str] = {}
+        # Diccionario para almacenar información adicional (ItemCode SAP en caso de mismatch)
+        self._info_adicional: Dict[str, Any] = {}
     
-    def detectar_producto_no_homologado(self, sku: str):
+    def detectar_producto_no_homologado(self, sku: str, tipo_problema: str = "no_existe", info_adicional: Optional[Dict[str, Any]] = None):
         """
         Registra un producto como no homologado durante el proceso de migración.
         
         Este método se llama cuando se detecta que un producto de MBA3
-        no existe en SAP (cuando sap_info es None).
+        no existe en SAP o hay un mismatch entre SKU e ItemCode.
         
         Args:
             sku: SKU del producto no homologado
+            tipo_problema: Tipo de problema ("no_existe", "mismatch", "error")
+            info_adicional: Información adicional (ej: item_code_sap para mismatch)
         """
         if sku and sku.strip():
-            self._productos_no_homologados_detectados.add(sku.strip())
-            logger.debug(f"🔍 Producto no homologado detectado: {sku}")
+            sku_normalized = sku.strip()
+            self._productos_no_homologados_detectados.add(sku_normalized)
+            self._tipos_problema[sku_normalized] = tipo_problema
+            if info_adicional:
+                self._info_adicional[sku_normalized] = info_adicional
+            logger.debug(f"🔍 Producto no homologado detectado: {sku} (tipo: {tipo_problema})")
     
     def get_productos_detectados(self) -> List[str]:
         """
@@ -45,6 +56,8 @@ class HomologacionService:
     def limpiar_detecciones(self):
         """Limpia la lista de productos detectados (para nueva sesión)."""
         self._productos_no_homologados_detectados.clear()
+        self._tipos_problema.clear()
+        self._info_adicional.clear()
     
     def get_productos_no_homologados_nuevos(self) -> List[Dict[str, Any]]:
         """
@@ -89,12 +102,19 @@ class HomologacionService:
             # Obtener información detallada solo de los productos nuevos para notificar
             productos_info = []
             for sku in skus_nuevos_para_notificar:
+                tipo_problema = self._tipos_problema.get(sku, "no_existe")
+                info_adicional = self._info_adicional.get(sku, {})
+                
                 if sku in productos_dict:
                     # Producto existe en BD, usar información completa
-                    productos_info.append(productos_dict[sku])
+                    producto = productos_dict[sku].copy()
+                    producto["tipo_problema"] = tipo_problema
+                    if info_adicional:
+                        producto.update(info_adicional)
+                    productos_info.append(producto)
                 else:
                     # Producto muy nuevo (aún no está en la consulta de BD), crear entrada básica
-                    productos_info.append({
+                    producto = {
                         "sku": sku,
                         "nombre_producto": "Sin nombre",
                         "veces_usado": 1,
@@ -102,7 +122,11 @@ class HomologacionService:
                         "total_valor": 0.0,
                         "primera_aparicion": datetime.now().strftime("%Y-%m-%d"),
                         "ultima_aparicion": datetime.now().strftime("%Y-%m-%d"),
-                    })
+                        "tipo_problema": tipo_problema
+                    }
+                    if info_adicional:
+                        producto.update(info_adicional)
+                    productos_info.append(producto)
             
             logger.info(f"✅ Encontrados {len(productos_info)} productos NUEVOS para notificar")
             return productos_info

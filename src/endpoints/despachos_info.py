@@ -4,6 +4,7 @@ Endpoints para consultar información de despachos (solo lectura).
 
 import logging
 import threading
+import asyncio
 from datetime import datetime, timedelta
 from typing import Optional, Dict, Any
 from fastapi import FastAPI, Request, Query, Depends
@@ -155,30 +156,42 @@ def register_info_endpoints(app: FastAPI):
             )
         
         try:
-            conn = get_db_connection()
-            despacho_repo = DespachoRepository(conn)
-            oc_repo = OrdenCompraRepository(conn)
+            # Función helper que se ejecutará en thread pool para no bloquear el event loop
+            # Esto permite que el endpoint responda inmediatamente incluso si el proceso
+            # automático está ejecutándose simultáneamente
+            def _query_despachos_count(limit_param: Optional[int]):
+                """Función helper que ejecuta las consultas de BD en thread separado"""
+                conn = get_db_connection()
+                try:
+                    despacho_repo = DespachoRepository(conn)
+                    oc_repo = OrdenCompraRepository(conn)
+                    
+                    # Contar despachos sin OC (misma lógica que usa /procesar-oc)
+                    count = despacho_repo.count_despachos_sin_oc()
+                    
+                    # Obtener información detallada de despachos con sus OCs
+                    despachos_info = despacho_repo.get_despachos_con_info_oc(limit=limit_param)
+                    
+                    # Agregar detalles de OC para cada despacho que tenga OC
+                    for despacho in despachos_info:
+                        if despacho.get("orden_compra_info") and despacho["orden_compra_info"].get("oc_id"):
+                            oc_id = despacho["orden_compra_info"]["oc_id"]
+                            try:
+                                oc_detalles = oc_repo.get_detalles(oc_id)
+                                despacho["orden_compra_info"]["oc_detalles"] = oc_detalles
+                            except Exception as e:
+                                logger.warning(f"⚠️ Error al obtener detalles de OC {oc_id}: {e}")
+                                despacho["orden_compra_info"]["oc_detalles"] = []
+                    
+                    disponible = count > 0
+                    
+                    return count, disponible, despachos_info
+                finally:
+                    conn.close()
             
-            # Contar despachos sin OC (misma lógica que usa /procesar-oc)
-            count = despacho_repo.count_despachos_sin_oc()
-            
-            # Obtener información detallada de despachos con sus OCs
-            despachos_info = despacho_repo.get_despachos_con_info_oc(limit=limit)
-            
-            # Agregar detalles de OC para cada despacho que tenga OC
-            for despacho in despachos_info:
-                if despacho.get("orden_compra_info") and despacho["orden_compra_info"].get("oc_id"):
-                    oc_id = despacho["orden_compra_info"]["oc_id"]
-                    try:
-                        oc_detalles = oc_repo.get_detalles(oc_id)
-                        despacho["orden_compra_info"]["oc_detalles"] = oc_detalles
-                    except Exception as e:
-                        logger.warning(f"⚠️ Error al obtener detalles de OC {oc_id}: {e}")
-                        despacho["orden_compra_info"]["oc_detalles"] = []
-            
-            conn.close()
-            
-            disponible = count > 0
+            # Ejecutar consultas de BD en thread pool para no bloquear el event loop
+            logger.debug("🔄 Ejecutando consultas de BD en thread pool (no bloquea otras peticiones)...")
+            count, disponible, despachos_info = await asyncio.to_thread(_query_despachos_count, limit)
             
             logger.debug(f"📊 GET /despachos/count: {count} despachos disponibles, {len(despachos_info)} registros retornados")
             
@@ -261,13 +274,20 @@ def register_info_endpoints(app: FastAPI):
         logger.info("=" * 70)
         
         try:
-            conn = get_db_connection()
-            despacho_repo = DespachoRepository(conn)
+            # Función helper que se ejecutará en thread pool para no bloquear el event loop
+            def _query_despacho_detalles(desp_id: str):
+                """Función helper que ejecuta la consulta de BD en thread separado"""
+                conn = get_db_connection()
+                try:
+                    despacho_repo = DespachoRepository(conn)
+                    detalles = despacho_repo.get_detalles(desp_id)
+                    return detalles
+                finally:
+                    conn.close()
             
-            # Obtener detalles del despacho
-            detalles = despacho_repo.get_detalles(despacho_id)
-            
-            conn.close()
+            # Ejecutar consulta de BD en thread pool para no bloquear el event loop
+            logger.debug(f"🔄 Ejecutando consulta de BD en thread pool para despacho {despacho_id}...")
+            detalles = await asyncio.to_thread(_query_despacho_detalles, despacho_id)
             
             logger.debug(f"📊 GET /despachos/{despacho_id}/detalles: {len(detalles)} detalles encontrados")
             

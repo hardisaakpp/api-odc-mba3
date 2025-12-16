@@ -3,8 +3,9 @@ Endpoint para procesar despachos y copiarlos a órdenes de compra.
 """
 
 import logging
+import asyncio
 from datetime import datetime
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
 from fastapi import FastAPI, Request, Query, Depends
 from fastapi.responses import JSONResponse
 
@@ -100,202 +101,216 @@ def register_procesar_endpoint(app: FastAPI):
         logger.info(f"Fuente: {source}")
         
         try:
-            # Obtener conexión y repositorios
-            conn = get_db_connection()
-            despacho_repo = DespachoRepository(conn)
-            oc_repo = OrdenCompraRepository(conn)
-            
-            # Determinar qué despachos procesar
-            if despacho_id:
-                # Modo: Procesar despachos específicos
-                despacho_ids_list = [id.strip() for id in despacho_id if id and id.strip()]
-                logger.info(f"📋 Modo: Procesar despachos específicos ({len(despacho_ids_list)} despachos)")
-                logger.info(f"   IDs: {despacho_ids_list}")
-                
-                # Validar que los despachos existan
-                despachos_a_procesar = []
-                despachos_no_encontrados = []
-                
-                for despacho_id_item in despacho_ids_list:
-                    # Verificar que el despacho existe
-                    cabecera = despacho_repo.get_existing_cabecera(despacho_id_item)
-                    if not cabecera:
-                        logger.warning(f"⚠️ Despacho {despacho_id_item} no encontrado, se omitirá")
-                        despachos_no_encontrados.append(despacho_id_item)
-                        continue
-                    
-                    # Verificar si ya tiene OC (solo informativo)
-                    existing_oc_id = oc_repo.find_by_despacho_id(despacho_id_item)
-                    if existing_oc_id:
-                        logger.info(f"ℹ️ Despacho {despacho_id_item} ya tiene OC ({existing_oc_id}), se actualizará")
-                    
-                    despachos_a_procesar.append(despacho_id_item)
-                
-                if not despachos_a_procesar:
-                    conn.close()
-                    return JSONResponse(
-                        status_code=400,
-                        content={
-                            "status": "error",
-                            "message": "No se encontraron despachos válidos para procesar",
-                            "despacho_ids_provistos": despacho_ids_list,
-                            "despachos_no_encontrados": despachos_no_encontrados,
-                            "oc_creadas": 0,
-                            "oc_errores": 0
-                        },
-                        headers={
-                            "X-Source": source,
-                            "X-Endpoint": "PROCESAR-OC"
-                        }
-                    )
-                
-                if despachos_no_encontrados:
-                    logger.warning(f"⚠️ {len(despachos_no_encontrados)} despachos no encontrados: {despachos_no_encontrados}")
-            else:
-                # Modo: Procesar todos los despachos sin OC (comportamiento original)
-                logger.info("📋 Modo: Procesar todos los despachos sin OC")
-                despachos_a_procesar = despacho_repo.get_despachos_sin_oc()
-                despachos_no_encontrados = []
-                
-                if not despachos_a_procesar:
-                    logger.info("ℹ️ No se encontraron despachos sin orden de compra")
-                    conn.close()
-                    return JSONResponse(
-                        status_code=200,
-                        content={
-                            "status": "success",
-                            "message": "No hay despachos pendientes de copiar a orden de compra",
-                            "oc_creadas": 0,
-                            "oc_errores": 0,
-                            "total_despachos": 0
-                        },
-                        headers={
-                            "X-Source": source,
-                            "X-Endpoint": "PROCESAR-OC"
-                        }
-                    )
-            
-            logger.info(f"📦 Total despachos a procesar: {len(despachos_a_procesar)}")
-            logger.info("=" * 70)
-            logger.info("🔄 PROCESANDO: Copiando despachos a orden de compra...")
-            logger.info("=" * 70)
-            
-            # Procesar cada despacho
-            oc_resultados = []
-            oc_exitosas = 0
-            oc_errores = 0
-            
-            for idx, despacho_id_item in enumerate(despachos_a_procesar, 1):
+            # Función helper que se ejecutará en thread pool para no bloquear el event loop
+            # Esto permite que el endpoint responda inmediatamente incluso si el proceso
+            # automático está ejecutándose simultáneamente
+            def _procesar_despachos_helper(despacho_ids_param: Optional[List[str]]) -> Dict[str, Any]:
+                """Función helper que ejecuta el procesamiento en thread separado"""
+                conn = get_db_connection()
                 try:
-                    logger.info(f"[{idx}/{len(despachos_a_procesar)}] Procesando despacho: {despacho_id_item}")
+                    despacho_repo = DespachoRepository(conn)
+                    oc_repo = OrdenCompraRepository(conn)
                     
-                    # Copiar despacho a orden de compra (con upsert)
-                    oc_resultado = copy_despacho_to_orden_compra(
-                        despacho_repo=despacho_repo,
-                        oc_repo=oc_repo,
-                        despacho_id=despacho_id_item,
-                        upsert=True
-                    )
-                    
-                    if oc_resultado:
-                        oc_exitosas += 1
-                        oc_id = oc_resultado.get("oc_id")
-                        accion = "actualizada" if oc_resultado.get("cabecera_actualizada") else "creada"
+                    # Determinar qué despachos procesar
+                    if despacho_ids_param:
+                        # Modo: Procesar despachos específicos
+                        despacho_ids_list = [id.strip() for id in despacho_ids_param if id and id.strip()]
+                        logger.info(f"📋 Modo: Procesar despachos específicos ({len(despacho_ids_list)} despachos)")
+                        logger.info(f"   IDs: {despacho_ids_list}")
                         
-                        resultado_item = {
-                            "despacho_id": despacho_id_item,
-                            "oc_id": oc_id,
-                            "proveedor": oc_resultado.get("proveedor"),
-                            "detalles_insertados": oc_resultado.get("detalles_insertados", 0),
-                            "accion": accion,
-                            "estado": "PENDIENTE"  # Estado inicial de la ODC
-                        }
+                        # Validar que los despachos existan
+                        despachos_a_procesar = []
+                        despachos_no_encontrados = []
                         
-                        logger.info(f"   ✅ OC {accion}: {oc_id} (estado: PENDIENTE)")
+                        for despacho_id_item in despacho_ids_list:
+                            # Verificar que el despacho existe
+                            cabecera = despacho_repo.get_existing_cabecera(despacho_id_item)
+                            if not cabecera:
+                                logger.warning(f"⚠️ Despacho {despacho_id_item} no encontrado, se omitirá")
+                                despachos_no_encontrados.append(despacho_id_item)
+                                continue
+                            
+                            # Verificar si ya tiene OC (solo informativo)
+                            existing_oc_id = oc_repo.find_by_despacho_id(despacho_id_item)
+                            if existing_oc_id:
+                                logger.info(f"ℹ️ Despacho {despacho_id_item} ya tiene OC ({existing_oc_id}), se actualizará")
+                            
+                            despachos_a_procesar.append(despacho_id_item)
                         
-                        oc_resultados.append(resultado_item)
+                        if not despachos_a_procesar:
+                            return {
+                                "status": "error",
+                                "status_code": 400,
+                                "message": "No se encontraron despachos válidos para procesar",
+                                "despacho_ids_provistos": despacho_ids_list,
+                                "despachos_no_encontrados": despachos_no_encontrados,
+                                "oc_creadas": 0,
+                                "oc_errores": 0
+                            }
+                        
+                        if despachos_no_encontrados:
+                            logger.warning(f"⚠️ {len(despachos_no_encontrados)} despachos no encontrados: {despachos_no_encontrados}")
                     else:
-                        oc_errores += 1
-                        logger.warning(f"   ⚠️ No se pudo crear/actualizar OC para despacho: {despacho_id_item}")
-                        oc_resultados.append({
-                            "despacho_id": despacho_id_item,
-                            "error": "No se pudo crear/actualizar OC"
-                        })
+                        # Modo: Procesar todos los despachos sin OC (comportamiento original)
+                        logger.info("📋 Modo: Procesar todos los despachos sin OC")
+                        despachos_a_procesar = despacho_repo.get_despachos_sin_oc()
+                        despachos_no_encontrados = []
                         
-                except Exception as oc_error:
-                    oc_errores += 1
-                    logger.error(f"   ❌ Error al copiar despacho {despacho_id_item} a OC: {oc_error}")
-                    oc_resultados.append({
-                        "despacho_id": despacho_id_item,
-                        "error": str(oc_error)
-                    })
-            
-            # Cerrar conexión
-            conn.close()
-            
-            # Invalidar caché si se crearon OCs (los datos han cambiado)
-            if oc_exitosas > 0:
-                try:
-                    from endpoints.despachos_info import invalidate_despachos_cache
-                    from endpoints.ordenes_compra import invalidate_ordenes_compra_cache
+                        if not despachos_a_procesar:
+                            logger.info("ℹ️ No se encontraron despachos sin orden de compra")
+                            return {
+                                "status": "success",
+                                "status_code": 200,
+                                "message": "No hay despachos pendientes de copiar a orden de compra",
+                                "oc_creadas": 0,
+                                "oc_errores": 0,
+                                "total_despachos": 0
+                            }
                     
-                    invalidate_despachos_cache()
-                    invalidate_ordenes_compra_cache()
-                    logger.debug("🗑️ Caché invalidado después de crear órdenes de compra")
-                except Exception as cache_error:
-                    # No fallar el proceso si hay error al invalidar caché
-                    logger.warning(f"⚠️ Error al invalidar caché: {cache_error}")
+                    logger.info(f"📦 Total despachos a procesar: {len(despachos_a_procesar)}")
+                    logger.info("=" * 70)
+                    logger.info("🔄 PROCESANDO: Copiando despachos a orden de compra...")
+                    logger.info("=" * 70)
+                    
+                    # Procesar cada despacho
+                    oc_resultados = []
+                    oc_exitosas = 0
+                    oc_errores = 0
+                    
+                    for idx, despacho_id_item in enumerate(despachos_a_procesar, 1):
+                        try:
+                            logger.info(f"[{idx}/{len(despachos_a_procesar)}] Procesando despacho: {despacho_id_item}")
+                            
+                            # Copiar despacho a orden de compra (con upsert)
+                            oc_resultado = copy_despacho_to_orden_compra(
+                                despacho_repo=despacho_repo,
+                                oc_repo=oc_repo,
+                                despacho_id=despacho_id_item,
+                                upsert=True
+                            )
+                            
+                            if oc_resultado:
+                                oc_exitosas += 1
+                                oc_id = oc_resultado.get("oc_id")
+                                accion = "actualizada" if oc_resultado.get("cabecera_actualizada") else "creada"
+                                
+                                resultado_item = {
+                                    "despacho_id": despacho_id_item,
+                                    "oc_id": oc_id,
+                                    "proveedor": oc_resultado.get("proveedor"),
+                                    "detalles_insertados": oc_resultado.get("detalles_insertados", 0),
+                                    "accion": accion,
+                                    "estado": "PENDIENTE"  # Estado inicial de la ODC
+                                }
+                                
+                                logger.info(f"   ✅ OC {accion}: {oc_id} (estado: PENDIENTE)")
+                                
+                                oc_resultados.append(resultado_item)
+                            else:
+                                oc_errores += 1
+                                logger.warning(f"   ⚠️ No se pudo crear/actualizar OC para despacho: {despacho_id_item}")
+                                oc_resultados.append({
+                                    "despacho_id": despacho_id_item,
+                                    "error": "No se pudo crear/actualizar OC"
+                                })
+                                
+                        except Exception as oc_error:
+                            oc_errores += 1
+                            logger.error(f"   ❌ Error al copiar despacho {despacho_id_item} a OC: {oc_error}")
+                            oc_resultados.append({
+                                "despacho_id": despacho_id_item,
+                                "error": str(oc_error)
+                            })
+                    
+                    # Cerrar conexión
+                    conn.close()
+                    
+                    # Invalidar caché si se crearon OCs (los datos han cambiado)
+                    if oc_exitosas > 0:
+                        try:
+                            from endpoints.despachos_info import invalidate_despachos_cache
+                            from endpoints.ordenes_compra import invalidate_ordenes_compra_cache
+                            
+                            invalidate_despachos_cache()
+                            invalidate_ordenes_compra_cache()
+                            logger.debug("🗑️ Caché invalidado después de crear órdenes de compra")
+                        except Exception as cache_error:
+                            # No fallar el proceso si hay error al invalidar caché
+                            logger.warning(f"⚠️ Error al invalidar caché: {cache_error}")
+                    
+                    oc_status = {
+                        "status": "success" if oc_errores == 0 else "partial",
+                        "oc_creadas": oc_exitosas,
+                        "oc_errores": oc_errores,
+                        "total_procesadas": len(oc_resultados),
+                        "total_despachos": len(despachos_a_procesar),
+                        "detalles": oc_resultados
+                    }
+                    
+                    # Agregar información de despachos no encontrados si aplica
+                    if despachos_no_encontrados:
+                        oc_status["despachos_no_encontrados"] = despachos_no_encontrados
+                    
+                    logger.info("=" * 70)
+                    logger.info(f"✅ PROCESAR-OC completado:")
+                    logger.info(f"   Total despachos procesados: {len(despachos_a_procesar)}")
+                    logger.info(f"   OCs creadas: {oc_exitosas}")
+                    logger.info(f"   Errores: {oc_errores}")
+                    if despachos_no_encontrados:
+                        logger.info(f"   Despachos no encontrados: {len(despachos_no_encontrados)}")
+                    logger.info(f"   Estado de OCs creadas: PENDIENTE (listas para enviar a SAP)")
+                    logger.info("=" * 70)
+                    
+                    mensaje = f"Proceso completado: {oc_exitosas} OCs creadas de {len(despachos_a_procesar)} despachos (estado: PENDIENTE)"
+                    if despachos_no_encontrados:
+                        mensaje += f". {len(despachos_no_encontrados)} despachos no encontrados."
+                    
+                    return {
+                        "status": "success",
+                        "status_code": 200,
+                        "message": mensaje,
+                        "metadata": oc_status,
+                        "oc_creadas": oc_exitosas,
+                        "oc_errores": oc_errores,
+                        "total_despachos": len(despachos_a_procesar),
+                        "despachos_no_encontrados": despachos_no_encontrados if despachos_no_encontrados else None,
+                        "modo": "selectivo" if despacho_ids_param else "todos"
+                    }
+                except Exception as e:
+                    logger.error(f"❌ Error en helper de procesamiento: {e}", exc_info=True)
+                    return {
+                        "status": "error",
+                        "status_code": 500,
+                        "message": f"Error al procesar orden de compra: {str(e)}"
+                    }
             
-            oc_status = {
-                "status": "success" if oc_errores == 0 else "partial",
-                "oc_creadas": oc_exitosas,
-                "oc_errores": oc_errores,
-                "total_procesadas": len(oc_resultados),
-                "total_despachos": len(despachos_a_procesar),
-                "detalles": oc_resultados
-            }
-            
-            # Agregar información de despachos no encontrados si aplica
-            if despachos_no_encontrados:
-                oc_status["despachos_no_encontrados"] = despachos_no_encontrados
-            
-            logger.info("=" * 70)
-            logger.info(f"✅ PROCESAR-OC completado:")
-            logger.info(f"   Total despachos procesados: {len(despachos_a_procesar)}")
-            logger.info(f"   OCs creadas: {oc_exitosas}")
-            logger.info(f"   Errores: {oc_errores}")
-            if despachos_no_encontrados:
-                logger.info(f"   Despachos no encontrados: {len(despachos_no_encontrados)}")
-            logger.info(f"   Estado de OCs creadas: PENDIENTE (listas para enviar a SAP)")
-            logger.info("=" * 70)
+            # Ejecutar procesamiento en thread pool para no bloquear el event loop
+            logger.debug("🔄 Ejecutando procesamiento en thread pool (no bloquea otras peticiones)...")
+            resultado = await asyncio.to_thread(_procesar_despachos_helper, despacho_id)
             
             # Preparar headers de respuesta
             headers = {
                 "X-Source": source,
                 "X-Endpoint": "PROCESAR-OC",
-                "X-OC-Status": oc_status.get("status", "unknown"),
-                "X-OC-Creadas": str(oc_exitosas),
-                "X-OC-Errores": str(oc_errores),
-                "X-Total-Despachos": str(len(despachos_a_procesar))
+                "X-OC-Status": resultado.get("status", "unknown"),
             }
             
-            if despacho_id:
-                headers["X-Modo"] = "selectivo"
-            else:
-                headers["X-Modo"] = "todos"
+            if "oc_creadas" in resultado:
+                headers["X-OC-Creadas"] = str(resultado.get("oc_creadas", 0))
+                headers["X-OC-Errores"] = str(resultado.get("oc_errores", 0))
+                headers["X-Total-Despachos"] = str(resultado.get("total_despachos", 0))
+                headers["X-Modo"] = resultado.get("modo", "unknown")
             
-            # Construir mensaje
-            mensaje = f"Proceso completado: {oc_exitosas} OCs creadas de {len(despachos_a_procesar)} despachos (estado: PENDIENTE)"
-            if despachos_no_encontrados:
-                mensaje += f". {len(despachos_no_encontrados)} despachos no encontrados."
-            
-            # Retornar respuesta con metadata
+            # Retornar respuesta según el resultado
             return JSONResponse(
-                status_code=200,
+                status_code=resultado.get("status_code", 200),
                 content={
-                    "status": "success",
-                    "message": mensaje,
-                    "metadata": oc_status
+                    "status": resultado.get("status"),
+                    "message": resultado.get("message"),
+                    "metadata": resultado.get("metadata")
+                } if "metadata" in resultado else {
+                    "status": resultado.get("status"),
+                    "message": resultado.get("message")
                 },
                 headers=headers
             )
@@ -309,4 +324,3 @@ def register_procesar_endpoint(app: FastAPI):
                     "message": f"Error al procesar orden de compra: {str(e)}"
                 }
             )
-

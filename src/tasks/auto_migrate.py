@@ -228,8 +228,16 @@ async def execute_auto_migration():
         logger.info("💾 Guardando en despacho_cabecera/detalle...")
         save_status = None
         try:
-            # Pasar el servicio de homologación para detectar productos no homologados
-            save_status = MBA3Service.save_to_database(result, upsert=True, homologacion_service=homologacion_service)
+            # Ejecutar save_to_database en thread pool para no bloquear el event loop
+            # Esto permite que las peticiones HTTP (como /despachos/count) respondan inmediatamente
+            # incluso mientras el proceso automático está ejecutándose
+            logger.debug("🔄 Ejecutando guardado en thread pool (no bloquea peticiones HTTP)...")
+            save_status = await asyncio.to_thread(
+                MBA3Service.save_to_database,
+                result,
+                upsert=True,
+                homologacion_service=homologacion_service
+            )
             
             if save_status:
                 facturas_guardadas = save_status.get('facturas_guardadas', 0)
