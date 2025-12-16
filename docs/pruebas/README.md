@@ -29,9 +29,8 @@ Ver [PRUEBAS_POWERSHELL.md](PRUEBAS_POWERSHELL.md) para comandos individuales de
 3. **Migrar Despachos** - Consultar y guardar en BD
 4. **Procesar Orden de Compra** - Copiar a OC
 5. **Proceso Completo** - Flujo completo end-to-end
-6. **Consultar Facturas** - Endpoint principal con filtros
-7. **Consultar SAP** - Consultar productos en SAP
-8. **Integrar con SAP** - Enviar ODCs a SAP
+6. **Consultar SAP** - Consultar productos en SAP
+7. **Integrar con SAP** - Enviar ODCs a SAP
 
 ## ⚠️ Pre-requisitos
 

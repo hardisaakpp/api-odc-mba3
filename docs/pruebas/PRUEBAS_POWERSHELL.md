@@ -32,17 +32,7 @@ Invoke-RestMethod -Uri "http://localhost:8000/procesar-oc" -Method Get
 Invoke-RestMethod -Uri "http://localhost:8000/pruebas" -Method Get
 ```
 
-### 6. Consultar Facturas (GET /facturas)
-
-```powershell
-# Sin filtros
-Invoke-RestMethod -Uri "http://localhost:8000/facturas" -Method Get
-
-# Con filtros
-Invoke-RestMethod -Uri "http://localhost:8000/facturas?anulada=false&confirmado=true&remision_facturada=false" -Method Get
-```
-
-### 7. Consultar SAP
+### 6. Consultar SAP
 
 ```powershell
 # Con cache
@@ -52,7 +42,7 @@ Invoke-RestMethod -Uri "http://localhost:8000/sap/test?sku=5-0012.9" -Method Get
 Invoke-RestMethod -Uri "http://localhost:8000/sap/test/direct?sku=5-0012.9" -Method Get
 ```
 
-### 8. Integrar con SAP (POST /integrar-sap)
+### 7. Integrar con SAP (POST /integrar-sap)
 
 ```powershell
 Invoke-RestMethod -Uri "http://localhost:8000/integrar-sap" -Method Post

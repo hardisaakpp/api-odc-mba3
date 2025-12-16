@@ -13,7 +13,7 @@ from services.mba3_service import MBA3Service
 from utils import get_source_from_headers
 from security.jwt_auth import verify_jwt_token, require_permission
 from exceptions import MBA3ConnectionError, MBA3QueryError
-from config import MBA3_QUERY_PREDEFINIDA
+from config import MBA3_QUERY_PREDEFINIDA, MIGRATE_DATE_FILTER_DAYS
 
 logger = logging.getLogger(__name__)
 
@@ -121,9 +121,15 @@ def register_migrar_endpoint(app: FastAPI):
         **Responsabilidad:** MIGRAR COMPLETO (consulta + guarda en un solo paso)
         
         Este endpoint realiza:
-        1. ✅ Consulta datos desde MBA3 usando query predefinida
+        1. ✅ Consulta datos desde MBA3 usando query predefinida con filtro de fecha (último año)
         2. ✅ Guarda resultados en SQL Server (despacho_cabecera/detalle)
         3. ❌ NO copia a orden_compra (ese paso lo hace el endpoint PROCESAR)
+        
+        **Características:**
+        - ✅ Filtro automático: siempre trae los últimos 365 días (1 año) desde hoy
+        - ✅ Sin parámetros: solo ejecutar el endpoint
+        - ✅ Fecha relativa: calcula automáticamente desde hoy hacia atrás
+        - ✅ Configurable: se puede cambiar en .env con MIGRATE_DATE_FILTER_DAYS
         
         **Nota:** Este endpoint realiza ambas operaciones (consulta y guardado).
         Para operaciones separadas, usar:
@@ -135,19 +141,17 @@ def register_migrar_endpoint(app: FastAPI):
         GET /migrar/completo
         ```
         
-        **Query predefinida:**
-        ```sql
-        SELECT CODIGO_FACTURA,ANULADA,NUMERO_PEDIDO_SISTEMA,NUMERO_ORDEN,NUMERO_FACTURA,CODIGO_DESPACHO,EMPRESA,CODIGO_CLIENTE,FECHA_FACTURA,TIPO_DOCUMENTO,ObjDatosFactura,ORDEN_COMPRA,ORDEN_COMPRA_CLIENTE,Remision_Facturada,NumIDFacturaRelacionada,CONFIRMADO,CODIGO_BODEGA FROM CLNT_FACTURA_PRINCIPAL WHERE TIPO_DOCUMENTO='REM' AND ANULADA='false' AND CONFIRMADO='true' AND Remision_Facturada='false' AND CODIGO_DESPACHO=0 AND NUMERO_FACTURA > 0 AND ObjDatosFactura IS NOT NULL
-        ```
-        
         **Nota:** Este endpoint solo migra a despacho.
         Para proceso completo (consulta + guarda + copia a ODC), usar GET /consulta/predefinida.
         
         Returns:
             JSON con los datos de MBA3 y metadata del guardado en despacho
         """
-        # Usar query predefinida sin filtros adicionales
-        query_predefinida = MBA3_QUERY_PREDEFINIDA
+        # Construir query con filtro de fecha fijo (1 año desde hoy)
+        query_predefinida = build_query_with_date_filter(
+            MBA3_QUERY_PREDEFINIDA, 
+            days=MIGRATE_DATE_FILTER_DAYS
+        )
         
         # Determinar fuente
         source = get_source_from_headers(request)
@@ -160,6 +164,7 @@ def register_migrar_endpoint(app: FastAPI):
         logger.info("=" * 70)
         logger.info(f"🔄 MIGRAR COMPLETO: Proceso iniciado a las {datetime.now().isoformat()}")
         logger.info(f"Fuente: {source}")
+        logger.info(f"📅 Proceso manual: filtrando últimos {MIGRATE_DATE_FILTER_DAYS} días (1 año)")
         logger.info(f"Query predefinida: {query_predefinida}")
         logger.info("Ejecutando consulta contra MBA3...")
         logger.info("=" * 70)
@@ -223,7 +228,8 @@ def register_migrar_endpoint(app: FastAPI):
                 "X-Query": query_predefinida[:100],  # Primeros 100 caracteres de la query
                 "X-Source": source,
                 "X-Method": "GET",
-                "X-Endpoint": "MIGRAR_COMPLETO"
+                "X-Endpoint": "MIGRAR_COMPLETO",
+                "X-Date-Filter": f"{MIGRATE_DATE_FILTER_DAYS}d"
             }
             
             # Agregar información de guardado si existe
@@ -239,6 +245,10 @@ def register_migrar_endpoint(app: FastAPI):
                 "metadata": {
                     "query": query_predefinida,
                     "count": len(result) if isinstance(result, list) else (1 if isinstance(result, dict) and result else 0),
+                    "date_filter": {
+                        "enabled": True,
+                        "days": MIGRATE_DATE_FILTER_DAYS
+                    },
                     "save_status": save_status if save_status else {
                         "status": "disabled",
                         "message": "Guardado no disponible",
@@ -278,6 +288,10 @@ def register_migrar_endpoint(app: FastAPI):
                     "data": [],  # Asegurar que data siempre esté presente
                     "metadata": {
                         "query": query_predefinida,
+                        "date_filter": {
+                            "enabled": True,
+                            "days": MIGRATE_DATE_FILTER_DAYS
+                        },
                         "save_status": {
                             "status": "error",
                             "message": "No se pudo conectar a MBA3",
@@ -300,6 +314,10 @@ def register_migrar_endpoint(app: FastAPI):
                     "data": [],  # Asegurar que data siempre esté presente
                     "metadata": {
                         "query": query_predefinida,
+                        "date_filter": {
+                            "enabled": True,
+                            "days": MIGRATE_DATE_FILTER_DAYS
+                        },
                         "save_status": {
                             "status": "error",
                             "message": "No se pudo ejecutar la consulta",
@@ -322,6 +340,10 @@ def register_migrar_endpoint(app: FastAPI):
                     "data": [],  # Asegurar que data siempre esté presente
                     "metadata": {
                         "query": query_predefinida,
+                        "date_filter": {
+                            "enabled": True,
+                            "days": MIGRATE_DATE_FILTER_DAYS
+                        },
                         "save_status": {
                             "status": "error",
                             "message": "Error interno del servidor",

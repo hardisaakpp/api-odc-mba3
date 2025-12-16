@@ -45,8 +45,8 @@ async def health_check():
 from security.jwt_auth import verify_jwt_token
 from fastapi import Depends
 
-@app.get("/facturas")
-async def get_facturas(
+@app.get("/despachos/count")
+async def get_despachos_count(
     request: Request,
     user: dict = Depends(verify_jwt_token)  # ✅ Requiere JWT válido
 ):
@@ -139,7 +139,7 @@ async def get_ordenes_compra(
 
 1. **Frontend/Cliente** → `POST /api/auth/login` al Core
 2. **Core** → Retorna JWT con roles y permisos
-3. **Frontend/Cliente** → `GET /api/facturas` a tu módulo Python con `Authorization: Bearer <token>`
+3. **Frontend/Cliente** → `GET /api/despachos/count` a tu módulo Python con `Authorization: Bearer <token>`
 4. **Tu módulo** → Valida el token con la misma clave JWT
 5. **Tu módulo** → Verifica permisos y ejecuta lógica
 
@@ -246,7 +246,7 @@ TOKEN=$(curl -X POST http://localhost:5000/api/auth/login \
   | jq -r '.token')
 
 # 2. Usar token en tu módulo
-curl -X GET http://localhost:8000/facturas \
+curl -X GET http://localhost:8000/despachos/count \
   -H "Authorization: Bearer $TOKEN"
 ```
 

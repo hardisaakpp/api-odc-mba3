@@ -7,12 +7,12 @@ Mantiene compatibilidad con la función create_endpoints() original.
 
 from fastapi import FastAPI
 from .health import register_health_endpoints
-from .facturas import register_facturas_endpoints
 from .despachos import register_despachos_endpoints
 from .sap import register_sap_endpoints
 from .ordenes_compra import register_ordenes_compra_endpoints
 from .pruebas import register_pruebas_endpoints
 from .user_preferences import register_user_preferences_endpoints
+from .remisiones import register_remisiones_endpoints
 
 
 def create_endpoints(app: FastAPI):
@@ -28,9 +28,6 @@ def create_endpoints(app: FastAPI):
     # Registrar endpoints de health check (migrado)
     register_health_endpoints(app)
     
-    # Registrar endpoints de facturas (migrado)
-    register_facturas_endpoints(app)
-    
     # Registrar endpoints de despachos (migrado)
     register_despachos_endpoints(app)
     
@@ -45,6 +42,9 @@ def create_endpoints(app: FastAPI):
     
     # Registrar endpoints de preferencias de usuario
     register_user_preferences_endpoints(app)
+    
+    # Registrar endpoints de remisiones
+    register_remisiones_endpoints(app)
     
     # ✅ TODOS LOS ENDPOINTS HAN SIDO MIGRADOS
     # Ya no es necesario importar el módulo legacy

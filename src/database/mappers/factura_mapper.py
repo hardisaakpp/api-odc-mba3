@@ -258,5 +258,83 @@ class FacturaMapper:
             "unidad_sap": unidad_sap,  # unidad_sap - Pack usado (X1, X2, X3, etc.)
             "precio_unitario_sap": precio_unitario_sap,  # precio_unitario_sap - Precio por pack (Mabel Trading)
         }
+    
+    @staticmethod
+    def to_remision_cabecera(factura: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Transforma una factura de remisión de MBA3 a formato de remision_cabecera.
+        
+        Estos documentos de remisión no tienen detalles (ObjDatosFactura IS NULL).
+        
+        Args:
+            factura: Diccionario con datos de factura de remisión de MBA3
+            
+        Returns:
+            Diccionario con datos para insertar en remision_cabecera
+        """
+        fecha_factura = FacturaMapper.parse_date(factura.get("FECHA_FACTURA"))
+        
+        # fecha_remision es requerido (NOT NULL), usar fecha_factura o fecha actual como fallback
+        fecha_remision = fecha_factura
+        if not fecha_remision:
+            # Si no hay fecha de factura, usar la fecha actual como valor por defecto
+            fecha_remision = datetime.now().strftime("%Y-%m-%d")
+        
+        # Obtener empresa: primero del campo EMPRESA, luego del código de factura
+        empresa = factura.get("EMPRESA")
+        if not empresa:
+            codigo_factura = factura.get("CODIGO_FACTURA")
+            empresa = FacturaMapper.extract_empresa_from_codigo(codigo_factura)
+        
+        # Si aún no hay empresa, usar valor por defecto
+        if not empresa:
+            empresa = "SIN_EMPRESA"  # Valor por defecto para campos requeridos
+        
+        # Obtener codigo_cliente con valor por defecto si no está disponible
+        codigo_cliente = factura.get("CODIGO_CLIENTE")
+        if not codigo_cliente:
+            codigo_cliente = "SIN_CLIENTE"  # Valor por defecto para campos requeridos
+        
+        # Obtener tipo_documento con valor por defecto si no está disponible
+        tipo_documento = factura.get("TIPO_DOCUMENTO")
+        if not tipo_documento:
+            tipo_documento = "REM"  # Valor por defecto para remisiones
+        
+        # Obtener numero_factura con valor por defecto si no está disponible
+        numero_factura = factura.get("NUMERO_FACTURA")
+        if numero_factura is None:
+            # Intentar extraer del código de factura si es posible
+            codigo_factura = factura.get("CODIGO_FACTURA", "")
+            if codigo_factura:
+                # Intentar extraer número del formato "REMSI-{numero}-{empresa}"
+                parts = codigo_factura.split("-")
+                if len(parts) >= 2:
+                    try:
+                        numero_factura = int(parts[1])
+                    except (ValueError, IndexError):
+                        numero_factura = 0  # Valor por defecto
+                else:
+                    numero_factura = 0
+            else:
+                numero_factura = 0  # Valor por defecto
+        
+        return {
+            # Campos que vienen de MBA3
+            "empresa": empresa,
+            "codigo_cliente": codigo_cliente,
+            "fecha_remision": fecha_remision,  # Usar fecha_factura o fecha actual si no está disponible
+            "codigo_factura": factura.get("CODIGO_FACTURA"),
+            "anulada": 1 if factura.get("ANULADA") else 0,
+            "numero_pedido_sistema": factura.get("NUMERO_PEDIDO_SISTEMA"),
+            "numero_orden": factura.get("NUMERO_ORDEN"),
+            "numero_factura": numero_factura,
+            "tipo_documento": tipo_documento,
+            "orden_compra": factura.get("ORDEN_COMPRA") or None,
+            "orden_compra_cliente": factura.get("ORDEN_COMPRA_CLIENTE") or None,
+            "remision_facturada": 1 if factura.get("Remision_Facturada") else 0,
+            "factura_impresa": 1 if factura.get("FACTURA_IMPRESA") else 0,
+            "confirmado": 1 if factura.get("CONFIRMADO") else 0,
+            "fecha_factura": fecha_factura,
+        }
 
 

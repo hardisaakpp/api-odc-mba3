@@ -104,7 +104,6 @@ mba3-consultas/
 ### Otros Endpoints
 
 - **GET `/health`** - Health check
-- **GET `/facturas`** - Obtener facturas con filtros (recomendado para frontend)
 - **GET `/sap/test?sku=...`** - Consultar producto en SAP (usa cache)
 
 Ver [docs/ENDPOINTS.md](docs/ENDPOINTS.md) para documentación completa.

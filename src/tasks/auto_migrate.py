@@ -11,7 +11,7 @@ from services.mba3_service import MBA3Service
 from config import (
     MBA3_QUERY_PREDEFINIDA,
     AUTO_MIGRATE_INTERVAL_MINUTES,
-    AUTO_MIGRATE_DATE_FILTER_DAYS,
+    MIGRATE_DATE_FILTER_DAYS,
     ENABLE_AUTO_MIGRATE,
     MBA3_BASE_URL,
     MBA3_SERVICE_CODE,
@@ -141,7 +141,7 @@ async def execute_auto_migration():
     
     Funcionalidad:
     - Consulta datos desde MBA3 usando query predefinida con filtro de fecha
-    - Filtra registros de los últimos N días (configurado en AUTO_MIGRATE_DATE_FILTER_DAYS)
+    - Filtra registros de los últimos N días (configurado en MIGRATE_DATE_FILTER_DAYS)
     - Guarda resultados en SQL Server (despacho_cabecera/detalle)
     - Si falla la primera vez con "Object or Collection Expected", espera y reintenta (simula comportamiento manual)
     - Envía notificaciones por email:
@@ -157,8 +157,8 @@ async def execute_auto_migration():
         logger.info("=" * 70)
         
         # Construir query con filtro de fecha
-        query_with_filter = build_query_with_date_filter(MBA3_QUERY_PREDEFINIDA, days=AUTO_MIGRATE_DATE_FILTER_DAYS)
-        logger.info(f"📅 Aplicando filtro de fecha: últimos {AUTO_MIGRATE_DATE_FILTER_DAYS} días")
+        query_with_filter = build_query_with_date_filter(MBA3_QUERY_PREDEFINIDA, days=MIGRATE_DATE_FILTER_DAYS)
+        logger.info(f"📅 Aplicando filtro de fecha: últimos {MIGRATE_DATE_FILTER_DAYS} días")
         logger.info(f"Query: {query_with_filter[:200]}...")  # Primeros 200 caracteres
         
         # Ejecutar consulta con filtro de fecha usando cliente dedicado
@@ -340,7 +340,7 @@ async def auto_migrate_loop(interval_minutes: int = 15):
     logger.info("=" * 70)
     logger.info(f"🚀 Iniciando tarea de migración automática")
     logger.info(f"   Intervalo: cada {interval_minutes} minutos ({interval_seconds} segundos)")
-    logger.info(f"   Filtro de fecha: últimos {AUTO_MIGRATE_DATE_FILTER_DAYS} días")
+    logger.info(f"   Filtro de fecha: últimos {MIGRATE_DATE_FILTER_DAYS} días")
     logger.info("=" * 70)
     
     # Esperar antes de la primera ejecución para dar tiempo a que MBA3 procese el JWT

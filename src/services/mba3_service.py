@@ -17,155 +17,6 @@ logger = logging.getLogger(__name__)
 class MBA3Service:
     """Servicio para ejecutar consultas contra MBA3."""
     
-    # Query base para facturas (integrada en el backend)
-    BASE_FACTURAS_QUERY = """
-        SELECT 
-            CODIGO_FACTURA,
-            ANULADA,
-            NUMERO_PEDIDO_SISTEMA,
-            NUMERO_ORDEN,
-            NUMERO_FACTURA,
-            CODIGO_DESPACHO,
-            EMPRESA,
-            CODIGO_CLIENTE,
-            FECHA_FACTURA,
-            TIPO_DOCUMENTO,
-            ObjDatosFactura,
-            ORDEN_COMPRA,
-            ORDEN_COMPRA_CLIENTE,
-            Remision_Facturada,
-            NumIDFacturaRelacionada,
-            CONFIRMADO,
-            CODIGO_BODEGA
-        FROM CLNT_FACTURA_PRINCIPAL
-    """
-    
-    @staticmethod
-    def build_facturas_query(
-        anulada: Optional[bool] = False,
-        confirmado: Optional[bool] = True,
-        remision_facturada: Optional[bool] = False,
-        include_obj_datos: bool = True
-    ) -> str:
-        """
-        Construye la query SQL para obtener facturas con filtros opcionales.
-        
-        Esta query está integrada en el backend para que el frontend
-        no necesite enviar SQL directamente.
-        
-        Args:
-            anulada: Si es True, solo facturas anuladas; si False, solo no anuladas; None = todas
-            confirmado: Si es True, solo facturas confirmadas; si False, solo no confirmadas; None = todas
-            remision_facturada: Si es True, solo facturas con remisión facturada; si False, solo sin remisión; None = todas
-            include_obj_datos: Si es True, filtra solo facturas con ObjDatosFactura no nulo
-            
-        Returns:
-            Query SQL completa como string
-        """
-        where_clauses = []
-        
-        # Agregar filtros según parámetros
-        if anulada is not None:
-            where_clauses.append(f"ANULADA='{'true' if anulada else 'false'}'")
-        
-        if confirmado is not None:
-            where_clauses.append(f"CONFIRMADO='{'true' if confirmado else 'false'}'")
-        
-        if remision_facturada is not None:
-            where_clauses.append(f"Remision_Facturada='{'true' if remision_facturada else 'false'}'")
-        
-        if include_obj_datos:
-            where_clauses.append("ObjDatosFactura IS NOT NULL")
-        
-        # Construir query completa
-        query = MBA3Service.BASE_FACTURAS_QUERY.strip()
-        if where_clauses:
-            query += "\n        WHERE " + " AND ".join(where_clauses)
-        
-        return query
-    
-    @staticmethod
-    def get_facturas(
-        anulada: Optional[bool] = False,
-        confirmado: Optional[bool] = True,
-        remision_facturada: Optional[bool] = False,
-        include_obj_datos: bool = True,
-        save_to_db: bool = True,
-        upsert: bool = True
-    ) -> Dict[str, Any]:
-        """
-        Obtiene facturas de MBA3 usando la query integrada en el backend.
-        
-        Este método construye la query automáticamente y la ejecuta,
-        eliminando la necesidad de que el frontend envíe SQL.
-        
-        Args:
-            anulada: Filtrar por facturas anuladas (False = no anuladas, True = anuladas, None = todas)
-            confirmado: Filtrar por facturas confirmadas (True = confirmadas, False = no confirmadas, None = todas)
-            remision_facturada: Filtrar por remisión facturada (False = sin remisión, True = con remisión, None = todas)
-            include_obj_datos: Si es True, solo incluye facturas con ObjDatosFactura no nulo
-            save_to_db: Si es True, guarda los resultados en SQL Server
-            upsert: Si es True, actualiza si existe; si False, inserta siempre (solo si save_to_db=True)
-            
-        Returns:
-            Dict con los resultados y metadata
-        """
-        # Construir query
-        query = MBA3Service.build_facturas_query(
-            anulada=anulada,
-            confirmado=confirmado,
-            remision_facturada=remision_facturada,
-            include_obj_datos=include_obj_datos
-        )
-        
-        # Ejecutar query
-        logger.info(f"🔍 Ejecutando consulta de facturas (filtros: anulada={anulada}, confirmado={confirmado}, remision_facturada={remision_facturada})")
-        result = MBA3Service.execute_query(query)
-        
-        # Log resumido del resultado
-        if isinstance(result, list):
-            logger.info(f"✅ Consulta completada: {len(result)} facturas obtenidas")
-            if len(result) > 0:
-                first_item = result[0]
-                if isinstance(first_item, dict):
-                    campos = list(first_item.keys())
-                    if len(campos) == 1:
-                        logger.error(f"⚠️ PROBLEMA: Solo se obtuvo 1 campo: {campos}")
-        else:
-            logger.info(f"✅ Consulta completada: resultado tipo {type(result)}")
-        
-        # Guardar en base de datos si está habilitado
-        # Capturar cualquier error para que no afecte la respuesta de las facturas
-        save_status = None
-        if save_to_db:
-            try:
-                save_status = MBA3Service.save_to_database(result, upsert=upsert)
-            except Exception as save_error:
-                # Si hay un error al guardar, registrarlo pero no afectar la respuesta
-                logger.error(f"❌ Error al intentar guardar en SQL Server (no afecta la respuesta): {save_error}")
-                save_status = {
-                    "status": "error",
-                    "message": f"Error al guardar en SQL Server: {str(save_error)}",
-                    "facturas_guardadas": 0,
-                    "facturas_actualizadas": 0,
-                    "total_detalles": 0,
-                    "errors": [str(save_error)]
-                }
-        
-        # Retornar resultado con metadata
-        return {
-            "data": result,
-            "query": query,
-            "filters": {
-                "anulada": anulada,
-                "confirmado": confirmado,
-                "remision_facturada": remision_facturada,
-                "include_obj_datos": include_obj_datos
-            },
-            "save_status": save_status,
-            "count": len(result) if isinstance(result, list) else (1 if result else 0)
-        }
-    
     @staticmethod
     def execute_query(query_text: str) -> Union[List[Dict[str, Any]], Dict[str, Any]]:
         """
@@ -289,6 +140,78 @@ class MBA3Service:
                 "errors": [str(e)],
                 "facturas_guardadas": 0,
                 "facturas_actualizadas": 0,
+                "total_detalles": 0
+            }
+    
+    @staticmethod
+    def save_remisiones_to_database(result: Any, upsert: bool = False) -> Optional[Dict[str, Any]]:
+        """
+        Guarda el resultado de remisiones de MBA3 en SQL Server.
+        
+        Este método guarda remisiones en la tabla remision_cabecera (sin detalles).
+        
+        Args:
+            result: Resultado de la consulta MBA3 (puede ser list o dict)
+            upsert: Si True, actualiza si existe; si False, inserta siempre
+            
+        Returns:
+            Dict con estadísticas del guardado, o None si está deshabilitado o hay error
+        """
+        try:
+            from database.services.remision_service import save_mba3_remisiones_to_sql_server
+            
+            save_status = save_mba3_remisiones_to_sql_server(
+                result,
+                upsert=upsert,
+                continue_on_error=True
+            )
+            
+            if save_status.get("status") == "success":
+                logger.info(
+                    f"✅ Remisiones guardadas en SQL Server: "
+                    f"{save_status.get('remisiones_guardadas', 0)} guardadas, "
+                    f"{save_status.get('remisiones_actualizadas', 0)} actualizadas"
+                )
+            elif save_status.get("status") == "disabled":
+                logger.debug("⏭️ Guardado en SQL Server deshabilitado")
+                return None
+            elif save_status.get("status") == "error":
+                logger.error(f"❌ Error al guardar remisiones en SQL Server: {save_status.get('errors', [])}")
+                return {
+                    "status": "error",
+                    "message": "Error al guardar remisiones en SQL Server",
+                    "errors": save_status.get("errors", []),
+                    "remisiones_guardadas": 0,
+                    "remisiones_actualizadas": 0
+                }
+            
+            # Adaptar formato de respuesta para compatibilidad con el frontend
+            return {
+                "status": save_status.get("status", "success"),
+                "facturas_guardadas": save_status.get("remisiones_guardadas", 0),
+                "facturas_actualizadas": save_status.get("remisiones_actualizadas", 0),
+                "total_detalles": 0,  # Las remisiones no tienen detalles
+                "errors": save_status.get("errors", [])
+            }
+            
+        except ImportError as e:
+            logger.warning(f"⚠️ Módulo database no disponible. Saltando guardado en SQL Server: {e}")
+            return {
+                "status": "disabled",
+                "message": "Módulo database no disponible",
+                "remisiones_guardadas": 0,
+                "remisiones_actualizadas": 0,
+                "total_detalles": 0
+            }
+        except Exception as e:
+            # Capturar cualquier error y no propagarlo para que no afecte la respuesta
+            logger.error(f"❌ Error inesperado al guardar remisiones en SQL Server: {e}", exc_info=True)
+            return {
+                "status": "error",
+                "message": f"Error al guardar remisiones en SQL Server: {str(e)}",
+                "errors": [str(e)],
+                "remisiones_guardadas": 0,
+                "remisiones_actualizadas": 0,
                 "total_detalles": 0
             }
 

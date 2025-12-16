@@ -237,6 +237,7 @@ Elimina las preferencias de una tabla.
 - `despachos` - Tabla de despachos disponibles
 - `ordenes-compra` - Tabla de órdenes de compra generadas
 - `historial-ordenes` - Tabla de historial/logs de órdenes
+- `remisiones` - Tabla de documentos de remisión
 
 ---
 
@@ -248,7 +249,7 @@ Elimina las preferencias de una tabla.
 - Verificar que el claim `nameidentifier` esté presente en el token
 
 ### Error: "tableId inválido"
-- Verificar que el `table_id` sea uno de: `despachos`, `ordenes-compra`, `historial-ordenes`
+- Verificar que el `table_id` sea uno de: `despachos`, `ordenes-compra`, `historial-ordenes`, `remisiones`
 
 ### Error: "Error al guardar preferencias"
 - Verificar que la tabla `UserPreferences` exista en SQL Server

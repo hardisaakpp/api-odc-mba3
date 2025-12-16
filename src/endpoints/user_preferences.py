@@ -23,7 +23,7 @@ from models import (
 logger = logging.getLogger(__name__)
 
 # Validar tableId permitidos
-VALID_TABLE_IDS = ["despachos", "ordenes-compra", "historial-ordenes"]
+VALID_TABLE_IDS = ["despachos", "ordenes-compra", "historial-ordenes", "remisiones"]
 
 # Exportar función principal para el linter
 __all__ = ["register_user_preferences_endpoints"]
@@ -369,7 +369,7 @@ def register_user_preferences_endpoints(app: FastAPI):
         Obtiene las preferencias de una tabla específica para el usuario actual.
         
         **Parámetros:**
-        - `table_id`: ID de la tabla (despachos, ordenes-compra, historial-ordenes)
+        - `table_id`: ID de la tabla (despachos, ordenes-compra, historial-ordenes, remisiones)
         
         **Headers requeridos:**
         - `Authorization: Bearer {token}` - Token JWT válido
@@ -439,7 +439,7 @@ def register_user_preferences_endpoints(app: FastAPI):
         Guarda o actualiza las preferencias de una tabla específica.
         
         **Parámetros:**
-        - `table_id`: ID de la tabla (despachos, ordenes-compra, historial-ordenes)
+        - `table_id`: ID de la tabla (despachos, ordenes-compra, historial-ordenes, remisiones)
         
         **Headers requeridos:**
         - `Authorization: Bearer {token}` - Token JWT válido
@@ -521,7 +521,7 @@ def register_user_preferences_endpoints(app: FastAPI):
         Elimina las preferencias de una tabla específica.
         
         **Parámetros:**
-        - `table_id`: ID de la tabla (despachos, ordenes-compra, historial-ordenes)
+        - `table_id`: ID de la tabla (despachos, ordenes-compra, historial-ordenes, remisiones)
         
         **Headers requeridos:**
         - `Authorization: Bearer {token}` - Token JWT válido

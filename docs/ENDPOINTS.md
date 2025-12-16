@@ -18,38 +18,6 @@ Verifica el estado del servidor.
 
 ---
 
-### Consultar Facturas
-
-**GET `/facturas`** ⭐ **Recomendado para Frontend**
-
-Obtiene facturas desde MBA3 con filtros configurables. La query está integrada en el backend.
-
-**Query Parameters:**
-- `anulada` (boolean, default: `false`) - Filtrar por facturas anuladas
-- `confirmado` (boolean, default: `true`) - Filtrar por facturas confirmadas
-- `remision_facturada` (boolean, default: `false`) - Filtrar por remisión facturada
-- `include_obj_datos` (boolean, default: `true`) - Incluir solo facturas con ObjDatosFactura
-- `save_to_db` (boolean, default: `true`) - Guardar en SQL Server
-
-**Ejemplo:**
-```bash
-curl "http://localhost:8000/facturas?anulada=false&confirmado=true"
-```
-
-**Respuesta:**
-```json
-{
-  "data": [...],
-  "metadata": {
-    "count": 10,
-    "filters": {...},
-    "save_status": {...}
-  }
-}
-```
-
----
-
 ### Consultar Despachos
 
 **GET `/consultar`**
@@ -332,6 +300,158 @@ Consulta directa a SAP sin usar cache.
 ```
 
 ---
+
+---
+
+### Obtener Remisiones (Paginado)
+
+**GET `/remisiones`**
+
+Obtiene remisiones desde la base de datos con paginación.
+
+**Características:**
+- ✅ Consulta desde la tabla `remision_cabecera` (ya guardada)
+- ✅ Paginación con `page` y `pageSize`
+- ✅ Ordenamiento por fecha más reciente primero
+- ✅ Permisos: solo lectura (`mba3-consultas.facturas.view`)
+
+**Query Parameters:**
+- `page` (int, default: 1) - Número de página (empezando en 1)
+- `pageSize` (int, default: 10, max: 100) - Tamaño de página
+
+**Ejemplo:**
+```bash
+curl "http://localhost:8000/remisiones?page=1&pageSize=10"
+curl "http://localhost:8000/remisiones?page=2&pageSize=20"
+```
+
+**Respuesta:**
+```json
+{
+  "status": "success",
+  "data": [
+    {
+      "CODIGO_FACTURA": "REMSI-900125250-TRAYO",
+      "ANULADA": false,
+      "NUMERO_PEDIDO_SISTEMA": 175975,
+      "NUMERO_ORDEN": 129065,
+      "FACTURA_IMPRESA": false,
+      "NUMERO_FACTURA": 900125250,
+      "EMPRESA": "TRAYO",
+      "CODIGO_CLIENTE": "CLI0024",
+      "FECHA_FACTURA": "2025-01-21",
+      "TIPO_DOCUMENTO": "REM",
+      "ObjDatosFactura": null,
+      "ORDEN_COMPRA": "1-10432",
+      "ORDEN_COMPRA_CLIENTE": "",
+      "Remision_Facturada": false,
+      "CONFIRMADO": false
+    }
+  ],
+  "metadata": {
+    "count": 100
+  },
+  "total": 100,
+  "page": 1,
+  "pageSize": 10,
+  "totalPages": 10
+}
+```
+
+**Uso en Frontend:**
+Este endpoint permite:
+- Consultar remisiones guardadas en la base de datos
+- Implementar paginación en la interfaz
+- Mostrar información de remisiones en una pantalla exclusiva
+- Ordenar por fecha más reciente primero
+
+---
+
+### Consultar Documentos de Remisión desde MBA3
+
+**GET `/remisiones/consultar`**
+
+Consulta documentos de remisión desde MBA3 y guarda solo cabeceras en la base de datos.
+
+**Características:**
+- ✅ Consulta documentos de remisión desde MBA3 (sin detalles)
+- ✅ Guarda solo cabeceras en `remision_cabecera` (tabla exclusiva, NO guarda detalles)
+- ✅ Filtro automático: siempre trae los últimos N días desde hoy (configurado en `MIGRATE_DATE_FILTER_DAYS`)
+- ✅ Sin parámetros: solo ejecutar el endpoint
+- ✅ Fecha relativa: calcula automáticamente desde hoy hacia atrás
+- ✅ Configurable: se puede cambiar en `.env` con `MIGRATE_DATE_FILTER_DAYS`
+- ✅ Estos documentos no tienen `ObjDatosFactura`, por lo que no se crean registros de detalles
+- ✅ Se almacenan en la tabla exclusiva `remision_cabecera` (separada de `despacho_cabecera`)
+- ✅ Permisos: requiere `mba3-consultas.proceso.execute`
+- ✅ Usa la misma configuración de filtro de fecha que los procesos manual y automático
+
+**Query utilizada:**
+Consulta documentos de remisión con:
+- `TIPO_DOCUMENTO='REM'`
+- `CONFIRMADO='false'`
+- `Remision_Facturada='false'`
+- `ObjDatosFactura IS NULL` (sin detalles)
+- `FACTURA_IMPRESA='false'`
+- `ANULADA='false'`
+- `FECHA_FACTURA >= (fecha calculada según MIGRATE_DATE_FILTER_DAYS)`
+
+**Ejemplo:**
+```bash
+curl "http://localhost:8000/remisiones/consultar"
+```
+
+**Respuesta:**
+```json
+{
+  "status": "success",
+  "data": [
+    {
+      "CODIGO_FACTURA": "REMSI-900125250-TRAYO",
+      "ANULADA": false,
+      "NUMERO_PEDIDO_SISTEMA": 175975,
+      "NUMERO_ORDEN": 129065,
+      "FACTURA_IMPRESA": false,
+      "NUMERO_FACTURA": 900125250,
+      "EMPRESA": "TRAYO",
+      "CODIGO_CLIENTE": "CLI0024",
+      "FECHA_FACTURA": "2025-01-21",
+      "TIPO_DOCUMENTO": "REM",
+      "ObjDatosFactura": null,
+      "ORDEN_COMPRA": "1-10432",
+      "ORDEN_COMPRA_CLIENTE": "",
+      "Remision_Facturada": false,
+      "CONFIRMADO": false
+    }
+  ],
+  "metadata": {
+    "query": "SELECT CODIGO_FACTURA,ANULADA...",
+    "count": 5,
+    "date_filter": {
+      "enabled": true,
+      "days": 365
+    },
+    "save_status": {
+      "status": "success",
+      "facturas_guardadas": 3,
+      "facturas_actualizadas": 2,
+      "total_detalles": 0
+    },
+    "note": "Estos documentos de remisión no tienen detalles. Solo se guardan cabeceras en remision_cabecera (tabla exclusiva)."
+  }
+}
+```
+
+**Uso en Frontend:**
+Este endpoint permite:
+- Consultar documentos de remisión específicos (sin detalles)
+- Guardar automáticamente las cabeceras en la base de datos
+- Mostrar información de remisiones en una pantalla exclusiva
+- Usar la misma configuración de filtro de fecha que los procesos manual y automático
+
+**Nota:** 
+- Este endpoint guarda automáticamente en la base de datos
+- Usa la misma configuración de filtro de fecha (`MIGRATE_DATE_FILTER_DAYS`) que los procesos `/migrar/completo` y la migración automática
+- El filtro de fecha se aplica automáticamente, no requiere parámetros
 
 ---
 

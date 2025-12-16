@@ -166,13 +166,19 @@ if ENVIRONMENT == "production":
 else:
     AUTO_MIGRATE_INTERVAL_MINUTES = int(os.getenv("AUTO_MIGRATE_INTERVAL_MINUTES", "5"))
 
-# Días hacia atrás para el filtro de fecha en migración automática
-# Desarrollo/Pruebas: 60 días (2 meses)
-# Producción: 60 días (2 meses) - configurable en .env
-if ENVIRONMENT == "production":
-    AUTO_MIGRATE_DATE_FILTER_DAYS = int(os.getenv("AUTO_MIGRATE_DATE_FILTER_DAYS", "345"))
-else:
-    AUTO_MIGRATE_DATE_FILTER_DAYS = int(os.getenv("AUTO_MIGRATE_DATE_FILTER_DAYS", "345"))
+# Días hacia atrás para el filtro de fecha en migración (automática y manual)
+# Ambos procesos (automático y manual) usan la misma configuración
+# Por defecto: 365 días (1 año) desde hoy
+# Configurable en .env con MIGRATE_DATE_FILTER_DAYS
+# 
+# Compatibilidad hacia atrás: Si existe AUTO_MIGRATE_DATE_FILTER_DAYS o 
+# MANUAL_MIGRATE_DATE_FILTER_DAYS en .env, se usará ese valor.
+# Si no, se usa MIGRATE_DATE_FILTER_DAYS o el valor por defecto (365).
+_migrate_days = os.getenv("MIGRATE_DATE_FILTER_DAYS") or \
+                os.getenv("AUTO_MIGRATE_DATE_FILTER_DAYS") or \
+                os.getenv("MANUAL_MIGRATE_DATE_FILTER_DAYS") or \
+                "365"
+MIGRATE_DATE_FILTER_DAYS = int(_migrate_days)
 
 # ============================================================================
 # Configuración de Notificaciones por Email
@@ -208,5 +214,17 @@ MBA3_QUERY_PREDEFINIDA = (
     "WHERE TIPO_DOCUMENTO='REM' AND ANULADA='false' AND CONFIRMADO='true' "
     "AND Remision_Facturada='false' AND CODIGO_DESPACHO=0 AND NUMERO_FACTURA > 0 "
     "AND ObjDatosFactura IS NOT NULL"
+)
+
+# Query SQL predefinida para consultar documentos de remisión sin detalles
+# Usada en el endpoint /remisiones/consultar
+# Estos documentos no tienen ObjDatosFactura ni detalles asociados
+MBA3_QUERY_REMISIONES = (
+    "SELECT CODIGO_FACTURA,ANULADA,NUMERO_PEDIDO_SISTEMA,NUMERO_ORDEN,FACTURA_IMPRESA,"
+    "NUMERO_FACTURA,EMPRESA,CODIGO_CLIENTE,FECHA_FACTURA,TIPO_DOCUMENTO,ObjDatosFactura,"
+    "ORDEN_COMPRA,ORDEN_COMPRA_CLIENTE,Remision_Facturada,CONFIRMADO "
+    "FROM CLNT_FACTURA_PRINCIPAL "
+    "WHERE TIPO_DOCUMENTO='REM' AND CONFIRMADO='false' AND Remision_Facturada='false' "
+    "AND ObjDatosFactura IS NULL AND FACTURA_IMPRESA='false' AND ANULADA='false'"
 )
 

@@ -68,23 +68,13 @@ Write-Host "5. PROCESO COMPLETO (GET /pruebas)" -ForegroundColor Magenta
 Test-Endpoint -Name "Proceso Completo" -Uri "http://localhost:8000/pruebas" -Method "Get"
 Start-Sleep -Seconds 2
 
-# 6. Consultar Facturas
-Write-Host "6. CONSULTAR FACTURAS (GET /facturas)" -ForegroundColor Magenta
-Test-Endpoint -Name "Consultar Facturas" -Uri "http://localhost:8000/facturas" -Method "Get"
-Start-Sleep -Seconds 1
-
-# 7. Consultar Facturas con Filtros
-Write-Host "7. CONSULTAR FACTURAS CON FILTROS" -ForegroundColor Magenta
-Test-Endpoint -Name "Facturas con Filtros" -Uri "http://localhost:8000/facturas?anulada=false&confirmado=true&remision_facturada=false" -Method "Get"
-Start-Sleep -Seconds 1
-
-# 8. Consultar SAP (si está habilitado)
-Write-Host "8. CONSULTAR SAP" -ForegroundColor Magenta
+# 6. Consultar SAP (si está habilitado)
+Write-Host "6. CONSULTAR SAP" -ForegroundColor Magenta
 Test-Endpoint -Name "Consultar SAP" -Uri "http://localhost:8000/sap/test?sku=5-0012.9" -Method "Get"
 Start-Sleep -Seconds 1
 
-# 9. Integrar con SAP
-Write-Host "9. INTEGRAR CON SAP (POST /integrar-sap)" -ForegroundColor Magenta
+# 7. Integrar con SAP
+Write-Host "7. INTEGRAR CON SAP (POST /integrar-sap)" -ForegroundColor Magenta
 Test-Endpoint -Name "Integrar SAP" -Uri "http://localhost:8000/integrar-sap" -Method "Post"
 Start-Sleep -Seconds 1
 

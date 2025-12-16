@@ -121,7 +121,6 @@ Content-Type: application/json
 
 | Endpoint | Método | Permiso Requerido |
 |----------|--------|-------------------|
-| `/facturas` | GET | `mba3-consultas.facturas.view` |
 | `/despachos/count` | GET | `mba3-consultas.facturas.view` |
 | `/consultar` | GET | `mba3-consultas.proceso.execute` |
 | `/migrar` | GET | `mba3-consultas.proceso.execute` |
