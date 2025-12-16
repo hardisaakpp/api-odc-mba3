@@ -282,7 +282,8 @@ class OrdenCompraRepository:
             cursor.execute(
                 """
                 SELECT oc_id, despacho_id, proveedor, fecha_generacion,
-                       estado, numero_oc_sap, referencia_despacho, created_at
+                       estado, numero_oc_sap, referencia_despacho, created_at,
+                       respuesta_sap, fecha_procesado, error_message, error_code, error_source, updated_at
                 FROM orden_compra_cabecera
                 WHERE referencia_despacho = ?
                 """,
@@ -301,6 +302,12 @@ class OrdenCompraRepository:
                 "numero_oc_sap": result[5],
                 "referencia_despacho": result[6],
                 "created_at": serialize_date(result[7]),
+                "respuesta_sap": result[8],
+                "fecha_procesado": serialize_date(result[9]),
+                "error_message": result[10],
+                "error_code": result[11],
+                "error_source": result[12],
+                "updated_at": serialize_date(result[13]),
             }
         finally:
             cursor.close()
@@ -322,7 +329,8 @@ class OrdenCompraRepository:
             cursor.execute(
                 """
                 SELECT oc_id, despacho_id, proveedor, fecha_generacion,
-                       estado, numero_oc_sap, referencia_despacho, created_at
+                       estado, numero_oc_sap, referencia_despacho, created_at,
+                       respuesta_sap, fecha_procesado, error_message, error_code, error_source, updated_at
                 FROM orden_compra_cabecera
                 WHERE estado = ?
                 ORDER BY created_at DESC
@@ -342,7 +350,12 @@ class OrdenCompraRepository:
                     "numero_oc_sap": row[5],
                     "referencia_despacho": row[6],
                     "created_at": serialize_date(row[7]),
-                    # updated_at no existe en la tabla, se omite
+                    "respuesta_sap": row[8],
+                    "fecha_procesado": serialize_date(row[9]),
+                    "error_message": row[10],
+                    "error_code": row[11],
+                    "error_source": row[12],
+                    "updated_at": serialize_date(row[13]),
                 })
             
             return oc_list
@@ -363,7 +376,8 @@ class OrdenCompraRepository:
             cursor.execute(
                 """
                 SELECT oc_id, despacho_id, proveedor, fecha_generacion,
-                       estado, numero_oc_sap, referencia_despacho, created_at
+                       estado, numero_oc_sap, referencia_despacho, created_at,
+                       respuesta_sap, fecha_procesado, error_message, error_code, error_source, updated_at
                 FROM orden_compra_cabecera
                 ORDER BY created_at DESC
                 """
@@ -381,6 +395,12 @@ class OrdenCompraRepository:
                     "numero_oc_sap": row[5],
                     "referencia_despacho": row[6],
                     "created_at": serialize_date(row[7]),
+                    "respuesta_sap": row[8],
+                    "fecha_procesado": serialize_date(row[9]),
+                    "error_message": row[10],
+                    "error_code": row[11],
+                    "error_source": row[12],
+                    "updated_at": serialize_date(row[13]),
                 })
             
             return oc_list
@@ -402,7 +422,8 @@ class OrdenCompraRepository:
             cursor.execute(
                 """
                 SELECT oc_id, despacho_id, proveedor, fecha_generacion,
-                       estado, numero_oc_sap, referencia_despacho
+                       estado, numero_oc_sap, referencia_despacho, created_at,
+                       respuesta_sap, fecha_procesado, error_message, error_code, error_source, updated_at
                 FROM orden_compra_cabecera
                 WHERE oc_id = ?
                 """,
@@ -420,6 +441,13 @@ class OrdenCompraRepository:
                 "estado": result[4],
                 "numero_oc_sap": result[5],
                 "referencia_despacho": result[6],
+                "created_at": serialize_date(result[7]),
+                "respuesta_sap": result[8],
+                "fecha_procesado": serialize_date(result[9]),
+                "error_message": result[10],
+                "error_code": result[11],
+                "error_source": result[12],
+                "updated_at": serialize_date(result[13]),
             }
         finally:
             cursor.close()
@@ -462,14 +490,20 @@ class OrdenCompraRepository:
                     merged[key] = existing[key]
             
             # SQL para actualizar (campos actualizables)
-            # Incluir estado y numero_oc_sap si están presentes
+            # Incluir estado, numero_oc_sap y nuevos campos de respuesta SAP si están presentes
             sql = """
             UPDATE orden_compra_cabecera SET
                 proveedor = ?,
                 fecha_generacion = ?,
                 referencia_despacho = ?,
                 estado = ?,
-                numero_oc_sap = ?
+                numero_oc_sap = ?,
+                respuesta_sap = ?,
+                fecha_procesado = ?,
+                error_message = ?,
+                error_code = ?,
+                error_source = ?,
+                updated_at = GETDATE()
             WHERE oc_id = ?
             """
             
@@ -479,6 +513,11 @@ class OrdenCompraRepository:
                 merged.get("referencia_despacho"),
                 merged.get("estado"),  # Puede ser None, se preservará el existente
                 merged.get("numero_oc_sap"),  # Puede ser None
+                merged.get("respuesta_sap"),  # Puede ser None
+                merged.get("fecha_procesado"),  # Puede ser None
+                merged.get("error_message"),  # Puede ser None
+                merged.get("error_code"),  # Puede ser None
+                merged.get("error_source"),  # Puede ser None
                 oc_id,
             )
             
@@ -501,9 +540,18 @@ class OrdenCompraRepository:
         finally:
             cursor.close()
     
-    def update_estado(self, oc_id: str, estado: str, numero_oc_sap: Optional[str] = None) -> bool:
+    def update_estado(
+        self, 
+        oc_id: str, 
+        estado: str, 
+        numero_oc_sap: Optional[str] = None,
+        respuesta_sap: Optional[str] = None,
+        error_message: Optional[str] = None,
+        error_code: Optional[str] = None,
+        error_source: Optional[str] = None
+    ) -> bool:
         """
-        Actualiza el estado de una orden de compra.
+        Actualiza el estado de una orden de compra y respuesta de SAP.
         
         Método helper para cambiar el estado de una OC fácilmente.
         Útil para cuando se implemente la integración con SAP.
@@ -512,6 +560,10 @@ class OrdenCompraRepository:
             oc_id: UUID de la orden de compra
             estado: Nuevo estado (PENDIENTE, ENVIADA, CONFIRMADA, ERROR, etc.)
             numero_oc_sap: Número de OC asignado por SAP (opcional)
+            respuesta_sap: Mensaje o respuesta de SAP (opcional)
+            error_message: Mensaje de error si falla (opcional)
+            error_code: Código de error de SAP (opcional)
+            error_source: Origen del error (SAP, BACKEND, SAP_CONNECTION) (opcional)
             
         Returns:
             True si se actualizó correctamente, False en caso contrario
@@ -519,21 +571,48 @@ class OrdenCompraRepository:
         cursor = self.conn.cursor()
         
         try:
-            if numero_oc_sap:
-                sql = """
-                UPDATE orden_compra_cabecera SET
-                    estado = ?,
-                    numero_oc_sap = ?
-                WHERE oc_id = ?
-                """
-                values = (estado, numero_oc_sap, oc_id)
-            else:
-                sql = """
-                UPDATE orden_compra_cabecera SET
-                    estado = ?
-                WHERE oc_id = ?
-                """
-                values = (estado, oc_id)
+            # Construir SQL dinámicamente según campos proporcionados
+            set_clauses = ["estado = ?", "updated_at = GETDATE()"]
+            values = [estado]
+            
+            # Siempre actualizar fecha_procesado cuando se cambia el estado
+            set_clauses.append("fecha_procesado = GETDATE()")
+            
+            if numero_oc_sap is not None:
+                set_clauses.append("numero_oc_sap = ?")
+                values.append(numero_oc_sap)
+            
+            if respuesta_sap is not None:
+                set_clauses.append("respuesta_sap = ?")
+                values.append(respuesta_sap)
+            
+            if error_message is not None:
+                set_clauses.append("error_message = ?")
+                values.append(error_message)
+            
+            if error_code is not None:
+                set_clauses.append("error_code = ?")
+                values.append(error_code)
+            
+            if error_source is not None:
+                set_clauses.append("error_source = ?")
+                values.append(error_source)
+            
+            # Si es estado ENVIADA, limpiar campos de error
+            if estado == "ENVIADA":
+                set_clauses.extend([
+                    "error_message = NULL",
+                    "error_code = NULL",
+                    "error_source = NULL"
+                ])
+            
+            sql = f"""
+            UPDATE orden_compra_cabecera SET
+                {', '.join(set_clauses)}
+            WHERE oc_id = ?
+            """
+            
+            values.append(oc_id)
             
             cursor.execute(sql, values)
             rows_affected = cursor.rowcount

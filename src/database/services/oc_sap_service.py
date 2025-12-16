@@ -90,7 +90,13 @@ class OCSAPService:
                 result["error_source"] = "BACKEND"  # Indicar que el error viene del backend
                 logger.error(f"❌ {result['error']}")
                 try:
-                    oc_repo.update_estado(oc_id, "ERROR")
+                    oc_repo.update_estado(
+                        oc_id, 
+                        "ERROR",
+                        respuesta_sap=error_msg,
+                        error_message=error_msg,
+                        error_source="BACKEND"
+                    )
                 except Exception:
                     pass
                 return result
@@ -111,7 +117,13 @@ class OCSAPService:
                 result["error_source"] = "BACKEND"
                 logger.error(f"❌ Error al construir JSON: {result['error']}")
                 try:
-                    oc_repo.update_estado(oc_id, "ERROR")
+                    oc_repo.update_estado(
+                        oc_id, 
+                        "ERROR",
+                        respuesta_sap=error_msg,
+                        error_message=error_msg,
+                        error_source="BACKEND"
+                    )
                 except Exception:
                     pass
                 return result
@@ -122,7 +134,13 @@ class OCSAPService:
                 result["error_source"] = "BACKEND"
                 logger.error(f"❌ Error inesperado: {result['error']}", exc_info=True)
                 try:
-                    oc_repo.update_estado(oc_id, "ERROR")
+                    oc_repo.update_estado(
+                        oc_id, 
+                        "ERROR",
+                        respuesta_sap=error_msg,
+                        error_message=error_msg,
+                        error_source="BACKEND"
+                    )
                 except Exception:
                     pass
                 return result
@@ -138,7 +156,13 @@ class OCSAPService:
                 result["error_source"] = "SAP_CONNECTION"
                 logger.error(f"❌ {result['error']}")
                 try:
-                    oc_repo.update_estado(oc_id, "ERROR")
+                    oc_repo.update_estado(
+                        oc_id, 
+                        "ERROR",
+                        respuesta_sap=error_msg,
+                        error_message=error_msg,
+                        error_source="SAP_CONNECTION"
+                    )
                 except Exception:
                     pass
                 return result
@@ -163,7 +187,15 @@ class OCSAPService:
                 
                 logger.error(f"❌ {result['error']}")
                 try:
-                    oc_repo.update_estado(oc_id, "ERROR")
+                    # Actualizar estado a ERROR y persistir información del error
+                    oc_repo.update_estado(
+                        oc_id, 
+                        "ERROR",
+                        respuesta_sap=error_final,
+                        error_message=error_final,
+                        error_code=str(error_code) if error_code else None,
+                        error_source="SAP"
+                    )
                 except Exception:
                     pass
                 return result
@@ -174,11 +206,21 @@ class OCSAPService:
             sap_response_data = sap_response.get("data")  # Respuesta completa de SAP
             
             try:
-                # Actualizar estado a ENVIADA y guardar número de OC de SAP
+                # Preparar mensaje de respuesta SAP
+                mensaje_sap = f"Orden creada exitosamente. DocNum: {doc_num}"
+                if sap_response_data and isinstance(sap_response_data, dict):
+                    # Si hay un mensaje en la respuesta, usarlo
+                    mensaje_sap = sap_response_data.get("message", mensaje_sap)
+                
+                # Actualizar estado a ENVIADA y guardar respuesta de SAP
                 oc_repo.update_estado(
                     oc_id,
                     "ENVIADA",
-                    numero_oc_sap=str(doc_num) if doc_num else None
+                    numero_oc_sap=str(doc_num) if doc_num else None,
+                    respuesta_sap=mensaje_sap,
+                    error_message=None,
+                    error_code=None,
+                    error_source=None
                 )
                 
                 result["success"] = True
@@ -186,6 +228,7 @@ class OCSAPService:
                 result["doc_num"] = doc_num
                 result["sap_response"] = sap_response_data  # Agregar respuesta completa de SAP
                 result["error_source"] = None  # Sin error
+                result["message"] = mensaje_sap  # Agregar mensaje para frontend
                 
                 logger.info(f"✅ ODC {oc_id} enviada exitosamente: DocNum={doc_num}")
                 
@@ -197,6 +240,7 @@ class OCSAPService:
                 result["doc_num"] = doc_num
                 result["sap_response"] = sap_response_data  # Agregar respuesta completa de SAP
                 result["error"] = f"Advertencia: Error al actualizar estado: {str(e)}"
+                result["message"] = f"Orden creada exitosamente. DocNum: {doc_num}"
             
             return result
             
@@ -207,7 +251,13 @@ class OCSAPService:
             result["error_source"] = "BACKEND"
             logger.error(f"❌ Error al enviar ODC a SAP: {e}", exc_info=True)
             try:
-                oc_repo.update_estado(oc_id, "ERROR")
+                oc_repo.update_estado(
+                    oc_id, 
+                    "ERROR",
+                    respuesta_sap=error_msg,
+                    error_message=error_msg,
+                    error_source="BACKEND"
+                )
             except Exception:
                 pass
             return result
