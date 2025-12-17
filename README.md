@@ -141,6 +141,8 @@ Ver [docs/ENDPOINTS.md](docs/ENDPOINTS.md) para documentación completa.
 ### Documentación Especializada
 
 - [Integración SAP](docs/INTEGRACION_SAP.md) - Configuración e integración con SAP
+- [Homologaciones SKU](docs/HOMOLOGACIONES_SKU.md) ⭐ - Sistema de gestión de homologaciones SKU
+- [Quick Start Homologaciones](docs/QUICKSTART_HOMOLOGACIONES.md) 🚀 - Instalación en 3 pasos
 - [Seguridad](docs/SEGURIDAD.md) - Configuración de seguridad opcional
 - [Testing](docs/TESTING.md) - Guía de pruebas
 - [Frontend](frontend/README.md) - Guía del frontend Vue.js

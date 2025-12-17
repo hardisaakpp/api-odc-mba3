@@ -220,5 +220,292 @@ class HomologacionService:
                     conn.close()
                 except:
                     pass
+    
+    # =========================================================================
+    # MÉTODOS PARA GESTIÓN DE HOMOLOGACIONES SKU
+    # =========================================================================
+    
+    def get_homologaciones_sku_paginadas(
+        self,
+        page: int = 1,
+        page_size: int = 10,
+        estado: Optional[str] = None,
+        tiene_diferencias: Optional[bool] = None,
+        tiene_datos_sap: Optional[bool] = None,
+        sku: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Obtiene lista paginada de homologaciones SKU con filtros.
+        
+        Args:
+            page: Número de página
+            page_size: Tamaño de página
+            estado: Filtro por estado
+            tiene_diferencias: Filtro por diferencias
+            tiene_datos_sap: Filtro por datos SAP
+            sku: Búsqueda por SKU
+            
+        Returns:
+            Diccionario con data, metadata, paginación
+        """
+        conn = None
+        try:
+            conn = get_db_connection()
+            repository = HomologacionRepository(conn)
+            
+            # Obtener datos paginados
+            homologaciones, total = repository.get_homologaciones_sku(
+                page=page,
+                page_size=page_size,
+                estado=estado,
+                tiene_diferencias=tiene_diferencias,
+                tiene_datos_sap=tiene_datos_sap,
+                sku=sku
+            )
+            
+            # Obtener estadísticas
+            estadisticas = repository.get_estadisticas_homologaciones_sku()
+            
+            # Calcular total de páginas
+            total_pages = (total + page_size - 1) // page_size if total > 0 else 0
+            
+            return {
+                "status": "success",
+                "data": homologaciones,
+                "metadata": {
+                    **estadisticas,
+                    "filters": {
+                        "estado": estado,
+                        "tiene_diferencias": tiene_diferencias,
+                        "tiene_datos_sap": tiene_datos_sap,
+                        "sku": sku
+                    }
+                },
+                "total": total,
+                "page": page,
+                "pageSize": page_size,
+                "totalPages": total_pages
+            }
+            
+        except Exception as e:
+            logger.error(f"❌ Error al obtener homologaciones paginadas: {e}", exc_info=True)
+            return {
+                "status": "error",
+                "message": str(e),
+                "data": [],
+                "metadata": {
+                    "count": 0,
+                    "total_pendientes": 0,
+                    "total_homologados": 0,
+                    "total_errores": 0,
+                    "filters": {}
+                },
+                "total": 0,
+                "page": page,
+                "pageSize": page_size,
+                "totalPages": 0
+            }
+        finally:
+            if conn:
+                try:
+                    conn.close()
+                except:
+                    pass
+    
+    def get_homologacion_by_id(self, homologacion_id: str) -> Dict[str, Any]:
+        """
+        Obtiene una homologación por ID.
+        
+        Args:
+            homologacion_id: UUID de la homologación
+            
+        Returns:
+            Diccionario con status y data
+        """
+        conn = None
+        try:
+            conn = get_db_connection()
+            repository = HomologacionRepository(conn)
+            
+            homologacion = repository.get_homologacion_by_id(homologacion_id)
+            
+            if homologacion:
+                return {
+                    "status": "success",
+                    "data": homologacion
+                }
+            else:
+                return {
+                    "status": "error",
+                    "message": "Homologación no encontrada",
+                    "error_code": "NOT_FOUND"
+                }
+            
+        except Exception as e:
+            logger.error(f"❌ Error al obtener homologación {homologacion_id}: {e}", exc_info=True)
+            return {
+                "status": "error",
+                "message": str(e),
+                "error_code": "INTERNAL_ERROR"
+            }
+        finally:
+            if conn:
+                try:
+                    conn.close()
+                except:
+                    pass
+    
+    def update_homologacion_sku(
+        self,
+        homologacion_id: str,
+        data: Dict[str, Any],
+        modificado_por: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Actualiza una homologación SKU.
+        
+        Args:
+            homologacion_id: UUID de la homologación
+            data: Datos a actualizar
+            modificado_por: Usuario que modifica
+            
+        Returns:
+            Diccionario con status y resultado
+        """
+        conn = None
+        try:
+            conn = get_db_connection()
+            repository = HomologacionRepository(conn)
+            
+            # Validar datos
+            if 'precio_unitario_sap' in data and data['precio_unitario_sap'] is not None:
+                if data['precio_unitario_sap'] < 0:
+                    return {
+                        "status": "error",
+                        "message": "El precio unitario SAP debe ser mayor o igual a 0",
+                        "error_code": "VALIDATION_ERROR"
+                    }
+            
+            if 'cantidad_pack_sap' in data and data['cantidad_pack_sap'] is not None:
+                if data['cantidad_pack_sap'] < 0:
+                    return {
+                        "status": "error",
+                        "message": "La cantidad pack SAP debe ser mayor o igual a 0",
+                        "error_code": "VALIDATION_ERROR"
+                    }
+            
+            if 'estado' in data:
+                if data['estado'] not in ['PENDIENTE', 'HOMOLOGADO', 'ERROR']:
+                    return {
+                        "status": "error",
+                        "message": "Estado inválido. Debe ser PENDIENTE, HOMOLOGADO o ERROR",
+                        "error_code": "VALIDATION_ERROR"
+                    }
+            
+            # Actualizar
+            success = repository.update_homologacion_sku(homologacion_id, data, modificado_por)
+            
+            if success:
+                # Obtener registro actualizado
+                homologacion_actualizada = repository.get_homologacion_by_id(homologacion_id)
+                return {
+                    "status": "success",
+                    "data": homologacion_actualizada,
+                    "message": "Homologación actualizada correctamente"
+                }
+            else:
+                return {
+                    "status": "error",
+                    "message": "Homologación no encontrada",
+                    "error_code": "NOT_FOUND"
+                }
+            
+        except Exception as e:
+            logger.error(f"❌ Error al actualizar homologación {homologacion_id}: {e}", exc_info=True)
+            return {
+                "status": "error",
+                "message": str(e),
+                "error_code": "INTERNAL_ERROR"
+            }
+        finally:
+            if conn:
+                try:
+                    conn.close()
+                except:
+                    pass
+    
+    def bulk_update_homologaciones(
+        self,
+        updates: List[Dict[str, Any]],
+        modificado_por: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Actualiza múltiples homologaciones en lote.
+        
+        Args:
+            updates: Lista de actualizaciones
+            modificado_por: Usuario que modifica
+            
+        Returns:
+            Diccionario con resultados
+        """
+        conn = None
+        try:
+            conn = get_db_connection()
+            repository = HomologacionRepository(conn)
+            
+            resultado = repository.bulk_update_homologaciones(updates, modificado_por)
+            
+            return {
+                "status": "success",
+                "data": resultado
+            }
+            
+        except Exception as e:
+            logger.error(f"❌ Error al actualizar homologaciones en lote: {e}", exc_info=True)
+            return {
+                "status": "error",
+                "message": str(e),
+                "error_code": "INTERNAL_ERROR"
+            }
+        finally:
+            if conn:
+                try:
+                    conn.close()
+                except:
+                    pass
+    
+    def sincronizar_homologaciones(self) -> Dict[str, Any]:
+        """
+        Sincroniza homologaciones desde los despachos.
+        
+        Returns:
+            Diccionario con resultados de sincronización
+        """
+        conn = None
+        try:
+            conn = get_db_connection()
+            repository = HomologacionRepository(conn)
+            
+            resultado = repository.sincronizar_homologaciones_desde_despachos()
+            
+            return {
+                "status": "success",
+                "data": resultado
+            }
+            
+        except Exception as e:
+            logger.error(f"❌ Error al sincronizar homologaciones: {e}", exc_info=True)
+            return {
+                "status": "error",
+                "message": str(e),
+                "error_code": "INTERNAL_ERROR"
+            }
+        finally:
+            if conn:
+                try:
+                    conn.close()
+                except:
+                    pass
 
 

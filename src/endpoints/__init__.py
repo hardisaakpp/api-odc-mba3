@@ -13,6 +13,7 @@ from .ordenes_compra import register_ordenes_compra_endpoints
 from .pruebas import register_pruebas_endpoints
 from .user_preferences import register_user_preferences_endpoints
 from .remisiones import register_remisiones_endpoints
+from .homologaciones_sku import register_homologaciones_sku_endpoints
 
 
 def create_endpoints(app: FastAPI):
@@ -45,6 +46,9 @@ def create_endpoints(app: FastAPI):
     
     # Registrar endpoints de remisiones
     register_remisiones_endpoints(app)
+    
+    # Registrar endpoints de homologaciones SKU
+    register_homologaciones_sku_endpoints(app)
     
     # ✅ TODOS LOS ENDPOINTS HAN SIDO MIGRADOS
     # Ya no es necesario importar el módulo legacy

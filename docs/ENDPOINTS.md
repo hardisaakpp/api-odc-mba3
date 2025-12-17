@@ -455,6 +455,210 @@ Este endpoint permite:
 
 ---
 
+## 🔄 Homologaciones SKU
+
+### Listar Homologaciones
+
+**GET `/api/homologaciones-sku`**
+
+Obtiene lista paginada de homologaciones SKU entre MBA3 y SAP.
+
+**Query Parameters:**
+- `page` (int, default: 1) - Número de página
+- `pageSize` (int, default: 10, max: 100) - Tamaño de página
+- `estado` (string, opcional) - PENDIENTE | HOMOLOGADO | ERROR
+- `tiene_diferencias` (boolean, opcional) - Filtrar por diferencias
+- `tiene_datos_sap` (boolean, opcional) - Filtrar por datos SAP
+- `sku` (string, opcional) - Búsqueda por SKU (MBA3 o SAP)
+
+**Headers requeridos:**
+```
+Authorization: Bearer {JWT_TOKEN}
+```
+
+**Respuesta:**
+```json
+{
+  "status": "success",
+  "data": [
+    {
+      "homologacion_id": "uuid-123",
+      "sku_mba3": "SKU001",
+      "nombre_producto_mba3": "Producto Ejemplo",
+      "precio_unitario_mba3": 100.50,
+      "cantidad_docena_mba3": 12.0,
+      "total_linea_mba3": 1206.00,
+      "sku_sap": "SKU001-SAP",
+      "nombre_producto_sap": "Producto SAP",
+      "precio_unitario_sap": 100.00,
+      "cantidad_pack_sap": 10.0,
+      "unidad_sap": "UN",
+      "subtotal_sap": 1000.00,
+      "estado": "PENDIENTE",
+      "tiene_diferencias": true,
+      "tiene_datos_sap": true,
+      "detalle_id": "detalle-123",
+      "despacho_id": "despacho-456",
+      "created_at": "2024-01-01T00:00:00Z",
+      "updated_at": "2024-01-01T00:00:00Z"
+    }
+  ],
+  "metadata": {
+    "count": 150,
+    "total_pendientes": 50,
+    "total_homologados": 80,
+    "total_errores": 20,
+    "filters": {}
+  },
+  "total": 150,
+  "page": 1,
+  "pageSize": 10,
+  "totalPages": 15
+}
+```
+
+---
+
+### Actualizar Homologación
+
+**PUT `/api/homologaciones-sku/{homologacion_id}`**
+
+Actualiza una homologación SKU específica.
+
+**Headers requeridos:**
+```
+Authorization: Bearer {JWT_TOKEN}
+Content-Type: application/json
+```
+
+**Body (todos los campos son opcionales):**
+```json
+{
+  "sku_sap": "SKU001-SAP",
+  "nombre_producto_sap": "Producto SAP Actualizado",
+  "precio_unitario_sap": 105.00,
+  "cantidad_pack_sap": 12,
+  "unidad_sap": "UN",
+  "subtotal_sap": 1260.00,
+  "estado": "HOMOLOGADO"
+}
+```
+
+**Respuesta:**
+```json
+{
+  "status": "success",
+  "data": {
+    "homologacion_id": "uuid-123",
+    // ... objeto completo actualizado
+  },
+  "message": "Homologación actualizada correctamente"
+}
+```
+
+**Validaciones:**
+- `precio_unitario_sap` >= 0
+- `cantidad_pack_sap` >= 0
+- `estado` debe ser PENDIENTE, HOMOLOGADO o ERROR
+
+---
+
+### Actualización Masiva
+
+**POST `/api/homologaciones-sku/bulk-update`**
+
+Actualiza múltiples homologaciones en lote.
+
+**Headers requeridos:**
+```
+Authorization: Bearer {JWT_TOKEN}
+Content-Type: application/json
+```
+
+**Body:**
+```json
+{
+  "updates": [
+    {
+      "homologacion_id": "uuid-123",
+      "data": {
+        "sku_sap": "SKU001-SAP",
+        "precio_unitario_sap": 105.00,
+        "estado": "HOMOLOGADO"
+      }
+    },
+    {
+      "homologacion_id": "uuid-456",
+      "data": {
+        "sku_sap": "SKU002-SAP",
+        "estado": "HOMOLOGADO"
+      }
+    }
+  ]
+}
+```
+
+**Respuesta:**
+```json
+{
+  "status": "success",
+  "data": {
+    "actualizadas": 2,
+    "errores": 0,
+    "detalles": [
+      {
+        "homologacion_id": "uuid-123",
+        "success": true
+      },
+      {
+        "homologacion_id": "uuid-456",
+        "success": true
+      }
+    ]
+  }
+}
+```
+
+---
+
+### Sincronizar Homologaciones
+
+**POST `/api/homologaciones-sku/sincronizar`**
+
+Sincroniza homologaciones desde los despachos. Detecta SKUs que no coinciden entre MBA3 y SAP.
+
+**Headers requeridos:**
+```
+Authorization: Bearer {JWT_TOKEN}
+```
+
+**Body:** vacío
+
+**Respuesta:**
+```json
+{
+  "status": "success",
+  "data": {
+    "homologaciones_encontradas": 25,
+    "homologaciones_nuevas": 10,
+    "homologaciones_actualizadas": 15,
+    "mensaje": "Sincronización completada"
+  }
+}
+```
+
+**Proceso de sincronización:**
+1. Lee todos los productos de `despacho_detalle`
+2. Busca información SAP en `producto_sap_cache`
+3. Detecta diferencias entre MBA3 y SAP
+4. Crea nuevas homologaciones o actualiza existentes
+5. Calcula flags automáticamente (`tiene_diferencias`, `tiene_datos_sap`)
+6. Asigna estado apropiado
+
+**Nota:** Para más detalles sobre homologaciones SKU, ver [HOMOLOGACIONES_SKU.md](HOMOLOGACIONES_SKU.md).
+
+---
+
 ## 📋 Flujo Completo de Procesamiento
 
 El sistema está diseñado con **4 endpoints principales** que forman un flujo completo:

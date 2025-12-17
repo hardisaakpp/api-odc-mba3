@@ -285,3 +285,170 @@ class SidebarPreferencesResponse(BaseModel):
     
     preferences: Optional[SidebarPreferencesDto] = None
 
+
+# ============================================================================
+# MODELOS PARA HOMOLOGACIONES SKU
+# ============================================================================
+
+class SkuHomologacion(BaseModel):
+    """Modelo para una homologación SKU entre MBA3 y SAP."""
+    
+    homologacion_id: str = Field(..., description="ID único de la homologación")
+    
+    # Datos de MBA3
+    sku_mba3: str = Field(..., description="SKU desde MBA3")
+    nombre_producto_mba3: Optional[str] = Field(None, description="Nombre del producto desde MBA3")
+    precio_unitario_mba3: Optional[float] = Field(None, description="Precio unitario desde MBA3")
+    cantidad_docena_mba3: Optional[float] = Field(None, description="Cantidad en docenas desde MBA3")
+    total_linea_mba3: Optional[float] = Field(None, description="Total de la línea desde MBA3")
+    
+    # Datos de SAP (pueden ser null)
+    sku_sap: Optional[str] = Field(None, description="SKU en SAP")
+    nombre_producto_sap: Optional[str] = Field(None, description="Nombre del producto en SAP")
+    precio_unitario_sap: Optional[float] = Field(None, description="Precio unitario en SAP")
+    cantidad_pack_sap: Optional[float] = Field(None, description="Cantidad por pack en SAP")
+    unidad_sap: Optional[str] = Field(None, description="Unidad de medida en SAP")
+    subtotal_sap: Optional[float] = Field(None, description="Subtotal en SAP")
+    
+    # Estado y flags
+    estado: str = Field(..., description="Estado de la homologación (PENDIENTE, HOMOLOGADO, ERROR)")
+    tiene_diferencias: bool = Field(..., description="Indica si hay diferencias entre MBA3 y SAP")
+    tiene_datos_sap: bool = Field(..., description="Indica si tiene al menos un dato de SAP")
+    
+    # Relaciones
+    detalle_id: Optional[str] = Field(None, description="ID del detalle del despacho relacionado")
+    despacho_id: Optional[str] = Field(None, description="ID del despacho relacionado")
+    
+    # Metadatos
+    created_at: Optional[str] = Field(None, description="Fecha de creación (ISO 8601)")
+    updated_at: Optional[str] = Field(None, description="Fecha de actualización (ISO 8601)")
+    ultima_modificacion: Optional[str] = Field(None, description="Última modificación (ISO 8601)")
+    modificado_por: Optional[str] = Field(None, description="Usuario que modificó")
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "homologacion_id": "uuid-123",
+                "sku_mba3": "SKU001",
+                "nombre_producto_mba3": "Producto Ejemplo",
+                "precio_unitario_mba3": 100.50,
+                "cantidad_docena_mba3": 12.0,
+                "total_linea_mba3": 1206.00,
+                "sku_sap": "SKU001-SAP",
+                "nombre_producto_sap": "Producto SAP",
+                "precio_unitario_sap": 100.00,
+                "cantidad_pack_sap": 10.0,
+                "unidad_sap": "UN",
+                "subtotal_sap": 1000.00,
+                "estado": "PENDIENTE",
+                "tiene_diferencias": True,
+                "tiene_datos_sap": True,
+                "detalle_id": "detalle-123",
+                "despacho_id": "despacho-456",
+                "created_at": "2024-01-01T00:00:00Z",
+                "updated_at": "2024-01-01T00:00:00Z"
+            }
+        }
+
+
+class HomologacionSkuUpdateRequest(BaseModel):
+    """Modelo para actualizar una homologación SKU."""
+    
+    sku_sap: Optional[str] = Field(None, description="SKU en SAP")
+    nombre_producto_sap: Optional[str] = Field(None, description="Nombre del producto en SAP")
+    precio_unitario_sap: Optional[float] = Field(None, ge=0, description="Precio unitario en SAP (>= 0)")
+    cantidad_pack_sap: Optional[float] = Field(None, ge=0, description="Cantidad por pack en SAP (>= 0)")
+    unidad_sap: Optional[str] = Field(None, description="Unidad de medida en SAP")
+    subtotal_sap: Optional[float] = Field(None, description="Subtotal en SAP")
+    estado: Optional[str] = Field(None, description="Estado (PENDIENTE, HOMOLOGADO, ERROR)")
+    
+    @field_validator('estado')
+    @classmethod
+    def validate_estado(cls, v):
+        if v is not None and v not in ['PENDIENTE', 'HOMOLOGADO', 'ERROR']:
+            raise ValueError('Estado debe ser PENDIENTE, HOMOLOGADO o ERROR')
+        return v
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "sku_sap": "SKU001-SAP",
+                "nombre_producto_sap": "Producto SAP Actualizado",
+                "precio_unitario_sap": 105.00,
+                "cantidad_pack_sap": 12.0,
+                "unidad_sap": "UN",
+                "subtotal_sap": 1260.00,
+                "estado": "HOMOLOGADO"
+            }
+        }
+
+
+class HomologacionSkuBulkUpdateItem(BaseModel):
+    """Modelo para un item de actualización masiva."""
+    
+    homologacion_id: str = Field(..., description="ID de la homologación a actualizar")
+    data: HomologacionSkuUpdateRequest = Field(..., description="Datos a actualizar")
+
+
+class HomologacionSkuBulkUpdateRequest(BaseModel):
+    """Modelo para actualización masiva de homologaciones."""
+    
+    updates: List[HomologacionSkuBulkUpdateItem] = Field(..., description="Lista de actualizaciones")
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "updates": [
+                    {
+                        "homologacion_id": "uuid-123",
+                        "data": {
+                            "sku_sap": "SKU001-SAP",
+                            "precio_unitario_sap": 105.00,
+                            "estado": "HOMOLOGADO"
+                        }
+                    },
+                    {
+                        "homologacion_id": "uuid-456",
+                        "data": {
+                            "sku_sap": "SKU002-SAP",
+                            "estado": "HOMOLOGADO"
+                        }
+                    }
+                ]
+            }
+        }
+
+
+class HomologacionesSkuListResponse(BaseModel):
+    """Modelo de respuesta para listar homologaciones."""
+    
+    status: str = Field(..., description="Estado de la respuesta")
+    data: List[SkuHomologacion] = Field(..., description="Lista de homologaciones")
+    metadata: Dict[str, Any] = Field(..., description="Metadatos y estadísticas")
+    total: int = Field(..., description="Total de registros")
+    page: int = Field(..., description="Página actual")
+    pageSize: int = Field(..., description="Tamaño de página")
+    totalPages: int = Field(..., description="Total de páginas")
+
+
+class HomologacionSkuResponse(BaseModel):
+    """Modelo de respuesta para una homologación individual."""
+    
+    status: str = Field(..., description="Estado de la respuesta")
+    data: Optional[SkuHomologacion] = Field(None, description="Datos de la homologación")
+    message: Optional[str] = Field(None, description="Mensaje adicional")
+
+
+class HomologacionSkuBulkUpdateResponse(BaseModel):
+    """Modelo de respuesta para actualización masiva."""
+    
+    status: str = Field(..., description="Estado de la respuesta")
+    data: Dict[str, Any] = Field(..., description="Resultados de la actualización")
+
+
+class HomologacionSkuSincronizarResponse(BaseModel):
+    """Modelo de respuesta para sincronización."""
+    
+    status: str = Field(..., description="Estado de la respuesta")
+    data: Dict[str, Any] = Field(..., description="Resultados de la sincronización")
+
