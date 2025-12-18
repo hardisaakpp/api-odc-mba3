@@ -425,3 +425,4 @@ def register_homologaciones_sku_endpoints(app: FastAPI):
 
 
 
+
