@@ -13,8 +13,8 @@ import json
 import logging
 import time
 from typing import Dict, Any, Optional
-from mba3_client import MBA3Client
-from exceptions import MBA3QueryError, MBA3ConnectionError
+from src.mba3_client import MBA3Client
+from src.exceptions import MBA3QueryError, MBA3ConnectionError
 
 logger = logging.getLogger(__name__)
 

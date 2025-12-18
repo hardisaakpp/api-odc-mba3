@@ -5,7 +5,7 @@ Servicio para consultar SAP y poblar el cache de productos.
 import logging
 from typing import Optional, Dict, Any
 
-from config import SAP_CACHE_DAYS, ENABLE_SAP_QUERIES
+from src.config import SAP_CACHE_DAYS, ENABLE_SAP_QUERIES
 from ..connection import get_db_connection
 from ..clients.sap_client import SAPClient
 from ..repositories.producto_sap_repository import ProductoSAPRepository

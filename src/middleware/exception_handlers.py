@@ -7,7 +7,7 @@ from fastapi import FastAPI, Request, status, HTTPException
 from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
 
-from exceptions import QueryValidationError, MBA3ConnectionError, MBA3QueryError
+from src.exceptions import QueryValidationError, MBA3ConnectionError, MBA3QueryError
 
 logger = logging.getLogger(__name__)
 

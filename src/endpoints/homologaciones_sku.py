@@ -7,9 +7,9 @@ from typing import Dict, Optional
 from fastapi import FastAPI, Request, HTTPException, Depends, Query
 from fastapi.responses import JSONResponse
 
-from database.services.homologacion_service import HomologacionService
-from security.jwt_auth import verify_jwt_token
-from models import (
+from src.database.services.homologacion_service import HomologacionService
+from src.security.jwt_auth import verify_jwt_token
+from src.models import (
     HomologacionesSkuListResponse,
     HomologacionSkuResponse,
     HomologacionSkuUpdateRequest,
@@ -422,6 +422,7 @@ def register_homologaciones_sku_endpoints(app: FastAPI):
                 status_code=500,
                 detail=f"Error al sincronizar homologaciones: {str(e)}"
             )
+
 
 
 

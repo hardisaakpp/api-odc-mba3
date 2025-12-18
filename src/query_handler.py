@@ -5,8 +5,8 @@ Manejo del cliente MBA3 para ejecución de consultas.
 import logging
 from typing import Optional
 
-from mba3_query_client import MBA3APIClient
-from config import (
+from src.mba3_query_client import MBA3APIClient
+from src.config import (
     MBA3_BASE_URL,
     MBA3_SERVICE_CODE,
     MBA3_SERVICE_PASSWORD,

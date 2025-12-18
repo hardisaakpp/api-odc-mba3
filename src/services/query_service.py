@@ -8,14 +8,14 @@ import logging
 from typing import Optional
 from datetime import datetime
 
-from utils import (
+from src.utils import (
     validate_query,
     parse_query,
     save_query_to_file,
     get_source_from_headers
 )
-from models import QueryResponse
-from exceptions import QueryValidationError
+from src.models import QueryResponse
+from src.exceptions import QueryValidationError
 
 logger = logging.getLogger(__name__)
 

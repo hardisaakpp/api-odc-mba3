@@ -5,8 +5,8 @@ Servicio para guardar facturas de MBA3 en SQL Server.
 import logging
 from typing import Dict, Any, List, Optional
 
-from config import ENABLE_SQL_SERVER_STORAGE
-from ..connection import get_db_connection
+from src.config import ENABLE_SQL_SERVER_STORAGE
+from ..connection import get_db_connection, get_db_connection_context
 from ..repositories.despacho_repository import DespachoRepository
 from ..mappers.factura_mapper import FacturaMapper
 from ..services.sap_service import SAPService
@@ -212,10 +212,14 @@ def save_mba3_data_to_sql_server(
     
     Esta función es el punto de entrada principal para guardar datos de MBA3.
     
+    ⚠️ ACTUALIZACIÓN: Usa context manager para garantizar cierre de conexión.
+    Esto previene conexiones huérfanas que causan bloqueos en SQL Server.
+    
     Args:
         mba3_json_result: Resultado JSON de MBA3 (puede ser list o dict)
         upsert: Si True, actualiza si existe; si False, inserta siempre
         continue_on_error: Si True, continúa procesando aunque falle una factura
+        homologacion_service: Servicio de homologación para detectar productos no homologados
         
     Returns:
         Dict con estadísticas de la operación
@@ -238,95 +242,85 @@ def save_mba3_data_to_sql_server(
         "errors": []
     }
     
-    conn = None
     try:
-        # Conectar a SQL Server
-        try:
-            conn = get_db_connection()
+        # CRÍTICO: Usar context manager para garantizar cierre de conexión
+        # El context manager cierra automáticamente la conexión incluso si hay excepciones
+        with get_db_connection_context() as conn:
             repository = DespachoRepository(conn)
-        except Exception as conn_error:
-            logger.error(f"❌ Error al conectar a SQL Server: {conn_error}")
-            return {
-                "status": "error",
-                "message": f"Error de conexión a SQL Server: {str(conn_error)}",
-                "total_facturas": 0,
-                "facturas_guardadas": 0,
-                "facturas_actualizadas": 0,
-                "facturas_error": 0,
-                "total_detalles": 0,
-                "errors": [f"Error de conexión: {str(conn_error)}"]
-            }
-        
-        # Procesar según el tipo de resultado
-        facturas = []
-        if isinstance(mba3_json_result, list):
-            facturas = mba3_json_result
-        elif isinstance(mba3_json_result, dict):
-            facturas = [mba3_json_result]
-        else:
-            logger.error(f"❌ Formato de resultado no soportado: {type(mba3_json_result)}")
-            return {
-                "status": "error",
-                "message": f"Formato no soportado: {type(mba3_json_result)}"
-            }
-        
-        stats["total_facturas"] = len(facturas)
-        logger.info(f"📦 Procesando {stats['total_facturas']} factura(s)...")
-        
-        # Procesar cada factura
-        for idx, factura in enumerate(facturas, 1):
-            try:
-                result = save_mba3_factura(repository, factura, upsert=upsert, homologacion_service=homologacion_service)
-                
-                if result["status"] == "success":
-                    if result.get("cabecera_actualizada"):
-                        stats["facturas_actualizadas"] += 1
+            
+            # Procesar según el tipo de resultado
+            facturas = []
+            if isinstance(mba3_json_result, list):
+                facturas = mba3_json_result
+            elif isinstance(mba3_json_result, dict):
+                facturas = [mba3_json_result]
+            else:
+                logger.error(f"❌ Formato de resultado no soportado: {type(mba3_json_result)}")
+                return {
+                    "status": "error",
+                    "message": f"Formato no soportado: {type(mba3_json_result)}"
+                }
+            
+            stats["total_facturas"] = len(facturas)
+            logger.info(f"📦 Procesando {stats['total_facturas']} factura(s)...")
+            
+            # Procesar cada factura
+            for idx, factura in enumerate(facturas, 1):
+                try:
+                    result = save_mba3_factura(repository, factura, upsert=upsert, homologacion_service=homologacion_service)
+                    
+                    if result["status"] == "success":
+                        if result.get("cabecera_actualizada"):
+                            stats["facturas_actualizadas"] += 1
+                        else:
+                            stats["facturas_guardadas"] += 1
+                        stats["total_detalles"] += result["detalles_insertados"]
+                    elif result["status"] == "exists":
+                        # Este caso ya no debería ocurrir con upsert=True, pero lo mantenemos por compatibilidad
+                        stats["facturas_existentes"] += 1
                     else:
-                        stats["facturas_guardadas"] += 1
-                    stats["total_detalles"] += result["detalles_insertados"]
-                elif result["status"] == "exists":
-                    # Este caso ya no debería ocurrir con upsert=True, pero lo mantenemos por compatibilidad
-                    stats["facturas_existentes"] += 1
-                else:
+                        stats["facturas_error"] += 1
+                        stats["errors"].extend(result["errors"])
+                        
+                        if not continue_on_error:
+                            raise Exception(f"Error al guardar factura: {result['errors']}")
+                    
+                except Exception as e:
+                    error_msg = f"Error al procesar factura {idx}: {str(e)}"
+                    logger.error(f"❌ {error_msg}")
                     stats["facturas_error"] += 1
-                    stats["errors"].extend(result["errors"])
+                    stats["errors"].append(error_msg)
                     
                     if not continue_on_error:
-                        raise Exception(f"Error al guardar factura: {result['errors']}")
-                
-            except Exception as e:
-                error_msg = f"Error al procesar factura {idx}: {str(e)}"
-                logger.error(f"❌ {error_msg}")
-                stats["facturas_error"] += 1
-                stats["errors"].append(error_msg)
-                
-                if not continue_on_error:
-                    raise
-        
-        # Determinar estado final
-        if stats["facturas_error"] == 0:
-            stats["status"] = "success"
-        elif stats["facturas_guardadas"] > 0:
-            stats["status"] = "partial"
-        else:
-            stats["status"] = "error"
-        
-        logger.info(f"✅ Proceso completado: {stats['facturas_guardadas']} guardadas, {stats['facturas_actualizadas']} actualizadas, {stats['facturas_error']} errores de {stats['total_facturas']} totales")
-        logger.info(f"   Total detalles: {stats['total_detalles']}")
-        logger.info("=" * 70)
+                        raise
+            
+            # Determinar estado final
+            if stats["facturas_error"] == 0:
+                stats["status"] = "success"
+            elif stats["facturas_guardadas"] > 0:
+                stats["status"] = "partial"
+            else:
+                stats["status"] = "error"
+            
+            logger.info(f"✅ Proceso completado: {stats['facturas_guardadas']} guardadas, {stats['facturas_actualizadas']} actualizadas, {stats['facturas_error']} errores de {stats['total_facturas']} totales")
+            logger.info(f"   Total detalles: {stats['total_detalles']}")
+            logger.info("=" * 70)
+        # La conexión se cierra automáticamente aquí al salir del with
         
     except Exception as e:
         logger.error(f"❌ Error crítico al guardar en SQL Server: {e}", exc_info=True)
         stats["status"] = "error"
         stats["errors"].append(f"Error crítico: {str(e)}")
-        
-    finally:
-        if conn:
-            try:
-                conn.close()
-                logger.debug("🔌 Conexión a SQL Server cerrada")
-            except:
-                pass
+        return {
+            "status": "error",
+            "message": f"Error de conexión a SQL Server: {str(e)}",
+            "total_facturas": 0,
+            "facturas_guardadas": 0,
+            "facturas_actualizadas": 0,
+            "facturas_error": 0,
+            "total_detalles": 0,
+            "errors": [f"Error de conexión: {str(e)}"]
+        }
     
     return stats
 

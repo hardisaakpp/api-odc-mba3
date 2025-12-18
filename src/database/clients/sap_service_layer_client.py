@@ -17,7 +17,7 @@ from typing import Optional, Dict, Any, Tuple, Union
 from datetime import datetime, timedelta
 from requests.adapters import HTTPAdapter
 
-from config import (
+from src.config import (
     SAP_SERVICE_LAYER_URL,
     SAP_SERVICE_LAYER_USERNAME,
     SAP_SERVICE_LAYER_PASSWORD,

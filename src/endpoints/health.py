@@ -4,7 +4,7 @@ Endpoints relacionados con health check y estado del sistema.
 
 from datetime import datetime
 from fastapi import FastAPI
-from models import HealthResponse
+from src.models import HealthResponse
 
 
 def register_health_endpoints(app: FastAPI):

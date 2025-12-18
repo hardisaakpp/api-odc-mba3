@@ -12,7 +12,7 @@ from email.mime.base import MIMEBase
 from email import encoders
 from datetime import datetime
 from typing import List, Optional
-from config import (
+from src.config import (
     EMAIL_SMTP_SERVER,
     EMAIL_SMTP_PORT,
     EMAIL_SMTP_USER,

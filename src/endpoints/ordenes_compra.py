@@ -10,11 +10,11 @@ from typing import Optional, List, Dict, Any
 from fastapi import FastAPI, Request, Query, Depends
 from fastapi.responses import JSONResponse
 
-from utils import get_source_from_headers
-from database.repositories.orden_compra_repository import OrdenCompraRepository
-from database.repositories.sap_integration_log_repository import SAPIntegrationLogRepository
-from database.connection import get_db_connection
-from security.jwt_auth import verify_jwt_token, require_permission
+from src.utils import get_source_from_headers
+from src.database.repositories.orden_compra_repository import OrdenCompraRepository
+from src.database.repositories.sap_integration_log_repository import SAPIntegrationLogRepository
+from src.database.connection import get_db_connection
+from src.security.jwt_auth import verify_jwt_token, require_permission
 
 logger = logging.getLogger(__name__)
 

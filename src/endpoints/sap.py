@@ -9,15 +9,15 @@ from typing import Optional, List
 from fastapi import FastAPI, Request, Query as FastAPIQuery, Depends, Query
 from fastapi.responses import JSONResponse
 
-from utils import get_source_from_headers
-from database.services.sap_service import SAPService
-from database.clients.sap_client import SAPClient
-from database.repositories.orden_compra_repository import OrdenCompraRepository
-from database.repositories.sap_integration_log_repository import SAPIntegrationLogRepository
-from database.services.oc_sap_service import OCSAPService
-from database.connection import get_db_connection
-from config import ENABLE_SAP_QUERIES, SAP_LINKED_SERVER, ENABLE_SAP_SERVICE_LAYER
-from security.jwt_auth import verify_jwt_token, require_permission
+from src.utils import get_source_from_headers
+from src.database.services.sap_service import SAPService
+from src.database.clients.sap_client import SAPClient
+from src.database.repositories.orden_compra_repository import OrdenCompraRepository
+from src.database.repositories.sap_integration_log_repository import SAPIntegrationLogRepository
+from src.database.services.oc_sap_service import OCSAPService
+from src.database.connection import get_db_connection
+from src.config import ENABLE_SAP_QUERIES, SAP_LINKED_SERVER, ENABLE_SAP_SERVICE_LAYER
+from src.security.jwt_auth import verify_jwt_token, require_permission
 
 logger = logging.getLogger(__name__)
 

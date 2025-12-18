@@ -11,7 +11,7 @@ import pyodbc
 from typing import Optional, Dict, Any
 from datetime import datetime
 
-from config import (
+from src.config import (
     SAP_LINKED_SERVER,
     SAP_DATABASE,
     SAP_SCHEMA,

@@ -7,9 +7,9 @@ Maneja la comunicación con MBA3 y el guardado en SQL Server.
 import logging
 from typing import Dict, Any, Optional, Union, List
 
-from query_handler import get_mba3_client
-from utils import validate_query
-from exceptions import QueryValidationError, MBA3QueryError, MBA3ConnectionError
+from src.query_handler import get_mba3_client
+from src.utils import validate_query
+from src.exceptions import QueryValidationError, MBA3QueryError, MBA3ConnectionError
 
 logger = logging.getLogger(__name__)
 
@@ -92,7 +92,7 @@ class MBA3Service:
             Dict con estadísticas del guardado, o None si está deshabilitado o hay error
         """
         try:
-            from database import save_mba3_data_to_sql_server
+            from src.database import save_mba3_data_to_sql_server
             
             save_status = save_mba3_data_to_sql_server(
                 result,

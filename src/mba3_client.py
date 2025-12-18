@@ -3,7 +3,7 @@ import requests
 import json
 import logging
 from typing import Optional, Union
-from exceptions import MBA3ConnectionError
+from src.exceptions import MBA3ConnectionError
 
 # Configurar logging básico similar a la versión anterior
 logging.basicConfig(

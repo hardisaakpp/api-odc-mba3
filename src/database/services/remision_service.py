@@ -5,7 +5,7 @@ Servicio para guardar remisiones de MBA3 en SQL Server.
 import logging
 from typing import Dict, Any, List, Optional
 
-from config import ENABLE_SQL_SERVER_STORAGE
+from src.config import ENABLE_SQL_SERVER_STORAGE
 from ..connection import get_db_connection
 from ..repositories.remision_repository import RemisionRepository
 from ..mappers.factura_mapper import FacturaMapper

@@ -7,15 +7,15 @@ from datetime import datetime
 from fastapi import FastAPI, Request, Depends
 from fastapi.responses import JSONResponse
 
-from services.mba3_service import MBA3Service
-from utils import get_source_from_headers
-from database.repositories.despacho_repository import DespachoRepository
-from database.repositories.orden_compra_repository import OrdenCompraRepository
-from database.services.orden_compra_service import copy_despacho_to_orden_compra
-from database.connection import get_db_connection
-from security.jwt_auth import verify_jwt_token, require_permission
-from exceptions import MBA3ConnectionError, MBA3QueryError
-from config import MBA3_QUERY_PREDEFINIDA
+from src.services.mba3_service import MBA3Service
+from src.utils import get_source_from_headers
+from src.database.repositories.despacho_repository import DespachoRepository
+from src.database.repositories.orden_compra_repository import OrdenCompraRepository
+from src.database.services.orden_compra_service import copy_despacho_to_orden_compra
+from src.database.connection import get_db_connection
+from src.security.jwt_auth import verify_jwt_token, require_permission
+from src.exceptions import MBA3ConnectionError, MBA3QueryError
+from src.config import MBA3_QUERY_PREDEFINIDA
 
 logger = logging.getLogger(__name__)
 

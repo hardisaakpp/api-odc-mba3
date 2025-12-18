@@ -140,6 +140,8 @@ Ver [docs/ENDPOINTS.md](docs/ENDPOINTS.md) para documentación completa.
 
 ### Documentación Especializada
 
+- [Celery Quick Start](docs/CELERY_QUICKSTART.md) 🚀 - Procesos automáticos con Celery en 5 pasos
+- [Celery Implementation](docs/CELERY_IMPLEMENTATION.md) - Documentación completa de Celery
 - [Integración SAP](docs/INTEGRACION_SAP.md) - Configuración e integración con SAP
 - [Homologaciones SKU](docs/HOMOLOGACIONES_SKU.md) ⭐ - Sistema de gestión de homologaciones SKU
 - [Quick Start Homologaciones](docs/QUICKSTART_HOMOLOGACIONES.md) 🚀 - Instalación en 3 pasos

@@ -8,12 +8,13 @@ Estructura:
 - services: Lógica de negocio de persistencia
 """
 
-from .connection import get_db_connection
+from .connection import get_db_connection, get_db_connection_context
 from .services.factura_service import save_mba3_data_to_sql_server
 from .services.sap_service import SAPService
 
 __all__ = [
     "get_db_connection",
+    "get_db_connection_context",
     "save_mba3_data_to_sql_server",
     "SAPService"
 ]

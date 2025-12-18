@@ -1,17 +1,13 @@
 """
 Módulo de tareas programadas en segundo plano.
+
+Nota: Los imports se hacen de forma explícita en lugar de automática
+para evitar problemas cuando Celery carga el módulo.
 """
 
-from .auto_migrate import (
-    start_auto_migrate,
-    stop_auto_migrate,
-    is_auto_migrate_running,
-    execute_auto_migration
-)
+# No importar automáticamente para evitar problemas con Celery
+# Los módulos se importan explícitamente donde se necesiten:
+# - auto_migrate.py: para el proceso asyncio antiguo (si se necesita)
+# - celery_auto_migrate.py: para el proceso Celery (nuevo)
 
-__all__ = [
-    "start_auto_migrate",
-    "stop_auto_migrate",
-    "is_auto_migrate_running",
-    "execute_auto_migration"
-]
+__all__ = []

@@ -158,3 +158,4 @@ PRINT 'La tabla orden_compra_cabecera ahora tiene los campos necesarios para per
 
 
 
+

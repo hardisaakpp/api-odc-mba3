@@ -12,7 +12,7 @@ import jwt
 from fastapi import HTTPException, Security, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
-from config import JWT_SECRET, JWT_ISSUER, JWT_AUDIENCE, ENVIRONMENT
+from src.config import JWT_SECRET, JWT_ISSUER, JWT_AUDIENCE, ENVIRONMENT
 
 logger = logging.getLogger(__name__)
 

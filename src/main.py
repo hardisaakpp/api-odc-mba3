@@ -19,8 +19,8 @@ import sys
 import argparse
 from dotenv import load_dotenv
 from pathlib import Path
-from mba3_client import MBA3Client
-from mba3_query_client import MBA3APIClient
+from src.mba3_client import MBA3Client
+from src.mba3_query_client import MBA3APIClient
 
 load_dotenv(dotenv_path=Path(__file__).resolve().parents[1] / ".env")
 
@@ -126,7 +126,7 @@ def do_query(query: str | None = None):
         print(result_json)
         
         # Guardar resultado en archivo JSON
-        from config import RESULTADO_API_FILE
+        from src.config import RESULTADO_API_FILE
         try:
             with open(RESULTADO_API_FILE, 'w', encoding='utf-8') as f:
                 json.dump(result, f, indent=2, ensure_ascii=False)

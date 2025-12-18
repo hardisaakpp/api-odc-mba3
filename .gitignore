@@ -19,3 +19,7 @@ htmlcov/
 .tox/
 *.cover
 .hypothesis/
+
+# Celery
+celerybeat-schedule
+celerybeat-schedule.*

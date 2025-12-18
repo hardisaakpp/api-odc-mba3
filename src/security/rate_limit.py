@@ -9,7 +9,7 @@ import os
 import logging
 from typing import Optional
 
-from config import ENABLE_RATE_LIMITING
+from src.config import ENABLE_RATE_LIMITING
 
 logger = logging.getLogger(__name__)
 

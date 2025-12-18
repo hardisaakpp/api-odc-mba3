@@ -13,11 +13,11 @@ from typing import List, Dict, Any, Union, Optional
 from fastapi import FastAPI, Request, Depends, Query
 from fastapi.responses import JSONResponse
 
-from services.mba3_service import MBA3Service
-from utils import get_source_from_headers
-from security.jwt_auth import verify_jwt_token, require_permission
-from exceptions import MBA3ConnectionError, MBA3QueryError
-from config import MBA3_QUERY_REMISIONES, MIGRATE_DATE_FILTER_DAYS
+from src.services.mba3_service import MBA3Service
+from src.utils import get_source_from_headers
+from src.security.jwt_auth import verify_jwt_token, require_permission
+from src.exceptions import MBA3ConnectionError, MBA3QueryError
+from src.config import MBA3_QUERY_REMISIONES, MIGRATE_DATE_FILTER_DAYS
 
 logger = logging.getLogger(__name__)
 

@@ -8,7 +8,7 @@ import logging
 from typing import Dict, Any, Tuple
 from pathlib import Path
 
-from config import QUERY_STORAGE_FILE, MAX_QUERY_LENGTH
+from src.config import QUERY_STORAGE_FILE, MAX_QUERY_LENGTH
 
 logger = logging.getLogger(__name__)
 

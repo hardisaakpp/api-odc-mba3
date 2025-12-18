@@ -11,7 +11,7 @@ from typing import Optional
 from fastapi import HTTPException, Security, Request
 from fastapi.security import APIKeyHeader
 
-from config import ENABLE_AUTH
+from src.config import ENABLE_AUTH
 
 logger = logging.getLogger(__name__)
 

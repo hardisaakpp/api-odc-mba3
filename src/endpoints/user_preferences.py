@@ -7,10 +7,10 @@ from typing import Dict
 from fastapi import FastAPI, Request, HTTPException, Depends
 from fastapi.responses import JSONResponse
 
-from database.repositories.user_preferences_repository import UserPreferencesRepository
-from database.connection import get_db_connection
-from security.jwt_auth import verify_jwt_token
-from models import (
+from src.database.repositories.user_preferences_repository import UserPreferencesRepository
+from src.database.connection import get_db_connection
+from src.security.jwt_auth import verify_jwt_token
+from src.models import (
     SavePreferencesRequest,
     PreferencesResponse,
     AllPreferencesResponse,

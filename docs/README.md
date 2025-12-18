@@ -2,6 +2,8 @@
 
 Índice completo de la documentación del proyecto MBA3 Consultas.
 
+> 💡 **Nuevo**: Ver [Estructura de Documentación](ESTRUCTURA_DOCUMENTACION.md) para una guía visual completa de la organización.
+
 ## 📚 Índice
 
 ### 🚀 Inicio Rápido
@@ -13,22 +15,36 @@
    - Configuración de servidor vinculado
    - Solución de problemas
 
+2. **[Celery Quick Start](CELERY_QUICKSTART.md)** 🚀 - Poner en marcha Celery en 5 pasos
+   - Instalación de Redis
+   - Configuración rápida
+   - Ejecución de procesos
+   - Verificación y troubleshooting
+
 ### 📖 Documentación de API
 
-2. **[Endpoints](ENDPOINTS.md)** - Documentación completa de la API REST
+3. **[Endpoints](ENDPOINTS.md)** - Documentación completa de la API REST
    - Endpoints principales (consultar, migrar, procesar-oc, integrar-sap)
    - Endpoints de facturas
    - Endpoints de SAP
    - Ejemplos de uso
 
-3. **[Flujo Completo](FLUJO_COMPLETO.md)** - Flujo de los 4 endpoints principales
+4. **[Flujo Completo](FLUJO_COMPLETO.md)** - Flujo de los 4 endpoints principales
    - CONSULTAR → MIGRAR → PROCESAR → INTEGRAR
    - Descripción detallada de cada paso
    - Ejemplos de uso
 
+### ⚙️ Procesos Automáticos
+
+5. **[Celery Implementation](CELERY_IMPLEMENTATION.md)** - Implementación completa de Celery
+   - Arquitectura de procesos aislados
+   - Configuración avanzada
+   - Monitoreo con Flower
+   - Troubleshooting detallado
+
 ### 🔌 Integración SAP
 
-4. **[Integración SAP](INTEGRACION_SAP.md)** - Guía completa de integración con SAP
+6. **[Integración SAP](INTEGRACION_SAP.md)** - Guía completa de integración con SAP
    - Conversión de unidades (docenas → packs)
    - Estructura de tablas
    - Configuración y requisitos
@@ -37,7 +53,7 @@
 
 ### 🔒 Seguridad
 
-5. **[Seguridad](SEGURIDAD.md)** - Configuración de seguridad opcional
+7. **[Seguridad](SEGURIDAD.md)** - Configuración de seguridad opcional
    - Autenticación mediante API Keys
    - Rate limiting
    - CORS restrictivo
@@ -45,7 +61,7 @@
 
 ### 🧪 Testing
 
-6. **[Testing](TESTING.md)** - Guía de pruebas
+8. **[Testing](TESTING.md)** - Guía de pruebas
    - Estructura de tests
    - Cómo ejecutar tests
    - Cómo escribir tests
@@ -53,12 +69,12 @@
 
 ### 📋 Procesos de Negocio
 
-7. **[Orden de Compra](ORDEN_COMPRA_COPIA.md)** - Proceso de copia a orden de compra
+9. **[Orden de Compra](ORDEN_COMPRA_COPIA.md)** - Proceso de copia a orden de compra
    - Descripción del proceso
    - Mapeo de datos
    - Estados de orden de compra
 
-8. **[Homologaciones SKU](HOMOLOGACIONES_SKU.md)** ⭐ - Sistema de gestión de homologaciones SKU
+10. **[Homologaciones SKU](HOMOLOGACIONES_SKU.md)** ⭐ - Sistema de gestión de homologaciones SKU
    - Introducción y casos de uso
    - Arquitectura del sistema
    - Documentación de API (4 endpoints)
@@ -66,13 +82,13 @@
    - Guía de instalación
    - Ejemplos de uso
 
-9. **[Quick Start - Homologaciones](QUICKSTART_HOMOLOGACIONES.md)** 🚀 - Instalación rápida en 3 pasos
+11. **[Quick Start - Homologaciones](QUICKSTART_HOMOLOGACIONES.md)** 🚀 - Instalación rápida en 3 pasos
    - Crear tabla en SQL Server
    - Reiniciar servidor
    - Primera sincronización
    - Tests rápidos
 
-10. **[Implementación Homologaciones](IMPLEMENTACION_HOMOLOGACIONES_SKU.md)** - Resumen técnico
+12. **[Implementación Homologaciones](IMPLEMENTACION_HOMOLOGACIONES_SKU.md)** - Resumen técnico
    - Componentes implementados
    - Archivos creados/modificados
    - Especificaciones cumplidas
@@ -80,21 +96,21 @@
 
 ### 🧪 Pruebas
 
-11. **[Guía de Pruebas](pruebas/README.md)** - Scripts y comandos para probar funcionalidades
+13. **[Guía de Pruebas](pruebas/README.md)** - Scripts y comandos para probar funcionalidades
    - Scripts PowerShell
    - Comandos de prueba
    - Ejemplos de uso
 
 ### 🔑 Autenticación
 
-12. **[JWT Authentication](JWT_AUTHENTICATION.md)** - Sistema de autenticación JWT
+14. **[JWT Authentication](JWT_AUTHENTICATION.md)** - Sistema de autenticación JWT
    - Configuración
    - Uso de tokens
    - Endpoints protegidos
 
 ### 👤 Preferencias de Usuario
 
-13. **[User Preferences](USER_PREFERENCES_IMPLEMENTATION.md)** - Sistema de preferencias
+15. **[User Preferences](USER_PREFERENCES_IMPLEMENTATION.md)** - Sistema de preferencias
    - Preferencias de tablas
    - Preferencias de sidebar
    - API de preferencias
@@ -105,6 +121,8 @@
 docs/
 ├── README.md (este archivo - índice completo)
 ├── CONFIGURACION.md ⭐ (Configuración completa consolidada)
+├── CELERY_QUICKSTART.md 🚀 (Inicio rápido Celery)
+├── CELERY_IMPLEMENTATION.md ⭐ (Implementación completa Celery)
 ├── ENDPOINTS.md (Documentación de API REST)
 ├── FLUJO_COMPLETO.md (Flujo de 4 endpoints principales)
 ├── INTEGRACION_SAP.md ⭐ (Integración SAP consolidada)
@@ -129,11 +147,12 @@ docs/
 ## 🚀 Guía de Inicio Rápido
 
 1. **Setup inicial:** Ver [Configuración](CONFIGURACION.md)
-2. **Entender el flujo:** Ver [Flujo Completo](FLUJO_COMPLETO.md) para entender los 4 endpoints principales
-3. **Usar la API:** Ver [Endpoints](ENDPOINTS.md) para documentación detallada
-4. **Integración SAP:** Ver [Integración SAP](INTEGRACION_SAP.md) si es necesario
-5. **Homologaciones SKU:** Ver [Quick Start Homologaciones](QUICKSTART_HOMOLOGACIONES.md) 🚀
-6. **Probar funcionalidades:** Ver [Guía de Pruebas](pruebas/README.md)
+2. **Setup Celery:** Ver [Celery Quick Start](CELERY_QUICKSTART.md) 🚀 para procesos automáticos
+3. **Entender el flujo:** Ver [Flujo Completo](FLUJO_COMPLETO.md) para entender los 4 endpoints principales
+4. **Usar la API:** Ver [Endpoints](ENDPOINTS.md) para documentación detallada
+5. **Integración SAP:** Ver [Integración SAP](INTEGRACION_SAP.md) si es necesario
+6. **Homologaciones SKU:** Ver [Quick Start Homologaciones](QUICKSTART_HOMOLOGACIONES.md) 🚀
+7. **Probar funcionalidades:** Ver [Guía de Pruebas](pruebas/README.md)
 
 ## 📝 Notas
 

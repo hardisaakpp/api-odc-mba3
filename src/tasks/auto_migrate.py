@@ -7,8 +7,8 @@ import asyncio
 from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Any
 
-from services.mba3_service import MBA3Service
-from config import (
+from src.services.mba3_service import MBA3Service
+from src.config import (
     MBA3_QUERY_PREDEFINIDA,
     AUTO_MIGRATE_INTERVAL_MINUTES,
     MIGRATE_DATE_FILTER_DAYS,
@@ -20,15 +20,15 @@ from config import (
     MBA3_DIGEST_PASSWORD
 )
 # Importar función para construir query con filtro de fecha
-from endpoints.despachos_migrar import build_query_with_date_filter
+from src.endpoints.despachos_migrar import build_query_with_date_filter
 # Importar excepciones para detectar errores específicos
-from exceptions import MBA3QueryError
+from src.exceptions import MBA3QueryError
 # Importar funciones de notificación por email
-from utils.email_notifier import send_migration_notification, send_error_notification, send_homologacion_notification
+from src.utils.email_notifier import send_migration_notification, send_error_notification, send_homologacion_notification
 # Importar servicio de homologación
-from database.services.homologacion_service import HomologacionService
+from src.database.services.homologacion_service import HomologacionService
 # Importar cliente MBA3 dedicado para el proceso automatizado
-from mba3_query_client import MBA3APIClient
+from src.mba3_query_client import MBA3APIClient
 
 logger = logging.getLogger(__name__)
 

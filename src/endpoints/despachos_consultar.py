@@ -7,11 +7,11 @@ from datetime import datetime
 from fastapi import FastAPI, Request, Depends
 from fastapi.responses import JSONResponse
 
-from services.mba3_service import MBA3Service
-from utils import get_source_from_headers
-from security.jwt_auth import verify_jwt_token, require_permission
-from exceptions import MBA3ConnectionError, MBA3QueryError
-from config import MBA3_QUERY_PREDEFINIDA
+from src.services.mba3_service import MBA3Service
+from src.utils import get_source_from_headers
+from src.security.jwt_auth import verify_jwt_token, require_permission
+from src.exceptions import MBA3ConnectionError, MBA3QueryError
+from src.config import MBA3_QUERY_PREDEFINIDA
 
 logger = logging.getLogger(__name__)
 

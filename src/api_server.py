@@ -32,16 +32,16 @@ src_dir = Path(__file__).parent
 if str(src_dir) not in sys.path:
     sys.path.insert(0, str(src_dir))
 
-from endpoints import create_endpoints
-from middleware.exception_handlers import setup_exception_handlers
-from config import (
+from src.endpoints import create_endpoints
+from src.middleware.exception_handlers import setup_exception_handlers
+from src.config import (
     ENABLE_CORS_RESTRICTION,
     CORS_ALLOWED_ORIGINS,
     ENVIRONMENT,
     HIDE_SWAGGER_IN_PROD,
     ENABLE_SQL_SERVER_STORAGE
 )
-from security.rate_limit import setup_rate_limiting
+from src.security.rate_limit import setup_rate_limiting
 
 # Configurar logging
 logging.basicConfig(
@@ -186,24 +186,41 @@ async def startup_event():
     else:
         logger.info("⏭️ SQL Server storage deshabilitado (ENABLE_SQL_SERVER_STORAGE=false)")
     
-    # 3. Iniciar tarea de migración automática con filtro de fecha
+    # 3. IMPORTANTE: NO iniciar asyncio auto_migrate
+    # La migración automática ahora se ejecuta con Celery Beat en un proceso separado
+    # Esto previene el cuello de botella entre el proceso manual y automático
     try:
-        logger.info("🤖 Iniciando tarea de migración automática...")
-        from tasks.auto_migrate import start_auto_migrate
-        from config import AUTO_MIGRATE_INTERVAL_MINUTES, ENABLE_AUTO_MIGRATE, MIGRATE_DATE_FILTER_DAYS
+        from config import ENABLE_AUTO_MIGRATE, AUTO_MIGRATE_INTERVAL_MINUTES, MIGRATE_DATE_FILTER_DAYS
+        
+        logger.info("=" * 70)
+        logger.info("📢 CONFIGURACIÓN DE MIGRACIÓN AUTOMÁTICA:")
         
         if ENABLE_AUTO_MIGRATE:
-            interval = AUTO_MIGRATE_INTERVAL_MINUTES
-            start_auto_migrate(interval_minutes=interval)
-            logger.info(f"✅ Tarea de migración automática iniciada (cada {interval} minutos)")
-            logger.info(f"   Filtro de fecha: últimos {MIGRATE_DATE_FILTER_DAYS} días")
+            logger.info("   ⚠️ Migración automática configurada con CELERY BEAT")
+            logger.info("   ⚠️ La migración automática corre en un PROCESO SEPARADO")
+            logger.info("   ⚠️ NO usa asyncio (previene cuello de botella con proceso manual)")
+            logger.info("")
+            logger.info("   📋 Para ejecutar el proceso automático, inicia en terminales separadas:")
+            logger.info("")
+            logger.info("   Terminal 2 (Worker Celery):")
+            logger.info("      celery -A src.celery_app worker --loglevel=info --pool=solo")
+            logger.info("")
+            logger.info("   Terminal 3 (Beat Celery - Scheduler):")
+            logger.info("      celery -A src.celery_app beat --loglevel=info")
+            logger.info("")
+            logger.info(f"   ⏰ Intervalo: cada {AUTO_MIGRATE_INTERVAL_MINUTES} minutos")
+            logger.info(f"   📅 Filtro: últimos {MIGRATE_DATE_FILTER_DAYS} días")
+            logger.info("")
+            logger.info("   ✅ El proceso automático NO afecta al proceso manual (/migrar/completo)")
+            logger.info("   ✅ Cada proceso tiene su propio pool de conexiones")
+            logger.info("   ✅ No hay competencia por recursos")
         else:
-            logger.info("⏭️ Migración automática deshabilitada (ENABLE_AUTO_MIGRATE=false)")
-            logger.info("   La migración manual sigue disponible mediante endpoint /migrar/completo")
-    except ImportError:
-        logger.warning("⚠️ Módulo tasks.auto_migrate no disponible. Migración automática deshabilitada.")
+            logger.info("   ⏭️ Migración automática DESHABILITADA (ENABLE_AUTO_MIGRATE=false)")
+            logger.info("   ℹ️ Solo está disponible el proceso manual: GET /migrar/completo")
+        
+        logger.info("=" * 70)
     except Exception as e:
-        logger.error(f"❌ Error al iniciar migración automática: {e}")
+        logger.error(f"❌ Error al verificar configuración de migración: {e}")
         logger.error("   La migración manual seguirá funcionando")
     
     logger.info("=" * 70)
