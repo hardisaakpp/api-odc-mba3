@@ -87,6 +87,10 @@ app = FastAPI(
         {
             "name": "Pruebas",
             "description": "Endpoints de prueba y debugging"
+        },
+        {
+            "name": "Cruce de Productos",
+            "description": "Endpoints para cruzar productos entre MBA3 y SAP"
         }
     ]
 )

@@ -74,6 +74,41 @@ SAP_SERVICE_LAYER_TIMEOUT=30
 
 **Nota:** Estas variables son necesarias para el endpoint `POST /integrar-sap` que envía órdenes de compra a SAP.
 
+### Notificaciones por Email
+
+```env
+# Habilitar/Deshabilitar notificaciones
+ENABLE_EMAIL_NOTIFICATIONS=true
+
+# Configuración SMTP
+EMAIL_SMTP_SERVER=mabeltrading-com-ec.mail.protection.outlook.com
+EMAIL_SMTP_PORT=25
+EMAIL_SMTP_USER=
+EMAIL_SMTP_PASSWORD=
+EMAIL_FROM=integrationsap@mabeltrading.com.ec
+EMAIL_FROM_NAME=INTEGRACIÓN SAP
+
+# Destinatarios segmentados por tipo de usuario
+# Usuario Principal: Operaciones/Despachos (recibe notificaciones de NUEVOS DESPACHOS)
+EMAIL_TO_OPERACIONES=operaciones@mabeltrading.com.ec
+
+# Usuario Homologaciones: Productos no homologados (recibe notificaciones de SKUs faltantes)
+EMAIL_TO_HOMOLOGACIONES=homologaciones@mabeltrading.com.ec,supervisor@mabeltrading.com.ec
+
+# Usuario Técnico: Errores y advertencias del sistema (recibe notificaciones técnicas)
+EMAIL_TO_TECNICOS=soporte@mabeltrading.com.ec,ti@mabeltrading.com.ec
+
+# Configuración de advertencias técnicas
+EMAIL_WARNING_TIME_LIMIT_PERCENT=80
+EMAIL_WARNING_HIGH_VOLUME_THRESHOLD=500
+EMAIL_WARNING_FAILURES_THRESHOLD=3
+```
+
+**Tipos de Notificaciones:**
+- **Operaciones**: Reciben emails cuando hay nuevos despachos disponibles (prioridad máxima)
+- **Homologaciones**: Reciben emails cuando se detectan productos no homologados en SAP (solo productos nuevos, no se reenvían)
+- **Técnicos**: Reciben emails de errores del sistema, advertencias de capacidad y problemas técnicos
+
 ### Seguridad (Opcional)
 
 ```env

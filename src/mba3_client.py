@@ -4,6 +4,7 @@ import json
 import logging
 from typing import Optional, Union
 from src.exceptions import MBA3ConnectionError
+from src.config import ENVIRONMENT
 
 # Configurar logging básico similar a la versión anterior
 logging.basicConfig(
@@ -193,8 +194,10 @@ class MBA3Client:
                     )
                 
                 self.token = token
-                logger.info("✅ Login exitoso, JWT obtenido")
-                logger.info(f"JWT (primeros 50 caracteres): {token[:50]}...")
+                if ENVIRONMENT == "development":
+                    logger.debug(f"✅ Login exitoso. JWT obtenido (primeros 20 caracteres): {token[:20]}...")
+                else:
+                    logger.info("✅ Login exitoso. JWT obtenido")
                 return token
                 
             except requests.exceptions.ConnectionError as e:

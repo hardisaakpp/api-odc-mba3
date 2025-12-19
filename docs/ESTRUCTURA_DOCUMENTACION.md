@@ -144,3 +144,4 @@ Después de revisar esta estructura:
 **Nota**: Esta estructura mantiene todos los documentos en un solo nivel (`docs/`) para facilitar referencias y evitar paths complejos. El índice en `README.md` proporciona la organización lógica.
 
 
+

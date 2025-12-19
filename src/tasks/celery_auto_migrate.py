@@ -209,33 +209,34 @@ def execute_auto_migration(self):
             else:
                 logger.info("⏭️ No hay nuevos registros, no se envía email")
             
-            # Verificar productos nuevos no homologados y notificar
+            # Verificar productos no homologados y notificar
             try:
-                productos_nuevos = homologacion_service.get_productos_no_homologados_nuevos()
-                if productos_nuevos:
-                    logger.info(f"⚠️ Detectados {len(productos_nuevos)} productos NUEVOS no homologados")
+                # Obtener TODOS los productos no homologados
+                productos_no_homologados = homologacion_service.get_productos_no_homologados()
+                
+                if productos_no_homologados:
+                    logger.info(f"⚠️ Detectados {len(productos_no_homologados)} productos no homologados en total")
                     
                     # Obtener estadísticas para el reporte
                     todos_productos = homologacion_service.get_todos_productos_no_homologados()
                     estadisticas = todos_productos.get("estadisticas", {})
                     
-                    # Enviar notificación por email
+                    # Enviar notificación por email (la función filtrará productos ya notificados)
                     logger.info("📧 Enviando notificación de productos no homologados...")
                     email_enviado = send_homologacion_notification(
-                        productos_no_homologados=productos_nuevos,
+                        productos_no_homologados=productos_no_homologados,
                         estadisticas=estadisticas,
-                        fecha_ejecucion=fecha_ejecucion
+                        fecha_ejecucion=fecha_ejecucion,
+                        filtrar_ya_notificados=True,  # ← Filtrar productos ya notificados
+                        homologacion_repository=homologacion_service.repository  # ← Pasar repository
                     )
                     
-                    # Registrar productos como notificados solo si el email se envió correctamente
                     if email_enviado:
-                        skus_notificados = [p["sku"] for p in productos_nuevos]
-                        registrados = homologacion_service.registrar_productos_notificados(skus_notificados)
-                        logger.info(f"✅ Registrados {registrados} productos como notificados")
+                        logger.info("✅ Notificación de homologación enviada (solo productos nuevos)")
                     else:
-                        logger.warning("⚠️ Email no se envió, productos no se registraron como notificados")
+                        logger.info("⏭️ No se envió notificación (todos ya fueron notificados)")
                 else:
-                    logger.debug("✅ No hay productos nuevos no homologados para notificar")
+                    logger.debug("✅ No hay productos no homologados para notificar")
             except Exception as homologacion_error:
                 # No fallar la migración si hay error en homologación
                 logger.warning(f"⚠️ Error al verificar productos no homologados: {homologacion_error}")

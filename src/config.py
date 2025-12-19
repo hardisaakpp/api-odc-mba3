@@ -35,12 +35,12 @@ else:
 # ============================================================================
 # Configuración de MBA3
 # ============================================================================
-# Estas credenciales se usan para inicializar el cliente MBA3 cuando se reciben consultas dinámicas
-# Se pueden configurar en el archivo .env o usar valores por defecto
+# ⚠️ IMPORTANTE: Configurar en .env (sin defaults por seguridad)
+# En desarrollo puedes dejar vacío, pero en producción es obligatorio
 
-MBA3_BASE_URL = os.getenv("MBA3_BASE_URL", "http://192.168.2.159:8081")
-MBA3_SERVICE_CODE = os.getenv("MBA3_CODIGO", os.getenv("MBA3_SERVICE_CODE", "CDB002"))
-MBA3_SERVICE_PASSWORD = os.getenv("MBA3_PWD", os.getenv("MBA3_SERVICE_PASSWORD", "***REMOVED***"))
+MBA3_BASE_URL = os.getenv("MBA3_BASE_URL", "")
+MBA3_SERVICE_CODE = os.getenv("MBA3_CODIGO", os.getenv("MBA3_SERVICE_CODE", ""))
+MBA3_SERVICE_PASSWORD = os.getenv("MBA3_PWD", os.getenv("MBA3_SERVICE_PASSWORD", ""))
 MBA3_DIGEST_USERNAME = os.getenv("MBA3_DIGEST_USERNAME", MBA3_SERVICE_CODE)
 MBA3_DIGEST_PASSWORD = os.getenv("MBA3_DIGEST_PASSWORD", MBA3_SERVICE_PASSWORD)
 
@@ -87,8 +87,9 @@ SQL_SERVER_SAP_PWD = os.getenv("SQL_SERVER_SAP_PWD", SQL_SERVER_PWD)
 SAP_LINKED_SERVER = os.getenv("SAP_LINKED_SERVER", "MYHANADB")
 
 # Base de datos y esquema de SAP
-SAP_DATABASE = os.getenv("SAP_DATABASE", "SBO_MABEL_PROD")
-SAP_SCHEMA = os.getenv("SAP_SCHEMA", "SBO_MABEL_PROD")
+# Configurar en .env para no exponer nombres en el código
+SAP_DATABASE = os.getenv("SAP_DATABASE", "")
+SAP_SCHEMA = os.getenv("SAP_SCHEMA", "")
 
 # Habilitar consultas a SAP (poner a False para deshabilitar)
 ENABLE_SAP_QUERIES = os.getenv("ENABLE_SAP_QUERIES", "true").lower() == "true"
@@ -107,7 +108,7 @@ SAP_SERVICE_LAYER_URL = os.getenv("SAP_SERVICE_LAYER_URL", "http://localhost:500
 # Credenciales de autenticación
 SAP_SERVICE_LAYER_USERNAME = os.getenv("SAP_SERVICE_LAYER_USERNAME", "")
 SAP_SERVICE_LAYER_PASSWORD = os.getenv("SAP_SERVICE_LAYER_PASSWORD", "")
-SAP_SERVICE_LAYER_DATABASE = os.getenv("SAP_SERVICE_LAYER_DATABASE", "SBODEMOUS")
+SAP_SERVICE_LAYER_DATABASE = os.getenv("SAP_SERVICE_LAYER_DATABASE", "")
 
 # Habilitar envío de ODC a SAP Service Layer
 ENABLE_SAP_SERVICE_LAYER = os.getenv("ENABLE_SAP_SERVICE_LAYER", "false").lower() == "true"
@@ -153,6 +154,79 @@ ENVIRONMENT = os.getenv("ENVIRONMENT", "development")  # development, staging, p
 HIDE_SWAGGER_IN_PROD = os.getenv("HIDE_SWAGGER_IN_PROD", "true").lower() == "true"
 
 # ============================================================================
+# Validaciones de Seguridad
+# ============================================================================
+import logging
+logger = logging.getLogger(__name__)
+
+# Validar configuraciones críticas en producción
+if ENVIRONMENT == "production":
+    # Validar MBA3
+    if not MBA3_BASE_URL:
+        raise ValueError(
+            "❌ MBA3_BASE_URL es obligatorio en producción. "
+            "Configura en .env"
+        )
+    if not MBA3_SERVICE_CODE:
+        raise ValueError(
+            "❌ MBA3_SERVICE_CODE (o MBA3_CODIGO) es obligatorio en producción. "
+            "Configura en .env"
+        )
+    if not MBA3_SERVICE_PASSWORD:
+        raise ValueError(
+            "❌ MBA3_SERVICE_PASSWORD (o MBA3_PWD) es obligatorio en producción. "
+            "Configura en .env"
+        )
+    
+    # Validar JWT_SECRET si JWT está habilitado
+    if ENABLE_JWT_AUTH:
+        if not JWT_SECRET or JWT_SECRET == 'clave_super_secreta_para_jwt_12345':
+            raise ValueError(
+                "❌ JWT_SECRET debe configurarse en .env en producción con un valor seguro. "
+                "No usar la clave por defecto. Genera una con: "
+                "python -c \"import secrets; print(secrets.token_urlsafe(64))\""
+            )
+    
+    # Advertencia sobre SSL deshabilitado
+    if ENABLE_SAP_SERVICE_LAYER and not SAP_SERVICE_LAYER_VERIFY_SSL:
+        logger.warning("=" * 70)
+        logger.warning("⚠️ ADVERTENCIA DE SEGURIDAD EN PRODUCCIÓN")
+        logger.warning("   SAP_SERVICE_LAYER_VERIFY_SSL=false")
+        logger.warning("   La verificación SSL está DESHABILITADA")
+        logger.warning("   Esto es INSEGURO en producción")
+        logger.warning("   Considera usar certificados válidos")
+        logger.warning("=" * 70)
+
+# Warnings en desarrollo
+elif ENVIRONMENT == "development":
+    warnings_found = False
+    
+    if not MBA3_BASE_URL or not MBA3_SERVICE_CODE or not MBA3_SERVICE_PASSWORD:
+        if not warnings_found:
+            logger.warning("=" * 70)
+            logger.warning("⚠️ CONFIGURACIÓN INCOMPLETA (Desarrollo)")
+            warnings_found = True
+        logger.warning("   Credenciales MBA3 no configuradas en .env")
+    
+    if ENABLE_JWT_AUTH and (not JWT_SECRET or JWT_SECRET == 'clave_super_secreta_para_jwt_12345'):
+        if not warnings_found:
+            logger.warning("=" * 70)
+            logger.warning("⚠️ CONFIGURACIÓN INCOMPLETA (Desarrollo)")
+            warnings_found = True
+        logger.warning("   JWT_SECRET usando valor por defecto (inseguro)")
+    
+    if ENABLE_SAP_SERVICE_LAYER and not SAP_SERVICE_LAYER_VERIFY_SSL:
+        if not warnings_found:
+            logger.warning("=" * 70)
+            logger.warning("⚠️ CONFIGURACIÓN INCOMPLETA (Desarrollo)")
+            warnings_found = True
+        logger.warning("   SAP SSL verification deshabilitada")
+    
+    if warnings_found:
+        logger.warning("   Esto está OK para desarrollo, pero corrige en producción")
+        logger.warning("=" * 70)
+
+# ============================================================================
 # Configuración de Migración Automática
 # ============================================================================
 # Habilitar migración automática (ejecuta /migrar cada N minutos)
@@ -196,9 +270,32 @@ EMAIL_SMTP_PASSWORD = os.getenv("EMAIL_SMTP_PASSWORD", "")  # Vacío para relay 
 EMAIL_FROM = os.getenv("EMAIL_FROM", "integrationsap@mabeltrading.com.ec")
 # Nombre del remitente para los correos
 EMAIL_FROM_NAME = os.getenv("EMAIL_FROM_NAME", "INTEGRACIÓN SAP")
-# EMAIL_TO puede ser múltiples separados por coma
-_email_to_str = os.getenv("EMAIL_TO", "cortiz@mabeltrading.com.ec")
+
+# EMAIL_TO - SEGMENTADO POR TIPO DE USUARIO
+# Usuario Principal: Operaciones/Despachos (recibe notificaciones de NUEVOS DESPACHOS)
+_email_operaciones = os.getenv("EMAIL_TO_OPERACIONES", "cortiz@mabeltrading.com.ec")
+EMAIL_TO_OPERACIONES = [email.strip() for email in _email_operaciones.split(",") if email.strip()]
+
+# Usuario Homologaciones: Productos no homologados (recibe notificaciones de SKUs faltantes)
+_email_homologaciones = os.getenv("EMAIL_TO_HOMOLOGACIONES", "cortiz@mabeltrading.com.ec")
+EMAIL_TO_HOMOLOGACIONES = [email.strip() for email in _email_homologaciones.split(",") if email.strip()]
+
+# Usuario Técnico: Errores y advertencias del sistema (recibe notificaciones técnicas)
+_email_tecnicos = os.getenv("EMAIL_TO_TECNICOS", "cortiz@mabeltrading.com.ec")
+EMAIL_TO_TECNICOS = [email.strip() for email in _email_tecnicos.split(",") if email.strip()]
+
+# EMAIL_TO (legacy - para compatibilidad con código existente)
+# Por defecto usa EMAIL_TO_OPERACIONES
+_email_to_str = os.getenv("EMAIL_TO", _email_operaciones)
 EMAIL_TO = [email.strip() for email in _email_to_str.split(",") if email.strip()]
+
+# Configuración de advertencias técnicas
+# Porcentaje del time limit para enviar advertencia
+EMAIL_WARNING_TIME_LIMIT_PERCENT = int(os.getenv("EMAIL_WARNING_TIME_LIMIT_PERCENT", "80"))
+# Número de facturas que se considera "alto" para advertir
+EMAIL_WARNING_HIGH_VOLUME_THRESHOLD = int(os.getenv("EMAIL_WARNING_HIGH_VOLUME_THRESHOLD", "500"))
+# Número de fallos en 24h para advertir
+EMAIL_WARNING_FAILURES_THRESHOLD = int(os.getenv("EMAIL_WARNING_FAILURES_THRESHOLD", "3"))
 
 # ============================================================================
 # Queries Predefinidas

@@ -6,9 +6,8 @@ Define los esquemas de request y response para los endpoints.
 
 from __future__ import annotations
 
-from typing import Optional, Dict, Any, Union
+from typing import Optional, Dict, Any, List
 from pydantic import BaseModel, Field, field_validator, model_validator
-from datetime import datetime
 
 
 class QueryRequest(BaseModel):

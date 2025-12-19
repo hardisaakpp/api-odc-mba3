@@ -15,6 +15,7 @@ import time
 from typing import Dict, Any, Optional
 from src.mba3_client import MBA3Client
 from src.exceptions import MBA3QueryError, MBA3ConnectionError
+from src.config import ENVIRONMENT
 
 logger = logging.getLogger(__name__)
 
@@ -61,7 +62,10 @@ class MBA3APIClient:
             if token:
                 self.jwt_token = token
                 self.last_login_time = time.time()
-                logger.info(f"Login exitoso. JWT obtenido (primeros 50 caracteres): {self.jwt_token[:50]}...")
+                if ENVIRONMENT == "development":
+                    logger.debug(f"Login exitoso. JWT obtenido (primeros 20 caracteres): {self.jwt_token[:20]}...")
+                else:
+                    logger.info("Login exitoso. JWT obtenido")
                 return True
             return False
         except Exception as e:
@@ -223,7 +227,10 @@ class MBA3APIClient:
         headers = {}
         if self.jwt_token:
             headers['Authorization'] = self.jwt_token
-            logger.debug(f"JWT presente en headers (primeros 50 caracteres): {self.jwt_token[:50]}...")
+            if ENVIRONMENT == "development":
+                logger.debug(f"JWT presente en headers (primeros 20 caracteres): {self.jwt_token[:20]}...")
+            else:
+                logger.debug("JWT presente en headers")
             # Validar que el JWT no esté vacío
             if not self.jwt_token.strip():
                 logger.error("⚠️ JWT está vacío, intentando obtener nuevo JWT...")

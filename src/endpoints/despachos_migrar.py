@@ -268,6 +268,46 @@ def register_migrar_endpoint(app: FastAPI):
             logger.info(f"   Total registros: {response_content['metadata']['count']}")
             logger.info("=" * 70)
             
+            # NUEVO: Verificar productos no homologados y notificar EN TIEMPO REAL
+            # Solo si hay facturas nuevas guardadas
+            if save_status and save_status.get('facturas_guardadas', 0) > 0:
+                try:
+                    from src.database.services.homologacion_service import HomologacionService
+                    from src.utils.email_notifier import send_homologacion_notification
+                    
+                    logger.info("🔍 Verificando productos no homologados en migración manual...")
+                    
+                    # Usar context manager para conexión
+                    from src.database.connection import get_db_connection_context
+                    with get_db_connection_context() as conn:
+                        homologacion_service = HomologacionService(conn)
+                        
+                        # Detectar productos no homologados
+                        productos_no_homologados = homologacion_service.get_productos_no_homologados()
+                        
+                        if productos_no_homologados and len(productos_no_homologados) > 0:
+                            logger.info(f"⚠️ Se detectaron {len(productos_no_homologados)} productos no homologados")
+                            
+                            # Enviar notificación FILTRANDO productos ya notificados
+                            email_enviado = send_homologacion_notification(
+                                productos_no_homologados=productos_no_homologados,
+                                estadisticas=None,
+                                fecha_ejecucion=datetime.now(),
+                                filtrar_ya_notificados=True,  # ← CLAVE: Filtrar ya notificados
+                                homologacion_repository=homologacion_service.repository
+                            )
+                            
+                            if email_enviado:
+                                logger.info("✅ Notificación de homologación enviada (solo productos nuevos)")
+                            else:
+                                logger.info("⏭️ No se envió notificación (todos ya fueron notificados)")
+                        else:
+                            logger.info("✅ No hay productos no homologados")
+                            
+                except Exception as homolog_error:
+                    logger.warning(f"⚠️ Error al verificar homologaciones: {homolog_error}")
+                    # No afectar la respuesta principal
+            
             # Retornar respuesta con metadata
             return JSONResponse(
                 status_code=200,

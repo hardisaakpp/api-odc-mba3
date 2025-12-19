@@ -20,7 +20,13 @@ from src.config import (
     EMAIL_FROM,
     EMAIL_FROM_NAME,
     EMAIL_TO,
-    ENABLE_EMAIL_NOTIFICATIONS
+    EMAIL_TO_OPERACIONES,
+    EMAIL_TO_HOMOLOGACIONES,
+    EMAIL_TO_TECNICOS,
+    ENABLE_EMAIL_NOTIFICATIONS,
+    EMAIL_WARNING_TIME_LIMIT_PERCENT,
+    EMAIL_WARNING_HIGH_VOLUME_THRESHOLD,
+    EMAIL_WARNING_FAILURES_THRESHOLD
 )
 
 logger = logging.getLogger(__name__)
@@ -33,7 +39,9 @@ def send_migration_notification(
     fecha_ejecucion: Optional[datetime] = None
 ) -> bool:
     """
-    Envía una notificación por correo electrónico cuando hay nuevos registros migrados.
+    Envía notificación de nuevos despachos al USUARIO DE OPERACIONES.
+    
+    DESTINATARIO: EMAIL_TO_OPERACIONES
     
     Args:
         facturas_guardadas: Número de facturas nuevas guardadas
@@ -57,11 +65,11 @@ def send_migration_notification(
         fecha_ejecucion = datetime.now()
     
     try:
-        # Convertir EMAIL_TO a lista si es string
-        recipients = EMAIL_TO if isinstance(EMAIL_TO, list) else [EMAIL_TO] if EMAIL_TO else []
+        # USAR EMAIL_TO_OPERACIONES en lugar de EMAIL_TO
+        recipients = EMAIL_TO_OPERACIONES if isinstance(EMAIL_TO_OPERACIONES, list) else [EMAIL_TO_OPERACIONES] if EMAIL_TO_OPERACIONES else []
         
         if not recipients:
-            logger.warning("⚠️ No hay destinatarios configurados para notificaciones por email")
+            logger.warning("⚠️ No hay destinatarios de OPERACIONES configurados")
             return False
         
         # Crear mensaje
@@ -156,7 +164,9 @@ def send_error_notification(
     fecha_ejecucion: Optional[datetime] = None
 ) -> bool:
     """
-    Envía una notificación por correo electrónico cuando hay un error en la migración.
+    Envía notificación de errores al USUARIO TÉCNICO.
+    
+    DESTINATARIO: EMAIL_TO_TECNICOS
     
     Args:
         error_message: Mensaje de error
@@ -172,11 +182,11 @@ def send_error_notification(
         fecha_ejecucion = datetime.now()
     
     try:
-        # Convertir EMAIL_TO a lista si es string
-        recipients = EMAIL_TO if isinstance(EMAIL_TO, list) else [EMAIL_TO] if EMAIL_TO else []
+        # USAR EMAIL_TO_TECNICOS en lugar de EMAIL_TO
+        recipients = EMAIL_TO_TECNICOS if isinstance(EMAIL_TO_TECNICOS, list) else [EMAIL_TO_TECNICOS] if EMAIL_TO_TECNICOS else []
         
         if not recipients:
-            logger.warning("⚠️ No hay destinatarios configurados para notificaciones por email")
+            logger.warning("⚠️ No hay destinatarios TÉCNICOS configurados")
             return False
         
         msg = MIMEMultipart()
@@ -255,10 +265,14 @@ def send_error_notification(
 def send_homologacion_notification(
     productos_no_homologados: List[dict],
     estadisticas: Optional[dict] = None,
-    fecha_ejecucion: Optional[datetime] = None
+    fecha_ejecucion: Optional[datetime] = None,
+    filtrar_ya_notificados: bool = True,
+    homologacion_repository = None
 ) -> bool:
     """
-    Envía una notificación por correo electrónico cuando se detectan productos no homologados.
+    Envía notificación de productos no homologados al USUARIO DE HOMOLOGACIONES.
+    
+    DESTINATARIO: EMAIL_TO_HOMOLOGACIONES
     
     Args:
         productos_no_homologados: Lista de productos no homologados:
@@ -282,6 +296,8 @@ def send_homologacion_notification(
                 "porcentaje_homologacion": 96.67
             }
         fecha_ejecucion: Fecha y hora de la ejecución (por defecto ahora)
+        filtrar_ya_notificados: Si True, filtra productos ya notificados anteriormente
+        homologacion_repository: Repository para acceder a registros de notificaciones
     
     Returns:
         True si el email se envió correctamente, False en caso contrario
@@ -298,19 +314,42 @@ def send_homologacion_notification(
     if not fecha_ejecucion:
         fecha_ejecucion = datetime.now()
     
+    # FILTRAR productos ya notificados si se solicita
+    productos_a_notificar = productos_no_homologados
+    skus_ya_notificados = set()
+    
+    if filtrar_ya_notificados and homologacion_repository:
+        try:
+            skus_ya_notificados = homologacion_repository.get_skus_ya_notificados()
+            productos_a_notificar = [
+                p for p in productos_no_homologados 
+                if p.get("sku") not in skus_ya_notificados
+            ]
+            
+            if not productos_a_notificar:
+                logger.info("⏭️ Todos los productos no homologados ya fueron notificados")
+                return False
+            
+            logger.info(f"📧 Productos a notificar: {len(productos_a_notificar)} (filtrados: {len(skus_ya_notificados)})")
+            
+        except Exception as e:
+            logger.warning(f"⚠️ No se pudo filtrar productos ya notificados: {e}")
+            # En caso de error, notificar todos
+            productos_a_notificar = productos_no_homologados
+    
     try:
-        # Convertir EMAIL_TO a lista si es string
-        recipients = EMAIL_TO if isinstance(EMAIL_TO, list) else [EMAIL_TO] if EMAIL_TO else []
+        # USAR EMAIL_TO_HOMOLOGACIONES en lugar de EMAIL_TO
+        recipients = EMAIL_TO_HOMOLOGACIONES if isinstance(EMAIL_TO_HOMOLOGACIONES, list) else [EMAIL_TO_HOMOLOGACIONES] if EMAIL_TO_HOMOLOGACIONES else []
         
         if not recipients:
-            logger.warning("⚠️ No hay destinatarios configurados para notificaciones por email")
+            logger.warning("⚠️ No hay destinatarios de HOMOLOGACIONES configurados")
             return False
         
         # Crear mensaje
         msg = MIMEMultipart()
         msg['From'] = EMAIL_FROM
         msg['To'] = ", ".join(recipients)
-        msg['Subject'] = f"⚠️ Productos NO Homologados Detectados - {len(productos_no_homologados)} producto(s)"
+        msg['Subject'] = f"⚠️ Productos NO Homologados Detectados - {len(productos_a_notificar)} producto(s) NUEVOS"
         
         # Preparar estadísticas
         if estadisticas:
@@ -321,17 +360,17 @@ def send_homologacion_notification(
         else:
             total_mba3 = 0
             homologados = 0
-            no_homologados = len(productos_no_homologados)
+            no_homologados = len(productos_a_notificar)
             porcentaje = 0.0
         
         # Separar productos por tipo de problema
-        productos_no_existen = [p for p in productos_no_homologados if p.get("tipo_problema") == "no_existe"]
-        productos_mismatch = [p for p in productos_no_homologados if p.get("tipo_problema") == "mismatch"]
-        productos_error = [p for p in productos_no_homologados if p.get("tipo_problema") == "error"]
-        productos_sin_tipo = [p for p in productos_no_homologados if not p.get("tipo_problema")]
+        productos_no_existen = [p for p in productos_a_notificar if p.get("tipo_problema") == "no_existe"]
+        productos_mismatch = [p for p in productos_a_notificar if p.get("tipo_problema") == "mismatch"]
+        productos_error = [p for p in productos_a_notificar if p.get("tipo_problema") == "error"]
+        productos_sin_tipo = [p for p in productos_a_notificar if not p.get("tipo_problema")]
         
         # Crear tabla HTML de productos con distinción de tipo (máximo 20 para no saturar el email)
-        productos_mostrar = productos_no_homologados[:20]
+        productos_mostrar = productos_a_notificar[:20]
         productos_tabla = ""
         for idx, producto in enumerate(productos_mostrar, 1):
             sku = producto.get("sku", "N/A")
@@ -367,11 +406,11 @@ def send_homologacion_notification(
             </tr>
             """
         
-        if len(productos_no_homologados) > 20:
+        if len(productos_a_notificar) > 20:
             productos_tabla += f"""
             <tr>
                 <td colspan="8" style="text-align: center; font-style: italic;">
-                    ... y {len(productos_no_homologados) - 20} producto(s) más
+                    ... y {len(productos_a_notificar) - 20} producto(s) más
                 </td>
             </tr>
             """
@@ -523,8 +562,8 @@ def send_homologacion_notification(
            Última Aparición: {ultima_aparicion}
         """
         
-        if len(productos_no_homologados) > 20:
-            body_text += f"\n        ... y {len(productos_no_homologados) - 20} producto(s) más\n"
+        if len(productos_a_notificar) > 20:
+            body_text += f"\n        ... y {len(productos_a_notificar) - 20} producto(s) más\n"
         
         body_text += f"""
         
@@ -557,7 +596,7 @@ def send_homologacion_notification(
             ])
             
             # Escribir datos de todos los productos (no solo los primeros 20)
-            for producto in productos_no_homologados:
+            for producto in productos_a_notificar:
                 tipo_problema = producto.get("tipo_problema", "no_existe")
                 item_code_sap = producto.get("item_code_sap", "")
                 
@@ -618,10 +657,153 @@ def send_homologacion_notification(
             server.send_message(msg, to_addrs=recipients)
         
         logger.info(f"✅ Email de homologación enviado a {', '.join(recipients)}")
-        logger.info(f"   Productos no homologados reportados: {len(productos_no_homologados)}")
+        logger.info(f"   Productos no homologados reportados: {len(productos_a_notificar)}")
+        
+        # REGISTRAR productos notificados
+        if homologacion_repository:
+            try:
+                skus_notificados = [p.get("sku") for p in productos_a_notificar if p.get("sku")]
+                registrados = homologacion_repository.registrar_productos_notificados(skus_notificados)
+                logger.info(f"✅ Registrados {registrados} productos como notificados")
+            except Exception as e:
+                logger.warning(f"⚠️ No se pudo registrar productos notificados: {e}")
+        
         return True
         
     except Exception as e:
         logger.error(f"❌ Error al enviar email de homologación: {e}", exc_info=True)
+        return False
+
+
+def send_capacity_warning_notification(
+    warning_type: str,
+    details: dict,
+    fecha_ejecucion: Optional[datetime] = None
+) -> bool:
+    """
+    Envía notificación de advertencia de capacidad al USUARIO TÉCNICO.
+    
+    DESTINATARIO: EMAIL_TO_TECNICOS
+    
+    Args:
+        warning_type: Tipo de advertencia ('time_limit', 'high_volume', 'high_failures')
+        details: Detalles de la advertencia
+        fecha_ejecucion: Fecha de ejecución
+    
+    Returns:
+        True si se envió correctamente, False en caso contrario
+    """
+    if not ENABLE_EMAIL_NOTIFICATIONS:
+        return False
+    
+    if not fecha_ejecucion:
+        fecha_ejecucion = datetime.now()
+    
+    try:
+        recipients = EMAIL_TO_TECNICOS if isinstance(EMAIL_TO_TECNICOS, list) else [EMAIL_TO_TECNICOS] if EMAIL_TO_TECNICOS else []
+        
+        if not recipients:
+            logger.warning("⚠️ No hay destinatarios TÉCNICOS configurados")
+            return False
+        
+        # Determinar título y mensaje según el tipo
+        if warning_type == 'time_limit':
+            titulo = "⚠️ Advertencia: Tiempo de Ejecución Alto"
+            mensaje_principal = f"La migración está usando {details.get('porcentaje_usado', 0)}% del tiempo límite."
+            color = "#ff9800"  # Naranja
+        elif warning_type == 'high_volume':
+            titulo = "📊 Advertencia: Volumen Alto de Registros"
+            mensaje_principal = f"Se detectaron {details.get('num_facturas', 0)} facturas (umbral: {details.get('umbral', 0)})."
+            color = "#2196F3"  # Azul
+        elif warning_type == 'high_failures':
+            titulo = "🔴 Advertencia: Múltiples Fallos Detectados"
+            mensaje_principal = f"Se detectaron {details.get('num_fallos', 0)} fallos en las últimas 24 horas."
+            color = "#f44336"  # Rojo
+        else:
+            titulo = "⚠️ Advertencia del Sistema"
+            mensaje_principal = "Se detectó una condición de advertencia."
+            color = "#ff9800"
+        
+        msg = MIMEMultipart()
+        msg['From'] = EMAIL_FROM
+        msg['To'] = ", ".join(recipients)
+        msg['Subject'] = titulo
+        
+        # Crear tabla de detalles
+        detalles_html = ""
+        for key, value in details.items():
+            detalles_html += f"<li><strong>{key.replace('_', ' ').title()}:</strong> {value}</li>"
+        
+        body_html = f"""
+        <html>
+        <head>
+            <style>
+                body {{ font-family: Arial, sans-serif; }}
+                .container {{ max-width: 600px; margin: 0 auto; padding: 20px; }}
+                .header {{ background-color: {color}; color: white; padding: 15px; text-align: center; }}
+                .content {{ background-color: #f9f9f9; padding: 20px; }}
+                .warning {{ background-color: white; padding: 15px; margin: 10px 0; border-left: 4px solid {color}; }}
+                .footer {{ text-align: center; color: #666; font-size: 12px; margin-top: 20px; }}
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <div class="header">
+                    <h2>{titulo}</h2>
+                </div>
+                <div class="content">
+                    <p>{mensaje_principal}</p>
+                    
+                    <div class="warning">
+                        <h3>📋 Detalles:</h3>
+                        <ul>
+                            {detalles_html}
+                        </ul>
+                    </div>
+                    
+                    <p><strong>Fecha y Hora:</strong> {fecha_ejecucion.strftime('%Y-%m-%d %H:%M:%S')}</p>
+                    
+                    <p><strong>Acción Recomendada:</strong> Revisar los logs del sistema y considerar ajustar la configuración si es necesario.</p>
+                </div>
+                <div class="footer">
+                    <p>Sistema MBA3 Consultas - Notificación Técnica</p>
+                </div>
+            </div>
+        </body>
+        </html>
+        """
+        
+        body_text = f"""
+        {titulo}
+        
+        {mensaje_principal}
+        
+        Detalles:
+        """
+        for key, value in details.items():
+            body_text += f"- {key.replace('_', ' ').title()}: {value}\n"
+        
+        body_text += f"""
+        
+        Fecha y Hora: {fecha_ejecucion.strftime('%Y-%m-%d %H:%M:%S')}
+        
+        Acción Recomendada: Revisar los logs del sistema y considerar ajustar la configuración si es necesario.
+        """
+        
+        msg.attach(MIMEText(body_text, 'plain'))
+        msg.attach(MIMEText(body_html, 'html'))
+        
+        with smtplib.SMTP(EMAIL_SMTP_SERVER, EMAIL_SMTP_PORT) as server:
+            if EMAIL_SMTP_PORT == 587:
+                server.starttls()
+            if EMAIL_SMTP_PASSWORD:
+                server.login(EMAIL_SMTP_USER, EMAIL_SMTP_PASSWORD)
+            server.send_message(msg, to_addrs=recipients)
+        
+        logger.info(f"✅ Email de advertencia de capacidad enviado a {', '.join(recipients)}")
+        return True
+        
+    except Exception as e:
+        logger.error(f"❌ Error al enviar email de advertencia: {e}", exc_info=True)
         return False
 
