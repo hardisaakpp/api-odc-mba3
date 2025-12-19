@@ -279,22 +279,29 @@ def register_migrar_endpoint(app: FastAPI):
                     
                     # Usar context manager para conexión
                     from src.database.connection import get_db_connection_context
+                    from src.database.repositories.homologacion_repository import HomologacionRepository
+                    
                     with get_db_connection_context() as conn:
-                        homologacion_service = HomologacionService(conn)
+                        homologacion_service = HomologacionService()
                         
-                        # Detectar productos no homologados
-                        productos_no_homologados = homologacion_service.get_productos_no_homologados()
+                        # Obtener TODOS los productos no homologados con estadísticas
+                        todos_productos = homologacion_service.get_todos_productos_no_homologados()
+                        productos_no_homologados = todos_productos.get("productos", [])
+                        estadisticas = todos_productos.get("estadisticas", {})
                         
                         if productos_no_homologados and len(productos_no_homologados) > 0:
                             logger.info(f"⚠️ Se detectaron {len(productos_no_homologados)} productos no homologados")
                             
+                            # Crear repository para filtrar productos ya notificados
+                            repository = HomologacionRepository(conn)
+                            
                             # Enviar notificación FILTRANDO productos ya notificados
                             email_enviado = send_homologacion_notification(
                                 productos_no_homologados=productos_no_homologados,
-                                estadisticas=None,
+                                estadisticas=estadisticas,
                                 fecha_ejecucion=datetime.now(),
                                 filtrar_ya_notificados=True,  # ← CLAVE: Filtrar ya notificados
-                                homologacion_repository=homologacion_service.repository
+                                homologacion_repository=repository
                             )
                             
                             if email_enviado:

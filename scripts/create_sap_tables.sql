@@ -63,7 +63,7 @@ BEGIN
         item_code VARCHAR(50) NOT NULL,                 -- ItemCode de SAP (mismo que SKU)
         item_name VARCHAR(200) NULL,                    -- Nombre del producto en SAP
         pack_sap VARCHAR(10) NULL,                      -- U_IXX_PACK de SAP (X1, X2, X3, etc.)
-        unidad_conversion DECIMAL(10, 9) NULL,          -- Unidad de conversión calculada
+        unidad_conversion DECIMAL(10, 4) NULL,          -- Unidad de conversión calculada (10,4 permite valores hasta 999999.9999 con mayor precisión decimal)
         pack_id VARCHAR(10) NULL,                       -- FK a pack_conversion.pack_id
         ultima_consulta DATETIME NULL,                  -- Cuándo se consultó SAP por última vez
         activo BIT DEFAULT 1,

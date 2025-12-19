@@ -12,7 +12,8 @@ from requests.auth import HTTPDigestAuth
 import json
 import logging
 import time
-from typing import Dict, Any, Optional
+import re
+from typing import Dict, Any, Optional, Union, List
 from src.mba3_client import MBA3Client
 from src.exceptions import MBA3QueryError, MBA3ConnectionError
 from src.config import ENVIRONMENT
@@ -72,7 +73,7 @@ class MBA3APIClient:
             logger.error(f"No se pudo hacer login: {e}")
             return False
     
-    def execute_query(self, query: str, require_jwt: bool = True) -> Optional[Dict[Any, Any]]:
+    def execute_query(self, query: str, require_jwt: bool = True) -> Optional[Union[List[Any], Dict[Any, Any]]]:
         """
         Ejecuta una consulta SQL en la base de datos MBA3.
         Según la documentación, se debe incluir el JWT en el header SetRequestHeader.
@@ -82,7 +83,7 @@ class MBA3APIClient:
             require_jwt: Si es True, intenta obtener JWT primero. Si es False, intenta sin JWT.
             
         Returns:
-            Respuesta JSON de la API como diccionario, o None si hay error
+            Respuesta JSON de la API como lista o diccionario, o None si hay error
         """
         # Si require_jwt es True y no hay JWT, intentar hacer login primero
         just_logged_in = False
@@ -130,7 +131,22 @@ class MBA3APIClient:
                 select_idx = query_upper.find("SELECT")
                 from_idx = query_upper.find("FROM")
                 select_part = query_original[select_idx + 6:from_idx].strip()
-                select_fields = select_part if select_part else "*"
+                
+                # Log del SELECT original parseado
+                logger.debug(f"SELECT original parseado: '{select_part}'")
+                
+                # NORMALIZAR: Eliminar saltos de línea y espacios múltiples, mantener comas
+                # Esto asegura que MBA3 procese correctamente todos los campos
+                if select_part:
+                    # Reemplazar saltos de línea, tabs y espacios múltiples por un solo espacio
+                    # Mantener las comas entre campos
+                    select_fields = re.sub(r'\s+', ' ', select_part).strip()
+                    # Eliminar espacios después de comas (ej: "campo1, campo2" -> "campo1,campo2")
+                    # Esto es importante porque MBA3 puede interpretar mal los espacios después de comas
+                    select_fields = re.sub(r',\s+', ',', select_fields)
+                    logger.debug(f"SELECT normalizado: '{select_fields}'")
+                else:
+                    select_fields = "*"
                 
                 # Parsear FROM - usar original para preservar mayúsculas/minúsculas
                 from_start = from_idx + 4
@@ -208,7 +224,9 @@ class MBA3APIClient:
         # Log detallado de lo que se está enviando
         logger.debug(f"URL: {url}")
         logger.debug(f"Form-data a enviar: {form_data}")
-        logger.info(f"Ejecutando consulta - Tabla: {from_table}, WHERE: {where_clause or 'N/A'}")
+        logger.info(f"Ejecutando consulta - Tabla: {from_table}, SELECT: {select_fields}, WHERE: {where_clause or 'N/A'}")
+        # Log crítico para debugging: mostrar exactamente qué se envía en el campo select
+        logger.info(f"🔍 Campo SELECT que se envía a MBA3: '{select_fields}' (longitud: {len(select_fields)})")
         
         # Validar que los campos requeridos no estén vacíos
         if not select_fields or select_fields.strip() == "":
@@ -254,6 +272,30 @@ class MBA3APIClient:
                 try:
                     result = response.json()
                     logger.info("Consulta exitosa!")
+                    
+                    # Log detallado de la respuesta para debugging
+                    if isinstance(result, list):
+                        logger.debug(f"Respuesta es lista con {len(result)} elementos")
+                        if len(result) > 0:
+                            logger.debug(f"Primer elemento tipo: {type(result[0])}")
+                            if isinstance(result[0], dict):
+                                campos = list(result[0].keys())
+                                logger.debug(f"Campos en primer elemento: {campos} ({len(campos)} campos)")
+                                # Mostrar muestra del primer elemento para debugging
+                                logger.debug(f"Muestra del primer elemento (primeros 500 chars): {str(result[0])[:500]}")
+                    elif isinstance(result, dict):
+                        logger.debug(f"Respuesta es diccionario con claves: {list(result.keys())}")
+                        # Mostrar muestra del diccionario para debugging
+                        logger.debug(f"Muestra del diccionario (primeros 500 chars): {str(result)[:500]}")
+                        # Buscar si hay una lista dentro del diccionario
+                        for key, value in result.items():
+                            if isinstance(value, list) and len(value) > 0:
+                                logger.debug(f"Encontrada lista en clave '{key}' con {len(value)} elementos")
+                                if isinstance(value[0], dict):
+                                    campos = list(value[0].keys())
+                                    logger.debug(f"Campos en primer elemento de '{key}': {campos} ({len(campos)} campos)")
+                                    logger.debug(f"Muestra del primer elemento de '{key}' (primeros 500 chars): {str(value[0])[:500]}")
+                    
                     return result
                 except json.JSONDecodeError:
                     logger.warning(f"La respuesta no es JSON válido. Respuesta recibida: {response.text[:500]}")

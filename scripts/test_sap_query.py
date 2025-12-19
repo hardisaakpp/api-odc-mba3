@@ -12,16 +12,17 @@ import sys
 import os
 from pathlib import Path
 
-# Agregar src al path para importar módulos
+# Agregar el directorio raíz del proyecto al path para importar módulos
 project_root = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(project_root / "src"))
+if str(project_root) not in sys.path:
+    sys.path.insert(0, str(project_root))
 
 import logging
-from database.clients.sap_client import SAPClient
-from database.services.sap_service import SAPService
-from database.repositories.producto_sap_repository import ProductoSAPRepository
-from database.connection import get_db_connection
-from config import (
+from src.database.clients.sap_client import SAPClient
+from src.database.services.sap_service import SAPService
+from src.database.repositories.producto_sap_repository import ProductoSAPRepository
+from src.database.connection import get_db_connection
+from src.config import (
     ENABLE_SAP_QUERIES, 
     SAP_LINKED_SERVER,
     SQL_SERVER_SERVER,

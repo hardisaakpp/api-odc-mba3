@@ -4,6 +4,7 @@ Endpoint para procesar despachos y copiarlos a órdenes de compra.
 
 import logging
 import asyncio
+import uuid
 from datetime import datetime
 from typing import Optional, List, Dict, Any
 from fastapi import FastAPI, Request, Query, Depends
@@ -17,6 +18,72 @@ from src.database.connection import get_db_connection
 from src.security.jwt_auth import verify_jwt_token, require_permission
 
 logger = logging.getLogger(__name__)
+
+
+def generar_process_id() -> str:
+    """
+    Genera un process_id único para trazabilidad.
+    
+    Returns:
+        String con formato: odc-YYYY-MM-DD-UUID
+    """
+    timestamp = datetime.now().strftime("%Y-%m-%d")
+    unique_id = str(uuid.uuid4())[:8]
+    return f"odc-{timestamp}-{unique_id}"
+
+
+def verificar_tiene_odc_actualizado(
+    despacho_repo: DespachoRepository, 
+    oc_repo: OrdenCompraRepository, 
+    despacho_ids: List[str]
+) -> bool:
+    """
+    Verifica que todos los despachos tienen OC asociada.
+    
+    NOTA: `tiene_odc` es un estado derivado, no persistido.
+    Se calcula verificando si existe una relación despacho_id → oc_id en orden_compra_cabecera.
+    
+    Args:
+        despacho_repo: Repositorio de despachos
+        oc_repo: Repositorio de órdenes de compra
+        despacho_ids: Lista de despacho_ids a verificar
+        
+    Returns:
+        True si todos tienen OC, False en caso contrario
+    """
+    try:
+        for despacho_id in despacho_ids:
+            oc_id = oc_repo.find_by_despacho_id(despacho_id)
+            if not oc_id:
+                logger.warning(f"⚠️ Despacho {despacho_id} no tiene OC después del proceso")
+                return False
+        return True
+    except Exception as e:
+        logger.error(f"❌ Error al verificar tiene_odc: {e}")
+        return False
+
+
+def verificar_ocs_disponibles(oc_repo: OrdenCompraRepository, oc_ids: List[str]) -> bool:
+    """
+    Verifica que las OCs están disponibles para consulta.
+    
+    Args:
+        oc_repo: Repositorio de órdenes de compra
+        oc_ids: Lista de oc_ids a verificar
+        
+    Returns:
+        True si todas están disponibles, False en caso contrario
+    """
+    try:
+        for oc_id in oc_ids:
+            oc_info = oc_repo.get_existing_cabecera(oc_id)
+            if not oc_info:
+                logger.warning(f"⚠️ OC {oc_id} no está disponible después del proceso")
+                return False
+        return True
+    except Exception as e:
+        logger.error(f"❌ Error al verificar OCs disponibles: {e}")
+        return False
 
 
 def register_procesar_endpoint(app: FastAPI):
@@ -70,6 +137,8 @@ def register_procesar_endpoint(app: FastAPI):
         - ✅ Mapea empresa → proveedor desde tabla cliente
         - ✅ Usa upsert: actualiza si existe OC, crea si no existe
         - ✅ Crea las ODC con estado "PENDIENTE" (listas para enviar a SAP)
+        - ✅ Verifica post-commit que los datos estén sincronizados
+        - ✅ Retorna `process_id` único para trazabilidad
         
         **Nota:** Este endpoint asume que los despachos ya están guardados en despacho_cabecera/detalle.
         Para proceso completo (consulta + guarda + copia + integración), usar los 4 endpoints en secuencia.
@@ -85,8 +154,41 @@ def register_procesar_endpoint(app: FastAPI):
         - `ENVIADA`: Enviada exitosamente a SAP (se actualiza en endpoint INTEGRAR)
         - `ERROR`: Error al enviar a SAP (se actualiza en endpoint INTEGRAR)
         
+        **Respuesta:**
+        - HTTP Status: Siempre 200 si el proceso terminó (éxito o error parcial)
+        - Estado real: Ver `metadata.oc_status.status`:
+          - `'completed'`: Todas las OCs se crearon exitosamente
+          - `'partial'`: Algunas OCs se crearon, otras fallaron
+          - `'error'`: Todas las OCs fallaron
+          - `'processing'`: Proceso asíncrono (futuro, no usado actualmente)
+        - `process_id`: ID único para trazabilidad y debugging
+        - `despachos_actualizados`: true si `tiene_odc` está actualizado (verificado post-commit)
+        - `datos_sincronizados`: true si las OCs están disponibles para consulta
+        
+        **IMPORTANTE:** El frontend debe guiarse por `metadata.oc_status.status`, NO por el HTTP status code.
+        
         Returns:
-            JSON con metadata del proceso de creación de ODC
+            JSON con estructura mejorada:
+            {
+                "status": "success" | "error",
+                "process_id": "odc-YYYY-MM-DD-UUID",
+                "message": "...",
+                "data": {
+                    "oc_ids": [...],
+                    "despachos_procesados": [...],
+                    "oc_creadas": N,
+                    "oc_errores": N
+                },
+                "metadata": {
+                    "oc_status": {
+                        "status": "completed" | "partial" | "error",
+                        "despachos_actualizados": true | false,
+                        "datos_sincronizados": true | false,
+                        "detalles": [...]
+                    },
+                    "timestamp": "ISO-8601"
+                }
+            }
         """
         # Determinar fuente
         source = get_source_from_headers(request)
@@ -95,9 +197,13 @@ def register_procesar_endpoint(app: FastAPI):
         username = user.get('username', 'unknown') if user else 'unknown'
         logger.info(f"👤 Usuario autenticado: {username}")
         
+        # Generar process_id único para trazabilidad
+        process_id = generar_process_id()
+        
         # Log del proceso
         logger.info("=" * 70)
         logger.info(f"🔄 PROCESAR-OC: Iniciado a las {datetime.now().isoformat()}")
+        logger.info(f"Process ID: {process_id}")
         logger.info(f"Fuente: {source}")
         
         try:
@@ -141,11 +247,26 @@ def register_procesar_endpoint(app: FastAPI):
                             return {
                                 "status": "error",
                                 "status_code": 400,
+                                "process_id": process_id,
                                 "message": "No se encontraron despachos válidos para procesar",
-                                "despacho_ids_provistos": despacho_ids_list,
-                                "despachos_no_encontrados": despachos_no_encontrados,
-                                "oc_creadas": 0,
-                                "oc_errores": 0
+                                "data": {
+                                    "oc_ids": [],
+                                    "despachos_procesados": [],
+                                    "oc_creadas": 0,
+                                    "oc_errores": 0
+                                },
+                                "metadata": {
+                                    "oc_status": {
+                                        "status": "error",
+                                        "oc_creadas": 0,
+                                        "oc_errores": len(despacho_ids_list),
+                                        "total_procesadas": 0,
+                                        "despachos_actualizados": False,
+                                        "datos_sincronizados": False,
+                                        "detalles": []
+                                    },
+                                    "timestamp": datetime.now().isoformat()
+                                }
                             }
                         
                         if despachos_no_encontrados:
@@ -161,10 +282,26 @@ def register_procesar_endpoint(app: FastAPI):
                             return {
                                 "status": "success",
                                 "status_code": 200,
+                                "process_id": process_id,
                                 "message": "No hay despachos pendientes de copiar a orden de compra",
-                                "oc_creadas": 0,
-                                "oc_errores": 0,
-                                "total_despachos": 0
+                                "data": {
+                                    "oc_ids": [],
+                                    "despachos_procesados": [],
+                                    "oc_creadas": 0,
+                                    "oc_errores": 0
+                                },
+                                "metadata": {
+                                    "oc_status": {
+                                        "status": "completed",
+                                        "oc_creadas": 0,
+                                        "oc_errores": 0,
+                                        "total_procesadas": 0,
+                                        "despachos_actualizados": True,
+                                        "datos_sincronizados": True,
+                                        "detalles": []
+                                    },
+                                    "timestamp": datetime.now().isoformat()
+                                }
                             }
                     
                     logger.info(f"📦 Total despachos a procesar: {len(despachos_a_procesar)}")
@@ -176,6 +313,7 @@ def register_procesar_endpoint(app: FastAPI):
                     oc_resultados = []
                     oc_exitosas = 0
                     oc_errores = 0
+                    oc_ids_creadas = []
                     
                     for idx, despacho_id_item in enumerate(despachos_a_procesar, 1):
                         try:
@@ -192,6 +330,7 @@ def register_procesar_endpoint(app: FastAPI):
                             if oc_resultado:
                                 oc_exitosas += 1
                                 oc_id = oc_resultado.get("oc_id")
+                                oc_ids_creadas.append(oc_id)
                                 accion = "actualizada" if oc_resultado.get("cabecera_actualizada") else "creada"
                                 
                                 resultado_item = {
@@ -200,7 +339,9 @@ def register_procesar_endpoint(app: FastAPI):
                                     "proveedor": oc_resultado.get("proveedor"),
                                     "detalles_insertados": oc_resultado.get("detalles_insertados", 0),
                                     "accion": accion,
-                                    "estado": "PENDIENTE"  # Estado inicial de la ODC
+                                    "estado": "PENDIENTE",  # Estado inicial de la ODC
+                                    "success": True,
+                                    "tiene_odc_actualizado": True  # Se actualiza en la misma transacción
                                 }
                                 
                                 logger.info(f"   ✅ OC {accion}: {oc_id} (estado: PENDIENTE)")
@@ -211,16 +352,39 @@ def register_procesar_endpoint(app: FastAPI):
                                 logger.warning(f"   ⚠️ No se pudo crear/actualizar OC para despacho: {despacho_id_item}")
                                 oc_resultados.append({
                                     "despacho_id": despacho_id_item,
-                                    "error": "No se pudo crear/actualizar OC"
+                                    "oc_id": None,
+                                    "success": False,
+                                    "error": "No se pudo crear/actualizar OC",
+                                    "tiene_odc_actualizado": False
                                 })
                                 
                         except Exception as oc_error:
                             oc_errores += 1
-                            logger.error(f"   ❌ Error al copiar despacho {despacho_id_item} a OC: {oc_error}")
+                            logger.error(f"   ❌ Error al copiar despacho {despacho_id_item} a OC: {oc_error}", exc_info=True)
                             oc_resultados.append({
                                 "despacho_id": despacho_id_item,
-                                "error": str(oc_error)
+                                "oc_id": None,
+                                "success": False,
+                                "error": str(oc_error),
+                                "tiene_odc_actualizado": False
                             })
+                    
+                    # CRÍTICO: Verificar que tiene_odc está actualizado
+                    # Esto debe hacerse DESPUÉS del commit (que ocurre en copy_despacho_to_orden_compra)
+                    despachos_actualizados = verificar_tiene_odc_actualizado(
+                        despacho_repo, oc_repo, despachos_a_procesar
+                    )
+                    
+                    # CRÍTICO: Verificar que las OCs están disponibles
+                    datos_sincronizados = verificar_ocs_disponibles(oc_repo, oc_ids_creadas) if oc_ids_creadas else True
+                    
+                    # Determinar status final
+                    if oc_errores == 0:
+                        oc_status_value = "completed"
+                    elif oc_exitosas > 0:
+                        oc_status_value = "partial"
+                    else:
+                        oc_status_value = "error"
                     
                     # Cerrar conexión
                     conn.close()
@@ -239,11 +403,12 @@ def register_procesar_endpoint(app: FastAPI):
                             logger.warning(f"⚠️ Error al invalidar caché: {cache_error}")
                     
                     oc_status = {
-                        "status": "success" if oc_errores == 0 else "partial",
+                        "status": oc_status_value,
                         "oc_creadas": oc_exitosas,
                         "oc_errores": oc_errores,
                         "total_procesadas": len(oc_resultados),
-                        "total_despachos": len(despachos_a_procesar),
+                        "despachos_actualizados": despachos_actualizados,
+                        "datos_sincronizados": datos_sincronizados,
                         "detalles": oc_resultados
                     }
                     
@@ -252,10 +417,13 @@ def register_procesar_endpoint(app: FastAPI):
                         oc_status["despachos_no_encontrados"] = despachos_no_encontrados
                     
                     logger.info("=" * 70)
-                    logger.info(f"✅ PROCESAR-OC completado:")
+                    logger.info(f"✅ PROCESAR-OC completado (Process ID: {process_id}):")
                     logger.info(f"   Total despachos procesados: {len(despachos_a_procesar)}")
                     logger.info(f"   OCs creadas: {oc_exitosas}")
                     logger.info(f"   Errores: {oc_errores}")
+                    logger.info(f"   Estado: {oc_status_value}")
+                    logger.info(f"   Despachos actualizados: {despachos_actualizados}")
+                    logger.info(f"   Datos sincronizados: {datos_sincronizados}")
                     if despachos_no_encontrados:
                         logger.info(f"   Despachos no encontrados: {len(despachos_no_encontrados)}")
                     logger.info(f"   Estado de OCs creadas: PENDIENTE (listas para enviar a SAP)")
@@ -266,22 +434,46 @@ def register_procesar_endpoint(app: FastAPI):
                         mensaje += f". {len(despachos_no_encontrados)} despachos no encontrados."
                     
                     return {
-                        "status": "success",
+                        "status": "success" if oc_errores == 0 else "partial",
                         "status_code": 200,
+                        "process_id": process_id,
                         "message": mensaje,
-                        "metadata": oc_status,
-                        "oc_creadas": oc_exitosas,
-                        "oc_errores": oc_errores,
-                        "total_despachos": len(despachos_a_procesar),
-                        "despachos_no_encontrados": despachos_no_encontrados if despachos_no_encontrados else None,
-                        "modo": "selectivo" if despacho_ids_param else "todos"
+                        "data": {
+                            "oc_ids": oc_ids_creadas,
+                            "despachos_procesados": despachos_a_procesar,
+                            "oc_creadas": oc_exitosas,
+                            "oc_errores": oc_errores
+                        },
+                        "metadata": {
+                            "oc_status": oc_status,
+                            "timestamp": datetime.now().isoformat()
+                        }
                     }
                 except Exception as e:
-                    logger.error(f"❌ Error en helper de procesamiento: {e}", exc_info=True)
+                    logger.error(f"❌ Error en helper de procesamiento (Process ID: {process_id}): {e}", exc_info=True)
                     return {
                         "status": "error",
                         "status_code": 500,
-                        "message": f"Error al procesar orden de compra: {str(e)}"
+                        "process_id": process_id,
+                        "message": f"Error al procesar orden de compra: {str(e)}",
+                        "data": {
+                            "oc_ids": [],
+                            "despachos_procesados": [],
+                            "oc_creadas": 0,
+                            "oc_errores": 0
+                        },
+                        "metadata": {
+                            "oc_status": {
+                                "status": "error",
+                                "oc_creadas": 0,
+                                "oc_errores": 0,
+                                "total_procesadas": 0,
+                                "despachos_actualizados": False,
+                                "datos_sincronizados": False,
+                                "detalles": []
+                            },
+                            "timestamp": datetime.now().isoformat()
+                        }
                     }
             
             # Ejecutar procesamiento en thread pool para no bloquear el event loop
@@ -292,14 +484,14 @@ def register_procesar_endpoint(app: FastAPI):
             headers = {
                 "X-Source": source,
                 "X-Endpoint": "PROCESAR-OC",
-                "X-OC-Status": resultado.get("status", "unknown"),
+                "X-OC-Status": resultado.get("metadata", {}).get("oc_status", {}).get("status", "unknown"),
+                "X-Process-ID": resultado.get("process_id", "unknown"),
             }
             
-            if "oc_creadas" in resultado:
-                headers["X-OC-Creadas"] = str(resultado.get("oc_creadas", 0))
-                headers["X-OC-Errores"] = str(resultado.get("oc_errores", 0))
-                headers["X-Total-Despachos"] = str(resultado.get("total_despachos", 0))
-                headers["X-Modo"] = resultado.get("modo", "unknown")
+            if "data" in resultado:
+                headers["X-OC-Creadas"] = str(resultado["data"].get("oc_creadas", 0))
+                headers["X-OC-Errores"] = str(resultado["data"].get("oc_errores", 0))
+                headers["X-Total-Despachos"] = str(len(resultado["data"].get("despachos_procesados", [])))
             
             # Retornar respuesta según el resultado
             return JSONResponse(
@@ -307,20 +499,38 @@ def register_procesar_endpoint(app: FastAPI):
                 content={
                     "status": resultado.get("status"),
                     "message": resultado.get("message"),
+                    "process_id": resultado.get("process_id"),
+                    "data": resultado.get("data"),
                     "metadata": resultado.get("metadata")
-                } if "metadata" in resultado else {
-                    "status": resultado.get("status"),
-                    "message": resultado.get("message")
                 },
                 headers=headers
             )
             
         except Exception as e:
-            logger.error(f"❌ Error al procesar orden de compra: {e}", exc_info=True)
+            logger.error(f"❌ Error al procesar orden de compra (Process ID: {process_id}): {e}", exc_info=True)
             return JSONResponse(
                 status_code=500,
                 content={
                     "status": "error",
-                    "message": f"Error al procesar orden de compra: {str(e)}"
+                    "process_id": process_id,
+                    "message": f"Error al procesar orden de compra: {str(e)}",
+                    "data": {
+                        "oc_ids": [],
+                        "despachos_procesados": [],
+                        "oc_creadas": 0,
+                        "oc_errores": 0
+                    },
+                    "metadata": {
+                        "oc_status": {
+                            "status": "error",
+                            "oc_creadas": 0,
+                            "oc_errores": 0,
+                            "total_procesadas": 0,
+                            "despachos_actualizados": False,
+                            "datos_sincronizados": False,
+                            "detalles": []
+                        },
+                        "timestamp": datetime.now().isoformat()
+                    }
                 }
             )

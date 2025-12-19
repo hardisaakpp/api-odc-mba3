@@ -7,11 +7,12 @@ Este script muestra qué servidor y base de datos está usando la aplicación.
 import sys
 from pathlib import Path
 
-# Agregar src al path para importar módulos
+# Agregar el directorio raíz del proyecto al path para importar módulos
 project_root = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(project_root / "src"))
+if str(project_root) not in sys.path:
+    sys.path.insert(0, str(project_root))
 
-from config import (
+from src.config import (
     SQL_SERVER_DRIVER,
     SQL_SERVER_SERVER,
     SQL_SERVER_DATABASE,
@@ -23,7 +24,7 @@ from config import (
     SQL_SERVER_SAP_UID,
     SQL_SERVER_SAP_PWD
 )
-from database.connection import get_db_connection, get_sap_db_connection
+from src.database.connection import get_db_connection, get_sap_db_connection
 
 print()
 print("=" * 70)

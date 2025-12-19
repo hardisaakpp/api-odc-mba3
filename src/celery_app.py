@@ -19,6 +19,7 @@ Comandos de ejecución:
 import logging
 import os
 from celery import Celery
+from celery.schedules import crontab
 from celery.signals import worker_process_init, worker_process_shutdown, beat_init, worker_ready
 
 logger = logging.getLogger(__name__)
@@ -26,13 +27,16 @@ logger = logging.getLogger(__name__)
 # Obtener configuración de Redis desde variables de entorno
 REDIS_URL = os.getenv('REDIS_URL', 'redis://localhost:6379/0')
 AUTO_MIGRATE_INTERVAL_MINUTES = int(os.getenv('AUTO_MIGRATE_INTERVAL_MINUTES', '5'))
+# Horario de sincronización de productos (hora en formato 24h, default: 3 = 3:00 AM)
+SYNC_PRODUCTOS_HOUR = int(os.getenv('SYNC_PRODUCTOS_HOUR', '3'))
+SYNC_PRODUCTOS_MINUTE = int(os.getenv('SYNC_PRODUCTOS_MINUTE', '0'))
 
 # Crear app Celery
 celery_app = Celery(
     'mba3_auto_migrate',
     broker=REDIS_URL,
     backend=REDIS_URL,
-    include=['src.tasks.celery_auto_migrate']  # Incluir el módulo de tareas
+    include=['src.tasks.celery_auto_migrate', 'src.tasks.celery_sync_productos']  # Incluir módulos de tareas
 )
 
 # Configuración de Celery
@@ -53,6 +57,13 @@ celery_app.conf.update(
             'schedule': float(AUTO_MIGRATE_INTERVAL_MINUTES * 60),  # Convertir minutos a segundos
             'options': {
                 'expires': 60.0,  # Expira si no se ejecuta en 60 segundos
+            }
+        },
+        'sync-productos-maestro': {
+            'task': 'src.tasks.celery_sync_productos.sync_productos_maestro',
+            'schedule': crontab(hour=SYNC_PRODUCTOS_HOUR, minute=SYNC_PRODUCTOS_MINUTE),  # type: ignore[arg-type] # Diario a las 3:00 AM - crontab acepta enteros aunque los stubs indiquen str
+            'options': {
+                'expires': 300.0,  # Expira si no se ejecuta en 5 minutos
             }
         },
     },

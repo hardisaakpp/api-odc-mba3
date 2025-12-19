@@ -232,7 +232,8 @@ class HomologacionService:
         estado: Optional[str] = None,
         tiene_diferencias: Optional[bool] = None,
         tiene_datos_sap: Optional[bool] = None,
-        sku: Optional[str] = None
+        sku: Optional[str] = None,
+        search: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Obtiene lista paginada de homologaciones SKU con filtros.
@@ -243,7 +244,8 @@ class HomologacionService:
             estado: Filtro por estado
             tiene_diferencias: Filtro por diferencias
             tiene_datos_sap: Filtro por datos SAP
-            sku: Búsqueda por SKU
+            sku: Búsqueda por SKU (MBA3 o SAP)
+            search: Búsqueda general en SKU y nombres de producto (MBA3 y SAP)
             
         Returns:
             Diccionario con data, metadata, paginación
@@ -260,7 +262,8 @@ class HomologacionService:
                 estado=estado,
                 tiene_diferencias=tiene_diferencias,
                 tiene_datos_sap=tiene_datos_sap,
-                sku=sku
+                sku=sku,
+                search=search
             )
             
             # Obtener estadísticas
@@ -278,7 +281,8 @@ class HomologacionService:
                         "estado": estado,
                         "tiene_diferencias": tiene_diferencias,
                         "tiene_datos_sap": tiene_datos_sap,
-                        "sku": sku
+                        "sku": sku,
+                        "search": search
                     }
                 },
                 "total": total,

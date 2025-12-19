@@ -92,6 +92,7 @@ def register_homologaciones_sku_endpoints(app: FastAPI):
         tiene_diferencias: Optional[bool] = Query(None, description="Filtro por diferencias MBA3 vs SAP"),
         tiene_datos_sap: Optional[bool] = Query(None, description="Filtro por presencia de datos SAP"),
         sku: Optional[str] = Query(None, description="Búsqueda por SKU (MBA3 o SAP)"),
+        search: Optional[str] = Query(None, description="Búsqueda general en SKU y nombres de producto (MBA3 y SAP)"),
         user: Dict = Depends(verify_jwt_token)
     ):
         """
@@ -106,7 +107,8 @@ def register_homologaciones_sku_endpoints(app: FastAPI):
         - `estado` (string): Filtro por estado (PENDIENTE | HOMOLOGADO | ERROR)
         - `tiene_diferencias` (boolean): Filtro por diferencias
         - `tiene_datos_sap` (boolean): Filtro por datos SAP
-        - `sku` (string): Búsqueda por SKU (busca en MBA3 y SAP)
+        - `sku` (string): Búsqueda por SKU (busca en MBA3 y SAP) - tiene prioridad sobre search
+        - `search` (string): Búsqueda general en SKU y nombres de producto (MBA3 y SAP)
         
         **Respuesta exitosa (200):**
         ```json
@@ -160,7 +162,8 @@ def register_homologaciones_sku_endpoints(app: FastAPI):
                 estado=estado,
                 tiene_diferencias=tiene_diferencias,
                 tiene_datos_sap=tiene_datos_sap,
-                sku=sku
+                sku=sku,
+                search=search
             )
             
             if resultado.get('status') == 'error':

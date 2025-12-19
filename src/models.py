@@ -6,7 +6,7 @@ Define los esquemas de request y response para los endpoints.
 
 from __future__ import annotations
 
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Union
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 
@@ -239,7 +239,7 @@ class SaveSidebarPreferencesRequest(BaseModel):
     2. Formato alternativo: {"collapsed": true}
     """
     
-    preferences: Optional[Dict[str, Any]] = None  # Usar Dict para mayor flexibilidad
+    preferences: Optional[Union[Dict[str, Any], 'SidebarPreferencesDto']] = None  # Puede ser dict o objeto validado
     collapsed: Optional[bool] = None  # Permitir formato alternativo: {collapsed: true}
     
     class Config:

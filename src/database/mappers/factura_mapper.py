@@ -195,9 +195,9 @@ class FacturaMapper:
         GRUPOS_PERMITIDOS = ["R-MEDIAS", "RD-INDUM MEDIAS"]
         
         # Verificar si sap_info es válido (no es None y no tiene error)
-        sap_info_valido = sap_info and not sap_info.get("_error", False)
+        sap_info_valido = sap_info is not None and not sap_info.get("_error", False)
         
-        if sap_info_valido and cantidad > 0:
+        if sap_info_valido and cantidad > 0 and sap_info is not None:
             unidad_conversion = sap_info.get("unidad_conversion")
             pack_sap = sap_info.get("pack_sap")
             grupo_articulos = sap_info.get("grupo_articulos")

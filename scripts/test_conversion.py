@@ -7,13 +7,14 @@ Este script simula el proceso de conversión que ocurre al guardar facturas.
 import sys
 from pathlib import Path
 
-# Agregar src al path para importar módulos
+# Agregar el directorio raíz del proyecto al path para importar módulos
 project_root = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(project_root / "src"))
+if str(project_root) not in sys.path:
+    sys.path.insert(0, str(project_root))
 
 import logging
-from database.services.sap_service import SAPService
-from database.mappers.factura_mapper import FacturaMapper
+from src.database.services.sap_service import SAPService
+from src.database.mappers.factura_mapper import FacturaMapper
 
 # Configurar logging
 logging.basicConfig(

@@ -211,30 +211,43 @@ def execute_auto_migration(self):
             
             # Verificar productos no homologados y notificar
             try:
-                # Obtener TODOS los productos no homologados
-                productos_no_homologados = homologacion_service.get_productos_no_homologados()
+                # Obtener TODOS los productos no homologados con estadísticas
+                todos_productos = homologacion_service.get_todos_productos_no_homologados()
+                productos_no_homologados = todos_productos.get("productos", [])
+                estadisticas = todos_productos.get("estadisticas", {})
                 
                 if productos_no_homologados:
                     logger.info(f"⚠️ Detectados {len(productos_no_homologados)} productos no homologados en total")
                     
-                    # Obtener estadísticas para el reporte
-                    todos_productos = homologacion_service.get_todos_productos_no_homologados()
-                    estadisticas = todos_productos.get("estadisticas", {})
+                    # Crear repository para filtrar productos ya notificados
+                    from src.database.connection import get_db_connection
+                    from src.database.repositories.homologacion_repository import HomologacionRepository
                     
-                    # Enviar notificación por email (la función filtrará productos ya notificados)
-                    logger.info("📧 Enviando notificación de productos no homologados...")
-                    email_enviado = send_homologacion_notification(
-                        productos_no_homologados=productos_no_homologados,
-                        estadisticas=estadisticas,
-                        fecha_ejecucion=fecha_ejecucion,
-                        filtrar_ya_notificados=True,  # ← Filtrar productos ya notificados
-                        homologacion_repository=homologacion_service.repository  # ← Pasar repository
-                    )
-                    
-                    if email_enviado:
-                        logger.info("✅ Notificación de homologación enviada (solo productos nuevos)")
-                    else:
-                        logger.info("⏭️ No se envió notificación (todos ya fueron notificados)")
+                    conn = None
+                    try:
+                        conn = get_db_connection()
+                        repository = HomologacionRepository(conn)
+                        
+                        # Enviar notificación por email (la función filtrará productos ya notificados)
+                        logger.info("📧 Enviando notificación de productos no homologados...")
+                        email_enviado = send_homologacion_notification(
+                            productos_no_homologados=productos_no_homologados,
+                            estadisticas=estadisticas,
+                            fecha_ejecucion=fecha_ejecucion,
+                            filtrar_ya_notificados=True,  # ← Filtrar productos ya notificados
+                            homologacion_repository=repository  # ← Pasar repository
+                        )
+                        
+                        if email_enviado:
+                            logger.info("✅ Notificación de homologación enviada (solo productos nuevos)")
+                        else:
+                            logger.info("⏭️ No se envió notificación (todos ya fueron notificados)")
+                    finally:
+                        if conn:
+                            try:
+                                conn.close()
+                            except:
+                                pass
                 else:
                     logger.debug("✅ No hay productos no homologados para notificar")
             except Exception as homologacion_error:

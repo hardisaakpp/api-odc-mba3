@@ -5,11 +5,13 @@ Identifica productos homologados, homologables y no encontrados.
 
 import logging
 import re
-from typing import List, Dict, Any, Tuple
+from typing import List, Dict, Any, Tuple, Optional
 
 from src.services.mba3_service import MBA3Service
-from ..connection import get_sap_db_connection
-from src.config import SAP_LINKED_SERVER, SAP_DATABASE
+from ..connection import get_sap_db_connection, get_db_connection
+from src.config import SAP_LINKED_SERVER, SAP_DATABASE, USE_PRODUCT_STAGING, ALLOW_ERP_FALLBACK, ENVIRONMENT
+from ..repositories.producto_mba3_staging_repository import ProductoMBA3StagingRepository
+from ..repositories.producto_sap_staging_repository import ProductoSAPStagingRepository
 
 logger = logging.getLogger(__name__)
 
@@ -17,9 +19,17 @@ logger = logging.getLogger(__name__)
 class CruceProductosService:
     """Servicio para cruzar productos entre MBA3 y SAP."""
     
-    def __init__(self):
-        """Inicializa el servicio."""
+    def __init__(self, use_staging: Optional[bool] = None):
+        """
+        Inicializa el servicio.
+        
+        Args:
+            use_staging: Si True, lee de staging. Si False, consulta directo.
+                        Si None, usa configuración USE_PRODUCT_STAGING.
+        """
         self.mba3_service = MBA3Service()
+        self.use_staging = use_staging if use_staging is not None else USE_PRODUCT_STAGING
+        self.allow_fallback = ALLOW_ERP_FALLBACK and ENVIRONMENT != 'production'
     
     def normalizar_codigo(self, codigo: str) -> str:
         """
@@ -41,7 +51,54 @@ class CruceProductosService:
     
     def obtener_productos_mba3(self) -> List[Dict[str, Any]]:
         """
-        Obtiene todos los productos desde la tabla INVT_FICHA_PRINCIPAL de MBA3.
+        Obtiene todos los productos desde staging o API MBA3 (fallback controlado).
+        
+        Returns:
+            Lista de productos con código y nombre
+        """
+        if self.use_staging:
+            try:
+                logger.info("📦 Leyendo productos MBA3 desde staging...")
+                conn = get_db_connection()
+                try:
+                    mba3_staging_repo = ProductoMBA3StagingRepository(conn)
+                    productos = mba3_staging_repo.get_all_active()
+                    
+                    # Convertir formato de staging a formato esperado por el cruce
+                    productos_normalizados = []
+                    for producto in productos:
+                        productos_normalizados.append({
+                            "product_id": producto["product_id"],
+                            "product_name": producto["product_name"],
+                            "corp": producto["corp"],
+                            "grupo_prenda": producto["grupo_prenda"],
+                            "talla": producto["talla"],
+                            "presentacion": producto["presentacion"],
+                            "product_id_normalizado": producto.get("product_id_normalizado")  # Usar normalizado del staging
+                        })
+                    
+                    logger.info(f"✅ Obtenidos {len(productos_normalizados)} productos desde staging MBA3")
+                    return productos_normalizados
+                finally:
+                    conn.close()
+            except Exception as e:
+                logger.error(f"❌ Error leyendo staging MBA3: {e}", exc_info=True)
+                
+                # CORRECCIÓN: Fallback solo si está permitido
+                if self.allow_fallback:
+                    logger.warning("⚠️ Fallback a API MBA3 (solo permitido en DEV)")
+                    return self._obtener_productos_mba3_directo()
+                else:
+                    raise RuntimeError(
+                        "Staging MBA3 no disponible y fallback a ERP deshabilitado. "
+                        "Ejecuta sincronización manual primero."
+                    )
+        else:
+            return self._obtener_productos_mba3_directo()
+    
+    def _obtener_productos_mba3_directo(self) -> List[Dict[str, Any]]:
+        """
+        Obtiene productos MBA3 directamente desde API (método interno).
         
         Returns:
             Lista de productos con código y nombre
@@ -50,18 +107,27 @@ class CruceProductosService:
             # Query según lo definido con ChatGPT
             query = (
                 "SELECT "
-                "PRODUCT_ID, "
                 "PRODUCT_NAME, "
-                "CORP, "
+                "PRODUCT_ID, "
                 "GrupoPrenda, "
+                "CORP, "
                 "Talla, "
-                "PRESENTACION "
+                "PRESENTACION, "
+                "Descontinuado, "
+                "GROUP_CODE, "
+                "INACTIVE, "
+                "Tipo_Origen "
                 "FROM INVT_FICHA_PRINCIPAL "
                 "WHERE PRODUCT_ID IS NOT NULL "
-                "AND Descontinuado = false"
+                "AND Descontinuado = 'false' "
+                "AND GROUP_CODE = 'PTERM' "
+                "AND INACTIVE = 'false' "
+                "AND Tipo_Origen != 'ESPEC' "
+                "AND Tipo_Origen != 'EXPOR' "
+                "AND Tipo_Origen != 'MAPRO'"
             )
             
-            logger.info("🔍 Consultando productos desde MBA3 (INVT_FICHA_PRINCIPAL)...")
+            logger.info("🔍 Consultando productos desde MBA3 API (directo)...")
             result = self.mba3_service.execute_query(query)
             
             # El resultado puede ser una lista o un dict con una clave que contiene la lista
@@ -88,6 +154,10 @@ class CruceProductosService:
                 grupo_prenda = producto.get("GrupoPrenda") or producto.get("grupoPrenda") or producto.get("grupo_prenda")
                 talla = producto.get("Talla") or producto.get("talla")
                 presentacion = producto.get("PRESENTACION") or producto.get("presentacion") or producto.get("Presentacion")
+                descontinuado = producto.get("Descontinuado") or producto.get("descontinuado")
+                group_code = producto.get("GROUP_CODE") or producto.get("group_code") or producto.get("Group_Code")
+                inactive = producto.get("INACTIVE") or producto.get("inactive") or producto.get("Inactive")
+                tipo_origen = producto.get("Tipo_Origen") or producto.get("tipo_origen") or producto.get("Tipo_Origen")
                 
                 if product_id:  # Solo incluir si tiene código
                     productos_normalizados.append({
@@ -96,10 +166,14 @@ class CruceProductosService:
                         "corp": str(corp).strip() if corp else "",
                         "grupo_prenda": str(grupo_prenda).strip() if grupo_prenda else "",
                         "talla": str(talla).strip() if talla else "",
-                        "presentacion": str(presentacion).strip() if presentacion else ""
+                        "presentacion": str(presentacion).strip() if presentacion else "",
+                        "descontinuado": str(descontinuado).strip() if descontinuado else "",
+                        "group_code": str(group_code).strip() if group_code else "",
+                        "inactive": str(inactive).strip() if inactive else "",
+                        "tipo_origen": str(tipo_origen).strip() if tipo_origen else ""
                     })
             
-            logger.info(f"✅ Obtenidos {len(productos_normalizados)} productos desde MBA3")
+            logger.info(f"✅ Obtenidos {len(productos_normalizados)} productos desde MBA3 API")
             return productos_normalizados
             
         except Exception as e:
@@ -108,7 +182,53 @@ class CruceProductosService:
     
     def obtener_productos_sap(self) -> List[Dict[str, Any]]:
         """
-        Obtiene todos los productos de SAP desde OITM usando OPENQUERY.
+        Obtiene todos los productos desde staging o OPENQUERY SAP (fallback controlado).
+        
+        Returns:
+            Lista de productos con código y nombre
+        """
+        if self.use_staging:
+            try:
+                logger.info("📦 Leyendo productos SAP desde staging...")
+                conn = get_db_connection()
+                try:
+                    sap_staging_repo = ProductoSAPStagingRepository(conn)
+                    productos = sap_staging_repo.get_all_active()
+                    
+                    # Convertir formato de staging a formato esperado por el cruce
+                    productos_normalizados = []
+                    for producto in productos:
+                        productos_normalizados.append({
+                            "item_code": producto["item_code"],
+                            "item_name": producto["item_name"],
+                            "pack": producto["pack"],
+                            "group_code": producto["group_code"],
+                            "active": producto["active"],
+                            "item_code_normalizado": producto.get("item_code_normalizado")  # Usar normalizado del staging
+                        })
+                    
+                    logger.info(f"✅ Obtenidos {len(productos_normalizados)} productos desde staging SAP")
+                    return productos_normalizados
+                finally:
+                    conn.close()
+            except Exception as e:
+                logger.error(f"❌ Error leyendo staging SAP: {e}", exc_info=True)
+                
+                # CORRECCIÓN: Fallback solo si está permitido
+                if self.allow_fallback:
+                    logger.warning("⚠️ Fallback a OPENQUERY SAP (solo permitido en DEV)")
+                    return self._obtener_productos_sap_directo()
+                else:
+                    raise RuntimeError(
+                        "Staging SAP no disponible y fallback a ERP deshabilitado. "
+                        "Ejecuta sincronización manual primero."
+                    )
+        else:
+            return self._obtener_productos_sap_directo()
+    
+    def _obtener_productos_sap_directo(self) -> List[Dict[str, Any]]:
+        """
+        Obtiene productos SAP directamente desde OPENQUERY (método interno).
         
         Returns:
             Lista de productos con código y nombre
@@ -138,7 +258,7 @@ class CruceProductosService:
             ') T0;
             """
             
-            logger.info("🔍 Consultando productos desde SAP (OITM)...")
+            logger.info("🔍 Consultando productos desde SAP OPENQUERY (directo)...")
             conn = get_sap_db_connection()
             cursor = conn.cursor()
             
@@ -164,7 +284,7 @@ class CruceProductosService:
                         "active": valid_for
                     })
             
-            logger.info(f"✅ Obtenidos {len(productos)} productos desde SAP")
+            logger.info(f"✅ Obtenidos {len(productos)} productos desde SAP OPENQUERY")
             return productos
             
         except Exception as e:
@@ -200,6 +320,9 @@ class CruceProductosService:
         """
         Indexa productos SAP por código exacto y normalizado.
         
+        Si el producto viene de staging y tiene item_code_normalizado, lo usa.
+        Si no, normaliza en tiempo real (fallback).
+        
         Args:
             productos: Lista de productos SAP
             
@@ -211,7 +334,8 @@ class CruceProductosService:
         
         for producto in productos:
             codigo_original = producto["item_code"]
-            codigo_normalizado = self.normalizar_codigo(codigo_original)
+            # Usar normalizado del staging si está disponible, sino normalizar
+            codigo_normalizado = producto.get("item_code_normalizado") or self.normalizar_codigo(codigo_original)
             
             if codigo_original not in sap_dict_exacto:
                 sap_dict_exacto[codigo_original] = []
@@ -299,7 +423,9 @@ class CruceProductosService:
             if codigo_mba3 in mba3_procesados:
                 continue  # Ya procesado como exacto
             
-            codigo_normalizado = self.normalizar_codigo(codigo_mba3)
+            # Usar normalizado del staging si está disponible, sino normalizar
+            producto_mba3 = productos_mba3_list[0]  # Tomar el primero para obtener normalizado
+            codigo_normalizado = producto_mba3.get("product_id_normalizado") or self.normalizar_codigo(codigo_mba3)
             
             if codigo_normalizado in sap_dict_normalizado:
                 productos_sap_list = sap_dict_normalizado[codigo_normalizado]
@@ -309,6 +435,9 @@ class CruceProductosService:
                     if producto_sap["item_code"] not in sap_procesados:
                         if codigo_mba3 != producto_sap["item_code"]:  # Diferentes originales
                             for producto_mba3 in productos_mba3_list:
+                                # Usar normalizado del staging si está disponible
+                                codigo_sap_normalizado = producto_sap.get("item_code_normalizado") or self.normalizar_codigo(producto_sap["item_code"])
+                                
                                 homologables.append({
                                     "codigo_mba3": producto_mba3["product_id"],
                                     "nombre_mba3": producto_mba3["product_name"],
@@ -320,7 +449,7 @@ class CruceProductosService:
                                     "nombre_sap": producto_sap["item_name"],
                                     "pack_sap": producto_sap.get("pack", ""),
                                     "codigo_mba3_normalizado": codigo_normalizado,
-                                    "codigo_sap_normalizado": self.normalizar_codigo(producto_sap["item_code"]),
+                                    "codigo_sap_normalizado": codigo_sap_normalizado,
                                     "tipo_coincidencia": "homologable"
                                 })
                                 mba3_procesados.add(codigo_mba3)

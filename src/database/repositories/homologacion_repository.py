@@ -399,7 +399,8 @@ class HomologacionRepository:
         estado: Optional[str] = None,
         tiene_diferencias: Optional[bool] = None,
         tiene_datos_sap: Optional[bool] = None,
-        sku: Optional[str] = None
+        sku: Optional[str] = None,
+        search: Optional[str] = None
     ) -> Tuple[List[Dict[str, Any]], int]:
         """
         Obtiene lista de homologaciones SKU con filtros y paginación.
@@ -411,6 +412,7 @@ class HomologacionRepository:
             tiene_diferencias: Filtro por diferencias MBA3 vs SAP
             tiene_datos_sap: Filtro por presencia de datos SAP
             sku: Búsqueda por SKU (MBA3 o SAP)
+            search: Búsqueda general en SKU y nombres de producto (MBA3 y SAP)
             
         Returns:
             Tupla (lista_homologaciones, total_registros)
@@ -433,9 +435,18 @@ class HomologacionRepository:
                 where_clauses.append("tiene_datos_sap = ?")
                 params.append(1 if tiene_datos_sap else 0)
             
+            # Búsqueda por SKU específico (prioridad sobre search)
             if sku:
                 where_clauses.append("(sku_mba3 LIKE ? OR sku_sap LIKE ?)")
                 params.extend([f"%{sku}%", f"%{sku}%"])
+            # Búsqueda general (si no hay sku específico)
+            elif search:
+                search_pattern = f"%{search}%"
+                where_clauses.append(
+                    "(sku_mba3 LIKE ? OR sku_sap LIKE ? OR "
+                    "nombre_producto_mba3 LIKE ? OR nombre_producto_sap LIKE ?)"
+                )
+                params.extend([search_pattern, search_pattern, search_pattern, search_pattern])
             
             where_sql = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
             
