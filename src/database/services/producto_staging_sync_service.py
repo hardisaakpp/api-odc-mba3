@@ -4,8 +4,9 @@ Servicio para sincronizar maestros de productos desde ERPs a staging.
 
 import logging
 import re
+import time
 from typing import List, Dict, Any, Optional
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from src.database.connection import get_db_connection, get_sap_db_connection
 from src.database.repositories.producto_mba3_staging_repository import ProductoMBA3StagingRepository
@@ -43,9 +44,41 @@ class ProductoStagingSyncService:
         """Inicializa el servicio."""
         self.mba3_service = MBA3Service()
     
-    def sync_mba3_products(self) -> Dict[str, Any]:
+    def _normalizar_respuesta_mba3(self, result: Any) -> List[Dict[str, Any]]:
         """
-        Sincroniza productos MBA3 desde API a staging.
+        Normaliza la estructura de respuesta del API de MBA3.
+        
+        Args:
+            result: Resultado de la consulta al API
+            
+        Returns:
+            Lista de productos normalizados
+        """
+        productos = []
+        if isinstance(result, list):
+            productos = result
+        elif isinstance(result, dict):
+            for key, value in result.items():
+                if isinstance(value, list):
+                    productos = value
+                    break
+            if not productos and result:
+                productos = [result]
+        return productos
+    
+    def sync_mba3_products(self, batch_size: int = 1000, force_full_sync: bool = False) -> Dict[str, Any]:
+        """
+        Sincroniza productos MBA3 desde API a staging con paginación por lotes.
+        
+        Usa cursor basado en PRODUCT_ID para paginación eficiente.
+        Query corregida con filtros de negocio alineados con el cruce de productos.
+        
+        Soporta sincronización incremental (desde último producto) o completa (desde inicio).
+        Por defecto usa incremental si hay productos en staging, completa si está vacío.
+        
+        Args:
+            batch_size: Tamaño de cada lote (default: 1000)
+            force_full_sync: Si True, fuerza sincronización completa desde el inicio (default: False)
         
         Returns:
             Diccionario con estadísticas de sincronización
@@ -55,84 +88,259 @@ class ProductoStagingSyncService:
         start_time = datetime.now()
         
         try:
-            logger.info("🔄 Iniciando sincronización de productos MBA3...")
+            logger.info("🔄 Iniciando sincronización de productos MBA3 con paginación...")
+            logger.info(f"📊 Configuración: batch_size={batch_size}, force_full_sync={force_full_sync}")
             
             # Obtener conexión y repositorios
             conn = get_db_connection()
             sync_control_repo = SyncControlRepository(conn)
             mba3_staging_repo = ProductoMBA3StagingRepository(conn)
             
+            # Determinar estrategia de sincronización (incremental vs completa)
+            ultimo_product_id_staging = mba3_staging_repo.get_last_product_id()
+            total_en_staging = mba3_staging_repo.count_all()
+            
+            if force_full_sync:
+                logger.info("🔄 Sincronización completa forzada (desde el inicio)")
+                last_product_id = None
+                modo_sync = "completa"
+            elif ultimo_product_id_staging is None or total_en_staging == 0:
+                logger.info("🔄 Tabla vacía, sincronización completa desde el inicio")
+                last_product_id = None
+                modo_sync = "completa"
+            elif total_en_staging < 100:
+                logger.info(f"🔄 Pocos productos en staging ({total_en_staging}), sincronización completa para asegurar consistencia")
+                last_product_id = None
+                modo_sync = "completa"
+            else:
+                logger.info(f"🔄 Sincronización incremental desde: {ultimo_product_id_staging} (total en staging: {total_en_staging})")
+                last_product_id = ultimo_product_id_staging
+                modo_sync = "incremental"
+            
             # Iniciar registro en sync_control
             sync_control_id = sync_control_repo.iniciar_sync('MBA3', 'BACKEND')
             
-            # Consultar productos desde MBA3 API
-            query = (
+            # Query base con filtros correctos (alineados con cruce de productos)
+            # Calcular fecha límite (últimos 365 días) - formato YYYY-MM-DD para 4D
+            fecha_limite = datetime.now() - timedelta(days=365)
+            fecha_limite_str = fecha_limite.strftime("%Y-%m-%d")
+            
+            query_base = (
                 "SELECT "
-                "PRODUCT_ID, "
                 "PRODUCT_NAME, "
-                "CORP, "
+                "PRODUCT_ID, "
                 "GrupoPrenda, "
+                "CORP, "
                 "Talla, "
                 "PRESENTACION, "
-                "Descontinuado "
+                "Descontinuado, "
+                "GROUP_CODE, "
+                "INACTIVE, "
+                "Tipo_Origen, "
+                "SELL, "
+                "CODE_PROV_O_ALT, "
+                "CATEGORY, "
+                "Familia, "
+                "Codigo_Marca, "
+                "PRODUCT_NAME_2, "
+                "Fecha_Ultima_Venta, "
+                "FechaUltimoMovimiento "
                 "FROM INVT_FICHA_PRINCIPAL "
                 "WHERE PRODUCT_ID IS NOT NULL "
-                "LIMIT 500"
+                "AND GrupoPrenda IS NOT NULL "
+                "AND Descontinuado = 'false' "
+                "AND GROUP_CODE = 'PTERM' "
+                "AND INACTIVE = 'false' "
+                "AND Tipo_Origen != 'ESPEC' "
+                "AND Tipo_Origen != 'EXPOR' "
+                "AND Tipo_Origen != 'MAPRO' "
+                "AND PRODUCT_NAME IS NOT NULL "
+                "AND SELL > 0 "
+                f"AND (FechaUltimoMovimiento >= '{fecha_limite_str}' OR Fecha_Ultima_Venta >= '{fecha_limite_str}') "
+                "ORDER BY PRODUCT_ID"
             )
             
-            logger.info("🔍 Consultando productos desde MBA3 API...")
-            result = self.mba3_service.execute_query(query)
+            # Estadísticas acumuladas
+            total_insertados = 0
+            total_actualizados = 0
+            total_errores = 0
+            total_procesados = 0
+            last_product_id = None
+            batch_number = 0
+            lotes_fallidos_consecutivos = 0
+            max_lotes_fallidos = 3  # Si 3 lotes consecutivos fallan, detener
+            max_lotes_mba3 = 3  # Límite máximo de lotes para MBA3
             
-            # Normalizar estructura de respuesta
-            productos = []
-            if isinstance(result, list):
-                productos = result
-            elif isinstance(result, dict):
-                for key, value in result.items():
-                    if isinstance(value, list):
-                        productos = value
+            # Bucle de paginación con cursor basado en PRODUCT_ID
+            while True:
+                batch_number += 1
+                
+                # Verificar límite de lotes para MBA3
+                if batch_number > max_lotes_mba3:
+                    logger.info(f"✅ Límite de {max_lotes_mba3} lotes alcanzado para MBA3. Deteniendo sincronización.")
+                    break
+                
+                # Construir query con cursor para paginación
+                if last_product_id:
+                    # Escapar comillas simples para prevenir SQL injection
+                    last_product_id_escaped = str(last_product_id).replace("'", "''")
+                    query = f"{query_base} AND PRODUCT_ID > '{last_product_id_escaped}' LIMIT {batch_size}"
+                else:
+                    query = f"{query_base} LIMIT {batch_size}"
+                
+                logger.info(f"📦 Lote {batch_number}: Consultando productos desde MBA3 API...")
+                if last_product_id:
+                    logger.info(f"   Cursor: PRODUCT_ID > '{last_product_id}'")
+                
+                # Reintentos con backoff exponencial
+                max_retries = 3
+                retry_count = 0
+                result = None
+                lote_exitoso = False
+                
+                while retry_count < max_retries:
+                    try:
+                        result = self.mba3_service.execute_query(query)
+                        lote_exitoso = True
+                        break  # Éxito, salir del bucle de reintentos
+                    except Exception as e:
+                        retry_count += 1
+                        if retry_count >= max_retries:
+                            logger.error(
+                                f"❌ Error en consulta del lote {batch_number} después de {max_retries} intentos: {e}",
+                                exc_info=True
+                            )
+                            logger.warning(
+                                f"⚠️ Saltando lote {batch_number} y continuando con el siguiente..."
+                            )
+                            # NO hacer break, continuar con siguiente lote
+                            # Actualizar cursor para evitar bucle infinito
+                            # Usar un valor que permita avanzar (si es posible)
+                            break
+                        else:
+                            wait_time = retry_count * 5  # Esperar 5, 10, 15 segundos
+                            logger.warning(
+                                f"⚠️ Reintentando lote {batch_number} (intento {retry_count}/{max_retries}) "
+                                f"después de {wait_time}s... Error: {str(e)[:100]}"
+                            )
+                            time.sleep(wait_time)
+                
+                # Si el lote falló después de todos los reintentos, saltarlo
+                if not lote_exitoso:
+                    total_errores += batch_size  # Estimación conservadora
+                    lotes_fallidos_consecutivos += 1
+                    
+                    # Si muchos lotes consecutivos fallan, detener para evitar bucle infinito
+                    if lotes_fallidos_consecutivos >= max_lotes_fallidos:
+                        logger.error(
+                            f"❌ {max_lotes_fallidos} lotes consecutivos fallaron. "
+                            f"Deteniendo sincronización para evitar bucle infinito."
+                        )
                         break
-                if not productos and result:
-                    productos = [result]
-            
-            logger.info(f"📦 Procesando {len(productos)} productos desde MBA3...")
-            
-            # Preparar productos para staging
-            productos_staging = []
-            for producto in productos:
-                try:
-                    product_id = str(producto.get("PRODUCT_ID") or producto.get("product_id") or producto.get("Product_ID", "")).strip()
-                    if not product_id:
+                    
+                    logger.warning(
+                        f"⚠️ Lote {batch_number} falló después de {max_retries} intentos. "
+                        f"Lotes fallidos consecutivos: {lotes_fallidos_consecutivos}/{max_lotes_fallidos}. "
+                        f"Continuando con siguiente lote..."
+                    )
+                    continue  # Continuar con siguiente lote
+                
+                # Si el lote fue exitoso, resetear contador de fallos consecutivos
+                lotes_fallidos_consecutivos = 0
+                
+                # Normalizar estructura de respuesta
+                productos = self._normalizar_respuesta_mba3(result)
+                
+                # Si no hay más productos, salir del bucle
+                if not productos:
+                    logger.info(f"✅ No hay más productos. Total procesado: {total_procesados}")
+                    break
+                
+                logger.info(f"📦 Lote {batch_number}: Procesando {len(productos)} productos...")
+                
+                # Preparar productos para staging
+                productos_staging = []
+                for producto in productos:
+                    try:
+                        product_id = str(producto.get("PRODUCT_ID") or producto.get("product_id") or producto.get("Product_ID", "")).strip()
+                        if not product_id:
+                            continue
+                        
+                        # Normalizar código
+                        product_id_normalizado = normalizar_codigo(product_id)
+                        
+                        # Extraer datos (incluyendo campos adicionales aunque no se guarden en staging)
+                        product_name = producto.get("PRODUCT_NAME") or producto.get("product_name") or producto.get("Product_Name", "")
+                        corp = producto.get("CORP") or producto.get("corp") or producto.get("Corp", "")
+                        grupo_prenda = producto.get("GrupoPrenda") or producto.get("grupoPrenda") or producto.get("grupo_prenda", "")
+                        talla = producto.get("Talla") or producto.get("talla", "")
+                        presentacion = producto.get("PRESENTACION") or producto.get("presentacion") or producto.get("Presentacion", "")
+                        descontinuado_raw = producto.get("Descontinuado") or producto.get("descontinuado")
+                        descontinuado = bool(descontinuado_raw) if descontinuado_raw else False
+                        
+                        # Validar que cumpla filtros (doble verificación)
+                        group_code = producto.get("GROUP_CODE") or producto.get("group_code") or producto.get("Group_Code", "")
+                        inactive = producto.get("INACTIVE") or producto.get("inactive") or producto.get("Inactive", "")
+                        tipo_origen = producto.get("Tipo_Origen") or producto.get("tipo_origen") or producto.get("Tipo_Origen", "")
+                        
+                        # Si no cumple filtros, saltar (por si el API no los aplica correctamente)
+                        if (str(descontinuado).lower() == 'true' or 
+                            str(inactive).lower() == 'true' or
+                            group_code != 'PTERM' or
+                            tipo_origen in ['ESPEC', 'EXPOR', 'MAPRO']):
+                            logger.debug(f"⚠️ Producto {product_id} no cumple filtros, omitiendo...")
+                            continue
+                        
+                        productos_staging.append({
+                            "product_id": product_id,
+                            "product_name": str(product_name).strip() if product_name else "",
+                            "corp": str(corp).strip() if corp else "",
+                            "grupo_prenda": str(grupo_prenda).strip() if grupo_prenda else "",
+                            "talla": str(talla).strip() if talla else "",
+                            "presentacion": str(presentacion).strip() if presentacion else "",
+                            "descontinuado": descontinuado,
+                            "product_id_normalizado": product_id_normalizado
+                        })
+                        
+                        # Actualizar cursor para siguiente iteración
+                        last_product_id = product_id
+                        
+                    except Exception as e:
+                        total_errores += 1
+                        logger.warning(f"⚠️ Error procesando producto MBA3: {e}")
                         continue
-                    
-                    # CORRECCIÓN: Normalizar en sync, no en cruce
-                    product_id_normalizado = normalizar_codigo(product_id)
-                    
-                    # Extraer datos
-                    product_name = producto.get("PRODUCT_NAME") or producto.get("product_name") or producto.get("Product_Name", "")
-                    corp = producto.get("CORP") or producto.get("corp") or producto.get("Corp", "")
-                    grupo_prenda = producto.get("GrupoPrenda") or producto.get("grupoPrenda") or producto.get("grupo_prenda", "")
-                    talla = producto.get("Talla") or producto.get("talla", "")
-                    presentacion = producto.get("PRESENTACION") or producto.get("presentacion") or producto.get("Presentacion", "")
-                    descontinuado = bool(producto.get("Descontinuado") or producto.get("descontinuado") or False)
-                    
-                    productos_staging.append({
-                        "product_id": product_id,
-                        "product_name": str(product_name).strip() if product_name else "",
-                        "corp": str(corp).strip() if corp else "",
-                        "grupo_prenda": str(grupo_prenda).strip() if grupo_prenda else "",
-                        "talla": str(talla).strip() if talla else "",
-                        "presentacion": str(presentacion).strip() if presentacion else "",
-                        "descontinuado": descontinuado,
-                        "product_id_normalizado": product_id_normalizado
-                    })
-                except Exception as e:
-                    logger.warning(f"⚠️ Error procesando producto MBA3: {e}")
-                    continue
-            
-            # Sincronizar a staging (UPSERT)
-            logger.info(f"💾 Guardando {len(productos_staging)} productos en staging...")
-            stats = mba3_staging_repo.bulk_insert_or_update(productos_staging)
+                
+                # Guardar lote en staging
+                if productos_staging:
+                    logger.info(f"💾 Lote {batch_number}: Guardando {len(productos_staging)} productos en staging...")
+                    try:
+                        stats = mba3_staging_repo.bulk_insert_or_update(productos_staging)
+                        total_insertados += stats["insertados"]
+                        total_actualizados += stats["actualizados"]
+                        total_errores += stats["errores"]
+                        total_procesados += len(productos_staging)
+                        
+                        logger.info(
+                            f"✅ Lote {batch_number} completado: "
+                            f"{stats['insertados']} nuevos, {stats['actualizados']} actualizados, "
+                            f"{stats['errores']} errores"
+                        )
+                    except Exception as e:
+                        logger.error(f"❌ Error guardando lote {batch_number}: {e}", exc_info=True)
+                        total_errores += len(productos_staging)
+                
+                # Si el lote es menor que batch_size, significa que es el último
+                if len(productos) < batch_size:
+                    logger.info(f"✅ Último lote procesado (menos de {batch_size} productos)")
+                    break
+                
+                # Log de progreso acumulado
+                logger.info(
+                    f"📊 Progreso acumulado: {total_procesados} productos procesados | "
+                    f"Nuevos: {total_insertados} | "
+                    f"Actualizados: {total_actualizados} | "
+                    f"Errores: {total_errores}"
+                )
             
             # Calcular duración
             end_time = datetime.now()
@@ -142,27 +350,29 @@ class ProductoStagingSyncService:
             sync_control_repo.finalizar_sync(
                 sync_control_id,
                 'EXITOSA',
-                stats["total"],
-                stats["insertados"],
-                stats["actualizados"],
+                total_procesados,
+                total_insertados,
+                total_actualizados,
                 None,
                 duracion_segundos
             )
             
             logger.info(
-                f"✅ Sync MBA3 completado: {stats['total']} procesados, "
-                f"{stats['insertados']} nuevos, {stats['actualizados']} actualizados "
-                f"({duracion_segundos}s)"
+                f"✅ Sync MBA3 completado: {total_procesados} procesados, "
+                f"{total_insertados} nuevos, {total_actualizados} actualizados, "
+                f"{total_errores} errores ({duracion_segundos}s)"
             )
             
             return {
                 "status": "success",
                 "entidad": "MBA3",
-                "registros_procesados": stats["total"],
-                "registros_nuevos": stats["insertados"],
-                "registros_actualizados": stats["actualizados"],
-                "registros_con_error": stats["errores"],
+                "modo_sincronizacion": modo_sync,
+                "registros_procesados": total_procesados,
+                "registros_nuevos": total_insertados,
+                "registros_actualizados": total_actualizados,
+                "registros_con_error": total_errores,
                 "duracion_segundos": duracion_segundos,
+                "lotes_procesados": batch_number,
                 "timestamp": end_time.isoformat()
             }
             
@@ -178,7 +388,9 @@ class ProductoStagingSyncService:
                     sync_control_repo.finalizar_sync(
                         sync_control_id,
                         'ERROR',
-                        0, 0, 0,
+                        total_procesados if 'total_procesados' in locals() else 0,
+                        total_insertados if 'total_insertados' in locals() else 0,
+                        total_actualizados if 'total_actualizados' in locals() else 0,
                         str(e),
                         duracion_segundos
                     )
@@ -193,9 +405,18 @@ class ProductoStagingSyncService:
                 except:
                     pass
     
-    def sync_sap_products(self) -> Dict[str, Any]:
+    def sync_sap_products(self, batch_size: int = 1000, force_full_sync: bool = False) -> Dict[str, Any]:
         """
-        Sincroniza productos SAP desde OPENQUERY a staging.
+        Sincroniza productos SAP desde OPENQUERY a staging con paginación por lotes.
+        
+        Usa cursor basado en ItemCode para paginación eficiente.
+        
+        Soporta sincronización incremental (desde último producto) o completa (desde inicio).
+        Por defecto usa incremental si hay productos en staging, completa si está vacío.
+        
+        Args:
+            batch_size: Tamaño de cada lote (default: 1000)
+            force_full_sync: Si True, fuerza sincronización completa desde el inicio (default: False)
         
         Returns:
             Diccionario con estadísticas de sincronización
@@ -206,7 +427,8 @@ class ProductoStagingSyncService:
         start_time = datetime.now()
         
         try:
-            logger.info("🔄 Iniciando sincronización de productos SAP...")
+            logger.info("🔄 Iniciando sincronización de productos SAP con paginación...")
+            logger.info(f"📊 Configuración: batch_size={batch_size}, force_full_sync={force_full_sync}")
             
             # Obtener conexiones y repositorios
             conn = get_db_connection()
@@ -214,83 +436,245 @@ class ProductoStagingSyncService:
             sync_control_repo = SyncControlRepository(conn)
             sap_staging_repo = ProductoSAPStagingRepository(conn)
             
+            # Determinar estrategia de sincronización (incremental vs completa)
+            ultimo_item_code_staging = sap_staging_repo.get_last_item_code()
+            total_en_staging = sap_staging_repo.count_all()
+            
+            if force_full_sync:
+                logger.info("🔄 Sincronización completa forzada (desde el inicio)")
+                last_item_code = None
+                modo_sync = "completa"
+            elif ultimo_item_code_staging is None or total_en_staging == 0:
+                logger.info("🔄 Tabla vacía, sincronización completa desde el inicio")
+                last_item_code = None
+                modo_sync = "completa"
+            elif total_en_staging < 100:
+                logger.info(f"🔄 Pocos productos en staging ({total_en_staging}), sincronización completa para asegurar consistencia")
+                last_item_code = None
+                modo_sync = "completa"
+            else:
+                logger.info(f"🔄 Sincronización incremental desde: {ultimo_item_code_staging} (total en staging: {total_en_staging})")
+                last_item_code = ultimo_item_code_staging
+                modo_sync = "incremental"
+            
             # Iniciar registro en sync_control
             sync_control_id = sync_control_repo.iniciar_sync('SAP', 'BACKEND')
             
-            # Consultar productos desde SAP via OPENQUERY
-            query = f"""
+            # Query base mejorada: Solo productos activos, vendibles y con ventas recientes (últimos 365 días)
+            # Usando cursor basado en ItemCode para paginación
+            query_base = f"""
             SELECT 
                 T0."ItemCode",
                 T0."ItemName",
                 T0."U_IXX_PACK",
-                T0."ItmsGrpCod",
+                T0."SalUnitMsr",
+                T0."CodeBars",
+                T0."ItmsGrpNam",
+                T0."ItmsGrpCod", 
                 T0."validFor",
-                T0."ItmsGrpNam"
+                T0."InvntItem"
             FROM OPENQUERY([{SAP_LINKED_SERVER}], '
-                SELECT TOP 500
+                SELECT 
                     OITM."ItemCode",
                     OITM."ItemName",
                     OITM."U_IXX_PACK",
+                    OITM."SalUnitMsr",
+                    OITM."CodeBars",
+                    OITB."ItmsGrpNam",
                     OITM."ItmsGrpCod",
                     OITM."validFor",
-                    OITB."ItmsGrpNam"
+                    OITM."InvntItem"
                 FROM "{SAP_DATABASE}"."OITM" OITM
                 INNER JOIN "{SAP_DATABASE}"."OITB" OITB 
                     ON OITM."ItmsGrpCod" = OITB."ItmsGrpCod"
                 WHERE OITM."ItemCode" IS NOT NULL
+                  AND OITM."ItemName" IS NOT NULL
+                  AND OITM."validFor" = ''Y''
+                  AND OITM."SellItem" = ''Y''
                   AND OITB."ItmsGrpNam" IN (''R-MEDIAS'', ''RD-INDUM MEDIAS'')
-            ') T0;
+                  AND EXISTS (
+                      SELECT 1 
+                      FROM "{SAP_DATABASE}"."INV1" INV1
+                      INNER JOIN "{SAP_DATABASE}"."OINV" OINV 
+                          ON INV1."DocEntry" = OINV."DocEntry"
+                      WHERE INV1."ItemCode" = OITM."ItemCode"
+                        AND OINV."DocDate" >= ADD_DAYS(CURRENT_DATE, -365)
+                  )
+                ORDER BY OITM."ItemCode"
+            ') T0
             """
             
-            logger.info("🔍 Consultando productos desde SAP (OPENQUERY)...")
-            cursor = sap_conn.cursor()
-            cursor.execute(query)
-            results = cursor.fetchall()
-            cursor.close()
+            # Estadísticas acumuladas
+            total_insertados = 0
+            total_actualizados = 0
+            total_errores = 0
+            total_procesados = 0
+            # last_item_code ya está inicializado arriba según la estrategia de sincronización
+            batch_number = 0
+            lotes_fallidos_consecutivos = 0
+            max_lotes_fallidos = 3  # Si 3 lotes consecutivos fallan, detener
             
-            logger.info(f"📦 Procesando {len(results)} productos desde SAP...")
-            
-            # Preparar productos para staging
-            productos_staging = []
-            for row in results:
-                try:
-                    item_code = row[0] if row[0] else ""
-                    if not item_code:
+            # Bucle de paginación con cursor basado en ItemCode
+            while True:
+                batch_number += 1
+                
+                # Construir query con cursor para paginación
+                if last_item_code:
+                    # Escapar comillas simples para prevenir SQL injection
+                    last_item_code_escaped = str(last_item_code).replace("'", "''")
+                    query = f"{query_base} WHERE T0.\"ItemCode\" > '{last_item_code_escaped}' ORDER BY T0.\"ItemCode\" OFFSET 0 ROWS FETCH NEXT {batch_size} ROWS ONLY"
+                else:
+                    query = f"{query_base} ORDER BY T0.\"ItemCode\" OFFSET 0 ROWS FETCH NEXT {batch_size} ROWS ONLY"
+                
+                logger.info(f"📦 Lote {batch_number}: Consultando productos desde SAP (OPENQUERY)...")
+                if last_item_code:
+                    logger.info(f"   Cursor: ItemCode > '{last_item_code}'")
+                logger.info(f"   Fetch: {batch_size}")
+                
+                # Reintentos con backoff exponencial
+                max_retries = 3
+                retry_count = 0
+                results = None
+                lote_exitoso = False
+                
+                while retry_count < max_retries:
+                    try:
+                        cursor = sap_conn.cursor()
+                        cursor.execute(query)
+                        results = cursor.fetchall()
+                        cursor.close()
+                        lote_exitoso = True
+                        break  # Éxito, salir del bucle de reintentos
+                    except Exception as e:
+                        retry_count += 1
+                        if retry_count >= max_retries:
+                            logger.error(
+                                f"❌ Error en consulta del lote {batch_number} después de {max_retries} intentos: {e}",
+                                exc_info=True
+                            )
+                            logger.warning(
+                                f"⚠️ Saltando lote {batch_number} y continuando con el siguiente..."
+                            )
+                            # NO hacer break, continuar con siguiente lote
+                            break
+                        else:
+                            wait_time = retry_count * 5  # Esperar 5, 10, 15 segundos
+                            logger.warning(
+                                f"⚠️ Reintentando lote {batch_number} (intento {retry_count}/{max_retries}) "
+                                f"después de {wait_time}s... Error: {str(e)[:100]}"
+                            )
+                            time.sleep(wait_time)
+                
+                # Si el lote falló después de todos los reintentos, saltarlo
+                if not lote_exitoso:
+                    total_errores += batch_size  # Estimación conservadora
+                    lotes_fallidos_consecutivos += 1
+                    
+                    # Si muchos lotes consecutivos fallan, detener para evitar bucle infinito
+                    if lotes_fallidos_consecutivos >= max_lotes_fallidos:
+                        logger.error(
+                            f"❌ {max_lotes_fallidos} lotes consecutivos fallaron. "
+                            f"Deteniendo sincronización para evitar bucle infinito."
+                        )
+                        break
+                    
+                    logger.warning(
+                        f"⚠️ Lote {batch_number} falló después de {max_retries} intentos. "
+                        f"Lotes fallidos consecutivos: {lotes_fallidos_consecutivos}/{max_lotes_fallidos}. "
+                        f"Continuando con siguiente lote..."
+                    )
+                    continue  # Continuar con siguiente lote
+                
+                # Si el lote fue exitoso, resetear contador de fallos consecutivos
+                lotes_fallidos_consecutivos = 0
+                
+                # Si no hay más productos, salir del bucle
+                if not results:
+                    logger.info(f"✅ No hay más productos. Total procesado: {total_procesados}")
+                    break
+                
+                logger.info(f"📦 Lote {batch_number}: Procesando {len(results)} productos...")
+                
+                # Preparar productos para staging
+                productos_staging = []
+                for row in results:
+                    try:
+                        item_code = row[0] if row[0] else ""
+                        if not item_code:
+                            continue
+                        
+                        item_code = str(item_code).strip()
+                        
+                        # Normalizar código
+                        item_code_normalizado = normalizar_codigo(item_code)
+                        
+                        # Extraer datos (nuevo orden: ItemCode, ItemName, U_IXX_PACK, SalUnitMsr, CodeBars, ItmsGrpNam, ItmsGrpCod, validFor, InvntItem)
+                        item_name = row[1] if row[1] else ""
+                        pack_sap = row[2] if row[2] else ""
+                        sal_unit_msr = row[3] if len(row) > 3 and row[3] else ""
+                        code_bars = row[4] if len(row) > 4 and row[4] else ""
+                        itms_grp_nam = row[5] if len(row) > 5 and row[5] else ""
+                        itms_grp_cod = row[6] if len(row) > 6 and row[6] else None
+                        valid_for_raw = row[7] if len(row) > 7 and row[7] is not None else 'N'
+                        valid_for = str(valid_for_raw).upper()
+                        invnt_item_raw = row[8] if len(row) > 8 and row[8] is not None else 'N'
+                        invnt_item = str(invnt_item_raw).upper() == 'Y'
+                        
+                        # activo es derivado de valid_for
+                        activo = (valid_for == 'Y')
+                        
+                        productos_staging.append({
+                            "item_code": item_code,
+                            "item_name": str(item_name).strip() if item_name else "",
+                            "pack_sap": str(pack_sap).strip() if pack_sap else "",
+                            "sal_unit_msr": str(sal_unit_msr).strip() if sal_unit_msr else "",
+                            "code_bars": str(code_bars).strip() if code_bars else "",
+                            "itms_grp_cod": itms_grp_cod,
+                            "itms_grp_nam": str(itms_grp_nam).strip() if itms_grp_nam else "",
+                            "valid_for": valid_for,
+                            "activo": activo,
+                            "invnt_item": invnt_item,
+                            "item_code_normalizado": item_code_normalizado
+                        })
+                        
+                        # Actualizar cursor para siguiente iteración
+                        last_item_code = item_code
+                    except Exception as e:
+                        total_errores += 1
+                        logger.warning(f"⚠️ Error procesando producto SAP: {e}")
                         continue
-                    
-                    item_code = str(item_code).strip()
-                    
-                    # CORRECCIÓN: Normalizar en sync
-                    item_code_normalizado = normalizar_codigo(item_code)
-                    
-                    # Extraer datos
-                    item_name = row[1] if row[1] else ""
-                    pack_sap = row[2] if row[2] else ""
-                    itms_grp_cod = row[3] if row[3] else None
-                    valid_for_raw = row[4] if row[4] is not None else 'N'
-                    valid_for = str(valid_for_raw).upper()
-                    itms_grp_nam = row[5] if row[5] else ""
-                    
-                    # CORRECCIÓN: activo es derivado, no editable
-                    activo = (valid_for == 'Y')
-                    
-                    productos_staging.append({
-                        "item_code": item_code,
-                        "item_name": str(item_name).strip() if item_name else "",
-                        "pack_sap": str(pack_sap).strip() if pack_sap else "",
-                        "itms_grp_cod": itms_grp_cod,
-                        "itms_grp_nam": str(itms_grp_nam).strip() if itms_grp_nam else "",
-                        "valid_for": valid_for,
-                        "activo": activo,
-                        "item_code_normalizado": item_code_normalizado
-                    })
-                except Exception as e:
-                    logger.warning(f"⚠️ Error procesando producto SAP: {e}")
-                    continue
-            
-            # Sincronizar a staging (UPSERT)
-            logger.info(f"💾 Guardando {len(productos_staging)} productos en staging...")
-            stats = sap_staging_repo.bulk_insert_or_update(productos_staging)
+                
+                # Guardar lote en staging
+                if productos_staging:
+                    logger.info(f"💾 Lote {batch_number}: Guardando {len(productos_staging)} productos en staging...")
+                    try:
+                        stats = sap_staging_repo.bulk_insert_or_update(productos_staging)
+                        total_insertados += stats["insertados"]
+                        total_actualizados += stats["actualizados"]
+                        total_errores += stats["errores"]
+                        total_procesados += len(productos_staging)
+                        
+                        logger.info(
+                            f"✅ Lote {batch_number} completado: "
+                            f"{stats['insertados']} nuevos, {stats['actualizados']} actualizados, "
+                            f"{stats['errores']} errores"
+                        )
+                    except Exception as e:
+                        logger.error(f"❌ Error guardando lote {batch_number}: {e}", exc_info=True)
+                        total_errores += len(productos_staging)
+                
+                # Si el lote es menor que batch_size, significa que es el último
+                if len(results) < batch_size:
+                    logger.info(f"✅ Último lote procesado (menos de {batch_size} productos)")
+                    break
+                
+                # Log de progreso acumulado
+                logger.info(
+                    f"📊 Progreso acumulado: {total_procesados} productos procesados | "
+                    f"Nuevos: {total_insertados} | "
+                    f"Actualizados: {total_actualizados} | "
+                    f"Errores: {total_errores}"
+                )
             
             # Calcular duración
             end_time = datetime.now()
@@ -300,27 +684,29 @@ class ProductoStagingSyncService:
             sync_control_repo.finalizar_sync(
                 sync_control_id,
                 'EXITOSA',
-                stats["total"],
-                stats["insertados"],
-                stats["actualizados"],
+                total_procesados,
+                total_insertados,
+                total_actualizados,
                 None,
                 duracion_segundos
             )
             
             logger.info(
-                f"✅ Sync SAP completado: {stats['total']} procesados, "
-                f"{stats['insertados']} nuevos, {stats['actualizados']} actualizados "
-                f"({duracion_segundos}s)"
+                f"✅ Sync SAP completado: {total_procesados} procesados, "
+                f"{total_insertados} nuevos, {total_actualizados} actualizados, "
+                f"{total_errores} errores ({duracion_segundos}s)"
             )
             
             return {
                 "status": "success",
                 "entidad": "SAP",
-                "registros_procesados": stats["total"],
-                "registros_nuevos": stats["insertados"],
-                "registros_actualizados": stats["actualizados"],
-                "registros_con_error": stats["errores"],
+                "modo_sincronizacion": modo_sync,
+                "registros_procesados": total_procesados,
+                "registros_nuevos": total_insertados,
+                "registros_actualizados": total_actualizados,
+                "registros_con_error": total_errores,
                 "duracion_segundos": duracion_segundos,
+                "lotes_procesados": batch_number,
                 "timestamp": end_time.isoformat()
             }
             
@@ -336,7 +722,9 @@ class ProductoStagingSyncService:
                     sync_control_repo.finalizar_sync(
                         sync_control_id,
                         'ERROR',
-                        0, 0, 0,
+                        total_procesados if 'total_procesados' in locals() else 0,
+                        total_insertados if 'total_insertados' in locals() else 0,
+                        total_actualizados if 'total_actualizados' in locals() else 0,
                         str(e),
                         duracion_segundos
                     )
@@ -356,17 +744,22 @@ class ProductoStagingSyncService:
                 except:
                     pass
     
-    def sync_all(self) -> Dict[str, Any]:
+    def sync_all(self, force_full_sync: bool = False) -> Dict[str, Any]:
         """
         Sincroniza ambos maestros (MBA3 y SAP).
+        
+        Args:
+            force_full_sync: Si True, fuerza sincronización completa desde el inicio (default: False)
         
         Returns:
             Diccionario con estadísticas combinadas
         """
         logger.info("🔄 Iniciando sincronización completa de maestros...")
+        if force_full_sync:
+            logger.info("⚠️ Modo: Sincronización completa forzada")
         
-        mba3_result = self.sync_mba3_products()
-        sap_result = self.sync_sap_products()
+        mba3_result = self.sync_mba3_products(force_full_sync=force_full_sync)
+        sap_result = self.sync_sap_products(force_full_sync=force_full_sync)
         
         return {
             "status": "success",

@@ -242,6 +242,48 @@ class ProductoSAPStagingRepository:
                 continue
         
         return stats
+    
+    def get_last_item_code(self) -> Optional[str]:
+        """
+        Obtiene el último item_code procesado (ordenado alfabéticamente).
+        
+        Returns:
+            Último item_code o None si no hay productos
+        """
+        cursor = self.conn.cursor()
+        try:
+            cursor.execute("""
+                SELECT TOP 1 item_code
+                FROM producto_sap_staging
+                ORDER BY item_code DESC
+            """)
+            row = cursor.fetchone()
+            return row[0] if row else None
+        except Exception as e:
+            logger.error(f"❌ Error al obtener último item_code: {e}", exc_info=True)
+            return None
+        finally:
+            cursor.close()
+    
+    def count_all(self) -> int:
+        """
+        Cuenta el total de productos en staging.
+        
+        Returns:
+            Número total de productos
+        """
+        cursor = self.conn.cursor()
+        try:
+            cursor.execute("SELECT COUNT(*) FROM producto_sap_staging")
+            row = cursor.fetchone()
+            return row[0] if row else 0
+        except Exception as e:
+            logger.error(f"❌ Error al contar productos: {e}", exc_info=True)
+            return 0
+        finally:
+            cursor.close()
+
+
 
 
 

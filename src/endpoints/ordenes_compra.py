@@ -6,7 +6,7 @@ import logging
 import threading
 import asyncio
 from datetime import datetime, timedelta
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, cast
 from fastapi import FastAPI, Request, Query, Depends
 from fastapi.responses import JSONResponse
 
@@ -216,23 +216,50 @@ def register_ordenes_compra_endpoints(app: FastAPI):
                     }
                 )
             
-            result = query_result["result"]
+            # Usar cast para ayudar al type checker
+            result_raw = query_result.get("result")
+            if not isinstance(result_raw, dict):
+                return JSONResponse(
+                    status_code=500,
+                    content={
+                        "status": "error",
+                        "message": "Formato de respuesta inválido"
+                    }
+                )
+            
+            result = cast(Dict[str, Any], result_raw)
+            
+            # Extraer valores con validación de tipos
+            data = result.get("data", [])
+            total_raw = result.get("total", 0)
+            
+            # Asegurar que total es un entero
+            if isinstance(total_raw, int):
+                total = total_raw
+            else:
+                try:
+                    total = int(total_raw)
+                except (ValueError, TypeError):
+                    total = 0
+            
+            # Asegurar que offset es un entero
+            offset_int = int(offset) if offset is not None else 0
             
             # Preparar respuesta
-            has_more = (offset or 0) + len(result["data"]) < result["total"]
+            has_more = offset_int + len(data) < total
             
             response_data = {
                 "status": "success",
-                "data": result["data"],
+                "data": data,
                 "metadata": {
-                    "total": result["total"],
+                    "total": total,
                     "limit": limit or 50,
-                    "offset": offset or 0,
+                    "offset": offset_int,
                     "has_more": has_more
                 }
             }
             
-            logger.info(f"✅ GET /historial-ordenes: {len(result['data'])} registros encontrados (total: {result['total']})")
+            logger.info(f"✅ GET /historial-ordenes: {len(data)} registros encontrados (total: {total})")
             
             return JSONResponse(
                 status_code=200,
@@ -240,7 +267,7 @@ def register_ordenes_compra_endpoints(app: FastAPI):
                 headers={
                     "X-Source": source,
                     "X-Endpoint": "HISTORIAL-ORDENES",
-                    "X-Total": str(result["total"])
+                    "X-Total": str(total)
                 }
             )
             
@@ -503,19 +530,61 @@ def register_ordenes_compra_endpoints(app: FastAPI):
                     }
                 )
             
-            result = query_result["result"]
-            page_num = query_result["page_num"]
-            page_size = query_result["page_size"]
+            # Usar cast para ayudar al type checker
+            result_raw = query_result.get("result")
+            if not isinstance(result_raw, dict):
+                return JSONResponse(
+                    status_code=500,
+                    content={
+                        "status": "error",
+                        "message": "Formato de respuesta inválido"
+                    }
+                )
+            
+            result = cast(Dict[str, Any], result_raw)
+            
+            # Extraer page_num y page_size con validación
+            page_num_raw = query_result.get("page_num", 1)
+            page_size_raw = query_result.get("page_size", 10)
+            
+            # Asegurar que page_num y page_size son enteros
+            if isinstance(page_num_raw, int):
+                page_num = page_num_raw
+            else:
+                try:
+                    page_num = int(page_num_raw)
+                except (ValueError, TypeError):
+                    page_num = 1
+            
+            if isinstance(page_size_raw, int):
+                page_size = page_size_raw
+            else:
+                try:
+                    page_size = int(page_size_raw)
+                except (ValueError, TypeError):
+                    page_size = 10
+            
+            # Extraer valores con validación de tipos
+            data = result.get("data", [])
+            total_raw = result.get("total", 0)
+            
+            # Asegurar que total es un entero
+            if isinstance(total_raw, int):
+                total = total_raw
+            else:
+                try:
+                    total = int(total_raw)
+                except (ValueError, TypeError):
+                    total = 0
             
             # Calcular total de páginas
-            total = result["total"]
             total_pages = (total + page_size - 1) // page_size if total > 0 else 0
             has_more = page_num < total_pages
             
             # Preparar respuesta con formato de paginación basada en página
             response_data = {
                 "status": "success",
-                "data": result["data"],
+                "data": data,
                 "metadata": {
                     "total": total,
                     "page": page_num,
@@ -525,7 +594,7 @@ def register_ordenes_compra_endpoints(app: FastAPI):
                 }
             }
             
-            logger.info(f"✅ GET /ordenes-compra/logs: {len(result['data'])} registros encontrados (total: {result['total']}, página: {page_num}/{total_pages})")
+            logger.info(f"✅ GET /ordenes-compra/logs: {len(data)} registros encontrados (total: {total}, página: {page_num}/{total_pages})")
             
             return JSONResponse(
                 status_code=200,
@@ -533,7 +602,7 @@ def register_ordenes_compra_endpoints(app: FastAPI):
                 headers={
                     "X-Source": source,
                     "X-Endpoint": "ORDENES-COMPRA-LOGS",
-                    "X-Total": str(result["total"]),
+                    "X-Total": str(total),
                     "X-Page": str(page_num),
                     "X-TotalPages": str(total_pages)
                 }

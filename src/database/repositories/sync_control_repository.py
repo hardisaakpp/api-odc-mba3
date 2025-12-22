@@ -168,6 +168,133 @@ class SyncControlRepository:
             raise
         finally:
             cursor.close()
+    
+    def get_estado_sincronizacion(self, entidad: str) -> Dict[str, Any]:
+        """
+        Obtiene el estado actual de sincronización de una entidad.
+        
+        Lógica:
+        1. Primero verifica si hay una sync EN_PROGRESO (prioridad)
+        2. Si no, obtiene la última sync (EXITOSA o ERROR)
+        3. Normaliza estados para frontend
+        
+        ⚠️ IMPORTANTE: Si hay una sync EN_PROGRESO con created_at > 2 horas,
+           se considera inconsistente (proceso colgado).
+        
+        ⚠️ NOTA TIMEZONE: Usa datetime.now() sin timezone para consistencia
+           con GETDATE() de SQL Server (hora local del servidor).
+        
+        Args:
+            entidad: 'MBA3' o 'SAP'
+            
+        Returns:
+            Diccionario con estado normalizado:
+            {
+                "ultima_sync": str (ISO) o None,
+                "estado": "exitoso" | "error" | "en_proceso" | None,
+                "mensaje": str
+            }
+        """
+        cursor = self.conn.cursor()
+        try:
+            # 1. Verificar si hay una sincronización EN_PROGRESO
+            cursor.execute("""
+                SELECT TOP 1
+                    estado,
+                    created_at,
+                    mensaje_error
+                FROM sync_control
+                WHERE entidad = ? AND estado = 'EN_PROGRESO'
+                ORDER BY created_at DESC
+            """, (entidad,))
+            
+            row_progreso = cursor.fetchone()
+            if row_progreso:
+                created_at = row_progreso[1]
+                
+                # ⚠️ Validación: Si la sync lleva > 2 horas, considerar inconsistente
+                if created_at:
+                    # datetime.now() sin timezone para consistencia con GETDATE() de SQL Server
+                    tiempo_transcurrido = (datetime.now() - created_at).total_seconds()
+                    horas_transcurridas = tiempo_transcurrido / 3600
+                    
+                    if horas_transcurridas > 2:
+                        # Proceso probablemente colgado
+                        return {
+                            "ultima_sync": None,
+                            "estado": "error",
+                            "mensaje": f"Sincronización iniciada hace {int(horas_transcurridas)} horas. Posible proceso colgado."
+                        }
+                
+                # Sync en progreso válida
+                fecha_str = created_at.isoformat() if created_at else "desconocido"
+                return {
+                    "ultima_sync": None,
+                    "estado": "en_proceso",
+                    "mensaje": f"Sincronización en progreso desde {fecha_str}"
+                }
+            
+            # 2. Si no hay EN_PROGRESO, obtener la última sync (EXITOSA o ERROR)
+            # ⚠️ ORDER BY created_at DESC es correcto porque cada sync inserta una fila nueva
+            cursor.execute("""
+                SELECT TOP 1
+                    estado,
+                    ultima_sync_exitosa,
+                    mensaje_error,
+                    registros_sincronizados
+                FROM sync_control
+                WHERE entidad = ?
+                ORDER BY created_at DESC
+            """, (entidad,))
+            
+            row = cursor.fetchone()
+            if not row:
+                # No hay registros de sincronización
+                return {
+                    "ultima_sync": None,
+                    "estado": None,
+                    "mensaje": "No hay sincronizaciones registradas"
+                }
+            
+            estado = row[0]
+            ultima_sync = row[1]  # ⚠️ Este es el campo correcto (no created_at)
+            mensaje_error = row[2]
+            registros = row[3]
+            
+            # 3. Normalizar estado para frontend
+            # ⚠️ CONTRATO DE API: Estos valores son estables, no cambiar sin coordinación con frontend
+            estado_normalizado = None
+            mensaje = None
+            
+            if estado == 'EXITOSA':
+                estado_normalizado = "exitoso"
+                registros_str = f"{registros or 0} registros procesados" if registros else ""
+                mensaje = f"Sincronización completada exitosamente. {registros_str}".strip()
+            elif estado == 'ERROR':
+                estado_normalizado = "error"
+                mensaje = mensaje_error or "Error en la última sincronización"
+            # EN_PROGRESO ya se manejó arriba, pero por si acaso:
+            elif estado == 'EN_PROGRESO':
+                estado_normalizado = "en_proceso"
+                mensaje = "Sincronización en progreso"
+            else:
+                # Estado desconocido
+                estado_normalizado = None
+                mensaje = f"Estado desconocido: {estado}"
+            
+            return {
+                "ultima_sync": ultima_sync.isoformat() if ultima_sync else None,
+                "estado": estado_normalizado,
+                "mensaje": mensaje
+            }
+        except Exception as e:
+            logger.error(f"❌ Error al obtener estado sync {entidad}: {e}", exc_info=True)
+            raise
+        finally:
+            cursor.close()
+
+
+
 
 
 

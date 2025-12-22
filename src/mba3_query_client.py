@@ -265,7 +265,7 @@ class MBA3APIClient:
                 url,
                 data=form_data,
                 headers=headers,
-                timeout=30
+                timeout=90  # Aumentado de 30 a 90 segundos para consultas grandes
             )
             
             if response.status_code == 200:

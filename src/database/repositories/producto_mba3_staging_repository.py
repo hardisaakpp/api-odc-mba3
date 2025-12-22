@@ -242,6 +242,48 @@ class ProductoMBA3StagingRepository:
                 continue
         
         return stats
+    
+    def get_last_product_id(self) -> Optional[str]:
+        """
+        Obtiene el último product_id procesado (ordenado alfabéticamente).
+        
+        Returns:
+            Último product_id o None si no hay productos
+        """
+        cursor = self.conn.cursor()
+        try:
+            cursor.execute("""
+                SELECT TOP 1 product_id
+                FROM producto_mba3_staging
+                ORDER BY product_id DESC
+            """)
+            row = cursor.fetchone()
+            return row[0] if row else None
+        except Exception as e:
+            logger.error(f"❌ Error al obtener último product_id: {e}", exc_info=True)
+            return None
+        finally:
+            cursor.close()
+    
+    def count_all(self) -> int:
+        """
+        Cuenta el total de productos en staging.
+        
+        Returns:
+            Número total de productos
+        """
+        cursor = self.conn.cursor()
+        try:
+            cursor.execute("SELECT COUNT(*) FROM producto_mba3_staging")
+            row = cursor.fetchone()
+            return row[0] if row else 0
+        except Exception as e:
+            logger.error(f"❌ Error al contar productos: {e}", exc_info=True)
+            return 0
+        finally:
+            cursor.close()
+
+
 
 
 
