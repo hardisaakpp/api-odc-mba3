@@ -440,6 +440,85 @@ def register_sap_endpoints(app: FastAPI):
             
             conn.close()
             
+            # ============================================================
+            # FASE 6: Log final consolidado
+            # ============================================================
+            
+            # Generar resumen consolidado del proceso
+            resumen_cierre = {
+                "proceso_id": proceso_id,
+                "timestamp": datetime.now().isoformat(),
+                "usuario": username,
+                "fuente": source,
+                "total_procesadas": len(oc_ids_a_procesar),
+                "enviadas": enviadas,
+                "errores": errores,
+                "detalles_por_oc": detalles,
+                "pedidos_cerrados": []  # Se llenará si hay pedidos cerrados
+            }
+            
+            # Identificar pedidos únicos procesados
+            pedidos_procesados = set()
+            for detalle in detalles:
+                if detalle.get("success"):
+                    # Obtener pedido_id de la OC exitosa
+                    try:
+                        conn_temp = get_db_connection()
+                        oc_repo_temp = OrdenCompraRepository(conn_temp)
+                        oc_info = oc_repo_temp.get_existing_cabecera(detalle["oc_id"])
+                        if oc_info and oc_info.get("pedido_id"):
+                            pedidos_procesados.add(oc_info["pedido_id"])
+                        conn_temp.close()
+                    except Exception:
+                        pass
+            
+            # Evaluar cierre de pedidos procesados
+            if pedidos_procesados:
+                try:
+                    from src.database.repositories.pedido_repository import PedidoRepository
+                    from src.database.services.pedido_cierre_service import PedidoCierreService
+                    
+                    conn_temp = get_db_connection()
+                    oc_repo_temp = OrdenCompraRepository(conn_temp)
+                    pedido_repo_temp = PedidoRepository(conn_temp)
+                    cierre_service = PedidoCierreService()
+                    
+                    for pedido_id in pedidos_procesados:
+                        resultado = cierre_service.cerrar_pedido_si_corresponde(
+                            pedido_id=pedido_id,
+                            oc_repo=oc_repo_temp,
+                            pedido_repo=pedido_repo_temp
+                        )
+                        if resultado["cerrado"]:
+                            resumen_cierre["pedidos_cerrados"].append({
+                                "pedido_id": pedido_id,
+                                "estado_anterior": resultado["estado_anterior"],
+                                "estado_nuevo": resultado["estado_nuevo"],
+                                "evaluacion": resultado["evaluacion"]
+                            })
+                    
+                    conn_temp.close()
+                except Exception as e:
+                    logger.warning(f"⚠️ Error al generar resumen de cierre (no crítico): {e}")
+            
+            # Guardar log final consolidado
+            try:
+                conn_final = get_db_connection()
+                log_repo_final = SAPIntegrationLogRepository(conn_final)
+                log_repo_final.guardar_log(
+                    proceso_id=proceso_id,
+                    nivel_log="INFO",
+                    mensaje=f"INTEGRAR-SAP completado: {enviadas} enviadas, {errores} errores. "
+                            f"Pedidos cerrados: {len(resumen_cierre['pedidos_cerrados'])}",
+                    usuario=username,
+                    fuente=source,
+                    success=enviadas > 0 and errores == 0,
+                    detalles_adicionales=resumen_cierre
+                )
+                conn_final.close()
+            except Exception as e:
+                logger.warning(f"⚠️ No se pudo guardar log final consolidado: {e}")
+            
             # Determinar status general
             status_general = "success" if errores == 0 else "partial"
             if enviadas == 0:

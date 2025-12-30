@@ -11,7 +11,7 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.base import MIMEBase
 from email import encoders
 from datetime import datetime
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 from src.config import (
     EMAIL_SMTP_SERVER,
     EMAIL_SMTP_PORT,
@@ -805,5 +805,238 @@ def send_capacity_warning_notification(
         
     except Exception as e:
         logger.error(f"❌ Error al enviar email de advertencia: {e}", exc_info=True)
+        return False
+
+
+def send_oc_to_supplier(
+    oc_cabecera: Dict[str, Any],
+    oc_detalles: List[Dict[str, Any]],
+    doc_num: Optional[int] = None,
+    doc_entry: Optional[int] = None,
+    proveedor_email: Optional[str] = None,
+    fecha_ejecucion: Optional[datetime] = None
+) -> bool:
+    """
+    Envía correo al proveedor con la ODC generada.
+    
+    DESTINATARIO: proveedor_email (si se proporciona) o EMAIL_TO_OPERACIONES como fallback
+    
+    Args:
+        oc_cabecera: Datos de cabecera de la orden de compra
+        oc_detalles: Lista de detalles de la orden de compra
+        doc_num: Número de documento SAP (DocNum)
+        doc_entry: Entry de documento SAP (DocEntry)
+        proveedor_email: Email del proveedor (opcional)
+        fecha_ejecucion: Fecha y hora de la ejecución (por defecto ahora)
+    
+    Returns:
+        True si el email se envió correctamente, False en caso contrario
+    """
+    if not ENABLE_EMAIL_NOTIFICATIONS:
+        logger.debug("⏭️ Notificaciones por email deshabilitadas")
+        return False
+    
+    if not fecha_ejecucion:
+        fecha_ejecucion = datetime.now()
+    
+    try:
+        # Determinar destinatario
+        if proveedor_email:
+            recipients = [proveedor_email.strip()]
+        else:
+            # Fallback: enviar a operaciones para que lo reenvíen manualmente
+            recipients = EMAIL_TO_OPERACIONES if isinstance(EMAIL_TO_OPERACIONES, list) else [EMAIL_TO_OPERACIONES] if EMAIL_TO_OPERACIONES else []
+            logger.warning(f"⚠️ No se proporcionó email del proveedor, enviando a operaciones: {recipients}")
+        
+        if not recipients:
+            logger.warning("⚠️ No hay destinatarios configurados")
+            return False
+        
+        # Extraer información de la ODC
+        oc_id = oc_cabecera.get("oc_id", "N/A")
+        proveedor = oc_cabecera.get("proveedor", "N/A")
+        numero_oc_sap = doc_num or oc_cabecera.get("numero_oc_sap", "N/A")
+        referencia = oc_cabecera.get("referencia_despacho", "N/A")
+        
+        # Crear mensaje
+        msg = MIMEMultipart()
+        msg['From'] = EMAIL_FROM
+        msg['To'] = ", ".join(recipients)
+        msg['Subject'] = f"📦 Orden de Compra Generada - ODC #{numero_oc_sap}"
+        
+        # Calcular totales
+        total_lineas = len(oc_detalles)
+        total_cantidad = sum(d.get("cantidad_sap", 0) for d in oc_detalles)
+        total_valor = sum(d.get("total_linea", 0) or 0 for d in oc_detalles)
+        
+        # Crear tabla HTML de detalles (máximo 50 líneas para no saturar)
+        detalles_mostrar = oc_detalles[:50]
+        detalles_tabla = ""
+        for idx, detalle in enumerate(detalles_mostrar, 1):
+            sku = detalle.get("sku_sap", "N/A")
+            nombre = detalle.get("nombre_producto", "Sin nombre")
+            cantidad = detalle.get("cantidad_sap", 0)
+            unidad = detalle.get("unidad_sap", "N/A")
+            precio_unit = detalle.get("precio_unitario", 0)
+            total_linea = detalle.get("total_linea", 0)
+            
+            detalles_tabla += f"""
+            <tr>
+                <td>{idx}</td>
+                <td><strong>{sku}</strong></td>
+                <td>{nombre}</td>
+                <td>{cantidad:.2f}</td>
+                <td>{unidad}</td>
+                <td>${precio_unit:.2f}</td>
+                <td>${total_linea:.2f}</td>
+            </tr>
+            """
+        
+        if len(oc_detalles) > 50:
+            detalles_tabla += f"""
+            <tr>
+                <td colspan="7" style="text-align: center; font-style: italic;">
+                    ... y {len(oc_detalles) - 50} línea(s) más
+                </td>
+            </tr>
+            """
+        
+        # Crear cuerpo del mensaje HTML
+        body_html = f"""
+        <html>
+        <head>
+            <style>
+                body {{ font-family: Arial, sans-serif; }}
+                .container {{ max-width: 800px; margin: 0 auto; padding: 20px; }}
+                .header {{ background-color: #4CAF50; color: white; padding: 15px; text-align: center; }}
+                .content {{ background-color: #f9f9f9; padding: 20px; }}
+                .info-box {{ background-color: white; padding: 15px; margin: 10px 0; border-left: 4px solid #4CAF50; }}
+                .table-container {{ overflow-x: auto; margin: 20px 0; }}
+                table {{ width: 100%; border-collapse: collapse; background-color: white; }}
+                th {{ background-color: #4CAF50; color: white; padding: 10px; text-align: left; }}
+                td {{ padding: 8px; border-bottom: 1px solid #ddd; }}
+                tr:hover {{ background-color: #f5f5f5; }}
+                .footer {{ text-align: center; color: #666; font-size: 12px; margin-top: 20px; }}
+                .total {{ font-weight: bold; background-color: #e8f5e9; }}
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <div class="header">
+                    <h2>📦 Orden de Compra Generada</h2>
+                </div>
+                <div class="content">
+                    <p>Se ha generado una nueva Orden de Compra en SAP.</p>
+                    
+                    <div class="info-box">
+                        <h3>📋 Información de la Orden de Compra</h3>
+                        <ul>
+                            <li><strong>Número ODC SAP:</strong> {numero_oc_sap}</li>
+                            <li><strong>DocEntry:</strong> {doc_entry or 'N/A'}</li>
+                            <li><strong>Proveedor:</strong> {proveedor}</li>
+                            <li><strong>Referencia:</strong> {referencia}</li>
+                            <li><strong>Total Líneas:</strong> {total_lineas}</li>
+                            <li><strong>Total Cantidad:</strong> {total_cantidad:.2f}</li>
+                            <li><strong>Total Valor:</strong> ${total_valor:.2f}</li>
+                        </ul>
+                    </div>
+                    
+                    <div class="table-container">
+                        <h3>📋 Detalle de la Orden de Compra</h3>
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>#</th>
+                                    <th>SKU</th>
+                                    <th>Producto</th>
+                                    <th>Cantidad</th>
+                                    <th>Unidad</th>
+                                    <th>Precio Unit.</th>
+                                    <th>Total</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {detalles_tabla}
+                            </tbody>
+                        </table>
+                    </div>
+                    
+                    <p><strong>Fecha y Hora:</strong> {fecha_ejecucion.strftime('%Y-%m-%d %H:%M:%S')}</p>
+                    
+                    <p>Este es un mensaje automático del sistema de integración SAP.</p>
+                </div>
+                <div class="footer">
+                    <p>Sistema MBA3 Consultas - Notificación de Orden de Compra</p>
+                </div>
+            </div>
+        </body>
+        </html>
+        """
+        
+        # Crear cuerpo de texto plano
+        body_text = f"""
+        Orden de Compra Generada
+        
+        Se ha generado una nueva Orden de Compra en SAP.
+        
+        Información de la Orden de Compra:
+        - Número ODC SAP: {numero_oc_sap}
+        - DocEntry: {doc_entry or 'N/A'}
+        - Proveedor: {proveedor}
+        - Referencia: {referencia}
+        - Total Líneas: {total_lineas}
+        - Total Cantidad: {total_cantidad:.2f}
+        - Total Valor: ${total_valor:.2f}
+        
+        Detalle de la Orden de Compra:
+        """
+        
+        for idx, detalle in enumerate(detalles_mostrar, 1):
+            sku = detalle.get("sku_sap", "N/A")
+            nombre = detalle.get("nombre_producto", "Sin nombre")
+            cantidad = detalle.get("cantidad_sap", 0)
+            unidad = detalle.get("unidad_sap", "N/A")
+            precio_unit = detalle.get("precio_unitario", 0)
+            total_linea = detalle.get("total_linea", 0)
+            
+            body_text += f"""
+        {idx}. SKU: {sku}
+           Producto: {nombre}
+           Cantidad: {cantidad:.2f} {unidad}
+           Precio Unit.: ${precio_unit:.2f}
+           Total: ${total_linea:.2f}
+        """
+        
+        if len(oc_detalles) > 50:
+            body_text += f"\n        ... y {len(oc_detalles) - 50} línea(s) más\n"
+        
+        body_text += f"""
+        
+        Fecha y Hora: {fecha_ejecucion.strftime('%Y-%m-%d %H:%M:%S')}
+        
+        Este es un mensaje automático del sistema de integración SAP.
+        """
+        
+        # Agregar cuerpo al mensaje
+        msg.attach(MIMEText(body_text, 'plain'))
+        msg.attach(MIMEText(body_html, 'html'))
+        
+        # Enviar email
+        with smtplib.SMTP(EMAIL_SMTP_SERVER, EMAIL_SMTP_PORT) as server:
+            # Solo usar TLS si el puerto es 587 (no para puerto 25 - relay interno)
+            if EMAIL_SMTP_PORT == 587:
+                server.starttls()
+            
+            # Solo autenticar si hay password configurada (no para relay interno)
+            if EMAIL_SMTP_PASSWORD:
+                server.login(EMAIL_SMTP_USER, EMAIL_SMTP_PASSWORD)
+            
+            server.send_message(msg, to_addrs=recipients)
+        
+        logger.info(f"✅ Email de ODC enviado a {', '.join(recipients)} (ODC #{numero_oc_sap})")
+        return True
+        
+    except Exception as e:
+        logger.error(f"❌ Error al enviar email de ODC al proveedor: {e}", exc_info=True)
         return False
 

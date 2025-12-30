@@ -16,7 +16,9 @@ class SAPOCMapper:
     def to_sap_purchase_order(
         oc_cabecera: Dict[str, Any],
         oc_detalles: List[Dict[str, Any]],
-        warehouse_code: Optional[str] = None
+        warehouse_code: Optional[str] = None,
+        usuario_id: Optional[str] = None,
+        pedido_id: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Convierte una orden de compra de las tablas a formato JSON de SAP Service Layer.
@@ -25,6 +27,8 @@ class SAPOCMapper:
             oc_cabecera: Datos de orden_compra_cabecera
             oc_detalles: Lista de datos de orden_compra_detalle
             warehouse_code: Código de bodega (opcional, si no se proporciona se omite)
+            usuario_id: ID del usuario que genera la OC (para U_USUARIO)
+            pedido_id: ID del pedido relacionado (para U_LOTE)
             
         Returns:
             Diccionario con estructura JSON para SAP Service Layer
@@ -36,6 +40,10 @@ class SAPOCMapper:
             "DocDueDate": "2025-01-21",
             "TaxDate": "2025-01-21",
             "Comments": "Ref: 900125351",
+            "U_ORIGEN": "C",
+            "U_USUARIO": "user123",
+            "U_FECHA": "2025-01-21",
+            "U_LOTE": "pedido-uuid",
             "DocumentLines": [
                 {
                     "ItemCode": "5-0012.9",
@@ -101,14 +109,30 @@ class SAPOCMapper:
                 proveedor = f"P{proveedor}"
                 logger.info(f"🔄 CardCode convertido con prefijo 'P': {proveedor_original} → {proveedor}")
         
-        # Construir JSON completo
+        # Obtener información para UDFs
+        # Usuario: de parámetro, de cabecera, o fallback
+        usuario_final = usuario_id or oc_cabecera.get("creado_por") or "SYSTEM"
+        
+        # Pedido ID: de parámetro, de cabecera, o vacío
+        pedido_final = pedido_id or oc_cabecera.get("pedido_id") or ""
+        
+        # Fecha actual para U_FECHA
+        fecha_actual = datetime.utcnow().strftime("%Y-%m-%d")
+        
+        # Construir JSON completo con UDFs de trazabilidad
         purchase_order = {
             "CardCode": proveedor,
             "DocDate": fecha,
             "DocDueDate": fecha,  # Por defecto igual a DocDate, se puede calcular según lógica
             "TaxDate": fecha,
             "Comments": f"Ref: {oc_cabecera.get('referencia_despacho', 'N/A')}",
-            "U_ORIGEN": "C",  # Campo hardcodeado para identificar el sistema origen
+            
+            # UDFs de trazabilidad
+            "U_ORIGEN": "C",  # Sistema origen (C = consultas)
+            "U_USUARIO": usuario_final,  # Usuario que genera la OC
+            "U_FECHA": fecha_actual,  # Fecha de generación
+            "U_LOTE": pedido_final,  # Lote/pedido relacionado (puede estar vacío si viene de despacho)
+            
             "DocumentLines": document_lines
         }
         
@@ -116,6 +140,13 @@ class SAPOCMapper:
         if not purchase_order.get("CardCode"):
             raise ValueError("CardCode (proveedor) es requerido")
         
-        logger.debug(f"✅ Purchase Order JSON construido: {len(document_lines)} líneas, CardCode: {proveedor}")
+        logger.debug(
+            f"✅ Purchase Order JSON construido: {len(document_lines)} líneas, "
+            f"CardCode: {proveedor}, "
+            f"UDFs: U_ORIGEN={purchase_order['U_ORIGEN']}, "
+            f"U_USUARIO={purchase_order['U_USUARIO']}, "
+            f"U_FECHA={purchase_order['U_FECHA']}, "
+            f"U_LOTE={purchase_order['U_LOTE'] or '(vacío)'}"
+        )
         return purchase_order
 

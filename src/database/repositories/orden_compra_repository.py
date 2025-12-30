@@ -281,8 +281,8 @@ class OrdenCompraRepository:
         try:
             cursor.execute(
                 """
-                SELECT oc_id, despacho_id, proveedor, fecha_generacion,
-                       estado, numero_oc_sap, referencia_despacho, created_at,
+                SELECT oc_id, despacho_id, pedido_id, proveedor, fecha_generacion,
+                       estado, numero_oc_sap, doc_entry, referencia_despacho, created_at,
                        respuesta_sap, fecha_procesado, error_message, error_code, error_source, updated_at
                 FROM orden_compra_cabecera
                 WHERE referencia_despacho = ?
@@ -295,20 +295,71 @@ class OrdenCompraRepository:
             
             return {
                 "oc_id": str(result[0]),
-                "despacho_id": str(result[1]),
-                "proveedor": result[2],
-                "fecha_generacion": serialize_date(result[3]),
-                "estado": result[4],
-                "numero_oc_sap": result[5],
-                "referencia_despacho": result[6],
-                "created_at": serialize_date(result[7]),
-                "respuesta_sap": result[8],
-                "fecha_procesado": serialize_date(result[9]),
-                "error_message": result[10],
-                "error_code": result[11],
-                "error_source": result[12],
-                "updated_at": serialize_date(result[13]),
+                "despacho_id": str(result[1]) if result[1] else None,
+                "pedido_id": str(result[2]) if result[2] else None,
+                "proveedor": result[3],
+                "fecha_generacion": serialize_date(result[4]),
+                "estado": result[5],
+                "numero_oc_sap": result[6],
+                "doc_entry": result[7],
+                "referencia_despacho": result[8],
+                "created_at": serialize_date(result[9]),
+                "respuesta_sap": result[10],
+                "fecha_procesado": serialize_date(result[11]),
+                "error_message": result[12],
+                "error_code": result[13],
+                "error_source": result[14],
+                "updated_at": serialize_date(result[15]),
             }
+        finally:
+            cursor.close()
+    
+    def get_by_pedido_id(self, pedido_id: str) -> List[Dict[str, Any]]:
+        """
+        Obtiene todas las órdenes de compra asociadas a un pedido.
+        
+        Args:
+            pedido_id: UUID del pedido
+            
+        Returns:
+            Lista de diccionarios con información de las ODC del pedido
+        """
+        cursor = self.conn.cursor()
+        try:
+            cursor.execute(
+                """
+                SELECT oc_id, despacho_id, pedido_id, proveedor, fecha_generacion,
+                       estado, numero_oc_sap, doc_entry, referencia_despacho, created_at,
+                       respuesta_sap, fecha_procesado, error_message, error_code, error_source, updated_at
+                FROM orden_compra_cabecera
+                WHERE pedido_id = ?
+                ORDER BY created_at ASC
+                """,
+                (pedido_id,)
+            )
+            rows = cursor.fetchall()
+            
+            return [
+                {
+                    "oc_id": str(row[0]),
+                    "despacho_id": str(row[1]) if row[1] else None,
+                    "pedido_id": str(row[2]) if row[2] else None,
+                    "proveedor": row[3],
+                    "fecha_generacion": serialize_date(row[4]),
+                    "estado": row[5],
+                    "numero_oc_sap": row[6],
+                    "doc_entry": row[7],
+                    "referencia_despacho": row[8],
+                    "created_at": serialize_date(row[9]),
+                    "respuesta_sap": row[10],
+                    "fecha_procesado": serialize_date(row[11]),
+                    "error_message": row[12],
+                    "error_code": row[13],
+                    "error_source": row[14],
+                    "updated_at": serialize_date(row[15]),
+                }
+                for row in rows
+            ]
         finally:
             cursor.close()
     
@@ -328,8 +379,8 @@ class OrdenCompraRepository:
         try:
             cursor.execute(
                 """
-                SELECT oc_id, despacho_id, proveedor, fecha_generacion,
-                       estado, numero_oc_sap, referencia_despacho, created_at,
+                SELECT oc_id, despacho_id, pedido_id, proveedor, fecha_generacion,
+                       estado, numero_oc_sap, doc_entry, referencia_despacho, created_at,
                        respuesta_sap, fecha_procesado, error_message, error_code, error_source, updated_at
                 FROM orden_compra_cabecera
                 WHERE estado = ?
@@ -343,19 +394,21 @@ class OrdenCompraRepository:
             for row in results:
                 oc_list.append({
                     "oc_id": str(row[0]),
-                    "despacho_id": str(row[1]),
-                    "proveedor": row[2],
-                    "fecha_generacion": serialize_date(row[3]),
-                    "estado": row[4],
-                    "numero_oc_sap": row[5],
-                    "referencia_despacho": row[6],
-                    "created_at": serialize_date(row[7]),
-                    "respuesta_sap": row[8],
-                    "fecha_procesado": serialize_date(row[9]),
-                    "error_message": row[10],
-                    "error_code": row[11],
-                    "error_source": row[12],
-                    "updated_at": serialize_date(row[13]),
+                    "despacho_id": str(row[1]) if row[1] else None,
+                    "pedido_id": str(row[2]) if row[2] else None,
+                    "proveedor": row[3],
+                    "fecha_generacion": serialize_date(row[4]),
+                    "estado": row[5],
+                    "numero_oc_sap": row[6],
+                    "doc_entry": row[7],
+                    "referencia_despacho": row[8],
+                    "created_at": serialize_date(row[9]),
+                    "respuesta_sap": row[10],
+                    "fecha_procesado": serialize_date(row[11]),
+                    "error_message": row[12],
+                    "error_code": row[13],
+                    "error_source": row[14],
+                    "updated_at": serialize_date(row[15]),
                 })
             
             return oc_list
@@ -375,8 +428,8 @@ class OrdenCompraRepository:
         try:
             cursor.execute(
                 """
-                SELECT oc_id, despacho_id, proveedor, fecha_generacion,
-                       estado, numero_oc_sap, referencia_despacho, created_at,
+                SELECT oc_id, despacho_id, pedido_id, proveedor, fecha_generacion,
+                       estado, numero_oc_sap, doc_entry, referencia_despacho, created_at,
                        respuesta_sap, fecha_procesado, error_message, error_code, error_source, updated_at
                 FROM orden_compra_cabecera
                 ORDER BY created_at DESC
@@ -388,19 +441,21 @@ class OrdenCompraRepository:
             for row in results:
                 oc_list.append({
                     "oc_id": str(row[0]),
-                    "despacho_id": str(row[1]),
-                    "proveedor": row[2],
-                    "fecha_generacion": serialize_date(row[3]),
-                    "estado": row[4],
-                    "numero_oc_sap": row[5],
-                    "referencia_despacho": row[6],
-                    "created_at": serialize_date(row[7]),
-                    "respuesta_sap": row[8],
-                    "fecha_procesado": serialize_date(row[9]),
-                    "error_message": row[10],
-                    "error_code": row[11],
-                    "error_source": row[12],
-                    "updated_at": serialize_date(row[13]),
+                    "despacho_id": str(row[1]) if row[1] else None,
+                    "pedido_id": str(row[2]) if row[2] else None,
+                    "proveedor": row[3],
+                    "fecha_generacion": serialize_date(row[4]),
+                    "estado": row[5],
+                    "numero_oc_sap": row[6],
+                    "doc_entry": row[7],
+                    "referencia_despacho": row[8],
+                    "created_at": serialize_date(row[9]),
+                    "respuesta_sap": row[10],
+                    "fecha_procesado": serialize_date(row[11]),
+                    "error_message": row[12],
+                    "error_code": row[13],
+                    "error_source": row[14],
+                    "updated_at": serialize_date(row[15]),
                 })
             
             return oc_list
@@ -421,8 +476,8 @@ class OrdenCompraRepository:
         try:
             cursor.execute(
                 """
-                SELECT oc_id, despacho_id, proveedor, fecha_generacion,
-                       estado, numero_oc_sap, referencia_despacho, created_at,
+                SELECT oc_id, despacho_id, pedido_id, proveedor, fecha_generacion,
+                       estado, numero_oc_sap, doc_entry, referencia_despacho, created_at,
                        respuesta_sap, fecha_procesado, error_message, error_code, error_source, updated_at
                 FROM orden_compra_cabecera
                 WHERE oc_id = ?
@@ -435,19 +490,21 @@ class OrdenCompraRepository:
             
             return {
                 "oc_id": str(result[0]),
-                "despacho_id": str(result[1]),
-                "proveedor": result[2],
-                "fecha_generacion": serialize_date(result[3]),
-                "estado": result[4],
-                "numero_oc_sap": result[5],
-                "referencia_despacho": result[6],
-                "created_at": serialize_date(result[7]),
-                "respuesta_sap": result[8],
-                "fecha_procesado": serialize_date(result[9]),
-                "error_message": result[10],
-                "error_code": result[11],
-                "error_source": result[12],
-                "updated_at": serialize_date(result[13]),
+                "despacho_id": str(result[1]) if result[1] else None,
+                "pedido_id": str(result[2]) if result[2] else None,
+                "proveedor": result[3],
+                "fecha_generacion": serialize_date(result[4]),
+                "estado": result[5],
+                "numero_oc_sap": result[6],
+                "doc_entry": result[7],
+                "referencia_despacho": result[8],
+                "created_at": serialize_date(result[9]),
+                "respuesta_sap": result[10],
+                "fecha_procesado": serialize_date(result[11]),
+                "error_message": result[12],
+                "error_code": result[13],
+                "error_source": result[14],
+                "updated_at": serialize_date(result[15]),
             }
         finally:
             cursor.close()
@@ -545,6 +602,7 @@ class OrdenCompraRepository:
         oc_id: str, 
         estado: str, 
         numero_oc_sap: Optional[str] = None,
+        doc_entry: Optional[int] = None,
         respuesta_sap: Optional[str] = None,
         error_message: Optional[str] = None,
         error_code: Optional[str] = None,
@@ -560,6 +618,7 @@ class OrdenCompraRepository:
             oc_id: UUID de la orden de compra
             estado: Nuevo estado (PENDIENTE, ENVIADA, CONFIRMADA, ERROR, etc.)
             numero_oc_sap: Número de OC asignado por SAP (opcional)
+            doc_entry: DocEntry de SAP (ID interno) (opcional)
             respuesta_sap: Mensaje o respuesta de SAP (opcional)
             error_message: Mensaje de error si falla (opcional)
             error_code: Código de error de SAP (opcional)
@@ -573,7 +632,7 @@ class OrdenCompraRepository:
         try:
             # Construir SQL dinámicamente según campos proporcionados
             set_clauses = ["estado = ?", "updated_at = GETDATE()"]
-            values = [estado]
+            values: List[Any] = [estado]
             
             # Siempre actualizar fecha_procesado cuando se cambia el estado
             set_clauses.append("fecha_procesado = GETDATE()")
@@ -581,6 +640,10 @@ class OrdenCompraRepository:
             if numero_oc_sap is not None:
                 set_clauses.append("numero_oc_sap = ?")
                 values.append(numero_oc_sap)
+            
+            if doc_entry is not None:
+                set_clauses.append("doc_entry = ?")
+                values.append(doc_entry)
             
             if respuesta_sap is not None:
                 set_clauses.append("respuesta_sap = ?")
@@ -620,7 +683,7 @@ class OrdenCompraRepository:
             
             if rows_affected > 0:
                 logger.info(f"✅ Estado de OC actualizado: {oc_id} → {estado}" + 
-                          (f" (SAP: {numero_oc_sap})" if numero_oc_sap else ""))
+                          (f" (SAP: DocNum={numero_oc_sap}, DocEntry={doc_entry})" if numero_oc_sap or doc_entry else ""))
                 return True
             else:
                 logger.warning(f"⚠️ No se encontró orden de compra para actualizar estado: {oc_id}")
@@ -630,6 +693,71 @@ class OrdenCompraRepository:
             self.conn.rollback()
             logger.error(f"❌ Error al actualizar estado de orden_compra: {e}")
             logger.error(f"   OC ID: {oc_id}, Estado: {estado}")
+            raise
+        finally:
+            cursor.close()
+    
+    def update_sap_refs(
+        self,
+        oc_id: str,
+        doc_entry: Optional[int] = None,
+        doc_num: Optional[str] = None
+    ) -> bool:
+        """
+        Actualiza referencias de SAP (DocEntry y DocNum) en una orden de compra.
+        
+        Args:
+            oc_id: UUID de la orden de compra
+            doc_entry: DocEntry de SAP (ID interno)
+            doc_num: DocNum de SAP (número visible)
+            
+        Returns:
+            True si se actualizó correctamente, False en caso contrario
+        """
+        cursor = self.conn.cursor()
+        
+        try:
+            set_clauses = ["updated_at = GETDATE()"]
+            values = []
+            
+            if doc_entry is not None:
+                set_clauses.append("doc_entry = ?")
+                values.append(doc_entry)
+            
+            if doc_num is not None:
+                set_clauses.append("numero_oc_sap = ?")
+                values.append(doc_num)
+            
+            if not values:
+                # No hay nada que actualizar
+                return False
+            
+            sql = f"""
+            UPDATE orden_compra_cabecera SET
+                {', '.join(set_clauses)}
+            WHERE oc_id = ?
+            """
+            
+            values.append(oc_id)
+            
+            cursor.execute(sql, values)
+            rows_affected = cursor.rowcount
+            self.conn.commit()
+            
+            if rows_affected > 0:
+                logger.info(
+                    f"✅ Referencias SAP actualizadas: {oc_id} → "
+                    f"DocEntry={doc_entry}, DocNum={doc_num}"
+                )
+                return True
+            else:
+                logger.warning(f"⚠️ No se encontró OC para actualizar referencias SAP: {oc_id}")
+                return False
+                
+        except Exception as e:
+            self.conn.rollback()
+            logger.error(f"❌ Error al actualizar referencias SAP: {e}")
+            logger.error(f"   OC ID: {oc_id}, DocEntry: {doc_entry}, DocNum: {doc_num}")
             raise
         finally:
             cursor.close()

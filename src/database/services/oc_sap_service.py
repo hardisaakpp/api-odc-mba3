@@ -6,7 +6,7 @@ Este servicio orquesta la construcción del JSON y el envío de ODC a SAP.
 
 import logging
 import json
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 
 from ..repositories.orden_compra_repository import OrdenCompraRepository
 from ..clients.sap_service_layer_client import SAPServiceLayerClient
@@ -103,12 +103,40 @@ class OCSAPService:
             
             logger.info(f"📦 Preparando envío de ODC {oc_id} a SAP ({len(oc_detalles)} líneas)")
             
-            # 3. Convertir a formato JSON de SAP
+            # 3. Validar antes de crear OC
+            validacion = self._validar_antes_de_crear_oc(oc_cabecera, oc_detalles)
+            
+            if not validacion["valid"]:
+                error_msg = f"Validación falló: {'; '.join(validacion['errors'])}"
+                result["error"] = error_msg
+                result["error_message"] = error_msg
+                result["error_source"] = "BACKEND"
+                logger.error(f"❌ {error_msg}")
+                try:
+                    oc_repo.update_estado(
+                        oc_id, 
+                        "ERROR",
+                        respuesta_sap=error_msg,
+                        error_message=error_msg,
+                        error_source="BACKEND"
+                    )
+                except Exception:
+                    pass
+                return result
+            
+            # Log warnings si existen
+            if validacion["warnings"]:
+                for warning in validacion["warnings"]:
+                    logger.warning(warning)
+            
+            # 4. Convertir a formato JSON de SAP
             try:
                 purchase_order_json = SAPOCMapper.to_sap_purchase_order(
                     oc_cabecera,
                     oc_detalles,
-                    warehouse_code
+                    warehouse_code,
+                    usuario_id=oc_cabecera.get("creado_por"),  # Usuario de la cabecera
+                    pedido_id=oc_cabecera.get("pedido_id")     # Pedido relacionado
                 )
             except ValueError as e:
                 error_msg = f"Error al construir JSON de SAP: {str(e)}"
@@ -145,7 +173,7 @@ class OCSAPService:
                     pass
                 return result
             
-            # 4. Enviar a SAP Service Layer
+            # 5. Enviar a SAP Service Layer
             logger.info(f"🔄 Enviando ODC {oc_id} a SAP Service Layer...")
             sap_response = self.sap_client.create_purchase_order(purchase_order_json)
             
@@ -200,7 +228,7 @@ class OCSAPService:
                     pass
                 return result
             
-            # 5. Actualizar estado y número de OC en la base de datos
+            # 6. Actualizar estado y referencias de SAP en la base de datos
             doc_entry = sap_response.get("doc_entry")
             doc_num = sap_response.get("doc_num")
             sap_response_data = sap_response.get("data")  # Respuesta completa de SAP
@@ -212,11 +240,12 @@ class OCSAPService:
                     # Si hay un mensaje en la respuesta, usarlo
                     mensaje_sap = sap_response_data.get("message", mensaje_sap)
                 
-                # Actualizar estado a ENVIADA y guardar respuesta de SAP
+                # Actualizar estado a ENVIADA y guardar respuesta de SAP (incluyendo DocEntry)
                 oc_repo.update_estado(
                     oc_id,
                     "ENVIADA",
                     numero_oc_sap=str(doc_num) if doc_num else None,
+                    doc_entry=doc_entry,  # ⭐ Persistir DocEntry
                     respuesta_sap=mensaje_sap,
                     error_message=None,
                     error_code=None,
@@ -230,17 +259,75 @@ class OCSAPService:
                 result["error_source"] = None  # Sin error
                 result["message"] = mensaje_sap  # Agregar mensaje para frontend
                 
-                logger.info(f"✅ ODC {oc_id} enviada exitosamente: DocNum={doc_num}")
+                logger.info(
+                    f"✅ ODC {oc_id} enviada exitosamente: "
+                    f"DocEntry={doc_entry}, DocNum={doc_num}"
+                )
+                
+                # ============================================================
+                # FASE 6: Notificación y cierre
+                # ============================================================
+                
+                # 7. Enviar correo al proveedor (no bloquea si falla)
+                try:
+                    from src.utils.email_notifier import send_oc_to_supplier
+                    email_enviado = send_oc_to_supplier(
+                        oc_cabecera=oc_cabecera,
+                        oc_detalles=oc_detalles,
+                        doc_num=doc_num,
+                        doc_entry=doc_entry,
+                        proveedor_email=None  # TODO: Obtener de tabla cliente/proveedor
+                    )
+                    if email_enviado:
+                        logger.info(f"📧 Email de ODC enviado al proveedor {oc_cabecera.get('proveedor')}")
+                    else:
+                        logger.warning(f"⚠️ No se pudo enviar email de ODC al proveedor (no crítico)")
+                except Exception as e:
+                    # NO fallar el proceso si el email falla
+                    logger.warning(f"⚠️ Error al enviar email de ODC (no crítico): {e}")
+                
+                # 8. Evaluar y cerrar pedido si corresponde
+                pedido_id = oc_cabecera.get("pedido_id")
+                if pedido_id:
+                    try:
+                        from ..repositories.pedido_repository import PedidoRepository
+                        from .pedido_cierre_service import PedidoCierreService
+                        
+                        pedido_repo = PedidoRepository(oc_repo.conn)
+                        cierre_service = PedidoCierreService()
+                        
+                        resultado_cierre = cierre_service.cerrar_pedido_si_corresponde(
+                            pedido_id=pedido_id,
+                            oc_repo=oc_repo,
+                            pedido_repo=pedido_repo
+                        )
+                        
+                        if resultado_cierre["cerrado"]:
+                            logger.info(
+                                f"✅ Pedido {pedido_id} cerrado automáticamente: "
+                                f"{resultado_cierre['estado_anterior']} → {resultado_cierre['estado_nuevo']}"
+                            )
+                    except Exception as e:
+                        # NO fallar el proceso si el cierre falla
+                        logger.warning(f"⚠️ Error al evaluar cierre de pedido (no crítico): {e}")
                 
             except Exception as e:
                 # Aunque falló la actualización, la OC se creó en SAP
-                logger.warning(f"⚠️ ODC creada en SAP pero error al actualizar estado: {e}")
+                logger.warning(
+                    f"⚠️ ODC creada en SAP pero error al actualizar estado: {e}. "
+                    f"DocEntry={doc_entry}, DocNum={doc_num}"
+                )
                 result["success"] = True
                 result["doc_entry"] = doc_entry
                 result["doc_num"] = doc_num
                 result["sap_response"] = sap_response_data  # Agregar respuesta completa de SAP
                 result["error"] = f"Advertencia: Error al actualizar estado: {str(e)}"
                 result["message"] = f"Orden creada exitosamente. DocNum: {doc_num}"
+                # Intentar actualizar referencias SAP aunque haya fallado update_estado
+                try:
+                    oc_repo.update_sap_refs(oc_id, doc_entry=doc_entry, doc_num=str(doc_num) if doc_num else None)
+                except Exception:
+                    pass
             
             return result
             
@@ -261,6 +348,67 @@ class OCSAPService:
             except Exception:
                 pass
             return result
+    
+    def _validar_antes_de_crear_oc(
+        self,
+        oc_cabecera: Dict[str, Any],
+        oc_detalles: List[Dict[str, Any]]
+    ) -> Dict[str, Any]:
+        """
+        Valida que la OC esté lista para enviarse a SAP.
+        
+        Args:
+            oc_cabecera: Datos de cabecera de la OC
+            oc_detalles: Lista de detalles de la OC
+            
+        Returns:
+            {
+                "valid": bool,
+                "errors": List[str],
+                "warnings": List[str]
+            }
+        """
+        errors = []
+        warnings = []
+        
+        # Validación 1: No debe tener DocEntry (idempotencia)
+        if oc_cabecera.get("doc_entry"):
+            errors.append(
+                f"La OC ya tiene DocEntry={oc_cabecera['doc_entry']}. "
+                "No se puede recrear. (Idempotencia)"
+            )
+        
+        # Validación 2: Debe tener detalles
+        if not oc_detalles:
+            errors.append("La OC no tiene líneas de detalle")
+        
+        # Validación 3: Todas las líneas deben tener cantidad > 0
+        lineas_con_cantidad_cero = [
+            d.get("sku_sap", "SKU desconocido")
+            for d in oc_detalles 
+            if d.get("cantidad_sap", 0) <= 0
+        ]
+        if lineas_con_cantidad_cero:
+            errors.append(
+                f"Líneas con cantidad <= 0: {', '.join(lineas_con_cantidad_cero)}"
+            )
+        
+        # Validación 4: Debe tener proveedor (CardCode)
+        if not oc_cabecera.get("proveedor"):
+            errors.append("La OC no tiene proveedor (CardCode)")
+        
+        # Validación 5: Advertencia si viene de despacho (legacy)
+        if oc_cabecera.get("despacho_id") and not oc_cabecera.get("pedido_id"):
+            warnings.append(
+                "⚠️ OC basada en despacho (legacy). "
+                "Considerar migrar a flujo de pedido confirmado."
+            )
+        
+        return {
+            "valid": len(errors) == 0,
+            "errors": errors,
+            "warnings": warnings
+        }
     
     def enviar_ocs_pendientes(
         self,

@@ -397,7 +397,7 @@ class PedidoAjusteService:
             
             # Actualizar en BD (sin commit)
             update_fields = ["costo_doc_sin_iva = ?", "subtotal = ?", "total = ?"]
-            values = [costo_ajustado, subtotal_nuevo, total_nuevo]
+            values: List[Any] = [costo_ajustado, subtotal_nuevo, total_nuevo]
             
             if descuento_ajustado is not None:
                 update_fields.append("descuento_1 = ?")
@@ -433,7 +433,7 @@ class PedidoAjusteService:
         respuesta_id: str,
         pedido_id: str,
         usuario_id: Optional[str] = None,
-        pedido_repo: PedidoRepository = None
+        pedido_repo: Optional[PedidoRepository] = None
     ) -> None:
         """
         Cierra la respuesta (aprobación) y actualiza estado del pedido.

@@ -9,7 +9,8 @@ from pathlib import Path
 # Configurar encoding para Windows
 if sys.platform == 'win32':
     os.system('chcp 65001 >nul 2>&1')
-    sys.stdout.reconfigure(encoding='utf-8') if hasattr(sys.stdout, 'reconfigure') else None
+    if hasattr(sys.stdout, 'reconfigure'):
+        sys.stdout.reconfigure(encoding='utf-8')  # type: ignore[attr-defined]
 
 # Agregar el directorio raíz del proyecto al path
 project_root = Path(__file__).resolve().parent.parent

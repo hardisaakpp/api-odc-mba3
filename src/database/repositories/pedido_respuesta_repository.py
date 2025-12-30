@@ -45,11 +45,14 @@ class PedidoRespuestaRepository:
             """, (pedido_id,))
             
             row = cursor.fetchone()
-            nueva_version = (row[0] if row[0] else 0) + 1
+            nueva_version = (row[0] if row and row[0] else 0) + 1
             
             # Crear respuesta
             cursor.execute("SELECT NEWID()")
-            respuesta_id = str(cursor.fetchone()[0])
+            row = cursor.fetchone()
+            if not row:
+                raise ValueError("No se pudo generar el UUID para la respuesta")
+            respuesta_id = str(row[0])
             
             cursor.execute("""
                 INSERT INTO pedido_respuesta_proveedor (
