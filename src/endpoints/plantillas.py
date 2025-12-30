@@ -237,11 +237,16 @@ def register_plantillas_endpoints(app: FastAPI):
     @app.get("/api/plantillas/{pedido_id}", tags=["Plantillas"])
     async def get_pedido(
         pedido_id: str = Path(..., description="UUID del pedido"),
+        incluir_respuesta: bool = Query(False, description="Incluir respuesta del proveedor si existe"),
         user: Dict = Depends(verify_jwt_token),
         _: None = Depends(require_permission('mba3-consultas.facturas.view'))
     ):
         """
         Obtiene un pedido completo con cabecera, detalles y distribuciones por tienda.
+        Opcionalmente incluye la respuesta del proveedor.
+        
+        **Query Parameters:**
+        - `incluir_respuesta` (bool, default: false): Si true, incluye respuesta del proveedor si existe
         
         **Respuesta exitosa:**
         ```json
@@ -266,7 +271,11 @@ def register_plantillas_endpoints(app: FastAPI):
                         }
                     ]
                 }
-            ]
+            ],
+            "respuesta_proveedor": {
+                "cabecera": {...},
+                "detalles": [...]
+            }
         }
         ```
         
@@ -276,6 +285,7 @@ def register_plantillas_endpoints(app: FastAPI):
         try:
             from src.database.connection import get_db_connection_context
             from src.database.repositories.pedido_repository import PedidoRepository
+            from src.database.repositories.pedido_respuesta_repository import PedidoRespuestaRepository
             
             with get_db_connection_context() as conn:
                 repository = PedidoRepository(conn)
@@ -286,6 +296,13 @@ def register_plantillas_endpoints(app: FastAPI):
                         status_code=404,
                         detail=f"Pedido no encontrado: {pedido_id}"
                     )
+                
+                # Agregar respuesta si se solicita y existe
+                if incluir_respuesta:
+                    respuesta_repo = PedidoRespuestaRepository(conn)
+                    respuesta = respuesta_repo.obtener_respuesta_activa(pedido_id)
+                    if respuesta:
+                        pedido["respuesta_proveedor"] = respuesta
                 
                 return JSONResponse(status_code=200, content=pedido)
             
@@ -539,5 +556,201 @@ def register_plantillas_endpoints(app: FastAPI):
             raise HTTPException(
                 status_code=500,
                 detail=f"Error interno al procesar el archivo: {str(e)}"
+            )
+    
+    # ============================================================================
+    # ENDPOINTS FASE 3: Interfaz para Proveedor
+    # ============================================================================
+    
+    @app.get("/api/pedidos/{pedido_id}/exportar-para-proveedor", tags=["Pedidos - Proveedor"])
+    async def exportar_pedido_para_proveedor(
+        pedido_id: str = Path(..., description="UUID del pedido"),
+        user: Dict = Depends(verify_jwt_token),
+        _: None = Depends(require_permission('mba3-consultas.facturas.view'))
+    ):
+        """
+        Exporta un pedido a Excel para que el proveedor lo complete.
+        
+        **Formato exportado:**
+        - Hoja RESUMEN: Totales solicitados por producto (consolidado) - **OBLIGATORIO completar**
+        - Hoja DETALLE_TIENDAS: Distribución por tienda - **OPCIONAL** (solo si el proveedor quiere especificar)
+        - Hoja INSTRUCCIONES: Guía de uso
+        
+        **Modelo de respuesta:**
+        - El proveedor responde principalmente por PRODUCTO (consolidado)
+        - Puede opcionalmente especificar distribución por tienda
+        - Si no especifica por tienda, el sistema distribuye proporcionalmente
+        
+        Returns:
+            Archivo Excel descargable
+        """
+        try:
+            from src.database.services.pedido_proveedor_service import PedidoProveedorService
+            from fastapi.responses import Response
+            
+            service = PedidoProveedorService()
+            excel_bytes = service.exportar_pedido_para_proveedor(pedido_id)
+            
+            return Response(
+                content=excel_bytes,
+                media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                headers={
+                    "Content-Disposition": f'attachment; filename="pedido_proveedor_{pedido_id}_{datetime.now().strftime("%Y%m%d")}.xlsx"'
+                }
+            )
+            
+        except ValueError as e:
+            raise HTTPException(status_code=404, detail=str(e))
+        except Exception as e:
+            logger.error(f"❌ Error al exportar pedido para proveedor: {e}", exc_info=True)
+            raise HTTPException(
+                status_code=500,
+                detail=f"Error interno al exportar pedido: {str(e)}"
+            )
+    
+    @app.post("/api/pedidos/{pedido_id}/cargar-respuesta-proveedor", tags=["Pedidos - Proveedor"])
+    async def cargar_respuesta_proveedor(
+        pedido_id: str = Path(..., description="UUID del pedido"),
+        file: UploadFile = File(..., description="Archivo Excel con respuesta del proveedor"),
+        user: Dict = Depends(verify_jwt_token),
+        _: None = Depends(require_permission('mba3-consultas.proceso.execute'))
+    ):
+        """
+        Carga la respuesta del proveedor desde un archivo Excel.
+        
+        **Formato esperado:**
+        - Hoja RESUMEN (obligatoria): Con columna "Cantidad Confirmada" completada
+        - Hoja DETALLE_TIENDAS (opcional): Si el proveedor especificó distribución por tienda
+        - Precios ajustados en columnas "Costo Unitario Ajustado" y "Descuento % Ajustado"
+        
+        **Validaciones:**
+        - ✅ Cantidad confirmada >= 0
+        - ✅ Cantidad confirmada <= cantidad solicitada (CRÍTICO)
+        - ✅ Precios ajustados >= 0
+        - ⚠️ Warning si confirma menos del 80%
+        - ⚠️ Warning si precio aumenta más del 10%
+        
+        **Estado del pedido:**
+        - Se actualiza a `RESPUESTA_PROVEEDOR_CARGADA` (pendiente de revisión)
+        - NO se marca como `CONFIRMADO_PROVEEDOR` automáticamente
+        
+        **Respuesta exitosa:**
+        ```json
+        {
+            "status": "success",
+            "message": "Respuesta del proveedor cargada exitosamente",
+            "respuesta_id": "...",
+            "validacion": {
+                "valido": true,
+                "errores": [],
+                "warnings": [...]
+            },
+            "cantidades_guardadas": 10,
+            "precios_guardados": 5,
+            "pedido_id": "..."
+        }
+        ```
+        
+        Returns:
+            JSON con resultado del procesamiento
+        """
+        try:
+            validate_excel_file(file)
+            
+            content = await file.read()
+            if len(content) > MAX_FILE_SIZE:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"El archivo excede el tamaño máximo permitido de {MAX_FILE_SIZE / 1024 / 1024} MB"
+                )
+            
+            from src.database.services.pedido_proveedor_service import PedidoProveedorService
+            
+            service = PedidoProveedorService()
+            usuario_id = user.get('id') or user.get('username', 'unknown')
+            
+            resultado = service.importar_respuesta_proveedor(
+                pedido_id=pedido_id,
+                file_content=content,
+                filename=file.filename or "respuesta.xlsx",
+                usuario_id=usuario_id
+            )
+            
+            status_code = 200
+            if resultado["status"] == "validation_error":
+                status_code = 400
+            
+            return JSONResponse(status_code=status_code, content=resultado)
+            
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"❌ Error al cargar respuesta del proveedor: {e}", exc_info=True)
+            raise HTTPException(
+                status_code=500,
+                detail=f"Error interno al procesar respuesta: {str(e)}"
+            )
+    
+    @app.get("/api/pedidos/{pedido_id}/respuesta-proveedor", tags=["Pedidos - Proveedor"])
+    async def obtener_respuesta_proveedor(
+        pedido_id: str = Path(..., description="UUID del pedido"),
+        user: Dict = Depends(verify_jwt_token),
+        _: None = Depends(require_permission('mba3-consultas.facturas.view'))
+    ):
+        """
+        Obtiene la respuesta más reciente del proveedor para un pedido (si existe).
+        
+        **Respuesta exitosa:**
+        ```json
+        {
+            "cabecera": {
+                "respuesta_id": "...",
+                "version": 1,
+                "estado": "PENDIENTE_REVISION",
+                "fecha_respuesta": "2025-01-21T10:00:00",
+                "creado_por": "...",
+                "observaciones_generales": "..."
+            },
+            "detalles": [
+                {
+                    "codigo_producto": "R225.1012.BCO",
+                    "cantidad_solicitada_total": 100,
+                    "cantidad_confirmada_total": 80,
+                    "costo_doc_sin_iva_original": 100.50,
+                    "costo_doc_sin_iva_ajustado": 95.00,
+                    "observaciones": "Stock limitado"
+                }
+            ]
+        }
+        ```
+        
+        Returns:
+            JSON con respuesta del proveedor o 404 si no existe
+        """
+        try:
+            from src.database.connection import get_db_connection_context
+            from src.database.repositories.pedido_respuesta_repository import PedidoRespuestaRepository
+            
+            with get_db_connection_context() as conn:
+                repo = PedidoRespuestaRepository(conn)
+                respuesta = repo.obtener_respuesta_activa(pedido_id)
+                
+                if not respuesta:
+                    raise HTTPException(
+                        status_code=404,
+                        detail=f"No existe respuesta del proveedor para este pedido"
+                    )
+                
+                return JSONResponse(status_code=200, content=respuesta)
+            
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"❌ Error al obtener respuesta del proveedor: {e}", exc_info=True)
+            raise HTTPException(
+                status_code=500,
+                detail=f"Error interno: {str(e)}"
             )
 
