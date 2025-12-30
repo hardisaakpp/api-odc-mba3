@@ -6,7 +6,7 @@ import logging
 import base64
 from typing import Dict, Optional
 from datetime import datetime
-from fastapi import FastAPI, UploadFile, File, Depends, HTTPException, Path, Query
+from fastapi import FastAPI, UploadFile, File, Depends, HTTPException, Path, Query, status
 from fastapi.responses import JSONResponse
 
 from src.security.jwt_auth import verify_jwt_token, require_permission
@@ -752,5 +752,137 @@ def register_plantillas_endpoints(app: FastAPI):
             raise HTTPException(
                 status_code=500,
                 detail=f"Error interno: {str(e)}"
+            )
+    
+    @app.post("/api/pedidos/{pedido_id}/procesar-confirmacion", tags=["Pedidos - Ajuste"])
+    async def procesar_confirmacion_proveedor(
+        pedido_id: str = Path(..., description="UUID del pedido"),
+        forzar_redistribucion: bool = Query(False, description="Forzar redistribución proporcional"),
+        user: Dict = Depends(verify_jwt_token),
+        _: None = Depends(require_permission('mba3-consultas.proceso.execute'))
+    ):
+        """
+        Procesa la confirmación del proveedor y ajusta el pedido.
+        
+        **Acciones realizadas:**
+        1. ✅ Ajusta cantidades por tienda para coincidir con total confirmado
+        2. ✅ Recalcula costos si hubo cambios de precio
+        3. ✅ Actualiza estado del pedido a CONFIRMADO_PROVEEDOR
+        4. ✅ Genera reporte de diferencias
+        
+        **Estrategia de redistribución:**
+        - Si el proveedor especificó distribución por tienda, se usa esa
+        - Si no, se redistribuye proporcionalmente según cantidades originales
+        - Si `forzar_redistribucion=True`, siempre redistribuye proporcionalmente
+        
+        **Idempotencia:**
+        - Si la respuesta ya fue procesada, retorna 409 Conflict (no error técnico)
+        - El frontend debe tratar esto como mensaje informativo
+        
+        Returns:
+            JSON con resultado del procesamiento y reporte de diferencias
+        """
+        try:
+            from src.database.services.pedido_ajuste_service import PedidoAjusteService
+            
+            service = PedidoAjusteService()
+            resultado = service.procesar_confirmacion_proveedor(
+                pedido_id=pedido_id,
+                usuario_id=user.get("sub") or user.get("id") or user.get("username", "unknown"),
+                forzar_redistribucion=forzar_redistribucion
+            )
+            
+            return resultado
+            
+        except ValueError as e:
+            error_msg = str(e)
+            
+            # ✅ CORRECCIÓN PUNTO 4: Detectar conflictos de idempotencia
+            if "ya fue procesada" in error_msg.lower() or "no está en estado" in error_msg.lower():
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail={
+                        "error": "conflict",
+                        "message": error_msg,
+                        "type": "idempotency_check"
+                    }
+                )
+            
+            # Otros errores de validación
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "error": "validation_error",
+                    "message": error_msg
+                }
+            )
+            
+        except Exception as e:
+            logger.error(f"❌ Error al procesar confirmación: {e}", exc_info=True)
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail={
+                    "error": "internal_error",
+                    "message": "Error interno al procesar confirmación del proveedor"
+                }
+            )
+
+    @app.get("/api/pedidos/{pedido_id}/reporte-diferencias", tags=["Pedidos - Reportes"])
+    async def obtener_reporte_diferencias(
+        pedido_id: str = Path(..., description="UUID del pedido"),
+        formato: str = Query("json", description="Formato del reporte: json, excel, csv"),
+        user: Dict = Depends(verify_jwt_token),
+        _: None = Depends(require_permission('mba3-consultas.facturas.view'))
+    ):
+        """
+        Genera un reporte de diferencias entre solicitado y confirmado.
+        
+        **Útil para:**
+        - Revisar qué productos fueron confirmados parcialmente
+        - Analizar cambios de precio
+        - Auditoría de confirmaciones
+        
+        Returns:
+            Reporte en el formato solicitado
+        """
+        try:
+            from src.database.services.pedido_ajuste_service import PedidoAjusteService
+            
+            service = PedidoAjusteService()
+            reporte = service.generar_reporte_diferencias(
+                pedido_id=pedido_id,
+                formato=formato
+            )
+            
+            if formato == "json":
+                return reporte
+            else:
+                # Para Excel/CSV, retornar archivo
+                raise NotImplementedError(f"Formato {formato} pendiente de implementar")
+                
+        except ValueError as e:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "error": "validation_error",
+                    "message": str(e)
+                }
+            )
+        except NotImplementedError as e:
+            raise HTTPException(
+                status_code=status.HTTP_501_NOT_IMPLEMENTED,
+                detail={
+                    "error": "not_implemented",
+                    "message": str(e)
+                }
+            )
+        except Exception as e:
+            logger.error(f"❌ Error al generar reporte: {e}", exc_info=True)
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail={
+                    "error": "internal_error",
+                    "message": "Error interno al generar reporte"
+                }
             )
 
