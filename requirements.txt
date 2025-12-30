@@ -13,6 +13,10 @@ python-multipart>=0.0.6
 # Dependencias para SQL Server
 pyodbc>=5.0.0
 
+# Dependencias para procesamiento de Excel
+pandas>=2.0.0
+openpyxl>=3.1.0  # Para leer archivos .xlsx
+
 # Dependencias para Testing (opcional)
 pytest>=7.4.0
 pytest-asyncio>=0.21.0

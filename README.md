@@ -58,6 +58,7 @@ ENABLE_JWT_AUTH=true
 ```bash
 # Backend
 python src/api_server.py
+uvicorn src.api_server:app --reload --host 0.0.0.0 --port 8000
 
 # Frontend (en otra terminal)
 cd frontend

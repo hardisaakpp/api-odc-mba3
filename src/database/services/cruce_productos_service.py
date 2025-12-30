@@ -6,7 +6,7 @@ Identifica productos homologados, homologables y no encontrados.
 import logging
 import re
 from datetime import datetime, timedelta
-from typing import List, Dict, Any, Tuple, Optional
+from typing import List, Dict, Any, Tuple, Optional, Callable, Callable
 
 from src.services.mba3_service import MBA3Service
 from ..connection import get_sap_db_connection, get_db_connection
@@ -34,11 +34,13 @@ class CruceProductosService:
     
     def normalizar_codigo(self, codigo: str) -> str:
         """
-        Normaliza un código de producto para comparación.
+        Normaliza un código de producto (wrapper para compatibilidad).
         
-        IMPORTANTE: Esta función debe ser IDÉNTICA a la de producto_staging_sync_service.
-        Elimina puntos, guiones y espacios, convierte a mayúsculas.
-        Ejemplo: "8040-10" -> "804010", "8040.10" -> "804010", "8040 10" -> "804010"
+        IMPORTANTE: Ahora usa función centralizada que incluye TODOS los separadores:
+        ., -, /, _, espacio
+        
+        DEPRECATED: Usar normalizar_codigo_producto de src.utils directamente.
+        Este wrapper se mantiene por compatibilidad con código existente.
         
         Args:
             codigo: Código a normalizar
@@ -46,11 +48,8 @@ class CruceProductosService:
         Returns:
             Código normalizado
         """
-        if not codigo:
-            return ""
-        # CORRECCIÓN CRÍTICA: Eliminar puntos, guiones Y espacios (igual que staging)
-        # Esto asegura consistencia entre staging y cruce
-        return re.sub(r'[.\-\s]', '', codigo.strip().upper())
+        from src.utils import normalizar_codigo_producto
+        return normalizar_codigo_producto(codigo)
     
     def obtener_productos_mba3(self) -> List[Dict[str, Any]]:
         """
@@ -121,8 +120,9 @@ class CruceProductosService:
         try:
             # Query actualizada con campos adicionales y filtros mejorados
             # Calcular fecha límite (últimos 365 días) - formato YYYY-MM-DD para 4D
-            fecha_limite = datetime.now() - timedelta(days=365)
-            fecha_limite_str = fecha_limite.strftime("%Y-%m-%d")
+            # COMENTADO: Filtro de fechas deshabilitado
+            # fecha_limite = datetime.now() - timedelta(days=365)
+            # fecha_limite_str = fecha_limite.strftime("%Y-%m-%d")
             
             query = (
                 "SELECT "
@@ -155,7 +155,8 @@ class CruceProductosService:
                 "AND GrupoPrenda IS NOT NULL "
                 "AND PRODUCT_NAME IS NOT NULL "
                 "AND SELL > 0 "
-                f"AND (FechaUltimoMovimiento >= '{fecha_limite_str}' OR Fecha_Ultima_Venta >= '{fecha_limite_str}')"
+                # COMENTADO: Filtro de fechas deshabilitado
+                # f"AND (FechaUltimoMovimiento >= '{fecha_limite_str}' OR Fecha_Ultima_Venta >= '{fecha_limite_str}')"
             )
             
             logger.info("🔍 Consultando productos desde MBA3 API (directo)...")
@@ -526,22 +527,27 @@ class CruceProductosService:
         
         # Iterar sobre códigos normalizados de MBA3 (más eficiente)
         for codigo_normalizado, productos_mba3_list in mba3_dict_normalizado.items():
-            # Obtener código original del primer producto
-            codigo_mba3_original = productos_mba3_list[0]["product_id"]
-            
-            # Saltar si ya fue procesado como exacto
-            if codigo_mba3_original in mba3_procesados:
+            # Buscar match en SAP por código normalizado
+            if codigo_normalizado not in sap_dict_normalizado:
                 continue
             
-            # Buscar match en SAP por código normalizado
-            if codigo_normalizado in sap_dict_normalizado:
-                productos_sap_list = sap_dict_normalizado[codigo_normalizado]
+            productos_sap_list = sap_dict_normalizado[codigo_normalizado]
+            
+            # CORRECCIÓN: Procesar cada producto MBA3 que comparte este código normalizado
+            # (antes solo procesaba el primero, dejando otros sin marcar)
+            for producto_mba3 in productos_mba3_list:
+                codigo_mba3_original = producto_mba3["product_id"]
                 
-                # Verificar que los códigos originales sean diferentes
+                # Saltar si ya fue procesado como exacto o en iteración anterior
+                if codigo_mba3_original in mba3_procesados:
+                    continue
+                
+                # Buscar el primer SAP que no esté procesado y que tenga código original diferente
+                match_encontrado = False
                 for producto_sap in productos_sap_list:
                     codigo_sap_original = producto_sap["item_code"]
                     
-                    # Saltar si ya fue procesado como exacto
+                    # Saltar si ya fue procesado como exacto o en iteración anterior
                     if codigo_sap_original in sap_procesados:
                         continue
                     
@@ -562,85 +568,191 @@ class CruceProductosService:
                             continue
                         
                         # Crear match homologable
-                        for producto_mba3 in productos_mba3_list:
-                            homologables.append({
-                                "codigo_mba3": producto_mba3["product_id"],
-                                "nombre_mba3": producto_mba3["product_name"],
-                                "corp": producto_mba3.get("corp", ""),
-                                "grupo_prenda": producto_mba3.get("grupo_prenda", ""),
-                                "talla": producto_mba3.get("talla", ""),
-                                "presentacion": producto_mba3.get("presentacion", ""),
-                                "codigo_sap": producto_sap["item_code"],
-                                "nombre_sap": producto_sap["item_name"],
-                                "pack_sap": producto_sap.get("pack", ""),
-                                "codigo_mba3_normalizado": codigo_normalizado,
-                                "codigo_sap_normalizado": codigo_sap_normalizado,
-                                "tipo_coincidencia": "homologable"
-                            })
-                            mba3_procesados.add(codigo_mba3_original)
-                            sap_procesados.add(codigo_sap_original)
-                            break  # Solo un match por producto MBA3
-                        break  # Solo un match por producto SAP
+                        homologables.append({
+                            "codigo_mba3": producto_mba3["product_id"],
+                            "nombre_mba3": producto_mba3["product_name"],
+                            "corp": producto_mba3.get("corp", ""),
+                            "grupo_prenda": producto_mba3.get("grupo_prenda", ""),
+                            "talla": producto_mba3.get("talla", ""),
+                            "presentacion": producto_mba3.get("presentacion", ""),
+                            "codigo_sap": producto_sap["item_code"],
+                            "nombre_sap": producto_sap["item_name"],
+                            "pack_sap": producto_sap.get("pack", ""),
+                            "codigo_mba3_normalizado": codigo_normalizado,
+                            "codigo_sap_normalizado": codigo_sap_normalizado,
+                            "tipo_coincidencia": "homologable"
+                        })
+                        mba3_procesados.add(codigo_mba3_original)
+                        sap_procesados.add(codigo_sap_original)
+                        match_encontrado = True
+                        break  # Solo un match por producto MBA3
+                
+                # Si encontramos match, no procesar más SAP para este código normalizado en este ciclo
+                # (para evitar múltiples matches del mismo SAP y mantener determinismo)
+                if match_encontrado:
+                    break
         
         return homologables, mba3_procesados, sap_procesados
     
     def _obtener_solo_en_mba3(
         self,
         productos_mba3: List[Dict[str, Any]],
-        productos_procesados: set
+        productos_procesados: set,
+        sap_dict_normalizado: Dict[str, List[Dict[str, Any]]],
+        sap_dict_exacto: Dict[str, List[Dict[str, Any]]]
     ) -> List[Dict[str, Any]]:
         """
         Obtiene productos que solo están en MBA3 (sin match en SAP).
         
+        IMPORTANTE: Valida explícitamente que el código NO exista en SAP
+        (ni por código exacto ni por código normalizado) para maximizar las coincidencias
+        y evitar que productos que existen en SAP aparezcan incorrectamente en esta lista.
+        
         Args:
             productos_mba3: Lista completa de productos MBA3
-            productos_procesados: Set de códigos MBA3 ya procesados
+            productos_procesados: Set de códigos MBA3 ya procesados (que tienen match en SAP)
+            sap_dict_normalizado: Diccionario indexado de productos SAP por código normalizado
+            sap_dict_exacto: Diccionario indexado de productos SAP por código exacto
             
         Returns:
-            Lista de productos solo en MBA3
+            Lista de productos solo en MBA3 (validados para no existir en SAP)
         """
         solo_en_mba3 = []
+        productos_omitidos = 0
+        
         for producto in productos_mba3:
             codigo = producto["product_id"]
-            if codigo not in productos_procesados:
-                solo_en_mba3.append({
-                    "codigo_mba3": producto["product_id"],
-                    "nombre_mba3": producto["product_name"],
-                    "corp": producto.get("corp", ""),
-                    "grupo_prenda": producto.get("grupo_prenda", ""),
-                    "talla": producto.get("talla", ""),
-                    "presentacion": producto.get("presentacion", ""),
-                    "tipo_coincidencia": "solo_mba3"
-                })
+            
+            # Validación: no incluir si ya fue procesado (tiene match en SAP)
+            if codigo in productos_procesados:
+                continue
+            
+            # CORRECCIÓN CRÍTICA 1: Validar que el código exacto NO exista en SAP
+            if codigo in sap_dict_exacto:
+                productos_omitidos += 1
+                logger.warning(
+                    f"⚠️ Producto MBA3 {codigo} existe en SAP (código exacto). "
+                    f"Omitiendo de solo_en_mba3. Esto indica un problema en la lógica de cruce."
+                )
+                continue
+            
+            # CORRECCIÓN CRÍTICA 2: Validar que el código normalizado NO exista en SAP
+            # Esto asegura maximizar las coincidencias y evitar productos SAP en esta lista
+            codigo_normalizado = producto.get("product_id_normalizado")
+            if not codigo_normalizado:
+                # Si no tiene normalizado, normalizar ahora
+                codigo_normalizado = self.normalizar_codigo(codigo)
+            
+            # Si existe en SAP (por código normalizado), no incluir en solo_en_mba3
+            # Esto puede pasar si:
+            # 1. Hay un bug en la lógica de procesamiento anterior
+            # 2. Hay múltiples productos MBA3 con el mismo código normalizado y solo uno se procesó
+            # 3. Todos los productos SAP con ese código normalizado ya fueron procesados pero el MBA3 no
+            if codigo_normalizado in sap_dict_normalizado:
+                productos_omitidos += 1
+                logger.warning(
+                    f"⚠️ Producto MBA3 {codigo} (normalizado: {codigo_normalizado}) "
+                    f"existe en SAP pero no fue marcado como procesado. Omitiendo de solo_en_mba3."
+                )
+                continue
+            
+            solo_en_mba3.append({
+                "codigo_mba3": producto["product_id"],
+                "nombre_mba3": producto["product_name"],
+                "corp": producto.get("corp", ""),
+                "grupo_prenda": producto.get("grupo_prenda", ""),
+                "talla": producto.get("talla", ""),
+                "presentacion": producto.get("presentacion", ""),
+                "tipo_coincidencia": "solo_mba3"
+            })
+        
+        if productos_omitidos > 0:
+            logger.warning(
+                f"⚠️ {productos_omitidos} productos MBA3 fueron omitidos de solo_en_mba3 "
+                f"porque existen en SAP (código exacto o normalizado coincidente). "
+                f"Esto puede indicar un problema en la lógica de cruce o datos contaminados."
+            )
+        
         return solo_en_mba3
     
     def _obtener_solo_en_sap(
         self,
         productos_sap: List[Dict[str, Any]],
-        productos_procesados: set
+        productos_procesados: set,
+        mba3_dict_normalizado: Dict[str, List[Dict[str, Any]]],
+        mba3_dict_exacto: Dict[str, List[Dict[str, Any]]]
     ) -> List[Dict[str, Any]]:
         """
         Obtiene productos que solo están en SAP (sin match en MBA3).
         
+        IMPORTANTE: Valida explícitamente que el código NO exista en MBA3
+        (ni por código exacto ni por código normalizado) para evitar que
+        productos que existen en MBA3 aparezcan incorrectamente en esta lista.
+        
         Args:
             productos_sap: Lista completa de productos SAP
-            productos_procesados: Set de códigos SAP ya procesados
+            productos_procesados: Set de códigos SAP ya procesados (que tienen match en MBA3)
+            mba3_dict_normalizado: Diccionario indexado de productos MBA3 por código normalizado
+            mba3_dict_exacto: Diccionario indexado de productos MBA3 por código exacto
             
         Returns:
-            Lista de productos solo en SAP
+            Lista de productos solo en SAP (validados para no existir en MBA3)
         """
         solo_en_sap = []
+        productos_omitidos = 0
+        
         for producto in productos_sap:
             codigo = producto["item_code"]
-            if codigo not in productos_procesados:
-                solo_en_sap.append({
-                    "codigo_sap": producto["item_code"],
-                    "nombre_sap": producto["item_name"],
-                    "pack_sap": producto.get("pack", ""),
-                    "group_code": producto.get("group_code"),
-                    "active": producto.get("active", True),
-                    "tipo_coincidencia": "solo_sap"
-                })
+            
+            # Validación 1: no incluir si ya fue procesado (tiene match en MBA3)
+            if codigo in productos_procesados:
+                continue
+            
+            # CORRECCIÓN CRÍTICA 1: Validar que el código exacto NO exista en MBA3
+            if codigo in mba3_dict_exacto:
+                productos_omitidos += 1
+                logger.warning(
+                    f"⚠️ Producto SAP {codigo} existe en MBA3 (código exacto). "
+                    f"Omitiendo de solo_en_sap. Esto indica un problema en la lógica de cruce."
+                )
+                continue
+            
+            # CORRECCIÓN CRÍTICA 2: Validar que el código normalizado NO exista en MBA3
+            # Esto asegura maximizar las coincidencias y evitar productos MBA3 en esta lista
+            codigo_normalizado = producto.get("item_code_normalizado")
+            if not codigo_normalizado:
+                # Si no tiene normalizado, normalizar ahora
+                codigo_normalizado = self.normalizar_codigo(codigo)
+            
+            # Si existe en MBA3 (por código normalizado), no incluir en solo_en_sap
+            # Esto puede pasar si:
+            # 1. Hay un bug en la lógica de procesamiento anterior
+            # 2. Hay múltiples productos SAP con el mismo código normalizado y solo uno se procesó
+            # 3. Todos los productos MBA3 con ese código normalizado ya fueron procesados pero el SAP no
+            if codigo_normalizado in mba3_dict_normalizado:
+                productos_omitidos += 1
+                logger.warning(
+                    f"⚠️ Producto SAP {codigo} (normalizado: {codigo_normalizado}) "
+                    f"existe en MBA3 pero no fue marcado como procesado. Omitiendo de solo_en_sap."
+                )
+                continue
+            
+            solo_en_sap.append({
+                "codigo_sap": producto["item_code"],
+                "nombre_sap": producto["item_name"],
+                "pack_sap": producto.get("pack", ""),
+                "group_code": producto.get("group_code"),
+                "active": producto.get("active", True),
+                "tipo_coincidencia": "solo_sap"
+            })
+        
+        if productos_omitidos > 0:
+            logger.warning(
+                f"⚠️ {productos_omitidos} productos SAP fueron omitidos de solo_en_sap "
+                f"porque existen en MBA3 (código exacto o normalizado coincidente). "
+                f"Esto puede indicar un problema en la lógica de cruce o datos contaminados."
+            )
+        
         return solo_en_sap
     
     def _calcular_estadisticas(
@@ -683,9 +795,23 @@ class CruceProductosService:
             "porcentaje_homologacion": round(porcentaje_homologacion, 2)
         }
     
-    def realizar_cruce(self) -> Dict[str, Any]:
+    def realizar_cruce(
+        self,
+        progress_callback: Optional[Callable[[str, int, str, Optional[dict]], None]] = None
+    ) -> Dict[str, Any]:
         """
         Realiza el cruce completo entre productos de MBA3 y SAP.
+        
+        OPTIMIZACIÓN: Primero compara exactos (sin normalizar), luego normaliza solo
+        los productos sin match exacto para buscar coincidencias normalizadas.
+        
+        Args:
+            progress_callback: Función opcional callback(step, progress, message, data=None)
+                              para reportar progreso del proceso.
+                              - step: Paso actual del proceso
+                              - progress: Porcentaje de progreso (0-100)
+                              - message: Mensaje descriptivo
+                              - data: Datos adicionales opcionales
         
         REGLAS DE CLASIFICACIÓN (DETERMINISTAS):
         
@@ -710,8 +836,11 @@ class CruceProductosService:
         - Un producto solo puede aparecer en UNA categoría
         - Si aparece en múltiples → BUG (revisar normalización)
         
-        IMPORTANTE: Usa SIEMPRE campos *_normalizado del staging para consistencia.
-        Solo normaliza en tiempo real como fallback de emergencia.
+        FLUJO OPTIMIZADO:
+        1. Comparación exacta PRODUCT_ID === ItemCode (sin normalizar)
+        2. Clasificación y agrupación de exactos
+        3. Normalización solo de productos sin match exacto
+        4. Búsqueda de coincidencias normalizadas
         
         Returns:
             Diccionario con resultados del cruce:
@@ -723,36 +852,155 @@ class CruceProductosService:
                 "estadisticas": {...}
             }
         """
+        def _reportar_progreso(step: str, progress: int, message: str, data: Optional[dict] = None):
+            """Helper para reportar progreso."""
+            if progress_callback:
+                progress_callback(step, progress, message, data)
+            logger.info(f"📊 [{step}] {progress}% - {message}")
+        
+        _reportar_progreso("iniciando", 0, "Iniciando cruce de productos...")
         logger.info("🔍 Iniciando cruce de productos MBA3 vs SAP...")
         
         # Obtener productos de ambas fuentes
+        _reportar_progreso("obteniendo_mba3", 10, "Obteniendo productos MBA3...")
         productos_mba3 = self.obtener_productos_mba3()
+        _reportar_progreso("obteniendo_mba3", 15, f"Obtenidos {len(productos_mba3)} productos MBA3",
+                          data={"total_mba3": len(productos_mba3)})
+        
+        _reportar_progreso("obteniendo_sap", 20, "Obteniendo productos SAP...")
         productos_sap = self.obtener_productos_sap()
+        _reportar_progreso("obteniendo_sap", 25, f"Obtenidos {len(productos_sap)} productos SAP",
+                          data={"total_sap": len(productos_sap)})
+        
+        # Validación: asegurar que hay datos para procesar
+        if not productos_mba3 and not productos_sap:
+            raise RuntimeError(
+                "No hay datos para procesar. Las tablas de staging están vacías. "
+                "Ejecuta primero POST /cruce-productos/sincronizar-maestros"
+            )
         
         if not productos_mba3:
-            logger.warning("⚠️ No se obtuvieron productos de MBA3")
+            logger.warning("⚠️ No se obtuvieron productos de MBA3 - la tabla de staging está vacía")
         if not productos_sap:
-            logger.warning("⚠️ No se obtuvieron productos de SAP")
+            logger.warning("⚠️ No se obtuvieron productos de SAP - la tabla de staging está vacía")
         
-        # Indexar productos para búsqueda rápida
-        mba3_dict_exacto, mba3_dict_normalizado = self._indexar_productos_mba3(productos_mba3)
-        sap_dict_exacto, sap_dict_normalizado = self._indexar_productos_sap(productos_sap)
+        # PASO 1: Indexar SOLO por código exacto (sin normalizar aún)
+        # Esto es más eficiente: solo normalizamos productos que no tienen match exacto
+        _reportar_progreso("indexando", 30, "Indexando productos por código exacto...")
+        logger.info("📊 Indexando productos por código exacto (sin normalizar)...")
+        mba3_dict_exacto = {}
+        sap_dict_exacto = {}
         
-        # Cruzar productos exactos
+        for producto in productos_mba3:
+            codigo = producto["product_id"]
+            if codigo not in mba3_dict_exacto:
+                mba3_dict_exacto[codigo] = []
+            mba3_dict_exacto[codigo].append(producto)
+        
+        for producto in productos_sap:
+            codigo = producto["item_code"]
+            if codigo not in sap_dict_exacto:
+                sap_dict_exacto[codigo] = []
+            sap_dict_exacto[codigo].append(producto)
+        
+        # PASO 2: Cruzar productos EXACTOS primero (PRODUCT_ID === ItemCode)
+        _reportar_progreso("exactos", 40, "Buscando coincidencias exactas (PRODUCT_ID === ItemCode)...")
+        logger.info("🔍 Buscando coincidencias exactas (PRODUCT_ID === ItemCode)...")
         homologados_exactos, mba3_procesados, sap_procesados = self._cruzar_exactos(
             mba3_dict_exacto, sap_dict_exacto
         )
         
-        # Cruzar productos homologables
-        homologables, mba3_procesados, sap_procesados = self._cruzar_homologables(
-            mba3_dict_exacto, mba3_dict_normalizado, sap_dict_normalizado, mba3_procesados, sap_procesados
+        _reportar_progreso("exactos", 50, f"Encontrados {len(homologados_exactos)} productos con coincidencia exacta",
+                          data={"exactos_count": len(homologados_exactos)})
+        logger.info(f"✅ Encontrados {len(homologados_exactos)} productos con coincidencia exacta")
+        
+        # PASO 3: Filtrar productos que NO tienen match exacto
+        # Solo estos productos necesitan normalización
+        _reportar_progreso("filtrando", 55, "Filtrando productos sin match exacto...")
+        productos_mba3_sin_match = [
+            p for p in productos_mba3 
+            if p["product_id"] not in mba3_procesados
+        ]
+        productos_sap_sin_match = [
+            p for p in productos_sap 
+            if p["item_code"] not in sap_procesados
+        ]
+        
+        _reportar_progreso("filtrando", 60, 
+                          f"Productos sin match exacto: {len(productos_mba3_sin_match)} MBA3, {len(productos_sap_sin_match)} SAP",
+                          data={"sin_match_mba3": len(productos_mba3_sin_match), "sin_match_sap": len(productos_sap_sin_match)})
+        logger.info(
+            f"📦 Productos sin match exacto: "
+            f"{len(productos_mba3_sin_match)} MBA3, "
+            f"{len(productos_sap_sin_match)} SAP"
         )
         
-        # Obtener productos sin match
-        solo_en_mba3 = self._obtener_solo_en_mba3(productos_mba3, mba3_procesados)
-        solo_en_sap = self._obtener_solo_en_sap(productos_sap, sap_procesados)
+        # PASO 4: Normalizar SOLO los productos sin match exacto
+        _reportar_progreso("normalizando", 65, "Normalizando códigos de productos sin match exacto...")
+        logger.info("🔄 Normalizando códigos de productos sin match exacto...")
+        mba3_dict_normalizado = {}
+        sap_dict_normalizado = {}
+        
+        for producto in productos_mba3_sin_match:
+            codigo_original = producto["product_id"]
+            # Usar campo normalizado del staging si está disponible
+            codigo_normalizado = producto.get("product_id_normalizado")
+            if not codigo_normalizado:
+                codigo_normalizado = self.normalizar_codigo(codigo_original)
+            
+            if codigo_normalizado not in mba3_dict_normalizado:
+                mba3_dict_normalizado[codigo_normalizado] = []
+            mba3_dict_normalizado[codigo_normalizado].append(producto)
+        
+        for producto in productos_sap_sin_match:
+            codigo_original = producto["item_code"]
+            # Usar campo normalizado del staging si está disponible
+            codigo_normalizado = producto.get("item_code_normalizado")
+            if not codigo_normalizado:
+                codigo_normalizado = self.normalizar_codigo(codigo_original)
+            
+            if codigo_normalizado not in sap_dict_normalizado:
+                sap_dict_normalizado[codigo_normalizado] = []
+            sap_dict_normalizado[codigo_normalizado].append(producto)
+        
+        _reportar_progreso("normalizando", 70, "Normalización completada")
+        
+        # PASO 5: Cruzar productos HOMOLOGABLES (normalizados)
+        _reportar_progreso("homologables", 75, "Buscando coincidencias normalizadas (homologables)...")
+        logger.info("🔍 Buscando coincidencias normalizadas (homologables)...")
+        homologables, mba3_procesados, sap_procesados = self._cruzar_homologables(
+            mba3_dict_exacto,  # Necesario para validar que códigos originales sean diferentes
+            mba3_dict_normalizado, 
+            sap_dict_normalizado, 
+            mba3_procesados, 
+            sap_procesados
+        )
+        
+        _reportar_progreso("homologables", 80, f"Encontrados {len(homologables)} productos homologables",
+                          data={"homologables_count": len(homologables)})
+        logger.info(f"✅ Encontrados {len(homologables)} productos homologables")
+        
+        # PASO 6: Obtener productos sin match (ni exacto ni normalizado)
+        _reportar_progreso("sin_match", 85, "Identificando productos sin match...")
+        logger.info("🔍 Identificando productos sin match...")
+        solo_en_mba3 = self._obtener_solo_en_mba3(
+            productos_mba3, 
+            mba3_procesados, 
+            sap_dict_normalizado,
+            sap_dict_exacto
+        )
+        solo_en_sap = self._obtener_solo_en_sap(
+            productos_sap, 
+            sap_procesados,
+            mba3_dict_normalizado,
+            mba3_dict_exacto
+        )
+        
+        _reportar_progreso("sin_match", 90, f"Productos sin match: {len(solo_en_mba3)} solo MBA3, {len(solo_en_sap)} solo SAP",
+                          data={"solo_mba3_count": len(solo_en_mba3), "solo_sap_count": len(solo_en_sap)})
         
         # Calcular estadísticas
+        _reportar_progreso("estadisticas", 95, "Calculando estadísticas finales...")
         estadisticas = self._calcular_estadisticas(
             len(productos_mba3),
             len(productos_sap),
@@ -762,6 +1010,16 @@ class CruceProductosService:
             solo_en_sap
         )
         
+        resultado = {
+            "homologados_exactos": homologados_exactos,
+            "homologables": homologables,
+            "solo_en_mba3": solo_en_mba3,
+            "solo_en_sap": solo_en_sap,
+            "estadisticas": estadisticas
+        }
+        
+        _reportar_progreso("completado", 100, "Cruce completado exitosamente",
+                          data={"estadisticas": estadisticas})
         logger.info(
             f"✅ Cruce completado: "
             f"{estadisticas['homologados_exactos']} exactas, "
@@ -770,11 +1028,5 @@ class CruceProductosService:
             f"{estadisticas['solo_en_sap']} solo SAP"
         )
         
-        return {
-            "homologados_exactos": homologados_exactos,
-            "homologables": homologables,
-            "solo_en_mba3": solo_en_mba3,
-            "solo_en_sap": solo_en_sap,
-            "estadisticas": estadisticas
-        }
+        return resultado
 

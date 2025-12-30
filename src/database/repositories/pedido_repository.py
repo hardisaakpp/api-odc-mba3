@@ -1,0 +1,699 @@
+"""
+Repositorio para operaciones de pedido en SQL Server.
+Modelo: Pedido → PedidoDetalle → PedidoDetalleTienda
+ENFOQUE: Solo ingesta y persistencia, sin cálculos ni validaciones de negocio
+"""
+
+import logging
+import pyodbc
+from typing import Dict, Any, List, Optional
+from datetime import datetime
+
+logger = logging.getLogger(__name__)
+
+
+class PedidoRepository:
+    """Repositorio para operaciones de pedido."""
+    
+    def __init__(self, conn: pyodbc.Connection):
+        """
+        Inicializa el repositorio con una conexión a SQL Server.
+        
+        Args:
+            conn: Conexión a SQL Server
+        """
+        self.conn = conn
+    
+    def insert_cabecera(self, datos_cabecera: Dict[str, Any]) -> str:
+        """
+        Inserta un registro en pedido.
+        
+        Args:
+            datos_cabecera: Diccionario con datos de cabecera (sin pedido_id)
+            
+        Returns:
+            pedido_id (UUID) generado
+            
+        Raises:
+            Exception: Si falla la inserción
+        """
+        cursor = self.conn.cursor()
+        
+        try:
+            # Generar UUID para pedido_id
+            cursor.execute("SELECT NEWID()")
+            uuid_result = cursor.fetchone()
+            if uuid_result is None:
+                raise ValueError("No se pudo generar UUID para pedido_id")
+            pedido_id = str(uuid_result[0])
+            
+            # Verificar si existe columna estado (para compatibilidad)
+            cursor.execute("""
+                SELECT COUNT(*) 
+                FROM INFORMATION_SCHEMA.COLUMNS 
+                WHERE TABLE_NAME = 'pedido' 
+                AND COLUMN_NAME = 'estado'
+            """)
+            row = cursor.fetchone()
+            tiene_estado = (row[0] if row else 0) > 0
+            
+            if tiene_estado:
+                sql = """
+                INSERT INTO pedido (
+                    pedido_id,
+                    numero_pedido,
+                    fecha_pedido,
+                    fecha_entrega,
+                    forma_pago,
+                    odc,
+                    proveedor_nombre,
+                    comprador_nombre,
+                    comprador_codigo,
+                    origen_traslado,
+                    serie,
+                    archivo_nombre,
+                    creado_por,
+                    estado,
+                    creado_en
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, GETDATE())
+                """
+                estado = datos_cabecera.get("estado", "PENDIENTE_CONFIRMACION_PROVEEDOR")
+                values = (
+                    pedido_id,
+                    datos_cabecera.get("numero_pedido"),
+                    datos_cabecera.get("fecha_pedido"),
+                    datos_cabecera.get("fecha_entrega"),
+                    datos_cabecera.get("forma_pago"),
+                    datos_cabecera.get("odc"),
+                    datos_cabecera.get("proveedor_nombre"),
+                    datos_cabecera.get("comprador_nombre"),
+                    datos_cabecera.get("comprador_codigo"),
+                    datos_cabecera.get("origen_traslado"),
+                    datos_cabecera.get("serie"),
+                    datos_cabecera.get("archivo_nombre"),
+                    datos_cabecera.get("creado_por"),
+                    estado,
+                )
+            else:
+                sql = """
+                INSERT INTO pedido (
+                    pedido_id,
+                    numero_pedido,
+                    fecha_pedido,
+                    fecha_entrega,
+                    forma_pago,
+                    odc,
+                    proveedor_nombre,
+                    comprador_nombre,
+                    comprador_codigo,
+                    origen_traslado,
+                    serie,
+                    archivo_nombre,
+                    creado_por,
+                    creado_en
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, GETDATE())
+                """
+                values = (
+                    pedido_id,
+                    datos_cabecera.get("numero_pedido"),
+                    datos_cabecera.get("fecha_pedido"),
+                    datos_cabecera.get("fecha_entrega"),
+                    datos_cabecera.get("forma_pago"),
+                    datos_cabecera.get("odc"),
+                    datos_cabecera.get("proveedor_nombre"),
+                    datos_cabecera.get("comprador_nombre"),
+                    datos_cabecera.get("comprador_codigo"),
+                    datos_cabecera.get("origen_traslado"),
+                    datos_cabecera.get("serie"),
+                    datos_cabecera.get("archivo_nombre"),
+                    datos_cabecera.get("creado_por"),
+                )
+            
+            cursor.execute(sql, values)
+            self.conn.commit()
+            
+            logger.debug(f"✅ Pedido cabecera insertada: {pedido_id} - Pedido: {datos_cabecera.get('numero_pedido')}")
+            return pedido_id
+            
+        except pyodbc.IntegrityError as e:
+            self.conn.rollback()
+            if "UQ_pedido_numero_pedido" in str(e):
+                raise ValueError(f"Ya existe un pedido con número: {datos_cabecera.get('numero_pedido')}")
+            raise
+        except Exception as e:
+            self.conn.rollback()
+            logger.error(f"❌ Error al insertar pedido: {e}")
+            logger.error(f"   Número pedido: {datos_cabecera.get('numero_pedido')}")
+            raise
+        finally:
+            cursor.close()
+    
+    def insert_detalle(self, pedido_id: str, datos_detalle: Dict[str, Any]) -> str:
+        """
+        Inserta un registro en pedido_detalle (artículo).
+        
+        ENFOQUE: Solo persiste lo que viene, sin recalcular totales.
+        
+        Args:
+            pedido_id: UUID del pedido
+            datos_detalle: Diccionario con datos del detalle (sin pedido_detalle_id)
+            
+        Returns:
+            pedido_detalle_id (UUID) generado
+        """
+        cursor = self.conn.cursor()
+        
+        try:
+            # Generar UUID para pedido_detalle_id
+            cursor.execute("SELECT NEWID()")
+            uuid_result = cursor.fetchone()
+            if uuid_result is None:
+                raise ValueError("No se pudo generar UUID para pedido_detalle_id")
+            pedido_detalle_id = str(uuid_result[0])
+            
+            sql = """
+            INSERT INTO pedido_detalle (
+                pedido_detalle_id,
+                pedido_id,
+                codigo_interno,
+                descripcion_sap,
+                marca,
+                codigo_barras,
+                pack,
+                costo_doc_sin_iva,
+                descuento_1,
+                pvp,
+                subtotal,
+                total,
+                created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, GETDATE())
+            """
+            
+            # NOTA: subtotal y total se guardan tal cual vienen del Excel (o NULL)
+            # NO se recalculan ni se validan
+            values = (
+                pedido_detalle_id,
+                pedido_id,
+                datos_detalle.get("codigo_interno"),
+                datos_detalle.get("descripcion_sap"),
+                datos_detalle.get("marca"),
+                datos_detalle.get("codigo_barras"),
+                datos_detalle.get("pack"),
+                datos_detalle.get("costo_doc_sin_iva"),
+                datos_detalle.get("descuento_1"),
+                datos_detalle.get("pvp"),
+                datos_detalle.get("subtotal"),  # Tal cual viene del Excel
+                datos_detalle.get("total"),     # Tal cual viene del Excel
+            )
+            
+            cursor.execute(sql, values)
+            self.conn.commit()
+            
+            logger.debug(f"✅ Pedido detalle insertado: {pedido_detalle_id}")
+            return pedido_detalle_id
+            
+        except Exception as e:
+            self.conn.rollback()
+            logger.error(f"❌ Error al insertar pedido_detalle: {e}")
+            raise
+        finally:
+            cursor.close()
+    
+    def insert_detalle_tiendas(
+        self,
+        pedido_detalle_id: str,
+        distribuciones: List[Dict[str, Any]]  # [{"tienda_id": "...", "cantidad": 10, "fila_origen": 2}, ...]
+    ) -> int:
+        """
+        Inserta distribuciones de un detalle por tiendas.
+        
+        Args:
+            pedido_detalle_id: UUID del detalle
+            distribuciones: Lista de dicts con tienda_id, cantidad y opcionalmente fila_origen
+            
+        Returns:
+            Número de distribuciones insertadas
+        """
+        if not distribuciones:
+            return 0
+        
+        cursor = self.conn.cursor()
+        inserted_count = 0
+        
+        try:
+            # Verificar si existe columna fila_origen (para compatibilidad)
+            cursor.execute("""
+                SELECT COUNT(*) 
+                FROM INFORMATION_SCHEMA.COLUMNS 
+                WHERE TABLE_NAME = 'pedido_detalle_tienda' 
+                AND COLUMN_NAME = 'fila_origen'
+            """)
+            row = cursor.fetchone()
+            tiene_fila_origen = (row[0] if row else 0) > 0
+            
+            if tiene_fila_origen:
+                sql = """
+                INSERT INTO pedido_detalle_tienda (
+                    id,
+                    pedido_detalle_id,
+                    tienda_id,
+                    cantidad,
+                    fila_origen,
+                    created_at
+                ) VALUES (NEWID(), ?, ?, ?, ?, GETDATE())
+                """
+            else:
+                sql = """
+                INSERT INTO pedido_detalle_tienda (
+                    id,
+                    pedido_detalle_id,
+                    tienda_id,
+                    cantidad,
+                    created_at
+                ) VALUES (NEWID(), ?, ?, ?, GETDATE())
+                """
+            
+            for dist in distribuciones:
+                try:
+                    tienda_id = dist.get("tienda_id")
+                    cantidad = dist.get("cantidad")
+                    fila_origen = dist.get("fila_origen")
+                    
+                    if not tienda_id or not cantidad or cantidad <= 0:
+                        continue
+                    
+                    if tiene_fila_origen:
+                        cursor.execute(sql, (pedido_detalle_id, tienda_id, cantidad, fila_origen))
+                    else:
+                        cursor.execute(sql, (pedido_detalle_id, tienda_id, cantidad))
+                    inserted_count += 1
+                    
+                except pyodbc.IntegrityError:
+                    # Ya existe la relación, continuar
+                    logger.debug(f"⚠️ Relación detalle-tienda ya existe: {pedido_detalle_id} - {dist.get('tienda_id')}")
+                    continue
+                except Exception as e:
+                    logger.warning(f"⚠️ Error al insertar distribución: {e}")
+                    continue
+            
+            self.conn.commit()
+            logger.debug(f"✅ {inserted_count} distribuciones insertadas para detalle {pedido_detalle_id}")
+            return inserted_count
+            
+        except Exception as e:
+            self.conn.rollback()
+            logger.error(f"❌ Error al insertar distribuciones: {e}")
+            raise
+        finally:
+            cursor.close()
+    
+    def get_or_create_tienda(self, codigo: str, nombre: Optional[str] = None) -> str:
+        """
+        Obtiene el ID de una tienda existente o la crea si no existe.
+        
+        Args:
+            codigo: Código de la tienda
+            nombre: Nombre de la tienda (opcional)
+            
+        Returns:
+            tienda_id (UUID)
+        """
+        cursor = self.conn.cursor()
+        
+        try:
+            # Intentar obtener tienda existente
+            cursor.execute("SELECT tienda_id FROM tienda WHERE codigo = ?", (codigo,))
+            row = cursor.fetchone()
+            
+            if row:
+                tienda_id = str(row[0])
+                logger.debug(f"✅ Tienda existente encontrada: {codigo} ({tienda_id})")
+                return tienda_id
+            
+            # Crear nueva tienda
+            cursor.execute("SELECT NEWID()")
+            uuid_result = cursor.fetchone()
+            if uuid_result is None:
+                raise ValueError("No se pudo generar UUID para tienda_id")
+            tienda_id = str(uuid_result[0])
+            
+            sql = """
+            INSERT INTO tienda (
+                tienda_id,
+                codigo,
+                nombre,
+                activa,
+                created_at
+            ) VALUES (?, ?, ?, 1, GETDATE())
+            """
+            
+            cursor.execute(sql, (tienda_id, codigo, nombre))
+            self.conn.commit()
+            
+            logger.debug(f"✅ Nueva tienda creada: {codigo} ({tienda_id})")
+            return tienda_id
+            
+        except pyodbc.IntegrityError as e:
+            self.conn.rollback()
+            # Si falla por unique constraint, intentar obtener de nuevo (race condition)
+            cursor.execute("SELECT tienda_id FROM tienda WHERE codigo = ?", (codigo,))
+            row = cursor.fetchone()
+            if row:
+                return str(row[0])
+            raise
+        except Exception as e:
+            self.conn.rollback()
+            logger.error(f"❌ Error al crear/obtener tienda {codigo}: {e}")
+            raise
+        finally:
+            cursor.close()
+    
+    def get_pedido_completo(self, pedido_id: str) -> Optional[Dict[str, Any]]:
+        """
+        Obtiene un pedido completo con cabecera, detalles, tiendas y distribuciones.
+        
+        Args:
+            pedido_id: UUID del pedido
+            
+        Returns:
+            Dict con cabecera, detalles (con sus tiendas), o None si no existe
+        """
+        cursor = self.conn.cursor()
+        
+        try:
+            # Verificar si existe columna estado
+            cursor.execute("""
+                SELECT COUNT(*) 
+                FROM INFORMATION_SCHEMA.COLUMNS 
+                WHERE TABLE_NAME = 'pedido' 
+                AND COLUMN_NAME = 'estado'
+            """)
+            row_check = cursor.fetchone()
+            tiene_estado = (row_check[0] if row_check else 0) > 0
+            
+            # Obtener cabecera
+            if tiene_estado:
+                cursor.execute("""
+                    SELECT 
+                        pedido_id, numero_pedido, fecha_pedido, fecha_entrega,
+                        forma_pago, odc, proveedor_nombre, comprador_nombre,
+                        comprador_codigo, origen_traslado, serie, archivo_nombre,
+                        creado_por, estado, creado_en
+                    FROM pedido
+                    WHERE pedido_id = ?
+                """, (pedido_id,))
+            else:
+                cursor.execute("""
+                    SELECT 
+                        pedido_id, numero_pedido, fecha_pedido, fecha_entrega,
+                        forma_pago, odc, proveedor_nombre, comprador_nombre,
+                        comprador_codigo, origen_traslado, serie, archivo_nombre,
+                        creado_por, creado_en
+                    FROM pedido
+                    WHERE pedido_id = ?
+                """, (pedido_id,))
+            
+            row = cursor.fetchone()
+            if not row:
+                return None
+            
+            # Construir cabecera
+            if tiene_estado:
+                cabecera = {
+                    "pedido_id": str(row[0]),
+                    "numero_pedido": row[1],
+                    "fecha_pedido": row[2].isoformat() if row[2] else None,
+                    "fecha_entrega": row[3],
+                    "forma_pago": row[4],
+                    "odc": row[5],
+                    "proveedor_nombre": row[6],
+                    "comprador_nombre": row[7],
+                    "comprador_codigo": row[8],
+                    "origen_traslado": row[9],
+                    "serie": row[10],
+                    "archivo_nombre": row[11],
+                    "creado_por": row[12],
+                    "estado": row[13],
+                    "creado_en": row[14].isoformat() if row[14] else None,
+                }
+            else:
+                cabecera = {
+                    "pedido_id": str(row[0]),
+                    "numero_pedido": row[1],
+                    "fecha_pedido": row[2].isoformat() if row[2] else None,
+                    "fecha_entrega": row[3],
+                    "forma_pago": row[4],
+                    "odc": row[5],
+                    "proveedor_nombre": row[6],
+                    "comprador_nombre": row[7],
+                    "comprador_codigo": row[8],
+                    "origen_traslado": row[9],
+                    "serie": row[10],
+                    "archivo_nombre": row[11],
+                    "creado_por": row[12],
+                    "creado_en": row[13].isoformat() if row[13] else None,
+                }
+            
+            # Obtener detalles con sus distribuciones
+            cursor.execute("""
+                SELECT 
+                    pd.pedido_detalle_id,
+                    pd.codigo_interno, pd.descripcion_sap, pd.marca, pd.codigo_barras,
+                    pd.pack, pd.costo_doc_sin_iva, pd.descuento_1, pd.pvp,
+                    pd.subtotal, pd.total
+                FROM pedido_detalle pd
+                WHERE pd.pedido_id = ?
+                ORDER BY pd.created_at
+            """, (pedido_id,))
+            
+            detalles = []
+            for row in cursor.fetchall():
+                pedido_detalle_id = str(row[0])
+                
+                # Obtener distribuciones por tienda para este detalle
+                cursor.execute("""
+                    SELECT 
+                        pdt.cantidad,
+                        t.tienda_id, t.codigo, t.nombre
+                    FROM pedido_detalle_tienda pdt
+                    INNER JOIN tienda t ON pdt.tienda_id = t.tienda_id
+                    WHERE pdt.pedido_detalle_id = ?
+                """, (pedido_detalle_id,))
+                
+                tiendas_distribucion = []
+                for dist_row in cursor.fetchall():
+                    tiendas_distribucion.append({
+                        "tienda_id": str(dist_row[1]),
+                        "codigo": dist_row[2],
+                        "nombre": dist_row[3],
+                        "cantidad": dist_row[0],
+                    })
+                
+                detalles.append({
+                    "pedido_detalle_id": pedido_detalle_id,
+                    "codigo_interno": row[1],
+                    "descripcion_sap": row[2],
+                    "marca": row[3],
+                    "codigo_barras": row[4],
+                    "pack": row[5],
+                    "costo_doc_sin_iva": float(row[6]) if row[6] else None,
+                    "descuento_1": float(row[7]) if row[7] else None,
+                    "pvp": float(row[8]) if row[8] else None,
+                    "subtotal": float(row[9]) if row[9] else None,  # Tal cual se guardó
+                    "total": float(row[10]) if row[10] else None,   # Tal cual se guardó
+                    "tiendas": tiendas_distribucion,
+                })
+            
+            return {
+                "cabecera": cabecera,
+                "detalles": detalles
+            }
+            
+        except Exception as e:
+            logger.error(f"❌ Error al obtener pedido completo: {e}", exc_info=True)
+            raise
+        finally:
+            cursor.close()
+    
+    def update_estado(self, pedido_id: str, estado: str) -> bool:
+        """
+        Actualiza el estado de un pedido.
+        
+        Args:
+            pedido_id: UUID del pedido
+            estado: Nuevo estado (ej: 'PENDIENTE_CONFIRMACION_PROVEEDOR', 'CONFIRMADO_PROVEEDOR', etc.)
+            
+        Returns:
+            True si se actualizó correctamente, False si no existe el pedido o no hay columna estado
+        """
+        cursor = self.conn.cursor()
+        
+        try:
+            # Verificar si existe columna estado
+            cursor.execute("""
+                SELECT COUNT(*) 
+                FROM INFORMATION_SCHEMA.COLUMNS 
+                WHERE TABLE_NAME = 'pedido' 
+                AND COLUMN_NAME = 'estado'
+            """)
+            row = cursor.fetchone()
+            tiene_estado = (row[0] if row else 0) > 0
+            
+            if not tiene_estado:
+                logger.warning("⚠️ Columna 'estado' no existe en tabla pedido. Ejecute el script add_estado_pedido.sql")
+                return False
+            
+            cursor.execute("""
+                UPDATE pedido 
+                SET estado = ?
+                WHERE pedido_id = ?
+            """, (estado, pedido_id))
+            
+            rows_affected = cursor.rowcount
+            self.conn.commit()
+            
+            if rows_affected > 0:
+                logger.debug(f"✅ Estado actualizado para pedido {pedido_id}: {estado}")
+                return True
+            else:
+                logger.warning(f"⚠️ No se encontró pedido con ID: {pedido_id}")
+                return False
+                
+        except Exception as e:
+            self.conn.rollback()
+            logger.error(f"❌ Error al actualizar estado del pedido: {e}", exc_info=True)
+            raise
+        finally:
+            cursor.close()
+    
+    def validar_tiendas_existen(
+        self,
+        codigos_tiendas: List[str]
+    ) -> Dict[str, Dict[str, Any]]:
+        """
+        Valida si las tiendas existen y están activas.
+        
+        Args:
+            codigos_tiendas: Lista de códigos de tiendas a validar
+            
+        Returns:
+            Dict con formato:
+            {
+                "codigo_tienda": {
+                    "existe": bool,
+                    "activa": bool,
+                    "tienda_id": str (si existe)
+                }
+            }
+        """
+        if not codigos_tiendas:
+            return {}
+        
+        cursor = self.conn.cursor()
+        resultado = {}
+        
+        try:
+            # Buscar todas las tiendas de una vez
+            placeholders = ','.join('?' * len(codigos_tiendas))
+            cursor.execute(f"""
+                SELECT tienda_id, codigo, activa
+                FROM tienda
+                WHERE codigo IN ({placeholders})
+            """, codigos_tiendas)
+            
+            # Inicializar todas como no encontradas
+            for codigo in codigos_tiendas:
+                resultado[codigo.upper()] = {
+                    "existe": False,
+                    "activa": False,
+                    "tienda_id": None
+                }
+            
+            # Marcar las encontradas
+            for row in cursor.fetchall():
+                tienda_id = str(row[0])
+                codigo = str(row[1]).upper()
+                activa = bool(row[2])
+                
+                if codigo in resultado:
+                    resultado[codigo] = {
+                        "existe": True,
+                        "activa": activa,
+                        "tienda_id": tienda_id
+                    }
+            
+            return resultado
+            
+        except Exception as e:
+            logger.error(f"❌ Error al validar tiendas: {e}", exc_info=True)
+            raise
+        finally:
+            cursor.close()
+    
+    def get_by_estado(self, estado: str) -> List[Dict[str, Any]]:
+        """
+        Obtiene todos los pedidos con un estado específico.
+        
+        Args:
+            estado: Estado a filtrar
+            
+        Returns:
+            Lista de diccionarios con datos de pedidos
+        """
+        cursor = self.conn.cursor()
+        
+        try:
+            # Verificar si existe columna estado
+            cursor.execute("""
+                SELECT COUNT(*) 
+                FROM INFORMATION_SCHEMA.COLUMNS 
+                WHERE TABLE_NAME = 'pedido' 
+                AND COLUMN_NAME = 'estado'
+            """)
+            row = cursor.fetchone()
+            tiene_estado = (row[0] if row else 0) > 0
+            
+            if not tiene_estado:
+                logger.warning("⚠️ Columna 'estado' no existe en tabla pedido")
+                return []
+            
+            cursor.execute("""
+                SELECT 
+                    pedido_id, numero_pedido, fecha_pedido, fecha_entrega,
+                    forma_pago, odc, proveedor_nombre, comprador_nombre,
+                    comprador_codigo, origen_traslado, serie, archivo_nombre,
+                    creado_por, estado, creado_en
+                FROM pedido
+                WHERE estado = ?
+                ORDER BY creado_en DESC
+            """, (estado,))
+            
+            pedidos = []
+            for row in cursor.fetchall():
+                pedidos.append({
+                    "pedido_id": str(row[0]),
+                    "numero_pedido": row[1],
+                    "fecha_pedido": row[2].isoformat() if row[2] else None,
+                    "fecha_entrega": row[3],
+                    "forma_pago": row[4],
+                    "odc": row[5],
+                    "proveedor_nombre": row[6],
+                    "comprador_nombre": row[7],
+                    "comprador_codigo": row[8],
+                    "origen_traslado": row[9],
+                    "serie": row[10],
+                    "archivo_nombre": row[11],
+                    "creado_por": row[12],
+                    "estado": row[13],
+                    "creado_en": row[14].isoformat() if row[14] else None,
+                })
+            
+            return pedidos
+            
+        except Exception as e:
+            logger.error(f"❌ Error al obtener pedidos por estado: {e}", exc_info=True)
+            raise
+        finally:
+            cursor.close()
+
+

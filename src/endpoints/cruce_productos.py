@@ -6,12 +6,16 @@ import logging
 import re
 import pyodbc
 import asyncio
+import time
+import json
 from datetime import datetime, timedelta
-from fastapi import FastAPI, HTTPException, Depends, Query
+from fastapi import FastAPI, HTTPException, Depends, Query, Request
+from fastapi.responses import StreamingResponse
 
 from src.database.services.cruce_productos_service import CruceProductosService
 from src.database.services.sugerencias_homologacion_service import SugerenciasHomologacionService
 from src.database.services.producto_staging_sync_service import ProductoStagingSyncService
+from src.database.services.proceso_estado_service import ProcesoEstadoService
 from src.database.repositories.sync_control_repository import SyncControlRepository
 from src.security.jwt_auth import verify_jwt_token, require_permission
 from src.config import SAP_LINKED_SERVER, SAP_DATABASE, ENABLE_SAP_QUERIES
@@ -67,22 +71,31 @@ def register_cruce_productos_endpoints(app: FastAPI):
         """
         Obtiene sugerencias de homologación para productos que no tienen match exacto.
         
-        IMPORTANTE: Este endpoint NO debe llenar la pestaña "Homologables" actual.
-        Es una nueva categoría: "Sugerencias" que debe mostrarse en una pestaña separada
-        o como vista secundaria al seleccionar un SKU solo MBA3.
+        **IMPORTANTE - Flujo requerido:**
         
-        Este endpoint NO homologa automáticamente, solo SUGIERE posibles coincidencias
-        entre productos MBA3 (solo_en_mba3) y productos SAP para revisión humana.
+        1. **Primero**: Ejecutar `POST /cruce-productos/iniciar` para iniciar el cruce
+        2. **Esperar**: El cruce completa (seguir progreso con `GET /cruce-productos/stream/{process_id}`)
+        3. **Luego**: Llamar a este endpoint para obtener sugerencias
         
-        Cada sugerencia incluye:
+        **Este endpoint NO ejecuta el cruce.** Reutiliza el último cruce completado
+        desde Redis. Si no existe un cruce reciente (menos de 15 minutos), devuelve error 412.
+        
+        **Códigos de respuesta:**
+        - `200`: Sugerencias generadas exitosamente
+        - `412`: No existe cruce reciente (ejecute el cruce primero)
+        - `500`: Error al generar sugerencias
+        
+        **TTL del cruce:**
+        - Los resultados del cruce se mantienen válidos por 15 minutos
+        - Un nuevo cruce invalida automáticamente el anterior
+        - Si se sincronizan maestros (MBA3/SAP), se recomienda ejecutar nuevo cruce
+        
+        **Características de las sugerencias:**
         - Score normalizado (0.0 - 1.0) para usar como porcentaje en frontend
         - Score original (para debugging)
         - Motivos del match (explicación del por qué se sugiere)
         - Máximo 5 sugerencias por producto MBA3
         - Solo sugerencias con score >= 0.5 (umbral mínimo)
-        
-        Reutiliza el resultado del cruce si está disponible,
-        pero puede ejecutarse independientemente.
         
         Returns:
             Lista de productos MBA3 con sus sugerencias ordenadas por score
@@ -90,12 +103,47 @@ def register_cruce_productos_endpoints(app: FastAPI):
         try:
             logger.info("🔍 Obteniendo sugerencias de homologación...")
             
-            # Obtener datos del cruce una sola vez
-            cruce_service = CruceProductosService()
-            cruce = cruce_service.realizar_cruce()
+            # ✅ CORRECTO: Buscar último cruce completado en Redis (O(1))
+            estado_service = ProcesoEstadoService()
+            ultimo_estado = estado_service.obtener_ultimo_completado(max_age_minutes=15)
             
+            if not ultimo_estado or "resultado" not in ultimo_estado:
+                # ✅ AJUSTE 3: Error 412 bien documentado
+                logger.warning("⚠️ No hay cruce reciente para generar sugerencias")
+                raise HTTPException(
+                    status_code=412,  # Precondition Failed
+                    detail={
+                        "error": "no_cruce_reciente",
+                        "message": "No existe un cruce reciente. Ejecute el cruce primero usando POST /cruce-productos/iniciar",
+                        "action_required": "Ejecutar cruce primero",
+                        "endpoint": "/cruce-productos/iniciar",
+                        "ttl_minutes": 15
+                    }
+                )
+            
+            cruce = ultimo_estado["resultado"]
+            
+            # Obtener datos del cruce
             productos_solo_mba3 = cruce.get("solo_en_mba3", [])
-            productos_sap = cruce_service.obtener_productos_sap()
+            
+            # ✅ AJUSTE 2: Usar productos_sap_base (payload reducido)
+            productos_sap = cruce.get("productos_sap_base", [])
+            
+            if not productos_sap:
+                # Fallback: si no están guardados, obtenerlos (solo para compatibilidad)
+                logger.warning("⚠️ productos_sap_base no encontrados en resultado, obteniendo...")
+                cruce_service = CruceProductosService()
+                productos_sap_completos = cruce_service.obtener_productos_sap()
+                # Convertir al formato esperado
+                productos_sap = [
+                    {
+                        "item_code": p.get("item_code", ""),
+                        "item_name": p.get("item_name", ""),
+                        "item_code_normalizado": p.get("item_code_normalizado", ""),
+                        "active": p.get("active", True)
+                    }
+                    for p in productos_sap_completos
+                ]
             
             # Obtener códigos ya homologados
             homologados_exactos = cruce.get("homologados_exactos", [])
@@ -119,6 +167,15 @@ def register_cruce_productos_endpoints(app: FastAPI):
                 productos_ya_homologados
             )
             
+            # Calcular edad del cruce usado
+            completed_at_str = ultimo_estado.get("completed_at")
+            age_minutes = None
+            if completed_at_str:
+                completed_at = datetime.fromisoformat(completed_at_str)
+                age_minutes = round(
+                    (datetime.now() - completed_at).total_seconds() / 60, 1
+                )
+            
             return {
                 "status": "success",
                 "data": sugerencias,
@@ -128,9 +185,16 @@ def register_cruce_productos_endpoints(app: FastAPI):
                     "productos_con_sugerencias": sum(1 for s in sugerencias if s["sugerencias"]),
                     "productos_sin_sugerencias": sum(1 for s in sugerencias if not s["sugerencias"]),
                     "min_score": SugerenciasHomologacionService.MIN_SCORE_SUGERENCIA,
-                    "max_sugerencias_por_producto": SugerenciasHomologacionService.MAX_SUGERENCIAS_POR_PRODUCTO
+                    "max_sugerencias_por_producto": SugerenciasHomologacionService.MAX_SUGERENCIAS_POR_PRODUCTO,
+                    "cruce_usado": {
+                        "process_id": ultimo_estado.get("process_id"),
+                        "completed_at": completed_at_str,
+                        "age_minutes": age_minutes
+                    }
                 }
             }
+        except HTTPException:
+            raise
         except Exception as e:
             logger.error(f"❌ Error al obtener sugerencias: {e}", exc_info=True)
             raise HTTPException(status_code=500, detail=f"Error al obtener sugerencias: {str(e)}")
@@ -143,26 +207,29 @@ def register_cruce_productos_endpoints(app: FastAPI):
         """
         Sincroniza maestros de productos MBA3 desde API a staging.
         
-        Este endpoint:
-        1. Consulta productos MBA3 desde API (tabla INVT_FICHA_PRINCIPAL)
+        Este endpoint SIEMPRE reemplaza la información existente:
+        1. Consulta TODOS los productos MBA3 desde API (tabla INVT_FICHA_PRINCIPAL)
         2. Normaliza códigos y guarda/actualiza en producto_mba3_staging
-        3. Registra estadísticas en sync_control
+        3. Elimina productos que ya no existen en MBA3
+        4. Registra estadísticas en sync_control
         
         ⚠️ ADVERTENCIA: Este proceso puede tardar varios minutos dependiendo del volumen.
         No es recomendable ejecutarlo frecuentemente. Usa la tarea programada (Celery) para sincronización automática.
         
         Returns:
-            Estadísticas de sincronización para MBA3
+            Estadísticas de sincronización para MBA3 (incluye registros_eliminados)
         """
         try:
-            logger.info("🔄 Iniciando sincronización manual de maestros MBA3...")
+            logger.info("🔄 Iniciando sincronización manual de maestros MBA3 (modo reemplazo completo)...")
             service = ProductoStagingSyncService()
-            resultado = service.sync_mba3_products()
+            # Siempre forzar sincronización completa para reemplazar información
+            # batch_size=4000 para traer 4000 elementos en un solo lote
+            resultado = service.sync_mba3_products(batch_size=4000, force_full_sync=True)
             
             return {
                 "status": "success",
                 "data": resultado,
-                "message": "Sincronización MBA3 completada exitosamente"
+                "message": "Sincronización MBA3 completada exitosamente (información reemplazada)"
             }
         except Exception as e:
             logger.error(f"❌ Error al sincronizar maestros MBA3: {e}", exc_info=True)
@@ -256,6 +323,8 @@ def register_cruce_productos_endpoints(app: FastAPI):
     @app.get("/cruce-productos/buscar-sku/mba3", tags=["Cruce de Productos"])
     async def buscar_sku_mba3(
         sku: str = Query(..., description="SKU del producto a buscar en MBA3"),
+        incluir_sugerencias_sap: bool = Query(False, description="Si True, incluye sugerencias similares de SAP basadas en el código de MBA3"),
+        limite_sugerencias: int = Query(20, ge=1, le=50, description="Límite máximo de sugerencias SAP a retornar (1-50, solo si incluir_sugerencias_sap=True)"),
         user: dict = Depends(verify_jwt_token),
         _: None = Depends(require_permission('mba3-consultas.proceso.execute'))
     ):
@@ -264,11 +333,39 @@ def register_cruce_productos_endpoints(app: FastAPI):
         
         Consulta directamente la tabla INVT_FICHA_PRINCIPAL de MBA3.
         
+        Si `incluir_sugerencias_sap=True`, además busca sugerencias similares en SAP
+        basándose en el código encontrado en MBA3. Esto es útil cuando un código existe
+        en MBA3 pero no tiene equivalente exacto en SAP, permitiendo encontrar alternativas similares.
+        
+        **Ejemplo de uso:**
+        - Búsqueda simple: `GET /cruce-productos/buscar-sku/mba3?sku=R225.1012.BCO`
+        - Con sugerencias: `GET /cruce-productos/buscar-sku/mba3?sku=R225.1012.BCO&incluir_sugerencias_sap=true&limite_sugerencias=20`
+        
         Args:
             sku: Código del producto (PRODUCT_ID) a buscar
+            incluir_sugerencias_sap: Si True, busca sugerencias similares en SAP
+            limite_sugerencias: Límite de sugerencias a retornar (solo si incluir_sugerencias_sap=True)
         
         Returns:
-            Información del producto en MBA3 si se encuentra
+            Información del producto en MBA3 y opcionalmente sugerencias similares en SAP:
+            {
+                "status": "success",
+                "sku": "R225.1012.BCO",
+                "data": {
+                    "codigo": "R225.1012.BCO",
+                    "nombre": "Producto en MBA3",
+                    ...
+                },
+                "sugerencias_sap": [
+                    {
+                        "codigo": "5-0012.9",
+                        "nombre": "Producto similar en SAP",
+                        "score": 0.85,
+                        "score_porcentaje": 85.0,
+                        "motivos": [...]
+                    }
+                ]  // Solo si incluir_sugerencias_sap=True
+            }
         """
         try:
             # Validar formato del SKU para prevenir SQL injection
@@ -286,15 +383,18 @@ def register_cruce_productos_endpoints(app: FastAPI):
             logger.info(f"🔍 Buscando SKU en MBA3: {sku_clean}")
             
             # Escapar comillas simples para la query (aunque ya está validado)
+            # Nota: MBA3 usa API REST que parsea SQL, no soporta parámetros preparados tradicionales
             sku_escaped = sku_clean.replace("'", "''")
             
-            # Consulta directa a MBA3 - solo busca por PRODUCT_ID sin filtros adicionales
+            # Consulta optimizada: solo campos usados por el frontend + LIMIT 1
+            # Reducción de 18 a 10 campos (44% menos datos)
+            # Mantiene simplicidad (sin filtros) para obtener cualquier producto
             query = (
-                "SELECT PRODUCT_NAME, PRODUCT_ID, GrupoPrenda, CORP, Talla, PRESENTACION, "
-                "Descontinuado, GROUP_CODE, INACTIVE, Tipo_Origen, SELL, CODE_PROV_O_ALT, "
-                "CATEGORY, Familia, Codigo_Marca, PRODUCT_NAME_2, Fecha_Ultima_Venta, FechaUltimoMovimiento "
+                "SELECT PRODUCT_ID, PRODUCT_NAME, CORP, GrupoPrenda, Talla, PRESENTACION, "
+                "GROUP_CODE, Tipo_Origen, Descontinuado, INACTIVE "
                 "FROM INVT_FICHA_PRINCIPAL "
-                f"WHERE PRODUCT_ID = '{sku_escaped}'"
+                f"WHERE PRODUCT_ID = '{sku_escaped}' "
+                "LIMIT 1"
             )
             
             # Ejecutar en thread pool para no bloquear el event loop
@@ -302,6 +402,9 @@ def register_cruce_productos_endpoints(app: FastAPI):
             mba3_service = MBA3Service()
             
             try:
+                # Medir tiempo de ejecución para diagnóstico
+                start_time = time.time()
+                
                 # Timeout de 50 segundos para dar margen a:
                 # - Delays de JWT (hasta 5s: 2s post-login + 3s si JWT reciente)
                 # - Consultas que pueden tardar 30-40s en MBA3
@@ -310,8 +413,13 @@ def register_cruce_productos_endpoints(app: FastAPI):
                     asyncio.to_thread(mba3_service.execute_query, query),
                     timeout=50.0
                 )
+                
+                elapsed_time = time.time() - start_time
+                logger.info(f"⏱️ Consulta MBA3 completada en {elapsed_time:.2f}s para SKU: {sku_clean}")
+                
             except asyncio.TimeoutError:
-                logger.error(f"❌ Timeout al buscar SKU en MBA3: {sku_clean} (más de 50 segundos)")
+                elapsed_time = time.time() - start_time if 'start_time' in locals() else 50.0
+                logger.error(f"❌ Timeout al buscar SKU en MBA3: {sku_clean} (más de 50 segundos, tiempo transcurrido: {elapsed_time:.2f}s)")
                 raise HTTPException(
                     status_code=504,
                     detail=f"Timeout al buscar SKU en MBA3. La consulta tardó más de 50 segundos. Verifique la conexión con MBA3."
@@ -363,12 +471,124 @@ def register_cruce_productos_endpoints(app: FastAPI):
                 "inactive": producto.get("INACTIVE") or producto.get("inactive") or producto.get("Inactive") or ""
             }
             
-            return {
+            # Preparar respuesta base
+            respuesta = {
                 "status": "success",
                 "message": "SKU encontrado en MBA3",
                 "sku": sku_clean,
                 "data": producto_info
             }
+            
+            # Si se solicita, buscar sugerencias similares en SAP
+            if incluir_sugerencias_sap:
+                logger.info(f"🔍 Buscando sugerencias SAP para SKU MBA3: {sku_clean}")
+                
+                try:
+                    # Verificar si SAP está habilitado
+                    if ENABLE_SAP_QUERIES:
+                        # Importar cliente SAP y servicio de sugerencias
+                        from src.database.clients.sap_client import SAPClient
+                        sap_client = SAPClient()
+                        sugerencias_service = SugerenciasHomologacionService()
+                        
+                        # Buscar SKUs similares en SAP
+                        def buscar_sugerencias_en_sap():
+                            return sap_client.buscar_skus_similares(
+                                sku_referencia=sku_clean,
+                                limite=limite_sugerencias * 2,  # Buscar más para tener mejor selección
+                                solo_activos=True
+                            )
+                        
+                        try:
+                            # Ejecutar búsqueda en thread pool con timeout
+                            productos_sap = await asyncio.wait_for(
+                                asyncio.to_thread(buscar_sugerencias_en_sap),
+                                timeout=50.0
+                            )
+                            
+                            if productos_sap:
+                                # Preparar producto MBA3 para usar servicio de sugerencias
+                                producto_mba3_ref = {
+                                    "codigo_mba3": producto_info.get("codigo", sku_clean),
+                                    "nombre_mba3": producto_info.get("nombre", ""),
+                                }
+                                
+                                # Convertir productos SAP al formato esperado
+                                productos_sap_formateados = []
+                                for prod in productos_sap:
+                                    productos_sap_formateados.append({
+                                        "item_code": prod.get("ItemCode", ""),
+                                        "item_name": prod.get("ItemName", ""),
+                                        "pack": prod.get("U_IXX_PACK", ""),
+                                        "active": prod.get("validFor", "N").upper() == "Y"
+                                    })
+                                
+                                # Calcular scores y motivos usando servicio de sugerencias
+                                sugerencias = sugerencias_service.buscar_sugerencias_para_producto(
+                                    producto_mba3=producto_mba3_ref,
+                                    productos_sap=productos_sap_formateados,
+                                    productos_ya_homologados=set()  # No excluir ningún producto
+                                )
+                                
+                                # Formatear sugerencias con información adicional
+                                sugerencias_formateadas = []
+                                productos_sap_dict = {p.get("ItemCode"): p for p in productos_sap}
+                                
+                                for sugerencia in sugerencias:
+                                    codigo_sap = sugerencia.get("codigo_sap")
+                                    producto_sap = productos_sap_dict.get(codigo_sap, {})
+                                    
+                                    valid_for = producto_sap.get("validFor", "N")
+                                    estado = "activo" if valid_for.upper() == "Y" else "inactivo"
+                                    
+                                    sugerencias_formateadas.append({
+                                        "codigo": codigo_sap,
+                                        "nombre": producto_sap.get("ItemName", ""),
+                                        "pack": producto_sap.get("U_IXX_PACK", ""),
+                                        "group_code": producto_sap.get("ItmsGrpCod"),
+                                        "group_name": producto_sap.get("ItmsGrpNam", ""),
+                                        "estado": estado,
+                                        "valid_for": valid_for,
+                                        "score": sugerencia.get("score", 0.0),
+                                        "score_porcentaje": round(sugerencia.get("score", 0.0) * 100, 1),
+                                        "motivos": sugerencia.get("motivos", [])
+                                    })
+                                
+                                # Limitar a la cantidad solicitada
+                                sugerencias_formateadas = sugerencias_formateadas[:limite_sugerencias]
+                                
+                                respuesta["sugerencias_sap"] = sugerencias_formateadas
+                                respuesta["total_sugerencias_sap"] = len(sugerencias_formateadas)
+                                logger.info(f"✅ Encontradas {len(sugerencias_formateadas)} sugerencias SAP para {sku_clean}")
+                            else:
+                                respuesta["sugerencias_sap"] = []
+                                respuesta["total_sugerencias_sap"] = 0
+                                logger.info(f"⚠️ No se encontraron sugerencias SAP para {sku_clean}")
+                                
+                        except asyncio.TimeoutError:
+                            logger.warning(f"⚠️ Timeout al buscar sugerencias SAP para {sku_clean}")
+                            respuesta["sugerencias_sap"] = []
+                            respuesta["total_sugerencias_sap"] = 0
+                            respuesta["sugerencias_sap_timeout"] = True
+                        except Exception as e:
+                            logger.warning(f"⚠️ Error al buscar sugerencias SAP para {sku_clean}: {e}")
+                            respuesta["sugerencias_sap"] = []
+                            respuesta["total_sugerencias_sap"] = 0
+                            respuesta["sugerencias_sap_error"] = str(e)
+                    else:
+                        logger.debug(f"⏭️ Consultas SAP deshabilitadas, omitiendo sugerencias")
+                        respuesta["sugerencias_sap"] = []
+                        respuesta["total_sugerencias_sap"] = 0
+                        respuesta["sugerencias_sap_disabled"] = True
+                        
+                except Exception as e:
+                    # Si hay error al buscar sugerencias, no fallar la respuesta principal
+                    logger.warning(f"⚠️ Error al buscar sugerencias SAP: {e}", exc_info=True)
+                    respuesta["sugerencias_sap"] = []
+                    respuesta["total_sugerencias_sap"] = 0
+                    respuesta["sugerencias_sap_error"] = str(e)
+            
+            return respuesta
             
         except HTTPException:
             # Re-lanzar excepciones HTTP (validaciones)
@@ -519,6 +739,168 @@ def register_cruce_productos_endpoints(app: FastAPI):
             logger.error(f"❌ Error al buscar SKU en SAP: {e}", exc_info=True)
             raise HTTPException(status_code=500, detail=f"Error al buscar SKU en SAP: {str(e)}")
     
+    @app.get("/cruce-productos/buscar-sku/sap/sugerencias", tags=["Cruce de Productos"])
+    async def buscar_sugerencias_sku_sap(
+        sku: str = Query(..., description="SKU (ItemCode) de referencia para buscar sugerencias similares en SAP"),
+        limite: int = Query(20, ge=1, le=50, description="Límite máximo de sugerencias a retornar (1-50)"),
+        user: dict = Depends(verify_jwt_token),
+        _: None = Depends(require_permission('mba3-consultas.proceso.execute'))
+    ):
+        """
+        Busca SKUs similares en SAP basándose en un SKU de referencia.
+        
+        Este endpoint realiza búsqueda fuzzy/similar usando:
+        1. Búsqueda LIKE en ItemCode de SAP
+        2. Algoritmo de scoring basado en similitud de códigos y nombres
+        3. Retorna sugerencias ordenadas por relevancia con scores y motivos
+        
+        Args:
+            sku: SKU de referencia (ItemCode) para buscar sugerencias similares
+            limite: Límite máximo de sugerencias (default: 20, máximo: 50)
+        
+        Returns:
+            Lista de sugerencias con información detallada:
+            {
+                "status": "success",
+                "sku_referencia": "5-0012.9",
+                "sugerencias": [
+                    {
+                        "codigo": "5-0012.9",
+                        "nombre": "Nombre del producto",
+                        "pack": "X3",
+                        "group_code": 123,
+                        "estado": "activo",
+                        "score": 0.95,
+                        "score_porcentaje": 95,
+                        "motivos": ["Código normalizado idéntico", "Prefijo compartido: 5"]
+                    },
+                    ...
+                ],
+                "total_encontrados": 15
+            }
+        """
+        try:
+            # Validar formato del SKU para prevenir SQL injection
+            sku_clean = sku.strip()
+            if not sku_clean:
+                raise HTTPException(status_code=400, detail="SKU no puede estar vacío")
+            
+            # Validar que el SKU tenga formato seguro
+            if not re.match(r'^[A-Za-z0-9.\- ]{1,50}$', sku_clean):
+                raise HTTPException(
+                    status_code=400, 
+                    detail="SKU contiene caracteres no permitidos. Solo se permiten letras, números, guiones, puntos y espacios."
+                )
+            
+            logger.info(f"🔍 Buscando sugerencias para SKU en SAP: {sku_clean}")
+            
+            # Verificar si SAP está habilitado
+            if not ENABLE_SAP_QUERIES:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Consultas SAP están deshabilitadas. Configura ENABLE_SAP_QUERIES=true en .env"
+                )
+            
+            # Importar cliente SAP y servicio de sugerencias
+            from src.database.clients.sap_client import SAPClient
+            sap_client = SAPClient()
+            sugerencias_service = SugerenciasHomologacionService()
+            
+            # Buscar SKUs similares en SAP
+            def buscar_en_sap():
+                return sap_client.buscar_skus_similares(
+                    sku_referencia=sku_clean,
+                    limite=limite * 2,  # Buscar más para tener mejor selección
+                    solo_activos=True
+                )
+            
+            try:
+                # Ejecutar búsqueda en thread pool con timeout
+                productos_sap = await asyncio.wait_for(
+                    asyncio.to_thread(buscar_en_sap),
+                    timeout=50.0
+                )
+            except asyncio.TimeoutError:
+                logger.error(f"❌ Timeout al buscar sugerencias SKU en SAP: {sku_clean}")
+                raise HTTPException(
+                    status_code=504,
+                    detail=f"Timeout al buscar sugerencias en SAP. La consulta tardó más de 50 segundos."
+                )
+            
+            if not productos_sap:
+                return {
+                    "status": "not_found",
+                    "sku_referencia": sku_clean,
+                    "message": f"No se encontraron SKUs similares en SAP para: {sku_clean}",
+                    "sugerencias": [],
+                    "total_encontrados": 0
+                }
+            
+            # Preparar producto de referencia (simulando estructura MBA3 para usar servicio de sugerencias)
+            producto_referencia = {
+                "codigo_mba3": sku_clean,
+                "nombre_mba3": "",  # No tenemos nombre, pero el servicio puede funcionar solo con código
+            }
+            
+            # Convertir productos SAP al formato esperado por el servicio
+            productos_sap_formateados = []
+            for prod in productos_sap:
+                productos_sap_formateados.append({
+                    "item_code": prod.get("ItemCode", ""),
+                    "item_name": prod.get("ItemName", ""),
+                    "pack": prod.get("U_IXX_PACK", ""),
+                    "active": prod.get("validFor", "N").upper() == "Y"
+                })
+            
+            # Usar servicio de sugerencias para calcular scores y motivos
+            sugerencias = sugerencias_service.buscar_sugerencias_para_producto(
+                producto_mba3=producto_referencia,
+                productos_sap=productos_sap_formateados,
+                productos_ya_homologados=set()  # No excluir ningún producto
+            )
+            
+            # Formatear respuesta con información adicional de SAP
+            sugerencias_formateadas = []
+            productos_sap_dict = {p.get("ItemCode"): p for p in productos_sap}
+            
+            for sugerencia in sugerencias:
+                codigo_sap = sugerencia.get("codigo_sap")
+                producto_sap = productos_sap_dict.get(codigo_sap, {})
+                
+                valid_for = producto_sap.get("validFor", "N")
+                estado = "activo" if valid_for.upper() == "Y" else "inactivo"
+                
+                sugerencias_formateadas.append({
+                    "codigo": codigo_sap,
+                    "nombre": producto_sap.get("ItemName", ""),
+                    "pack": producto_sap.get("U_IXX_PACK", ""),
+                    "group_code": producto_sap.get("ItmsGrpCod"),
+                    "group_name": producto_sap.get("ItmsGrpNam", ""),
+                    "estado": estado,
+                    "valid_for": valid_for,
+                    "score": sugerencia.get("score", 0.0),
+                    "score_porcentaje": round(sugerencia.get("score", 0.0) * 100, 1),
+                    "motivos": sugerencia.get("motivos", [])
+                })
+            
+            # Limitar a la cantidad solicitada
+            sugerencias_formateadas = sugerencias_formateadas[:limite]
+            
+            return {
+                "status": "success",
+                "sku_referencia": sku_clean,
+                "message": f"Encontradas {len(sugerencias_formateadas)} sugerencias similares",
+                "sugerencias": sugerencias_formateadas,
+                "total_encontrados": len(sugerencias_formateadas)
+            }
+            
+        except HTTPException:
+            # Re-lanzar excepciones HTTP (validaciones)
+            raise
+        except Exception as e:
+            logger.error(f"❌ Error al buscar sugerencias SKU en SAP: {e}", exc_info=True)
+            raise HTTPException(status_code=500, detail=f"Error al buscar sugerencias SKU en SAP: {str(e)}")
+    
     @app.get("/cruce-productos/estado-sincronizacion", tags=["Cruce de Productos"])
     async def obtener_estado_sincronizacion(
         user: dict = Depends(verify_jwt_token),
@@ -583,4 +965,231 @@ def register_cruce_productos_endpoints(app: FastAPI):
         except Exception as e:
             logger.error(f"❌ Error al obtener estado de sincronización: {e}", exc_info=True)
             raise HTTPException(status_code=500, detail=f"Error al obtener estado: {str(e)}")
+    
+    @app.post("/cruce-productos/iniciar", tags=["Cruce de Productos"])
+    async def iniciar_cruce_productos(
+        user: dict = Depends(verify_jwt_token),
+        _: None = Depends(require_permission('mba3-consultas.proceso.execute'))
+    ):
+        """
+        Inicia un cruce de productos en background usando Celery.
+        
+        Este endpoint:
+        1. Crea un proceso con ID único
+        2. Ejecuta el cruce en background usando Celery
+        3. Devuelve el process_id para seguir el progreso
+        
+        Para seguir el progreso, usa:
+        - GET /cruce-productos/stream/{process_id} (SSE)
+        - GET /cruce-productos/resultado/{process_id} (polling)
+        
+        Returns:
+            {
+                "status": "success",
+                "process_id": "cruce-abc123",
+                "message": "Cruce iniciado..."
+            }
+        """
+        try:
+            estado_service = ProcesoEstadoService()
+            user_id = user.get('id') or user.get('username', 'unknown')
+            process_id = estado_service.crear_proceso(user_id=user_id)
+            
+            # Ejecutar en Celery (background task)
+            from src.tasks.celery_cruce_productos import ejecutar_cruce_productos
+            ejecutar_cruce_productos.delay(process_id, user_id)
+            
+            logger.info(f"🚀 Cruce iniciado: {process_id} (usuario: {user_id})")
+            
+            return {
+                "status": "success",
+                "process_id": process_id,
+                "message": "Cruce iniciado. Usa GET /cruce-productos/stream/{process_id} para ver progreso."
+            }
+        except Exception as e:
+            logger.error(f"❌ Error al iniciar cruce: {e}", exc_info=True)
+            raise HTTPException(status_code=500, detail=f"Error al iniciar cruce: {str(e)}")
+    
+    @app.get("/cruce-productos/stream/{process_id}", tags=["Cruce de Productos"])
+    async def stream_progreso_cruce(
+        process_id: str,
+        request: Request,
+        user: dict = Depends(verify_jwt_token),
+        _: None = Depends(require_permission('mba3-consultas.proceso.execute'))
+    ):
+        """
+        Stream de progreso usando Server-Sent Events (SSE).
+        
+        Este endpoint envía eventos de progreso en tiempo real mientras
+        se ejecuta el cruce de productos.
+        
+        **Autenticación:**
+        - El token JWT debe enviarse en el header Authorization (no en query string)
+        - El frontend debe usar fetch() con ReadableStream o un polyfill de EventSource
+        
+        **Eventos enviados:**
+        - Cada segundo mientras el proceso está en ejecución
+        - Solo cuando hay cambios en el estado (comparación por updated_at y version)
+        - Evento final cuando el proceso completa o falla
+        
+        **Formato de eventos:**
+        ```
+        data: {"status": "processing", "step": "exactos", "progress": 50, ...}
+        ```
+        
+        Args:
+            process_id: ID del proceso obtenido de POST /cruce-productos/iniciar
+            
+        Returns:
+            Stream de eventos SSE con formato text/event-stream
+        """
+        try:
+            estado_service = ProcesoEstadoService()
+            
+            # Validar que el proceso pertenece al usuario (opcional pero recomendado)
+            estado = estado_service.obtener_estado(process_id)
+            if not estado:
+                raise HTTPException(status_code=404, detail="Proceso no encontrado")
+            
+            if estado.get("user_id"):
+                user_id = user.get('id') or user.get('username', 'unknown')
+                if estado["user_id"] != user_id:
+                    raise HTTPException(
+                        status_code=403,
+                        detail="No tienes acceso a este proceso"
+                    )
+            
+            async def event_stream():
+                """Generador de eventos SSE."""
+                ultimo_updated_at = None
+                ultima_version = None
+                
+                while True:
+                    # Verificar si el cliente se desconectó
+                    if await request.is_disconnected():
+                        logger.info(f"🔌 Cliente desconectado del stream {process_id}")
+                        break
+                    
+                    estado_actual = estado_service.obtener_estado(process_id)
+                    
+                    if not estado_actual:
+                        yield f"data: {json.dumps({'error': 'Proceso no encontrado'})}\n\n"
+                        break
+                    
+                    # Comparar por updated_at y version (más robusto que comparar dict completo)
+                    updated_at = estado_actual.get("updated_at")
+                    version = estado_actual.get("version", 0)
+                    
+                    if updated_at != ultimo_updated_at or version != ultima_version:
+                        # Enviar solo campos necesarios (no incluir resultado completo hasta completar)
+                        estado_enviar = {
+                            "process_id": estado_actual["process_id"],
+                            "status": estado_actual["status"],
+                            "step": estado_actual["step"],
+                            "progress": estado_actual["progress"],
+                            "message": estado_actual["message"],
+                            "updated_at": updated_at,
+                            "version": version
+                        }
+                        
+                        # Incluir data parcial si existe
+                        if "data" in estado_actual:
+                            estado_enviar["data"] = estado_actual["data"]
+                        
+                        # Si completó, incluir resultado completo
+                        if estado_actual["status"] == "completed":
+                            estado_enviar["resultado"] = estado_actual.get("resultado")
+                        
+                        # Si error, incluir error
+                        if estado_actual["status"] == "error":
+                            estado_enviar["error"] = estado_actual.get("error")
+                        
+                        yield f"data: {json.dumps(estado_enviar)}\n\n"
+                        
+                        ultimo_updated_at = updated_at
+                        ultima_version = version
+                    
+                    # Si completó o error, cerrar stream
+                    if estado_actual["status"] in ("completed", "error"):
+                        break
+                    
+                    await asyncio.sleep(1)  # Poll cada segundo
+            
+            return StreamingResponse(
+                event_stream(),
+                media_type="text/event-stream",
+                headers={
+                    "Cache-Control": "no-cache",
+                    "Connection": "keep-alive",
+                    "X-Accel-Buffering": "no",  # Nginx: deshabilitar buffering
+                }
+            )
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"❌ Error en stream de progreso: {e}", exc_info=True)
+            raise HTTPException(status_code=500, detail=f"Error en stream: {str(e)}")
+    
+    @app.get("/cruce-productos/resultado/{process_id}", tags=["Cruce de Productos"])
+    async def obtener_resultado_cruce(
+        process_id: str,
+        user: dict = Depends(verify_jwt_token),
+        _: None = Depends(require_permission('mba3-consultas.proceso.execute'))
+    ):
+        """
+        Obtiene el resultado final del cruce (por si se perdió el stream SSE).
+        
+        Este endpoint es útil para:
+        - Recuperar resultados después de perder conexión SSE
+        - Verificar estado de un proceso sin mantener conexión abierta
+        - Implementar polling como alternativa a SSE
+        
+        Args:
+            process_id: ID del proceso obtenido de POST /cruce-productos/iniciar
+            
+        Returns:
+            - Si completado: resultado completo del cruce
+            - Si en proceso: estado actual
+            - Si error: mensaje de error
+        """
+        try:
+            estado_service = ProcesoEstadoService()
+            estado = estado_service.obtener_estado(process_id)
+            
+            if not estado:
+                raise HTTPException(status_code=404, detail="Proceso no encontrado")
+            
+            # Validar acceso
+            if estado.get("user_id"):
+                user_id = user.get('id') or user.get('username', 'unknown')
+                if estado["user_id"] != user_id:
+                    raise HTTPException(status_code=403, detail="No tienes acceso a este proceso")
+            
+            if estado["status"] == "completed":
+                return {
+                    "status": "success",
+                    "process_id": process_id,
+                    "data": estado.get("resultado")
+                }
+            elif estado["status"] == "error":
+                raise HTTPException(
+                    status_code=500,
+                    detail=estado.get("error", "Error desconocido")
+                )
+            else:
+                return {
+                    "status": "processing",
+                    "process_id": process_id,
+                    "estado": {
+                        "step": estado["step"],
+                        "progress": estado["progress"],
+                        "message": estado["message"],
+                        "updated_at": estado.get("updated_at")
+                    }
+                }
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"❌ Error al obtener resultado: {e}", exc_info=True)
+            raise HTTPException(status_code=500, detail=f"Error al obtener resultado: {str(e)}")
 

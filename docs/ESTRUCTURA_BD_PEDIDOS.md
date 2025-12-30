@@ -1,0 +1,327 @@
+# Estructura de Base de Datos - Pedidos
+
+## 📊 Modelo de Datos
+
+El sistema de pedidos utiliza un modelo jerárquico de 3 niveles:
+
+```
+pedido (cabecera)
+  └── pedido_detalle (productos)
+       └── pedido_detalle_tienda (distribución por tienda)
+```
+
+---
+
+## 🗂️ Tablas
+
+### 1. `tienda` (Maestro de Tiendas)
+
+Almacena el catálogo de tiendas/sucursales.
+
+```sql
+CREATE TABLE tienda (
+    tienda_id UNIQUEIDENTIFIER PRIMARY KEY,
+    codigo NVARCHAR(100) NOT NULL UNIQUE,  -- Ej: "T001", "RECREO"
+    nombre NVARCHAR(150) NULL,              -- Nombre descriptivo
+    activa BIT DEFAULT 1,
+    created_at DATETIME DEFAULT GETDATE(),
+    updated_at DATETIME DEFAULT GETDATE()
+);
+```
+
+**Características:**
+- Se crea automáticamente si no existe cuando se procesa un pedido
+- `codigo` es único y se usa como identificador principal
+- `activa` permite deshabilitar tiendas sin eliminarlas
+
+---
+
+### 2. `pedido` (Cabecera del Pedido)
+
+Almacena la información general del pedido.
+
+```sql
+CREATE TABLE pedido (
+    pedido_id UNIQUEIDENTIFIER PRIMARY KEY,
+    numero_pedido NVARCHAR(50) NOT NULL UNIQUE,  -- Business key
+    fecha_pedido DATE NULL,
+    fecha_entrega NVARCHAR(50) NULL,            -- "INMEDIATO" o fecha
+    forma_pago NVARCHAR(50) NULL,
+    odc NVARCHAR(50) NULL,
+    proveedor_nombre NVARCHAR(150) NULL,
+    comprador_nombre NVARCHAR(150) NULL,
+    comprador_codigo NVARCHAR(50) NULL,
+    origen_traslado NVARCHAR(50) NULL,
+    serie NVARCHAR(50) NULL,
+    archivo_nombre NVARCHAR(255) NOT NULL,      -- Nombre del Excel original
+    creado_por NVARCHAR(450) NULL,              -- User ID del JWT
+    creado_en DATETIME DEFAULT GETDATE()
+);
+```
+
+**Características:**
+- `numero_pedido` es único (business key)
+- `archivo_nombre` permite rastrear el origen del pedido
+- `creado_por` almacena el usuario que subió el archivo
+
+---
+
+### 3. `pedido_detalle` (Productos del Pedido)
+
+Almacena cada producto/artículo del pedido.
+
+```sql
+CREATE TABLE pedido_detalle (
+    pedido_detalle_id UNIQUEIDENTIFIER PRIMARY KEY,
+    pedido_id UNIQUEIDENTIFIER NOT NULL,
+    
+    -- Información del producto
+    codigo_interno NVARCHAR(50) NULL,           -- CodigoProducto del Excel
+    descripcion_sap NVARCHAR(255) NULL,
+    marca NVARCHAR(50) NULL,
+    codigo_barras NVARCHAR(50) NULL,
+    
+    -- Datos SAP
+    pack NVARCHAR(50) NULL,
+    
+    -- Precios (NO cantidad aquí, va en pedido_detalle_tienda)
+    costo_doc_sin_iva DECIMAL(18, 4) NULL,
+    descuento_1 DECIMAL(5, 2) NULL,
+    pvp DECIMAL(18, 4) NULL,
+    
+    -- Totales (se guardan tal cual vienen del Excel, NO se recalculan)
+    subtotal DECIMAL(18, 2) NULL,
+    total DECIMAL(18, 2) NULL,
+    
+    created_at DATETIME DEFAULT GETDATE(),
+    
+    FOREIGN KEY (pedido_id) REFERENCES pedido(pedido_id) ON DELETE CASCADE
+);
+```
+
+**Características:**
+- Un producto puede tener múltiples distribuciones por tienda
+- `codigo_interno` corresponde al `CodigoProducto` del Excel
+- Los totales se guardan tal cual vienen del Excel (no se recalculan)
+
+---
+
+### 4. `pedido_detalle_tienda` (Distribución por Tienda)
+
+Almacena la cantidad de cada producto por tienda.
+
+```sql
+CREATE TABLE pedido_detalle_tienda (
+    id UNIQUEIDENTIFIER PRIMARY KEY,
+    pedido_detalle_id UNIQUEIDENTIFIER NOT NULL,
+    tienda_id UNIQUEIDENTIFIER NOT NULL,
+    cantidad INT NOT NULL CHECK (cantidad > 0),
+    fila_origen INT NULL,                        -- Fila del Excel (nuevo campo)
+    created_at DATETIME DEFAULT GETDATE(),
+    
+    FOREIGN KEY (pedido_detalle_id) REFERENCES pedido_detalle(pedido_detalle_id) ON DELETE CASCADE,
+    FOREIGN KEY (tienda_id) REFERENCES tienda(tienda_id) ON DELETE CASCADE,
+    UNIQUE (pedido_detalle_id, tienda_id)       -- Un producto no puede tener dos distribuciones para la misma tienda
+);
+```
+
+**Características:**
+- `cantidad` es el único campo que varía por tienda
+- `fila_origen` permite rastrear de qué fila del Excel vino el registro (auditoría)
+- Constraint UNIQUE evita duplicados producto+tienda en el mismo detalle
+
+---
+
+## 🔄 Flujo de Datos
+
+### Fase 1 - Tarea 2: Parsing Técnico
+
+```
+Excel → parsear_excel_pedido() → {
+    resumen: { filasLeidas, filasValidas, filasInvalidas },
+    errores: [...],
+    data: [
+        { codigoProducto, idTienda, cantidad, filaOrigen }
+    ]
+}
+```
+
+**NO se guarda en BD en esta fase** - Solo parsing y validación técnica.
+
+---
+
+### Fase 1 - Tarea 3: Validaciones Pre-Negocio
+
+```
+Resultado del parsing → validar_y_procesar_archivo_excel() → {
+    validation: { valid, errors, warnings, issues_by_row },
+    pedido_id: "...",
+    articulos_cargados: N,
+    distribuciones_cargadas: M
+}
+```
+
+**SÍ se guarda en BD** si pasa las validaciones:
+
+1. **Crear cabecera** en `pedido`
+   - `numero_pedido`: Auto-generado o del Excel
+   - `archivo_nombre`: Nombre del archivo subido
+   - `creado_por`: User ID del JWT
+
+2. **Para cada producto válido** en `data`:
+   - **Crear detalle** en `pedido_detalle`
+     - `codigo_interno`: Del campo `codigoProducto`
+     - Otros campos: NULL (formato simple) o del Excel (formato complejo)
+   
+   - **Para cada distribución** (producto + tienda):
+     - **Crear/obtener tienda** en `tienda` (si no existe)
+     - **Crear distribución** en `pedido_detalle_tienda`
+       - `cantidad`: Del campo `cantidad`
+       - `fila_origen`: Del campo `filaOrigen` (si está disponible)
+
+---
+
+## 📝 Mapeo Excel → BD
+
+### Formato Simple (CodigoProducto, IdTienda, Cantidad)
+
+**Excel:**
+```
+Fila 2: R225.1012.BCO | T001 | 10
+Fila 3: R225.1012.BCO | T002 | 5
+Fila 4: A889.3321.NEG | T001 | 2
+```
+
+**BD Resultante:**
+
+**pedido:**
+```
+pedido_id: abc-123...
+numero_pedido: AUTO-20250121-120000
+archivo_nombre: pedido.xlsx
+```
+
+**pedido_detalle:**
+```
+pedido_detalle_id: def-456...
+pedido_id: abc-123...
+codigo_interno: R225.1012.BCO
+```
+
+**pedido_detalle_tienda:**
+```
+id: ghi-789...
+pedido_detalle_id: def-456...
+tienda_id: (T001)
+cantidad: 10
+fila_origen: 2
+```
+
+```
+id: jkl-012...
+pedido_detalle_id: def-456...
+tienda_id: (T002)
+cantidad: 5
+fila_origen: 3
+```
+
+**pedido_detalle:**
+```
+pedido_detalle_id: mno-345...
+pedido_id: abc-123...
+codigo_interno: A889.3321.NEG
+```
+
+**pedido_detalle_tienda:**
+```
+id: pqr-678...
+pedido_detalle_id: mno-345...
+tienda_id: (T001)
+cantidad: 2
+fila_origen: 4
+```
+
+---
+
+## 🔍 Consultas Útiles
+
+### Obtener pedido completo con distribuciones
+
+```sql
+SELECT 
+    p.numero_pedido,
+    p.archivo_nombre,
+    pd.codigo_interno,
+    t.codigo AS tienda_codigo,
+    t.nombre AS tienda_nombre,
+    pdt.cantidad,
+    pdt.fila_origen
+FROM pedido p
+INNER JOIN pedido_detalle pd ON p.pedido_id = pd.pedido_id
+INNER JOIN pedido_detalle_tienda pdt ON pd.pedido_detalle_id = pdt.pedido_detalle_id
+INNER JOIN tienda t ON pdt.tienda_id = t.tienda_id
+WHERE p.pedido_id = @pedido_id
+ORDER BY pd.codigo_interno, t.codigo;
+```
+
+### Buscar por fila origen (debugging)
+
+```sql
+SELECT 
+    p.numero_pedido,
+    pd.codigo_interno,
+    t.codigo AS tienda_codigo,
+    pdt.cantidad,
+    pdt.fila_origen
+FROM pedido_detalle_tienda pdt
+INNER JOIN pedido_detalle pd ON pdt.pedido_detalle_id = pd.pedido_detalle_id
+INNER JOIN pedido p ON pd.pedido_id = p.pedido_id
+INNER JOIN tienda t ON pdt.tienda_id = t.tienda_id
+WHERE pdt.fila_origen = 18;
+```
+
+---
+
+## 🆕 Cambios Recientes
+
+### Campo `fila_origen` (Nuevo)
+
+**Script:** `scripts/add_fila_origen_pedido.sql`
+
+Permite rastrear de qué fila del Excel vino cada registro, útil para:
+- Auditoría
+- Debugging
+- Reportes de trazabilidad
+
+**Nota:** El campo es opcional (NULL) para mantener compatibilidad con datos existentes.
+
+---
+
+## 📊 Índices
+
+```sql
+-- Búsqueda rápida por número de pedido
+CREATE INDEX idx_pedido_numero_pedido ON pedido(numero_pedido);
+
+-- Búsqueda por código de producto
+CREATE INDEX idx_pedido_detalle_codigo_interno ON pedido_detalle(codigo_interno);
+
+-- Búsqueda por tienda
+CREATE INDEX idx_pedido_detalle_tienda_tienda_id ON pedido_detalle_tienda(tienda_id);
+
+-- Búsqueda por fila origen (debugging)
+CREATE INDEX idx_pedido_detalle_tienda_fila_origen ON pedido_detalle_tienda(fila_origen);
+```
+
+---
+
+## ⚠️ Consideraciones
+
+1. **No se consolidan duplicados**: Si el Excel tiene duplicados (mismo producto+tienda), se marcan como ERROR en el parsing, no se guardan.
+
+2. **Totales no se recalculan**: Los campos `subtotal` y `total` se guardan tal cual vienen del Excel.
+
+3. **Tiendas se crean automáticamente**: Si una tienda no existe, se crea automáticamente al procesar el pedido.
+
+4. **Cascada de eliminación**: Si se elimina un `pedido`, se eliminan automáticamente sus detalles y distribuciones.
+

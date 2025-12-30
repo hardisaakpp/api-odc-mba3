@@ -677,6 +677,101 @@ class OrdenCompraRepository:
         finally:
             cursor.close()
     
+    def update_sku_detalle(
+        self,
+        oc_detalle_id: str,
+        nuevo_sku_sap: str,
+        validar_existencia: bool = True
+    ) -> bool:
+        """
+        Actualiza el SKU de un detalle de orden de compra.
+        
+        Args:
+            oc_detalle_id: UUID del detalle de orden de compra a actualizar
+            nuevo_sku_sap: Nuevo SKU (ItemCode) de SAP
+            validar_existencia: Si True, valida que el detalle exista antes de actualizar
+            
+        Returns:
+            True si se actualizó correctamente, False si no se encontró el detalle
+            
+        Raises:
+            ValueError: Si el nuevo SKU está vacío o es inválido
+        """
+        if not nuevo_sku_sap or not nuevo_sku_sap.strip():
+            raise ValueError("El nuevo SKU no puede estar vacío")
+        
+        nuevo_sku_sap = nuevo_sku_sap.strip()
+        
+        # Validar longitud
+        if len(nuevo_sku_sap) > 50:
+            raise ValueError(f"El SKU excede la longitud máxima (50 caracteres): {len(nuevo_sku_sap)}")
+        
+        cursor = self.conn.cursor()
+        
+        try:
+            # Validar que el detalle exista si se requiere
+            if validar_existencia:
+                cursor.execute(
+                    """
+                    SELECT oc_detalle_id, oc_id, sku_sap
+                    FROM orden_compra_detalle
+                    WHERE oc_detalle_id = ?
+                    """,
+                    (oc_detalle_id,)
+                )
+                detalle_existente = cursor.fetchone()
+                
+                if not detalle_existente:
+                    logger.warning(f"⚠️ No se encontró detalle con ID: {oc_detalle_id}")
+                    return False
+                
+                oc_id = detalle_existente[1]
+                sku_anterior = detalle_existente[2]
+                
+                logger.info(f"📝 Actualizando SKU en detalle {oc_detalle_id}: '{sku_anterior}' → '{nuevo_sku_sap}'")
+            else:
+                # Obtener oc_id para logging
+                cursor.execute(
+                    "SELECT oc_id, sku_sap FROM orden_compra_detalle WHERE oc_detalle_id = ?",
+                    (oc_detalle_id,)
+                )
+                detalle_existente = cursor.fetchone()
+                if detalle_existente:
+                    oc_id = detalle_existente[0]
+                    sku_anterior = detalle_existente[1]
+                else:
+                    oc_id = None
+                    sku_anterior = None
+            
+            # Actualizar el SKU
+            cursor.execute(
+                """
+                UPDATE orden_compra_detalle
+                SET sku_sap = ?,
+                    updated_at = GETDATE()
+                WHERE oc_detalle_id = ?
+                """,
+                (nuevo_sku_sap, oc_detalle_id)
+            )
+            
+            rows_affected = cursor.rowcount
+            self.conn.commit()
+            
+            if rows_affected > 0:
+                logger.info(f"✅ SKU actualizado en detalle {oc_detalle_id[:8]}... (OC: {str(oc_id)[:8] if oc_id else 'N/A'}...)")
+                return True
+            else:
+                logger.warning(f"⚠️ No se encontró detalle para actualizar: {oc_detalle_id}")
+                return False
+                
+        except Exception as e:
+            self.conn.rollback()
+            logger.error(f"❌ Error al actualizar SKU en detalle: {e}")
+            logger.error(f"   Detalle ID: {oc_detalle_id}, Nuevo SKU: {nuevo_sku_sap}")
+            raise
+        finally:
+            cursor.close()
+    
     def delete_detalles(self, oc_id: str) -> int:
         """
         Elimina todos los detalles de una orden de compra.

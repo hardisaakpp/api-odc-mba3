@@ -92,9 +92,3 @@ def sync_productos_maestro(self):
         logger.error(f"❌ Error crítico en sincronización de productos: {e}", exc_info=True)
         logger.error(f"   Tiempo transcurrido: {elapsed_time:.2f} segundos")
         raise
-
-
-
-
-
-

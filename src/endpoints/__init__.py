@@ -15,6 +15,7 @@ from .user_preferences import register_user_preferences_endpoints
 from .remisiones import register_remisiones_endpoints
 from .homologaciones_sku import register_homologaciones_sku_endpoints
 from .cruce_productos import register_cruce_productos_endpoints
+from .plantillas import register_plantillas_endpoints
 
 
 def create_endpoints(app: FastAPI):
@@ -53,6 +54,9 @@ def create_endpoints(app: FastAPI):
     
     # Registrar endpoints de cruce de productos
     register_cruce_productos_endpoints(app)
+    
+    # Registrar endpoints de plantillas Excel
+    register_plantillas_endpoints(app)
     
     # ✅ TODOS LOS ENDPOINTS HAN SIDO MIGRADOS
     # Ya no es necesario importar el módulo legacy

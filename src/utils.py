@@ -5,12 +5,63 @@ Funciones de utilidad para procesamiento de consultas SQL.
 import json
 import re
 import logging
-from typing import Dict, Any, Tuple
+from typing import Dict, Any, Tuple, Optional
 from pathlib import Path
 
 from src.config import QUERY_STORAGE_FILE, MAX_QUERY_LENGTH
 
 logger = logging.getLogger(__name__)
+
+
+def normalizar_codigo_producto(codigo: Optional[str]) -> str:
+    """
+    Normaliza código de producto eliminando separadores comunes.
+    
+    Función centralizada para normalización de códigos de producto.
+    Debe usarse en TODAS las partes del sistema para asegurar consistencia.
+    
+    Separadores eliminados: . - / _ espacio
+    Conversión: a mayúsculas
+    
+    Ejemplos:
+        R225.1012.BCO -> R2251012BCO
+        R225-1012-BCO -> R2251012BCO
+        R225/1012/BCO -> R2251012BCO
+        R225_1012_BCO -> R2251012BCO
+        R225 1012 BCO -> R2251012BCO
+    
+    Args:
+        codigo: Código a normalizar (puede ser None)
+        
+    Returns:
+        Código normalizado (string vacío si codigo es None o vacío)
+    """
+    if not codigo:
+        return ""
+    
+    # Eliminar todos los separadores comunes y convertir a mayúsculas
+    # IMPORTANTE: Incluir todos los separadores posibles (., -, /, _, espacio)
+    # NOTA: El guión (-) debe estar al final de la clase para que sea literal, no rango
+    codigo_normalizado = re.sub(r'[.\s/_-]', '', codigo.strip().upper())
+    
+    return codigo_normalizado
+
+
+def validar_longitud_minima_codigo(codigo_normalizado: str, longitud_minima: int = 3) -> bool:
+    """
+    Valida que un código normalizado tenga longitud mínima.
+    
+    Útil para evitar búsquedas demasiado genéricas que pueden devolver
+    demasiados resultados.
+    
+    Args:
+        codigo_normalizado: Código ya normalizado
+        longitud_minima: Longitud mínima requerida (default: 3)
+        
+    Returns:
+        True si cumple la longitud mínima, False en caso contrario
+    """
+    return len(codigo_normalizado) >= longitud_minima
 
 
 def get_source_from_headers(request) -> str:

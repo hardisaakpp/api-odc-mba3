@@ -282,6 +282,96 @@ class ProductoSAPStagingRepository:
             return 0
         finally:
             cursor.close()
+    
+    def buscar_por_normalizado_similar(
+        self, 
+        codigo_normalizado: str, 
+        limite: int = 20,
+        solo_activos: bool = True,
+        longitud_minima: int = 3
+    ) -> List[Dict[str, Any]]:
+        """
+        Busca productos por código normalizado usando LIKE sobre item_code_normalizado.
+        
+        Esta búsqueda es eficiente porque usa el índice sobre item_code_normalizado
+        y permite encontrar productos con diferentes separadores ya que la normalización
+        elimina separadores comunes (., -, /, _, espacio).
+        
+        VALIDACIÓN: Si el código normalizado es muy corto (< longitud_minima),
+        puede devolver demasiados resultados. Se registra un warning pero no se bloquea.
+        
+        Args:
+            codigo_normalizado: Código normalizado (sin separadores, ya procesado)
+            limite: Límite máximo de resultados a retornar (se busca 3x más antes del scoring)
+            solo_activos: Si True, solo productos activos (activo = 1)
+            longitud_minima: Longitud mínima del código normalizado (validación)
+            
+        Returns:
+            Lista de productos encontrados con formato esperado por SAPClient
+        """
+        # Validación de longitud mínima (registrar warning pero no bloquear)
+        if len(codigo_normalizado) < longitud_minima:
+            logger.warning(
+                f"⚠️ Código normalizado muy corto ({len(codigo_normalizado)} < {longitud_minima}): "
+                f"'{codigo_normalizado}'. La búsqueda puede devolver muchos resultados."
+            )
+        
+        cursor = self.conn.cursor()
+        try:
+            # Escapar caracteres especiales para LIKE
+            codigo_escaped = codigo_normalizado.replace("%", "[%]").replace("_", "[_]")
+            
+            where_clause = "item_code_normalizado LIKE ?"
+            params = [f"%{codigo_escaped}%"]
+            
+            if solo_activos:
+                where_clause += " AND activo = 1"
+            
+            # Pedir más resultados para que scoring tenga mejor selección
+            # El scoring luego limitará a la cantidad solicitada
+            limite_busqueda = limite * 3
+            
+            query = f"""
+                SELECT TOP {limite_busqueda}
+                    staging_id,
+                    item_code,
+                    item_name,
+                    pack_sap,
+                    itms_grp_cod,
+                    itms_grp_nam,
+                    valid_for,
+                    activo,
+                    item_code_normalizado
+                FROM producto_sap_staging
+                WHERE {where_clause}
+                ORDER BY item_code
+            """
+            
+            cursor.execute(query, params)
+            
+            productos = []
+            for row in cursor.fetchall():
+                productos.append({
+                    "ItemCode": row[1],
+                    "ItemName": row[2] or "",
+                    "U_IXX_PACK": row[3] or "",
+                    "ItmsGrpNam": row[5] or "",
+                    "ItmsGrpCod": row[4],
+                    "validFor": row[6] or "N",
+                    "item_code_normalizado": row[8]  # Ya viene normalizado de staging
+                })
+            
+            logger.debug(
+                f"✅ Staging: {len(productos)} productos encontrados para código normalizado '{codigo_normalizado}'"
+            )
+            
+            return productos
+            
+        except Exception as e:
+            logger.error(f"❌ Error al buscar por código normalizado '{codigo_normalizado}': {e}", exc_info=True)
+            raise
+        finally:
+            cursor.close()
 
 
 

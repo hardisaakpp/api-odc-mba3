@@ -17,26 +17,27 @@ Comandos de ejecución:
 """
 
 import logging
-import os
 from celery import Celery
 from celery.schedules import crontab
 from celery.signals import worker_process_init, worker_process_shutdown, beat_init, worker_ready
 
-logger = logging.getLogger(__name__)
+# Importar configuración centralizada desde config.py
+# Todo se maneja en un solo lugar: src/config.py
+from src.config import (
+    REDIS_URL,
+    AUTO_MIGRATE_INTERVAL_MINUTES,
+    SYNC_PRODUCTOS_HOUR,
+    SYNC_PRODUCTOS_MINUTE
+)
 
-# Obtener configuración de Redis desde variables de entorno
-REDIS_URL = os.getenv('REDIS_URL', 'redis://localhost:6379/0')
-AUTO_MIGRATE_INTERVAL_MINUTES = int(os.getenv('AUTO_MIGRATE_INTERVAL_MINUTES', '5'))
-# Horario de sincronización de productos (hora en formato 24h, default: 3 = 3:00 AM)
-SYNC_PRODUCTOS_HOUR = int(os.getenv('SYNC_PRODUCTOS_HOUR', '3'))
-SYNC_PRODUCTOS_MINUTE = int(os.getenv('SYNC_PRODUCTOS_MINUTE', '0'))
+logger = logging.getLogger(__name__)
 
 # Crear app Celery
 celery_app = Celery(
     'mba3_auto_migrate',
     broker=REDIS_URL,
     backend=REDIS_URL,
-    include=['src.tasks.celery_auto_migrate', 'src.tasks.celery_sync_productos']  # Incluir módulos de tareas
+    include=['src.tasks.celery_auto_migrate', 'src.tasks.celery_sync_productos', 'src.tasks.celery_cruce_productos']  # Incluir módulos de tareas
 )
 
 # Configuración de Celery

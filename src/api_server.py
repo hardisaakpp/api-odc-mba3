@@ -91,6 +91,10 @@ app = FastAPI(
         {
             "name": "Cruce de Productos",
             "description": "Endpoints para cruzar productos entre MBA3 y SAP"
+        },
+        {
+            "name": "Plantillas",
+            "description": "Endpoints para gestión de plantillas Excel"
         }
     ]
 )

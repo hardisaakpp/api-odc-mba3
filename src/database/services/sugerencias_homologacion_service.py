@@ -34,7 +34,13 @@ class SugerenciasHomologacionService:
     
     def normalizar_codigo_avanzado(self, codigo: str) -> str:
         """
-        Normalización avanzada: elimina puntos, guiones y espacios.
+        Normalización avanzada (wrapper para compatibilidad).
+        
+        IMPORTANTE: Ahora usa función centralizada que incluye TODOS los separadores:
+        ., -, /, _, espacio
+        
+        DEPRECATED: Usar normalizar_codigo_producto de src.utils directamente.
+        Este wrapper se mantiene por compatibilidad con código existente.
         
         Args:
             codigo: Código a normalizar
@@ -42,10 +48,8 @@ class SugerenciasHomologacionService:
         Returns:
             Código normalizado
         """
-        if not codigo:
-            return ""
-        # Eliminar puntos, guiones y espacios, convertir a mayúsculas
-        return re.sub(r'[.\-\s]', '', codigo.strip().upper())
+        from src.utils import normalizar_codigo_producto
+        return normalizar_codigo_producto(codigo)
     
     def extraer_bloques_numericos(self, texto: str) -> List[str]:
         """

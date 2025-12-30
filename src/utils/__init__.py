@@ -30,6 +30,8 @@ if _utils_module_path.exists():
         parse_query = utils_module.parse_query
         save_query_to_file = utils_module.save_query_to_file
         build_query_from_parts = utils_module.build_query_from_parts
+        normalizar_codigo_producto = utils_module.normalizar_codigo_producto
+        validar_longitud_minima_codigo = utils_module.validar_longitud_minima_codigo
     else:
         # Fallback: intentar importación directa
         import utils as utils_module
@@ -56,6 +58,8 @@ __all__ = [
     "parse_query",
     "save_query_to_file",
     "build_query_from_parts",
+    "normalizar_codigo_producto",
+    "validar_longitud_minima_codigo",
     "send_migration_notification",
     "send_error_notification",
     "send_homologacion_notification"

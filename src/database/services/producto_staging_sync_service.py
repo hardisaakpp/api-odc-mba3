@@ -20,9 +20,13 @@ logger = logging.getLogger(__name__)
 
 def normalizar_codigo(codigo: str) -> str:
     """
-    Normaliza código de producto para comparación.
+    Normaliza código de producto para comparación (wrapper para compatibilidad).
     
-    Regla: Eliminar puntos, guiones, espacios, convertir a mayúsculas.
+    IMPORTANTE: Ahora usa función centralizada que incluye TODOS los separadores:
+    ., -, /, _, espacio
+    
+    DEPRECATED: Usar normalizar_codigo_producto de src.utils directamente.
+    Este wrapper se mantiene por compatibilidad con código existente.
     
     Args:
         codigo: Código a normalizar
@@ -30,9 +34,8 @@ def normalizar_codigo(codigo: str) -> str:
     Returns:
         Código normalizado
     """
-    if not codigo:
-        return ""
-    return re.sub(r'[.\-\s]', '', codigo.strip().upper())
+    from src.utils import normalizar_codigo_producto
+    return normalizar_codigo_producto(codigo)
 
 
 class ProductoStagingSyncService:
@@ -122,8 +125,9 @@ class ProductoStagingSyncService:
             
             # Query base con filtros correctos (alineados con cruce de productos)
             # Calcular fecha límite (últimos 365 días) - formato YYYY-MM-DD para 4D
-            fecha_limite = datetime.now() - timedelta(days=365)
-            fecha_limite_str = fecha_limite.strftime("%Y-%m-%d")
+            # COMENTADO: Filtro de fechas deshabilitado
+            # fecha_limite = datetime.now() - timedelta(days=365)
+            # fecha_limite_str = fecha_limite.strftime("%Y-%m-%d")
             
             query_base = (
                 "SELECT "
@@ -156,7 +160,8 @@ class ProductoStagingSyncService:
                 "AND Tipo_Origen != 'MAPRO' "
                 "AND PRODUCT_NAME IS NOT NULL "
                 "AND SELL > 0 "
-                f"AND (FechaUltimoMovimiento >= '{fecha_limite_str}' OR Fecha_Ultima_Venta >= '{fecha_limite_str}') "
+                # COMENTADO: Filtro de fechas deshabilitado
+                # f"AND (FechaUltimoMovimiento >= '{fecha_limite_str}' OR Fecha_Ultima_Venta >= '{fecha_limite_str}') "
                 "ORDER BY PRODUCT_ID"
             )
             
@@ -165,32 +170,45 @@ class ProductoStagingSyncService:
             total_actualizados = 0
             total_errores = 0
             total_procesados = 0
+            total_eliminados = 0  # Para productos obsoletos
+            productos_encontrados = set()  # Para rastrear productos encontrados en sincronización completa
             last_product_id = None
             batch_number = 0
             lotes_fallidos_consecutivos = 0
             max_lotes_fallidos = 3  # Si 3 lotes consecutivos fallan, detener
-            max_lotes_mba3 = 3  # Límite máximo de lotes para MBA3
+            # REMOVIDO: max_lotes_mba3 - ahora continúa hasta que no haya más productos o se detecte repetición
+            
+            # Detección de productos duplicados para evitar bucles infinitos
+            primer_product_id_anterior = None
+            lotes_repetidos_consecutivos = 0
+            max_lotes_repetidos = 2  # Si 2 lotes consecutivos tienen el mismo primer producto, detener
             
             # Bucle de paginación con cursor basado en PRODUCT_ID
             while True:
                 batch_number += 1
                 
-                # Verificar límite de lotes para MBA3
-                if batch_number > max_lotes_mba3:
-                    logger.info(f"✅ Límite de {max_lotes_mba3} lotes alcanzado para MBA3. Deteniendo sincronización.")
-                    break
-                
                 # Construir query con cursor para paginación
                 if last_product_id:
                     # Escapar comillas simples para prevenir SQL injection
                     last_product_id_escaped = str(last_product_id).replace("'", "''")
-                    query = f"{query_base} AND PRODUCT_ID > '{last_product_id_escaped}' LIMIT {batch_size}"
+                    
+                    # Si hay lotes repetidos, intentar estrategia alternativa con solo >
+                    if lotes_repetidos_consecutivos > 0:
+                        logger.warning(
+                            f"⚠️ Intentando estrategia alternativa de paginación (usando solo >) "
+                            f"debido a productos repetidos..."
+                        )
+                        query = f"{query_base} AND PRODUCT_ID > '{last_product_id_escaped}' LIMIT {batch_size}"
+                        logger.info(f"   Cursor alternativo: PRODUCT_ID > '{last_product_id}'")
+                    else:
+                        # CRÍTICO: Usar >= y luego != para asegurar que MBA3 respete la condición
+                        # Algunos sistemas SQL no manejan bien > con strings, así que usamos >= y excluimos el igual
+                        query = f"{query_base} AND PRODUCT_ID >= '{last_product_id_escaped}' AND PRODUCT_ID != '{last_product_id_escaped}' LIMIT {batch_size}"
+                        logger.info(f"   Cursor: PRODUCT_ID >= '{last_product_id}' AND PRODUCT_ID != '{last_product_id}'")
                 else:
                     query = f"{query_base} LIMIT {batch_size}"
                 
                 logger.info(f"📦 Lote {batch_number}: Consultando productos desde MBA3 API...")
-                if last_product_id:
-                    logger.info(f"   Cursor: PRODUCT_ID > '{last_product_id}'")
                 
                 # Reintentos con backoff exponencial
                 max_retries = 3
@@ -256,10 +274,86 @@ class ProductoStagingSyncService:
                     logger.info(f"✅ No hay más productos. Total procesado: {total_procesados}")
                     break
                 
+                # Detectar si MBA3 está devolviendo los mismos productos (problema de paginación)
+                primer_producto_actual = productos[0]
+                primer_product_id_actual = str(
+                    primer_producto_actual.get("PRODUCT_ID") or 
+                    primer_producto_actual.get("product_id") or 
+                    primer_producto_actual.get("Product_ID", "")
+                ).strip()
+                
+                # Si el primer producto es el mismo que en el lote anterior, MBA3 no está paginando correctamente
+                if primer_product_id_anterior and primer_product_id_actual == primer_product_id_anterior:
+                    lotes_repetidos_consecutivos += 1
+                    logger.warning(
+                        f"⚠️ Lote {batch_number}: Primer producto repetido ({primer_product_id_actual}). "
+                        f"MBA3 no está respetando la paginación. Lotes repetidos consecutivos: {lotes_repetidos_consecutivos}/{max_lotes_repetidos}"
+                    )
+                    
+                    if lotes_repetidos_consecutivos >= max_lotes_repetidos:
+                        logger.error(
+                            f"❌ {max_lotes_repetidos} lotes consecutivos con el mismo primer producto. "
+                            f"MBA3 no está respetando la condición de paginación. Deteniendo sincronización para evitar bucle infinito."
+                        )
+                        logger.info(f"✅ Sincronización detenida. Total procesado: {total_procesados}")
+                        break
+                else:
+                    # Resetear contador si el primer producto es diferente
+                    lotes_repetidos_consecutivos = 0
+                    primer_product_id_anterior = primer_product_id_actual
+                
+                # CRÍTICO: Si hay cursor, filtrar el primer producto si es igual al cursor
+                # Esto asegura que no procesemos productos duplicados si MBA3 no respeta la condición >
+                if last_product_id and productos:
+                    primer_producto = productos[0]
+                    primer_product_id = str(
+                        primer_producto.get("PRODUCT_ID") or 
+                        primer_producto.get("product_id") or 
+                        primer_producto.get("Product_ID", "")
+                    ).strip()
+                    
+                    if primer_product_id == last_product_id:
+                        logger.info(f"⚠️ Primer producto del lote es igual al cursor ({last_product_id}), filtrándolo...")
+                        productos = productos[1:]  # Remover el primer producto
+                        if not productos:
+                            logger.info(f"✅ No hay más productos después de filtrar. Total procesado: {total_procesados}")
+                            break
+                        logger.info(f"   Productos restantes después de filtrar: {len(productos)}")
+                
                 logger.info(f"📦 Lote {batch_number}: Procesando {len(productos)} productos...")
                 
                 # Preparar productos para staging
                 productos_staging = []
+                ultimo_product_id_valido = None  # Para corregir el bug del cursor
+                
+                # CRÍTICO: Actualizar cursor con el ÚLTIMO producto del lote completo (sin filtrar)
+                # Esto asegura que la paginación avance correctamente incluso si algunos productos se filtran
+                if productos:
+                    # Obtener primer y último producto para diagnóstico
+                    primer_producto = productos[0]
+                    ultimo_producto_lote = productos[-1]
+                    
+                    primer_product_id = str(
+                        primer_producto.get("PRODUCT_ID") or 
+                        primer_producto.get("product_id") or 
+                        primer_producto.get("Product_ID", "")
+                    ).strip()
+                    
+                    ultimo_product_id_lote = str(
+                        ultimo_producto_lote.get("PRODUCT_ID") or 
+                        ultimo_producto_lote.get("product_id") or 
+                        ultimo_producto_lote.get("Product_ID", "")
+                    ).strip()
+                    
+                    if ultimo_product_id_lote:
+                        ultimo_product_id_valido = ultimo_product_id_lote
+                        logger.info(f"🔍 DIAGNÓSTICO Lote {batch_number}:")
+                        logger.info(f"   Cursor usado en query: {last_product_id if 'last_product_id' in locals() else 'None (primer lote)'}")
+                        logger.info(f"   Primer producto recibido: {primer_product_id}")
+                        logger.info(f"   Último producto recibido: {ultimo_product_id_valido}")
+                        logger.info(f"   Total productos en lote: {len(productos)}")
+                        logger.debug(f"📍 Cursor preparado desde último producto del lote: {ultimo_product_id_valido}")
+                
                 for producto in productos:
                     try:
                         product_id = str(producto.get("PRODUCT_ID") or producto.get("product_id") or producto.get("Product_ID", "")).strip()
@@ -302,13 +396,20 @@ class ProductoStagingSyncService:
                             "product_id_normalizado": product_id_normalizado
                         })
                         
-                        # Actualizar cursor para siguiente iteración
-                        last_product_id = product_id
+                        # Rastrear productos encontrados para sincronización completa
+                        if force_full_sync:
+                            productos_encontrados.add(product_id)
                         
                     except Exception as e:
                         total_errores += 1
                         logger.warning(f"⚠️ Error procesando producto MBA3: {e}")
                         continue
+                
+                # CORRECCIÓN: Actualizar cursor DESPUÉS de procesar el lote completo
+                # Usar el último producto del lote completo (sin filtrar) para asegurar paginación correcta
+                if ultimo_product_id_valido:
+                    last_product_id = ultimo_product_id_valido
+                    logger.info(f"📍 Cursor actualizado para siguiente lote: {last_product_id}")
                 
                 # Guardar lote en staging
                 if productos_staging:
@@ -342,6 +443,18 @@ class ProductoStagingSyncService:
                     f"Errores: {total_errores}"
                 )
             
+            # Si es sincronización completa, eliminar productos que ya no existen en MBA3
+            if force_full_sync and productos_encontrados:
+                logger.info(f"🗑️ Eliminando productos que ya no existen en MBA3...")
+                logger.info(f"   Productos encontrados en MBA3: {len(productos_encontrados)}")
+                try:
+                    total_eliminados = mba3_staging_repo.delete_products_not_in_list(list(productos_encontrados))
+                    logger.info(f"✅ Eliminados {total_eliminados} productos obsoletos")
+                except Exception as e:
+                    logger.error(f"❌ Error al eliminar productos obsoletos: {e}", exc_info=True)
+                    # No fallar la sincronización completa si falla la eliminación
+                    total_eliminados = 0
+            
             # Calcular duración
             end_time = datetime.now()
             duracion_segundos = int((end_time - start_time).total_seconds())
@@ -360,7 +473,7 @@ class ProductoStagingSyncService:
             logger.info(
                 f"✅ Sync MBA3 completado: {total_procesados} procesados, "
                 f"{total_insertados} nuevos, {total_actualizados} actualizados, "
-                f"{total_errores} errores ({duracion_segundos}s)"
+                f"{total_eliminados} eliminados, {total_errores} errores ({duracion_segundos}s)"
             )
             
             return {
@@ -370,6 +483,7 @@ class ProductoStagingSyncService:
                 "registros_procesados": total_procesados,
                 "registros_nuevos": total_insertados,
                 "registros_actualizados": total_actualizados,
+                "registros_eliminados": total_eliminados,
                 "registros_con_error": total_errores,
                 "duracion_segundos": duracion_segundos,
                 "lotes_procesados": batch_number,
@@ -378,6 +492,10 @@ class ProductoStagingSyncService:
             
         except Exception as e:
             logger.error(f"❌ Error crítico en sync MBA3: {e}", exc_info=True)
+            
+            # Resetear total_eliminados en caso de error
+            if 'total_eliminados' not in locals():
+                total_eliminados = 0
             
             # Marcar sync_control como ERROR
             if conn and sync_control_id:

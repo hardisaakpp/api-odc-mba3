@@ -56,6 +56,10 @@ def get_db_connection() -> pyodbc.Connection:
         logger.debug(f"Conectando a SQL Server: {SQL_SERVER_SERVER}/{SQL_SERVER_DATABASE}")
         conn = pyodbc.connect(connection_string, timeout=10)
         
+        # CRÍTICO: Configurar autocommit = False para usar transacciones explícitas
+        # Esto asegura que los commits explícitos (conn.commit()) funcionen correctamente
+        conn.autocommit = False
+        
         # Verificar base de datos actual
         cursor = conn.cursor()
         cursor.execute("SELECT DB_NAME()")

@@ -8,7 +8,7 @@ para obtener información de productos (ItemCode, ItemName, U_IXX_PACK, ItmsGrpN
 import logging
 import re
 import pyodbc
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 from datetime import datetime
 
 from src.config import (
@@ -207,4 +207,232 @@ class SAPClient:
         
         logger.info(f"✅ Consultados {len(resultados)} de {len(item_codes)} productos desde SAP")
         return resultados
+    
+    def buscar_skus_similares(
+        self, 
+        sku_referencia: str, 
+        limite: int = 20,
+        solo_activos: bool = True,
+        usar_staging: bool = True,
+        longitud_minima: int = 3
+    ) -> List[Dict[str, Any]]:
+        """
+        Busca SKUs similares usando staging (preferido) o OPENQUERY SAP (fallback).
+        
+        VALIDACIONES IMPLEMENTADAS:
+        #1: Normalización consistente (usa función centralizada)
+        #2: Validación de SKU corto/genérico
+        #3: Duplicados semánticos (manejados por scoring)
+        #4: Límite antes del scoring (pide 3x más)
+        #5: Observabilidad (métricas de staging vs SAP)
+        
+        Args:
+            sku_referencia: SKU de referencia para buscar similares
+            limite: Límite máximo de resultados (default: 20)
+            solo_activos: Si True, solo busca productos activos
+            usar_staging: Si True, intenta usar staging primero (recomendado)
+            longitud_minima: Longitud mínima del código normalizado para validación
+            
+        Returns:
+            Lista de productos SAP ordenados por relevancia:
+            [{
+                "ItemCode": "5-0012.9",
+                "ItemName": "Nombre del producto",
+                "U_IXX_PACK": "X3",
+                "ItmsGrpNam": "R-MEDIAS",
+                "validFor": "Y",
+                "ItmsGrpCod": 103
+            }, ...]
+        """
+        import time
+        
+        # Validar y normalizar SKU de referencia
+        if not sku_referencia or not sku_referencia.strip():
+            return []
+        
+        sku_clean = sku_referencia.strip()
+        
+        # Validar longitud máxima
+        if len(sku_clean) > 50:
+            logger.warning(f"⚠️ SKU de referencia demasiado largo: {len(sku_clean)} caracteres")
+            return []
+        
+        # VALIDACIÓN #1: Normalización consistente (función centralizada)
+        from src.utils import normalizar_codigo_producto, validar_longitud_minima_codigo
+        sku_normalizado = normalizar_codigo_producto(sku_clean)
+        
+        if not sku_normalizado:
+            logger.warning(f"⚠️ SKU '{sku_clean}' se normalizó a string vacío")
+            return []
+        
+        # VALIDACIÓN #2: SKU corto/genérico
+        if not validar_longitud_minima_codigo(sku_normalizado, longitud_minima):
+            logger.warning(
+                f"⚠️ SKU normalizado muy corto ({len(sku_normalizado)} < {longitud_minima}): "
+                f"'{sku_normalizado}' (original: '{sku_clean}'). "
+                f"La búsqueda puede devolver muchos resultados."
+            )
+            # Ajustar límite para SKUs cortos (más restrictivo)
+            limite_ajustado = min(limite, 10)
+        else:
+            limite_ajustado = limite
+        
+        # INTENTO 1: Buscar en staging (rápido y eficiente)
+        if usar_staging:
+            start_time_staging = time.time()
+            try:
+                from ..connection import get_db_connection
+                from ..repositories.producto_sap_staging_repository import ProductoSAPStagingRepository
+                
+                conn = get_db_connection()
+                try:
+                    staging_repo = ProductoSAPStagingRepository(conn)
+                    productos = staging_repo.buscar_por_normalizado_similar(
+                        codigo_normalizado=sku_normalizado,
+                        limite=limite_ajustado,
+                        solo_activos=solo_activos,
+                        longitud_minima=longitud_minima
+                    )
+                    
+                    elapsed_staging = time.time() - start_time_staging
+                    
+                    # VALIDACIÓN #5: Observabilidad
+                    if productos:
+                        logger.info(
+                            f"✅ Staging: {len(productos)} productos encontrados en {elapsed_staging:.3f}s "
+                            f"para '{sku_clean}' (normalizado: '{sku_normalizado}')"
+                        )
+                        return productos
+                    else:
+                        logger.debug(
+                            f"⚠️ Staging: 0 productos encontrados en {elapsed_staging:.3f}s, "
+                            f"usando fallback a SAP"
+                        )
+                finally:
+                    conn.close()
+            except Exception as e:
+                elapsed_staging = time.time() - start_time_staging
+                logger.warning(
+                    f"⚠️ Error en staging ({elapsed_staging:.3f}s), usando fallback a SAP: {e}"
+                )
+                # Continuar con fallback
+        
+        # FALLBACK: Buscar directamente en SAP (más lento, pero funciona)
+        start_time_sap = time.time()
+        
+        if not self.enabled:
+            logger.debug(f"⏭️ Consultas SAP deshabilitadas para: {sku_clean}")
+            return []
+        
+        # Búsqueda mejorada con múltiples condiciones OR para manejar diferentes separadores
+        import re
+        sku_escaped = sku_clean.replace("'", "''").replace("%", "[%]").replace("_", "[_]")
+        
+        # Extraer partes para búsqueda más flexible
+        prefijo_match = re.match(r'^([A-Za-z]+)', sku_clean)
+        prefijo = prefijo_match.group(1) if prefijo_match else None
+        numeros = re.findall(r'\d+', sku_clean)
+        numero_principal = numeros[0] if numeros else None
+        
+        # Construir condiciones OR
+        condiciones = []
+        
+        # Condición 1: Búsqueda exacta (código tal cual)
+        condiciones.append(f"T0.\"ItemCode\" LIKE ''%{sku_escaped}%''")
+        
+        # Condición 2: Prefijo + número principal (más flexible)
+        if prefijo and numero_principal:
+            prefijo_escaped = prefijo.replace("'", "''").replace("%", "[%]").replace("_", "[_]")
+            numero_escaped = numero_principal.replace("'", "''").replace("%", "[%]").replace("_", "[_]")
+            condiciones.append(
+                f"(T0.\"ItemCode\" LIKE ''%{prefijo_escaped}%'' AND T0.\"ItemCode\" LIKE ''%{numero_escaped}%'')"
+            )
+        
+        # Condición 3: Solo número principal (si es largo, 4+ dígitos)
+        if numero_principal and len(numero_principal) >= 4:
+            numero_escaped = numero_principal.replace("'", "''").replace("%", "[%]").replace("_", "[_]")
+            condiciones.append(f"T0.\"ItemCode\" LIKE ''%{numero_escaped}%''")
+        
+        where_clause = " OR ".join(f"({cond})" for cond in condiciones)
+        if solo_activos:
+            where_clause = f"({where_clause}) AND T0.\"validFor\" = ''Y''"
+        
+        # VALIDACIÓN #4: Pedir más resultados antes del scoring
+        limite_busqueda = limite_ajustado * 3
+        
+        query = f"""
+        SELECT 
+            T0."ItemCode",
+            T0."ItemName",
+            T0."U_IXX_PACK",
+            T0."ItmsGrpNam",
+            T0."validFor",
+            T0."ItmsGrpCod"
+        FROM OPENQUERY([{SAP_LINKED_SERVER}], '
+            SELECT 
+                T0."ItemCode",
+                T0."ItemName",
+                T0."U_IXX_PACK",
+                T1."ItmsGrpNam",
+                T0."validFor",
+                T0."ItmsGrpCod"
+            FROM "{SAP_DATABASE}"."OITM" T0
+            LEFT JOIN "{SAP_DATABASE}"."OITB" T1 ON T0."ItmsGrpCod" = T1."ItmsGrpCod"
+            WHERE {where_clause}
+            ORDER BY T0."ItemCode"
+            LIMIT {limite_busqueda}
+        ') T0
+        ORDER BY T0."ItemCode";
+        """
+        
+        conn = None
+        try:
+            logger.info(
+                f"🔍 SAP directo: Buscando SKUs similares a '{sku_clean}' "
+                f"(normalizado: '{sku_normalizado}', límite: {limite_busqueda})"
+            )
+            conn = get_sap_db_connection()
+            cursor = conn.cursor()
+            
+            cursor.execute(query)
+            results = cursor.fetchall()
+            
+            productos = []
+            for row in results:
+                productos.append({
+                    "ItemCode": row[0] if row[0] else None,
+                    "ItemName": row[1] if row[1] else None,
+                    "U_IXX_PACK": row[2] if row[2] else None,
+                    "ItmsGrpNam": row[3] if row[3] else None,
+                    "validFor": row[4] if row[4] else "N",
+                    "ItmsGrpCod": row[5] if row[5] else None,
+                })
+            
+            elapsed_sap = time.time() - start_time_sap
+            
+            # VALIDACIÓN #5: Observabilidad
+            logger.info(
+                f"{'✅' if productos else '⚠️'} SAP directo: {len(productos)} productos encontrados "
+                f"en {elapsed_sap:.3f}s para '{sku_clean}'"
+            )
+            
+            return productos
+            
+        except pyodbc.Error as e:
+            elapsed_sap = time.time() - start_time_sap
+            error_msg = f"Error al buscar SKUs similares para '{sku_clean}': {str(e)}"
+            logger.error(f"❌ SAP directo ({elapsed_sap:.3f}s): {error_msg}")
+            return []
+        except Exception as e:
+            elapsed_sap = time.time() - start_time_sap
+            error_msg = f"Error inesperado al buscar SKUs similares para '{sku_clean}': {str(e)}"
+            logger.error(f"❌ SAP directo ({elapsed_sap:.3f}s): {error_msg}", exc_info=True)
+            return []
+        finally:
+            if conn:
+                try:
+                    cursor.close()
+                    conn.close()
+                except:
+                    pass
 

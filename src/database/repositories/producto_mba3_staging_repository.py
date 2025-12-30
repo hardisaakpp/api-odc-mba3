@@ -282,6 +282,204 @@ class ProductoMBA3StagingRepository:
             return 0
         finally:
             cursor.close()
+    
+    def delete_products_not_in_list(self, product_ids: List[str]) -> int:
+        """
+        Elimina productos que no están en la lista proporcionada.
+        
+        Útil para sincronización completa donde se quiere mantener solo
+        los productos que existen actualmente en MBA3.
+        
+        Args:
+            product_ids: Lista de product_ids que deben mantenerse
+            
+        Returns:
+            Número de productos eliminados
+        """
+        cursor = self.conn.cursor()
+        try:
+            if not product_ids:
+                # Si la lista está vacía, eliminar todos
+                cursor.execute("SELECT COUNT(*) FROM producto_mba3_staging")
+                row = cursor.fetchone()
+                count = row[0] if row else 0
+                cursor.execute("DELETE FROM producto_mba3_staging")
+                self.conn.commit()
+                logger.info(f"🗑️ Eliminados todos los productos ({count} registros)")
+                return count
+            
+            # Crear placeholders para la query IN
+            placeholders = ','.join(['?' for _ in product_ids])
+            
+            # Contar productos que se eliminarán
+            cursor.execute(
+                f"SELECT COUNT(*) FROM producto_mba3_staging WHERE product_id NOT IN ({placeholders})",
+                product_ids
+            )
+            row = cursor.fetchone()
+            count = row[0] if row else 0
+            
+            if count > 0:
+                # Eliminar productos que no están en la lista
+                cursor.execute(
+                    f"DELETE FROM producto_mba3_staging WHERE product_id NOT IN ({placeholders})",
+                    product_ids
+                )
+                self.conn.commit()
+                logger.info(f"🗑️ Eliminados {count} productos obsoletos")
+            else:
+                logger.info("✅ No hay productos obsoletos para eliminar")
+            
+            return count
+        except Exception as e:
+            self.conn.rollback()
+            logger.error(f"❌ Error al eliminar productos no encontrados: {e}", exc_info=True)
+            raise
+        finally:
+            cursor.close()
+    
+    def validar_codigos_existen(
+        self,
+        codigos: List[str],
+        usar_normalizado: bool = True
+    ) -> Dict[str, bool]:
+        """
+        Valida si los códigos de producto existen en el catálogo.
+        
+        Puede buscar por código exacto o por código normalizado.
+        
+        Args:
+            codigos: Lista de códigos de producto a validar
+            usar_normalizado: Si True, busca también por código normalizado (más flexible)
+            
+        Returns:
+            Dict con formato: {codigo: existe}
+        """
+        if not codigos:
+            return {}
+        
+        cursor = self.conn.cursor()
+        resultado = {}
+        
+        try:
+            # Inicializar todos como no encontrados
+            for codigo in codigos:
+                resultado[codigo.upper()] = False
+            
+            # Buscar por código exacto
+            placeholders = ','.join('?' * len(codigos))
+            cursor.execute(f"""
+                SELECT product_id
+                FROM producto_mba3_staging
+                WHERE product_id IN ({placeholders})
+            """, codigos)
+            
+            # Marcar los encontrados
+            for row in cursor.fetchall():
+                codigo_encontrado = str(row[0]).upper()
+                if codigo_encontrado in resultado:
+                    resultado[codigo_encontrado] = True
+            
+            # Si se permite búsqueda normalizada, buscar también por product_id_normalizado
+            if usar_normalizado:
+                from src.utils import normalizar_codigo_producto
+                
+                # Normalizar todos los códigos
+                codigos_normalizados = [normalizar_codigo_producto(c) for c in codigos]
+                
+                # Buscar por código normalizado (solo los que no se encontraron antes)
+                codigos_no_encontrados = [c for c, existe in resultado.items() if not existe]
+                if codigos_no_encontrados:
+                    codigos_normalizados_no_encontrados = [
+                        normalizar_codigo_producto(c) for c in codigos_no_encontrados
+                    ]
+                    
+                    placeholders_norm = ','.join('?' * len(codigos_normalizados_no_encontrados))
+                    cursor.execute(f"""
+                        SELECT product_id_normalizado
+                        FROM producto_mba3_staging
+                        WHERE product_id_normalizado IN ({placeholders_norm})
+                    """, codigos_normalizados_no_encontrados)
+                    
+                    # Crear mapa de normalizados a originales
+                    normalizado_a_original = {
+                        normalizar_codigo_producto(c): c for c in codigos_no_encontrados
+                    }
+                    
+                    # Marcar los encontrados por normalizado
+                    for row in cursor.fetchall():
+                        codigo_norm_encontrado = str(row[0])
+                        if codigo_norm_encontrado in normalizado_a_original:
+                            codigo_original = normalizado_a_original[codigo_norm_encontrado]
+                            resultado[codigo_original] = True
+            
+            return resultado
+            
+        except Exception as e:
+            logger.error(f"❌ Error al validar códigos de productos: {e}", exc_info=True)
+            raise
+        finally:
+            cursor.close()
+    
+    def find_by_product_id_normalized(self, codigo: str) -> Optional[Dict[str, Any]]:
+        """
+        Busca un producto por código normalizado.
+        
+        Args:
+            codigo: Código a buscar (se normalizará internamente)
+            
+        Returns:
+            Diccionario con datos del producto, o None si no existe
+        """
+        from src.utils import normalizar_codigo_producto
+        
+        codigo_normalizado = normalizar_codigo_producto(codigo)
+        if not codigo_normalizado:
+            return None
+        
+        cursor = self.conn.cursor()
+        try:
+            cursor.execute("""
+                SELECT 
+                    staging_id,
+                    product_id,
+                    product_name,
+                    corp,
+                    grupo_prenda,
+                    talla,
+                    presentacion,
+                    descontinuado,
+                    product_id_normalizado,
+                    ultima_sincronizacion,
+                    created_at,
+                    updated_at
+                FROM producto_mba3_staging
+                WHERE product_id_normalizado = ?
+            """, (codigo_normalizado,))
+            
+            row = cursor.fetchone()
+            if not row:
+                return None
+            
+            return {
+                "staging_id": str(row[0]),
+                "product_id": row[1],
+                "product_name": row[2],
+                "corp": row[3],
+                "grupo_prenda": row[4],
+                "talla": row[5],
+                "presentacion": row[6],
+                "descontinuado": bool(row[7]),
+                "product_id_normalizado": row[8],
+                "ultima_sincronizacion": row[9].isoformat() if row[9] else None,
+                "created_at": row[10].isoformat() if row[10] else None,
+                "updated_at": row[11].isoformat() if row[11] else None
+            }
+        except Exception as e:
+            logger.error(f"❌ Error al buscar producto MBA3 normalizado {codigo}: {e}", exc_info=True)
+            raise
+        finally:
+            cursor.close()
 
 
 

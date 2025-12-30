@@ -7,13 +7,14 @@ import threading
 import asyncio
 from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Any, cast
-from fastapi import FastAPI, Request, Query, Depends
+from fastapi import FastAPI, Request, Query, Depends, Path, Body, HTTPException
 from fastapi.responses import JSONResponse
 
 from src.utils import get_source_from_headers
 from src.database.repositories.orden_compra_repository import OrdenCompraRepository
 from src.database.repositories.sap_integration_log_repository import SAPIntegrationLogRepository
 from src.database.connection import get_db_connection
+from src.database.clients.sap_client import SAPClient
 from src.security.jwt_auth import verify_jwt_token, require_permission
 
 logger = logging.getLogger(__name__)
@@ -999,5 +1000,291 @@ def register_ordenes_compra_endpoints(app: FastAPI):
                     "status": "error",
                     "message": f"Error al eliminar órdenes de compra: {str(e)}"
                 }
+            )
+    
+    @app.get("/ordenes-compra/{oc_id}/detalles", tags=["Órdenes de Compra"])
+    async def get_orden_compra_detalles(
+        request: Request,
+        oc_id: str = Path(..., description="UUID de la orden de compra"),
+        user: dict = Depends(verify_jwt_token),
+        _: None = Depends(require_permission('mba3-consultas.ordenes-compra.view'))
+    ):
+        """
+        Endpoint para obtener los detalles (líneas) de una orden de compra específica.
+        
+        Este endpoint retorna todas las líneas de detalle de una ODC, incluyendo
+        información sobre SKUs, cantidades, precios, etc.
+        
+        **Path Parameters:**
+        - `oc_id` (string, requerido) - UUID de la orden de compra
+        
+        **Ejemplo de uso:**
+        ```
+        GET /ordenes-compra/DD7D7A51-9E57-44D4-9A8F-4A05427A8325/detalles
+        ```
+        
+        **Respuesta exitosa:**
+        ```json
+        {
+            "status": "success",
+            "oc_id": "DD7D7A51-9E57-44D4-9A8F-4A05427A8325",
+            "detalles": [
+                {
+                    "oc_detalle_id": "ABC123-...",
+                    "oc_id": "DD7D7A51-...",
+                    "sku_sap": "5-0012.9",
+                    "cantidad_sap": 10.0,
+                    "unidad_sap": "X3",
+                    "precio_unitario": 150.0,
+                    "total_linea": 1500.0,
+                    "cantidad_origen": 30.0
+                },
+                ...
+            ],
+            "count": 5
+        }
+        ```
+        
+        **Respuesta si no existe:**
+        ```json
+        {
+            "status": "error",
+            "message": "Orden de compra no encontrada",
+            "oc_id": "DD7D7A51-9E57-44D4-9A8F-4A05427A8325"
+        }
+        ```
+        """
+        source = get_source_from_headers(request)
+        
+        logger.info(f"📋 GET /ordenes-compra/{oc_id}/detalles: Consulta iniciada")
+        
+        try:
+            def obtener_detalles_oc():
+                conn = get_db_connection()
+                try:
+                    oc_repo = OrdenCompraRepository(conn)
+                    
+                    # Verificar que la OC existe
+                    oc_cabecera = oc_repo.get_existing_cabecera(oc_id)
+                    if not oc_cabecera:
+                        return None
+                    
+                    # Obtener detalles
+                    detalles = oc_repo.get_detalles(oc_id)
+                    return detalles
+                finally:
+                    conn.close()
+            
+            detalles = await asyncio.to_thread(obtener_detalles_oc)
+            
+            if detalles is None:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Orden de compra no encontrada: {oc_id}"
+                )
+            
+            logger.info(f"✅ GET /ordenes-compra/{oc_id}/detalles: {len(detalles)} detalles encontrados")
+            
+            return JSONResponse(
+                status_code=200,
+                content={
+                    "status": "success",
+                    "oc_id": oc_id,
+                    "detalles": detalles,
+                    "count": len(detalles)
+                },
+                headers={
+                    "X-Source": source,
+                    "X-Endpoint": "GET-ORDEN-COMPRA-DETALLES",
+                    "X-Count": str(len(detalles))
+                }
+            )
+            
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"❌ Error al obtener detalles de OC {oc_id}: {e}", exc_info=True)
+            raise HTTPException(
+                status_code=500,
+                detail=f"Error al obtener detalles de la orden de compra: {str(e)}"
+            )
+    
+    @app.put("/ordenes-compra/{oc_id}/detalle/{oc_detalle_id}/sku", tags=["Órdenes de Compra"])
+    async def actualizar_sku_detalle(
+        request: Request,
+        oc_id: str = Path(..., description="UUID de la orden de compra"),
+        oc_detalle_id: str = Path(..., description="UUID del detalle de orden de compra"),
+        nuevo_sku: str = Body(..., embed=True, description="Nuevo SKU (ItemCode) de SAP"),
+        validar_en_sap: bool = Body(True, embed=True, description="Validar que el SKU exista en SAP antes de actualizar"),
+        user: dict = Depends(verify_jwt_token),
+        _: None = Depends(require_permission('mba3-consultas.ordenes-compra.update'))
+    ):
+        """
+        Endpoint para actualizar el SKU de un detalle de orden de compra.
+        
+        Este endpoint permite corregir el SKU de una línea de detalle de una ODC,
+        útil cuando hay errores al enviar a SAP debido a SKUs incorrectos.
+        
+        **Path Parameters:**
+        - `oc_id` (string, requerido) - UUID de la orden de compra
+        - `oc_detalle_id` (string, requerido) - UUID del detalle de orden de compra
+        
+        **Body Parameters:**
+        - `nuevo_sku` (string, requerido) - Nuevo SKU (ItemCode) de SAP
+        - `validar_en_sap` (boolean, default: true) - Si True, valida que el SKU exista en SAP antes de actualizar
+        
+        **Ejemplo de uso:**
+        ```
+        PUT /ordenes-compra/DD7D7A51-9E57-44D4-9A8F-4A05427A8325/detalle/ABC123-DEF456-GHI789/sku
+        {
+            "nuevo_sku": "5-0012.9",
+            "validar_en_sap": true
+        }
+        ```
+        
+        **Respuesta exitosa:**
+        ```json
+        {
+            "status": "success",
+            "message": "SKU actualizado exitosamente",
+            "oc_id": "DD7D7A51-9E57-44D4-9A8F-4A05427A8325",
+            "oc_detalle_id": "ABC123-DEF456-GHI789",
+            "sku_anterior": "5-0012.8",
+            "sku_nuevo": "5-0012.9",
+            "sku_validado_en_sap": true
+        }
+        ```
+        
+        **Respuesta si el SKU no existe en SAP (si validar_en_sap=true):**
+        ```json
+        {
+            "status": "error",
+            "message": "El SKU no existe en SAP",
+            "sku": "5-0012.9"
+        }
+        ```
+        """
+        source = get_source_from_headers(request)
+        username = user.get('username', 'unknown') if user else 'unknown'
+        
+        logger.info(f"📝 Actualizando SKU en detalle {oc_detalle_id[:8]}... de OC {oc_id[:8]}...")
+        logger.info(f"   Usuario: {username}, Nuevo SKU: {nuevo_sku}")
+        
+        try:
+            # Validar formato del nuevo SKU
+            nuevo_sku_clean = nuevo_sku.strip()
+            if not nuevo_sku_clean:
+                raise HTTPException(status_code=400, detail="El nuevo SKU no puede estar vacío")
+            
+            # Validar formato del SKU
+            import re
+            if not re.match(r'^[A-Za-z0-9.\- ]{1,50}$', nuevo_sku_clean):
+                raise HTTPException(
+                    status_code=400,
+                    detail="El SKU contiene caracteres no permitidos. Solo se permiten letras, números, guiones, puntos y espacios."
+                )
+            
+            # Validar que el SKU exista en SAP si se requiere
+            sku_validado_en_sap = False
+            if validar_en_sap:
+                logger.info(f"🔍 Validando SKU en SAP: {nuevo_sku_clean}")
+                
+                def validar_sku_en_sap():
+                    sap_client = SAPClient()
+                    producto_info = sap_client.get_producto_info(nuevo_sku_clean)
+                    return producto_info is not None
+                
+                try:
+                    sku_validado_en_sap = await asyncio.to_thread(validar_sku_en_sap)
+                except Exception as e:
+                    logger.warning(f"⚠️ Error al validar SKU en SAP: {e}")
+                    sku_validado_en_sap = False
+                
+                if not sku_validado_en_sap:
+                    raise HTTPException(
+                        status_code=404,
+                        detail=f"El SKU '{nuevo_sku_clean}' no existe en SAP o no está disponible"
+                    )
+                
+                logger.info(f"✅ SKU validado en SAP: {nuevo_sku_clean}")
+            
+            # Obtener información del detalle actual antes de actualizar
+            def obtener_y_actualizar_sku():
+                conn = get_db_connection()
+                try:
+                    oc_repo = OrdenCompraRepository(conn)
+                    
+                    # Obtener detalles para verificar que existe y obtener SKU anterior
+                    detalles = oc_repo.get_detalles(oc_id)
+                    detalle_encontrado = None
+                    
+                    for detalle in detalles:
+                        if str(detalle.get("oc_detalle_id")) == oc_detalle_id:
+                            detalle_encontrado = detalle
+                            break
+                    
+                    if not detalle_encontrado:
+                        raise ValueError(f"No se encontró el detalle {oc_detalle_id} en la OC {oc_id}")
+                    
+                    sku_anterior = detalle_encontrado.get("sku_sap")
+                    
+                    # Verificar que la OC esté en estado ERROR (o permitir actualizar si está en PENDIENTE también)
+                    oc_cabecera = oc_repo.get_existing_cabecera(oc_id)
+                    if not oc_cabecera:
+                        raise ValueError(f"No se encontró la OC {oc_id}")
+                    
+                    estado_actual = oc_cabecera.get("estado")
+                    if estado_actual not in ["ERROR", "PENDIENTE"]:
+                        logger.warning(f"⚠️ OC está en estado '{estado_actual}', permitiendo actualización de SKU")
+                    
+                    # Actualizar el SKU
+                    actualizado = oc_repo.update_sku_detalle(
+                        oc_detalle_id=oc_detalle_id,
+                        nuevo_sku_sap=nuevo_sku_clean,
+                        validar_existencia=True
+                    )
+                    
+                    if not actualizado:
+                        raise ValueError(f"No se pudo actualizar el SKU del detalle {oc_detalle_id}")
+                    
+                    # Invalidar caché de órdenes de compra
+                    invalidate_ordenes_compra_cache()
+                    
+                    return sku_anterior
+                finally:
+                    conn.close()
+            
+            # Ejecutar actualización en thread pool
+            sku_anterior = await asyncio.to_thread(obtener_y_actualizar_sku)
+            
+            logger.info(f"✅ SKU actualizado exitosamente: '{sku_anterior}' → '{nuevo_sku_clean}'")
+            
+            return JSONResponse(
+                status_code=200,
+                content={
+                    "status": "success",
+                    "message": "SKU actualizado exitosamente",
+                    "oc_id": oc_id,
+                    "oc_detalle_id": oc_detalle_id,
+                    "sku_anterior": sku_anterior,
+                    "sku_nuevo": nuevo_sku_clean,
+                    "sku_validado_en_sap": sku_validado_en_sap
+                },
+                headers={
+                    "X-Source": source,
+                    "X-Endpoint": "UPDATE-SKU-DETALLE"
+                }
+            )
+            
+        except HTTPException:
+            raise
+        except ValueError as e:
+            logger.error(f"❌ Error de validación al actualizar SKU: {e}")
+            raise HTTPException(status_code=404, detail=str(e))
+        except Exception as e:
+            logger.error(f"❌ Error al actualizar SKU en detalle: {e}", exc_info=True)
+            raise HTTPException(
+                status_code=500,
+                detail=f"Error al actualizar SKU: {str(e)}"
             )
 

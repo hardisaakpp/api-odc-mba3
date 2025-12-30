@@ -233,12 +233,8 @@ elif ENVIRONMENT == "development":
 ENABLE_AUTO_MIGRATE = os.getenv("ENABLE_AUTO_MIGRATE", "true").lower() == "true"
 
 # Intervalo en minutos entre ejecuciones automáticas
-# Desarrollo/Pruebas: 5 minutos (para pruebas)
-# Producción: 15 minutos (configurar en .env)
-if ENVIRONMENT == "production":
-    AUTO_MIGRATE_INTERVAL_MINUTES = int(os.getenv("AUTO_MIGRATE_INTERVAL_MINUTES", "15"))
-else:
-    AUTO_MIGRATE_INTERVAL_MINUTES = int(os.getenv("AUTO_MIGRATE_INTERVAL_MINUTES", "5"))
+# Configurar en .env: AUTO_MIGRATE_INTERVAL_MINUTES=15
+AUTO_MIGRATE_INTERVAL_MINUTES = int(os.getenv("AUTO_MIGRATE_INTERVAL_MINUTES", "15"))
 
 # Días hacia atrás para el filtro de fecha en migración (automática y manual)
 # Ambos procesos (automático y manual) usan la misma configuración
@@ -253,6 +249,18 @@ _migrate_days = os.getenv("MIGRATE_DATE_FILTER_DAYS") or \
                 os.getenv("MANUAL_MIGRATE_DATE_FILTER_DAYS") or \
                 "365"
 MIGRATE_DATE_FILTER_DAYS = int(_migrate_days)
+
+# ============================================================================
+# Configuración de Celery y Tareas Automatizadas
+# ============================================================================
+# ⚠️ Configurar en .env para personalizar, o usar defaults para desarrollo
+
+# URL de Redis para Celery (broker y backend)
+REDIS_URL = os.getenv('REDIS_URL', 'redis://localhost:6379/0')
+
+# Horario de sincronización de productos (hora en formato 24h)
+SYNC_PRODUCTOS_HOUR = int(os.getenv('SYNC_PRODUCTOS_HOUR', '3'))  # Default: 3:00 AM
+SYNC_PRODUCTOS_MINUTE = int(os.getenv('SYNC_PRODUCTOS_MINUTE', '0'))  # Default: minuto 0
 
 # ============================================================================
 # Configuración de Notificaciones por Email

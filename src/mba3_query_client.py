@@ -299,6 +299,44 @@ class MBA3APIClient:
                     return result
                 except json.JSONDecodeError:
                     logger.warning(f"La respuesta no es JSON válido. Respuesta recibida: {response.text[:500]}")
+                    
+                    # Intentar extraer JSON válido si hay texto adicional
+                    text = response.text.strip()
+                    
+                    # Buscar el primer carácter que indica inicio de JSON ( [ o { )
+                    start_idx = -1
+                    start_char = None
+                    for i, char in enumerate(text):
+                        if char in ['[', '{']:
+                            start_idx = i
+                            start_char = char
+                            break
+                    
+                    if start_idx != -1:
+                        # Encontrar el final correspondiente balanceando brackets/braces
+                        end_char = ']' if start_char == '[' else '}'
+                        depth = 0
+                        end_idx = -1
+                        
+                        for i in range(start_idx, len(text)):
+                            if text[i] == start_char:
+                                depth += 1
+                            elif text[i] == end_char:
+                                depth -= 1
+                                if depth == 0:
+                                    end_idx = i
+                                    break
+                        
+                        if end_idx != -1:
+                            try:
+                                json_text = text[start_idx:end_idx+1]
+                                result = json.loads(json_text)
+                                logger.info(f"✅ JSON válido extraído de respuesta con texto adicional (extraído {len(json_text)} chars de {len(text)} totales)")
+                                return result
+                            except json.JSONDecodeError as e:
+                                logger.debug(f"No se pudo parsear JSON extraído: {e}")
+                    
+                    # Si no se pudo extraer, retornar raw_response
                     return {'raw_response': response.text}
             
             elif response.status_code == 401:
