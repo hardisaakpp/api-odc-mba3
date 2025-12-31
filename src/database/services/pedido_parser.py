@@ -752,12 +752,16 @@ class PedidoParser:
                 
                 detalle = {
                     "codigo_interno": str(codigo_interno).strip(),
-                    "descripcion_sap": self.get_cell_value(row, "descripcion sap"),
+                    "descripcion_sap": self.get_cell_value(row, "descripcion sap", ["descripción sap", "descripcion"]),
                     "marca": self.get_cell_value(row, "marca"),
-                    "codigo_barras": self.get_cell_value(row, "codigo de barras"),
+                    "codigo_barras": self.get_cell_value(row, "codigo de barras", ["codigo_barras", "código de barras", "codigo barras"]),
                     "pack": self.get_cell_value(row, "pack"),
-                    "costo_doc_sin_iva": self.get_numeric_value(row, "costo doc sin iva"),
-                    "descuento_1": self.get_numeric_value(row, "dscto 1") or self.get_numeric_value(row, "descuento 1"),
+                    "costo_doc_sin_iva": self.get_numeric_value(row, "costo doc sin iva", ["costo doc sin iva", "costo sin iva", "costo documento sin iva"]),
+                    "descuento_1": (
+                        self.get_numeric_value(row, "dscto 1", ["descuento 1"]) or 
+                        self.get_numeric_value(row, "descuento 1", ["dscto 1"]) or 
+                        self.get_numeric_value(row, "descuento", ["dscto"])
+                    ),
                     "pvp": self.get_numeric_value(row, "pvp"),
                     "subtotal": self.get_numeric_value(row, "subtotal"),
                     "total": self.get_numeric_value(row, "total"),
@@ -777,27 +781,127 @@ class PedidoParser:
             logger.error(f"❌ Error al extraer detalle con tiendas: {e}", exc_info=True)
             return []
     
-    def get_cell_value(self, row: pd.Series, column_name: str) -> Optional[str]:
-        """Obtiene valor de celda como string."""
+    def _find_column_flexible(self, row: pd.Series, column_names: List[str]) -> Optional[str]:
+        """
+        Busca una columna de manera flexible, probando múltiples variaciones del nombre.
+        
+        Args:
+            row: Serie de pandas con los datos de la fila
+            column_names: Lista de nombres de columnas a buscar (en orden de prioridad)
+            
+        Returns:
+            Nombre de la columna encontrada, o None si no se encuentra ninguna
+        """
+        # Primero intentar coincidencia exacta (sin espacios extra)
+        for col_name in column_names:
+            # Normalizar: remover espacios extras, convertir a minúsculas
+            col_normalized = ' '.join(col_name.lower().split())
+            if col_normalized in row.index:
+                return col_normalized
+        
+        # Si no hay coincidencia exacta, buscar coincidencia parcial (que contenga las palabras clave)
+        for col_name in column_names:
+            col_normalized = ' '.join(col_name.lower().split())
+            # Buscar columnas que contengan todas las palabras clave
+            keywords = [kw for kw in col_normalized.split() if len(kw) > 2]  # Filtrar palabras muy cortas
+            if not keywords:
+                keywords = col_normalized.split()  # Si no hay palabras largas, usar todas
+            
+            for idx_col in row.index:
+                idx_col_lower = str(idx_col).lower().strip()
+                # Verificar si todas las palabras clave están en el nombre de la columna
+                if all(keyword in idx_col_lower for keyword in keywords):
+                    return idx_col
+        
+        return None
+    
+    def get_cell_value(self, row: pd.Series, column_name: str, alternative_names: Optional[List[str]] = None) -> Optional[str]:
+        """
+        Obtiene valor de celda como string, con búsqueda flexible de columnas.
+        
+        Args:
+            row: Serie de pandas con los datos de la fila
+            column_name: Nombre principal de la columna a buscar
+            alternative_names: Nombres alternativos para buscar (opcional)
+        """
         try:
-            if column_name in row.index:
-                valor = row[column_name]
+            # Construir lista de nombres a buscar
+            names_to_try = [column_name]
+            if alternative_names:
+                names_to_try.extend(alternative_names)
+            
+            # Buscar columna de manera flexible
+            found_column = self._find_column_flexible(row, names_to_try)
+            
+            if found_column:
+                valor = row[found_column]
                 if isinstance(valor, pd.Series):
                     if len(valor) == 0 or valor.isna().all():
                         return None
                     valor = valor.iloc[0] if len(valor) > 0 else None
                 if valor is None or (isinstance(valor, (float, int)) and pd.isna(valor)):
                     return None
-                return str(valor).strip() if valor else None
+                
+                # Manejo especial para código de barras: si es un número, convertirlo a string sin decimales
+                is_codigo_barras = any(name.lower() in ['codigo de barras', 'codigo_barras', 'código de barras', 'codigo barras'] 
+                                      for name in names_to_try)
+                
+                if is_codigo_barras and isinstance(valor, (int, float)):
+                    # Si es un número entero (aunque esté como float), convertir a string sin decimales
+                    try:
+                        if isinstance(valor, int):
+                            result = str(valor)
+                        elif isinstance(valor, float):
+                            if valor.is_integer():
+                                result = str(int(valor))
+                            else:
+                                # Si no es entero, convertir a string normalmente
+                                result = str(valor).rstrip('0').rstrip('.')
+                        else:
+                            result = str(valor).strip()
+                    except (ValueError, TypeError, OverflowError):
+                        result = str(valor).strip()
+                else:
+                    # Convertir a string y limpiar
+                    result = str(valor).strip()
+                    
+                    # Si es código de barras y el string termina en .0, intentar convertir
+                    if is_codigo_barras and result.endswith('.0'):
+                        try:
+                            num_val = float(result)
+                            if num_val.is_integer():
+                                result = str(int(num_val))
+                        except (ValueError, TypeError):
+                            pass
+                
+                return result if result else None
+            
             return None
-        except Exception:
+        except Exception as e:
+            logger.debug(f"⚠️ Error al obtener valor de celda '{column_name}': {e}")
             return None
     
-    def get_numeric_value(self, row: pd.Series, column_name: str) -> Optional[float]:
-        """Obtiene valor numérico de celda, manejando formatos de moneda y porcentaje."""
+    def get_numeric_value(self, row: pd.Series, column_name: str, alternative_names: Optional[List[str]] = None) -> Optional[float]:
+        """
+        Obtiene valor numérico de celda, manejando formatos de moneda y porcentaje.
+        Usa búsqueda flexible de columnas.
+        
+        Args:
+            row: Serie de pandas con los datos de la fila
+            column_name: Nombre principal de la columna a buscar
+            alternative_names: Nombres alternativos para buscar (opcional)
+        """
         try:
-            if column_name in row.index:
-                valor = row[column_name]
+            # Construir lista de nombres a buscar
+            names_to_try = [column_name]
+            if alternative_names:
+                names_to_try.extend(alternative_names)
+            
+            # Buscar columna de manera flexible
+            found_column = self._find_column_flexible(row, names_to_try)
+            
+            if found_column:
+                valor = row[found_column]
                 if isinstance(valor, pd.Series):
                     if len(valor) == 0 or valor.isna().all():
                         return None
@@ -843,7 +947,7 @@ class PedidoParser:
                 
             return None
         except (ValueError, TypeError) as e:
-            logger.debug(f"⚠️ Error al convertir valor numérico de columna '{column_name}': {e}, valor: {valor}")
+            logger.debug(f"⚠️ Error al convertir valor numérico de columna '{column_name}': {e}")
             return None
     
     def extraer_distribuciones_tienda(self, row: pd.Series, columnas: List[str]) -> List[Dict[str, Any]]:
