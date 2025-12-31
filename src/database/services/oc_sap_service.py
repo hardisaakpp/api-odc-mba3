@@ -271,12 +271,18 @@ class OCSAPService:
                 # 7. Enviar correo al proveedor (no bloquea si falla)
                 try:
                     from src.utils.email_notifier import send_oc_to_supplier
+                    from src.config import EMAIL_PROVEEDOR_PRUEBAS
+                    
+                    # Durante fase de pruebas, usar email configurado
+                    # TODO: En producción, obtener desde tabla cliente usando CardCode
+                    proveedor_email = EMAIL_PROVEEDOR_PRUEBAS
+                    
                     email_enviado = send_oc_to_supplier(
                         oc_cabecera=oc_cabecera,
                         oc_detalles=oc_detalles,
                         doc_num=doc_num,
                         doc_entry=doc_entry,
-                        proveedor_email=None  # TODO: Obtener de tabla cliente/proveedor
+                        proveedor_email=proveedor_email
                     )
                     if email_enviado:
                         logger.info(f"📧 Email de ODC enviado al proveedor {oc_cabecera.get('proveedor')}")

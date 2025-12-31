@@ -234,16 +234,22 @@ def register_plantillas_endpoints(app: FastAPI):
                 detail=f"Error interno al procesar la plantilla: {str(e)}"
             )
     
-    @app.get("/api/plantillas/{pedido_id}", tags=["Plantillas"])
+    @app.get("/api/plantillas/{identificador}", tags=["Plantillas"])
     async def get_pedido(
-        pedido_id: str = Path(..., description="UUID del pedido"),
+        identificador: str = Path(..., description="Número de pedido (ej: 'P-12.48 - 12 - 2025') o UUID del pedido (para compatibilidad)"),
         incluir_respuesta: bool = Query(False, description="Incluir respuesta del proveedor si existe"),
         user: Dict = Depends(verify_jwt_token),
         _: None = Depends(require_permission('mba3-consultas.facturas.view'))
     ):
         """
         Obtiene un pedido completo con cabecera, detalles y distribuciones por tienda.
+        Acepta número de pedido (recomendado) o UUID (para compatibilidad).
         Opcionalmente incluye la respuesta del proveedor.
+        
+        **Path Parameters:**
+        - `identificador` (string, requerido) - Puede ser:
+          - Número de pedido (business key, ej: 'P-12.48 - 12 - 2025') ⭐ RECOMENDADO
+          - UUID del pedido (ej: 'AEDEC52D-D007-416F-8A09-9F0D31282EEE') ⚠️ Compatibilidad
         
         **Query Parameters:**
         - `incluir_respuesta` (bool, default: false): Si true, incluye respuesta del proveedor si existe
@@ -283,23 +289,40 @@ def register_plantillas_endpoints(app: FastAPI):
             JSON con pedido completo
         """
         try:
+            import re
             from src.database.connection import get_db_connection_context
             from src.database.repositories.pedido_repository import PedidoRepository
             from src.database.repositories.pedido_respuesta_repository import PedidoRespuestaRepository
             
+            # Detectar si es UUID (formato: 8-4-4-4-12 caracteres hexadecimales)
+            uuid_pattern = re.compile(r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$')
+            es_uuid = uuid_pattern.match(identificador.strip()) is not None
+            
             with get_db_connection_context() as conn:
                 repository = PedidoRepository(conn)
-                pedido = repository.get_pedido_completo(pedido_id)
                 
-                if not pedido:
-                    raise HTTPException(
-                        status_code=404,
-                        detail=f"Pedido no encontrado: {pedido_id}"
-                    )
+                # Usar método apropiado según el formato detectado
+                if es_uuid:
+                    logger.info(f"🔍 Detectado UUID: {identificador}, usando get_pedido_completo")
+                    pedido = repository.get_pedido_completo(identificador)
+                    if not pedido:
+                        raise HTTPException(
+                            status_code=404,
+                            detail=f"Pedido no encontrado con UUID: {identificador}"
+                        )
+                else:
+                    logger.info(f"🔍 Detectado numero_pedido: {identificador}, usando get_pedido_completo_por_numero")
+                    pedido = repository.get_pedido_completo_por_numero(identificador)
+                    if not pedido:
+                        raise HTTPException(
+                            status_code=404,
+                            detail=f"Pedido no encontrado con número: {identificador}"
+                        )
                 
-                # Agregar respuesta si se solicita y existe
+                # Agregar respuesta si se solicita y existe (usando pedido_id de la cabecera)
                 if incluir_respuesta:
                     respuesta_repo = PedidoRespuestaRepository(conn)
+                    pedido_id = pedido["cabecera"]["pedido_id"]
                     respuesta = respuesta_repo.obtener_respuesta_activa(pedido_id)
                     if respuesta:
                         pedido["respuesta_proveedor"] = respuesta
@@ -883,6 +906,92 @@ def register_plantillas_endpoints(app: FastAPI):
                 detail={
                     "error": "internal_error",
                     "message": "Error interno al generar reporte"
+                }
+            )
+    
+    @app.post("/api/pedidos/{pedido_id}/crear-orden-compra", tags=["Pedidos - ODC"])
+    async def crear_orden_compra_desde_pedido(
+        pedido_id: str = Path(..., description="UUID del pedido"),
+        user: Dict = Depends(verify_jwt_token),
+        _: None = Depends(require_permission('mba3-consultas.proceso.execute'))
+    ):
+        """
+        Crea una orden de compra desde un pedido confirmado.
+        
+        **FASE 5: Generación de ODC desde cantidades confirmadas**
+        
+        **Flujo:**
+        1. Valida que el pedido tenga respuesta aprobada
+        2. Obtiene cantidades confirmadas (cantidad_confirmada_total > 0)
+        3. Convierte unidades (docenas → packs SAP)
+        4. Obtiene SKU SAP desde homologación/cache
+        5. Crea OC con pedido_id asociado
+        6. Estado inicial: PENDIENTE (lista para enviar a SAP)
+        
+        **Diferencia con /procesar-oc:**
+        - Este endpoint es para **PEDIDOS confirmados** (flujo nuevo)
+        - `/procesar-oc` es para **DESPACHOS legacy** (flujo antiguo)
+        
+        **Validaciones:**
+        - ✅ Pedido debe existir
+        - ✅ Debe tener respuesta del proveedor en estado APROBADA
+        - ✅ Debe haber productos con cantidad_confirmada_total > 0
+        - ✅ Todos los productos deben tener SKU SAP homologado
+        - ✅ Todos los productos deben tener unidad de conversión
+        
+        **Respuesta exitosa:**
+        ```json
+        {
+            "status": "success",
+            "message": "Orden de compra creada exitosamente",
+            "oc_id": "uuid-de-la-oc",
+            "pedido_id": "uuid-del-pedido",
+            "proveedor": "P1790389219001",
+            "estado": "PENDIENTE",
+            "detalles_insertados": 10,
+            "total_lineas": 10,
+            "warnings": []
+        }
+        ```
+        
+        **Próximo paso:**
+        Después de crear la OC, usar `POST /integrar-sap` para enviarla a SAP.
+        
+        Returns:
+            JSON con resultado de la creación de la OC
+        """
+        try:
+            from src.database.services.pedido_oc_service import PedidoOCService
+            
+            user_id = user.get("sub") or user.get("user_id")
+            
+            service = PedidoOCService()
+            resultado = service.crear_oc_desde_pedido_confirmado(
+                pedido_id=pedido_id,
+                usuario_id=user_id
+            )
+            
+            return {
+                "status": "success",
+                "message": "Orden de compra creada exitosamente",
+                **resultado
+            }
+            
+        except ValueError as e:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "error": "validation_error",
+                    "message": str(e)
+                }
+            )
+        except Exception as e:
+            logger.error(f"❌ Error al crear orden de compra: {e}", exc_info=True)
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail={
+                    "error": "internal_error",
+                    "message": f"Error interno al crear orden de compra: {str(e)}"
                 }
             )
 

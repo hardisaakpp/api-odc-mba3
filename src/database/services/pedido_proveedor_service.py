@@ -157,15 +157,19 @@ class PedidoProveedorService:
             resumen_data = []
             for detalle in pedido["detalles"]:
                 total_cantidad = sum(t["cantidad"] for t in detalle["tiendas"])
+                # Manejar valores None para que no aparezcan como celdas vacías
+                costo_original = detalle.get("costo_doc_sin_iva")
+                descuento_original = detalle.get("descuento_1")
+                
                 resumen_data.append({
                     "Código Producto": detalle["codigo_interno"],
                     "Descripción": detalle["descripcion_sap"],
                     "Marca": detalle.get("marca") or "",
                     "Cantidad Total Solicitada": total_cantidad,
                     "Cantidad Confirmada": "",  # Para que el proveedor complete
-                    "Costo Unitario Original": detalle.get("costo_doc_sin_iva"),
+                    "Costo Unitario Original": costo_original if costo_original is not None else "",
                     "Costo Unitario Ajustado": "",  # Para que el proveedor complete
-                    "Descuento % Original": detalle.get("descuento_1"),
+                    "Descuento % Original": descuento_original if descuento_original is not None else "",
                     "Descuento % Ajustado": "",  # Opcional
                     "Observaciones": "",  # Opcional
                 })

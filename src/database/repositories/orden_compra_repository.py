@@ -150,17 +150,19 @@ class OrdenCompraRepository:
             INSERT INTO orden_compra_cabecera (
                 oc_id,
                 despacho_id,
+                pedido_id,
                 proveedor,
                 fecha_generacion,
                 referencia_despacho,
                 estado,
                 created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, GETDATE())
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, GETDATE())
             """
             
             values = (
                 oc_id,
                 datos_cabecera.get("despacho_id"),
+                datos_cabecera.get("pedido_id"),
                 datos_cabecera.get("proveedor"),
                 datos_cabecera.get("fecha_generacion"),
                 datos_cabecera.get("referencia_despacho"),

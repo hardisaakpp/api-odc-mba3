@@ -297,6 +297,12 @@ EMAIL_TO_TECNICOS = [email.strip() for email in _email_tecnicos.split(",") if em
 _email_to_str = os.getenv("EMAIL_TO", _email_operaciones)
 EMAIL_TO = [email.strip() for email in _email_to_str.split(",") if email.strip()]
 
+# Email del proveedor para pruebas (FASE 6)
+# Durante fase de pruebas, se usa este email para notificaciones de ODC
+# TODO: En producción, obtener desde tabla cliente usando CardCode
+EMAIL_PROVEEDOR_PRUEBAS = os.getenv("EMAIL_PROVEEDOR_PRUEBAS", "cortiz@mabeltrading.com.ec")
+
+
 # Configuración de advertencias técnicas
 # Porcentaje del time limit para enviar advertencia
 EMAIL_WARNING_TIME_LIMIT_PERCENT = int(os.getenv("EMAIL_WARNING_TIME_LIMIT_PERCENT", "80"))
@@ -342,4 +348,3 @@ USE_PRODUCT_STAGING = os.getenv("USE_PRODUCT_STAGING", "true").lower() == "true"
 # Permitir fallback a ERP si staging falla (solo en desarrollo)
 ENVIRONMENT = os.getenv("ENVIRONMENT", "production")  # 'development' | 'production'
 ALLOW_ERP_FALLBACK = os.getenv("ALLOW_ERP_FALLBACK", "false").lower() == "true" and ENVIRONMENT != "production"
-

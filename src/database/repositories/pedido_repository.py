@@ -515,6 +515,155 @@ class PedidoRepository:
         finally:
             cursor.close()
     
+    def get_pedido_completo_por_numero(self, numero_pedido: str) -> Optional[Dict[str, Any]]:
+        """
+        Obtiene un pedido completo con cabecera, detalles, tiendas y distribuciones por número de pedido.
+        
+        Args:
+            numero_pedido: Número de pedido (business key)
+            
+        Returns:
+            Dict con cabecera, detalles (con sus tiendas), o None si no existe
+        """
+        cursor = self.conn.cursor()
+        
+        try:
+            # Verificar si existe columna estado
+            cursor.execute("""
+                SELECT COUNT(*) 
+                FROM INFORMATION_SCHEMA.COLUMNS 
+                WHERE TABLE_NAME = 'pedido' 
+                AND COLUMN_NAME = 'estado'
+            """)
+            row_check = cursor.fetchone()
+            tiene_estado = (row_check[0] if row_check else 0) > 0
+            
+            # Obtener cabecera por numero_pedido
+            if tiene_estado:
+                cursor.execute("""
+                    SELECT 
+                        pedido_id, numero_pedido, fecha_pedido, fecha_entrega,
+                        forma_pago, odc, proveedor_nombre, comprador_nombre,
+                        comprador_codigo, origen_traslado, serie, archivo_nombre,
+                        creado_por, estado, creado_en
+                    FROM pedido
+                    WHERE numero_pedido = ?
+                """, (numero_pedido,))
+            else:
+                cursor.execute("""
+                    SELECT 
+                        pedido_id, numero_pedido, fecha_pedido, fecha_entrega,
+                        forma_pago, odc, proveedor_nombre, comprador_nombre,
+                        comprador_codigo, origen_traslado, serie, archivo_nombre,
+                        creado_por, creado_en
+                    FROM pedido
+                    WHERE numero_pedido = ?
+                """, (numero_pedido,))
+            
+            row = cursor.fetchone()
+            if not row:
+                return None
+            
+            pedido_id = str(row[0])
+            
+            # Construir cabecera
+            if tiene_estado:
+                cabecera = {
+                    "pedido_id": pedido_id,
+                    "numero_pedido": row[1],
+                    "fecha_pedido": row[2].isoformat() if row[2] else None,
+                    "fecha_entrega": row[3],
+                    "forma_pago": row[4],
+                    "odc": row[5],
+                    "proveedor_nombre": row[6],
+                    "comprador_nombre": row[7],
+                    "comprador_codigo": row[8],
+                    "origen_traslado": row[9],
+                    "serie": row[10],
+                    "archivo_nombre": row[11],
+                    "creado_por": row[12],
+                    "estado": row[13],
+                    "creado_en": row[14].isoformat() if row[14] else None,
+                }
+            else:
+                cabecera = {
+                    "pedido_id": pedido_id,
+                    "numero_pedido": row[1],
+                    "fecha_pedido": row[2].isoformat() if row[2] else None,
+                    "fecha_entrega": row[3],
+                    "forma_pago": row[4],
+                    "odc": row[5],
+                    "proveedor_nombre": row[6],
+                    "comprador_nombre": row[7],
+                    "comprador_codigo": row[8],
+                    "origen_traslado": row[9],
+                    "serie": row[10],
+                    "archivo_nombre": row[11],
+                    "creado_por": row[12],
+                    "creado_en": row[13].isoformat() if row[13] else None,
+                }
+            
+            # Obtener detalles con sus distribuciones (usando pedido_id obtenido)
+            cursor.execute("""
+                SELECT 
+                    pd.pedido_detalle_id,
+                    pd.codigo_interno, pd.descripcion_sap, pd.marca, pd.codigo_barras,
+                    pd.pack, pd.costo_doc_sin_iva, pd.descuento_1, pd.pvp,
+                    pd.subtotal, pd.total
+                FROM pedido_detalle pd
+                WHERE pd.pedido_id = ?
+                ORDER BY pd.created_at
+            """, (pedido_id,))
+            
+            detalles = []
+            for row in cursor.fetchall():
+                pedido_detalle_id = str(row[0])
+                
+                # Obtener distribuciones por tienda para este detalle
+                cursor.execute("""
+                    SELECT 
+                        pdt.cantidad,
+                        t.tienda_id, t.codigo, t.nombre
+                    FROM pedido_detalle_tienda pdt
+                    INNER JOIN tienda t ON pdt.tienda_id = t.tienda_id
+                    WHERE pdt.pedido_detalle_id = ?
+                """, (pedido_detalle_id,))
+                
+                tiendas_distribucion = []
+                for dist_row in cursor.fetchall():
+                    tiendas_distribucion.append({
+                        "tienda_id": str(dist_row[1]),
+                        "codigo": dist_row[2],
+                        "nombre": dist_row[3],
+                        "cantidad": dist_row[0],
+                    })
+                
+                detalles.append({
+                    "pedido_detalle_id": pedido_detalle_id,
+                    "codigo_interno": row[1],
+                    "descripcion_sap": row[2],
+                    "marca": row[3],
+                    "codigo_barras": row[4],
+                    "pack": row[5],
+                    "costo_doc_sin_iva": float(row[6]) if row[6] else None,
+                    "descuento_1": float(row[7]) if row[7] else None,
+                    "pvp": float(row[8]) if row[8] else None,
+                    "subtotal": float(row[9]) if row[9] else None,  # Tal cual se guardó
+                    "total": float(row[10]) if row[10] else None,   # Tal cual se guardó
+                    "tiendas": tiendas_distribucion,
+                })
+            
+            return {
+                "cabecera": cabecera,
+                "detalles": detalles
+            }
+            
+        except Exception as e:
+            logger.error(f"❌ Error al obtener pedido completo por número: {e}", exc_info=True)
+            raise
+        finally:
+            cursor.close()
+    
     def update_estado(self, pedido_id: str, estado: str) -> bool:
         """
         Actualiza el estado de un pedido.

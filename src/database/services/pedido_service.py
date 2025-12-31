@@ -167,11 +167,88 @@ class PedidoService:
                             row_data.append(str(val)[:50])  # Limitar a 50 caracteres
                     logger.info(f"  Fila {i}: {row_data}")
             
-            # Paso 1: Extraer cabecera
+            # Paso 1: Extraer cabecera usando método que soporta formato horizontal y vertical
             try:
-                cabecera = self.parser.extraer_cabecera(df_raw, filename, usuario_id)
+                # Usar _parsear_cabecera que soporta ambos formatos
+                excel_file = pd.ExcelFile(io.BytesIO(file_content))
+                cabecera_parseada = self.parser._parsear_cabecera(excel_file, "CABECERA_PEDIDO")
+                
+                # Convertir a formato BD (mapear campos del Excel a campos de BD)
+                cabecera = {
+                    "numero_pedido": (
+                        cabecera_parseada.get("numero_pedido") or 
+                        cabecera_parseada.get("CODIGO PEDIDO") or 
+                        cabecera_parseada.get("CÓDIGO PEDIDO")
+                    ),
+                    "fecha_pedido": (
+                        cabecera_parseada.get("fecha_pedido") or 
+                        cabecera_parseada.get("FECHA PEDIDO")
+                    ),
+                    "fecha_entrega": (
+                        cabecera_parseada.get("fecha_entrega") or 
+                        cabecera_parseada.get("FECHA ENTREGA")
+                    ),
+                    "forma_pago": (
+                        cabecera_parseada.get("forma_pago") or 
+                        cabecera_parseada.get("FORMA PAGO") or 
+                        cabecera_parseada.get("FORMA DE PAGO")
+                    ),
+                    "odc": (
+                        cabecera_parseada.get("odc") or 
+                        cabecera_parseada.get("ODC")
+                    ),
+                    "proveedor_nombre": (
+                        cabecera_parseada.get("proveedor_nombre") or 
+                        cabecera_parseada.get("NOMBRE PROVEEDOR")
+                    ),
+                    "comprador_nombre": (
+                        cabecera_parseada.get("comprador_nombre") or 
+                        cabecera_parseada.get("COMPRADOR NOMBRE")
+                    ),
+                    "comprador_codigo": (
+                        cabecera_parseada.get("comprador_codigo") or 
+                        cabecera_parseada.get("COD COMPRADOR") or 
+                        cabecera_parseada.get("CÓD COMPRADOR") or 
+                        cabecera_parseada.get("CODIGO COMPRADOR")
+                    ),
+                    "origen_traslado": (
+                        cabecera_parseada.get("origen_traslado") or 
+                        cabecera_parseada.get("ORIGEN TRASLADO")
+                    ),
+                    "serie": (
+                        cabecera_parseada.get("serie") or 
+                        cabecera_parseada.get("SERIE")
+                    ),
+                    "archivo_nombre": filename,
+                    "creado_por": usuario_id,
+                }
+                
+                # Validar que numero_pedido existe
+                if not cabecera["numero_pedido"]:
+                    raise ValueError(
+                        "No se pudo encontrar el campo 'CODIGO PEDIDO' en la cabecera del Excel. "
+                        "Verifica que el archivo tenga la estructura correcta."
+                    )
+                
+                # Convertir fecha_pedido a DATE si es posible
+                if cabecera["fecha_pedido"]:
+                    try:
+                        if isinstance(cabecera["fecha_pedido"], datetime):
+                            cabecera["fecha_pedido"] = cabecera["fecha_pedido"].date()
+                        elif isinstance(cabecera["fecha_pedido"], date):
+                            # Ya es date, no hacer nada
+                            pass
+                        elif isinstance(cabecera["fecha_pedido"], str):
+                            cabecera["fecha_pedido"] = pd.to_datetime(cabecera["fecha_pedido"], dayfirst=True).date()
+                    except Exception as e:
+                        logger.warning(f"⚠️ Error al parsear fecha_pedido: {e}")
+                        cabecera["fecha_pedido"] = None
+                        
             except ValueError as e:
                 # Error de validación (ej: numero_pedido no encontrado)
+                raise ValueError(f"Error al extraer cabecera del Excel: {str(e)}")
+            except Exception as e:
+                logger.error(f"❌ Error al parsear cabecera: {e}", exc_info=True)
                 raise ValueError(f"Error al extraer cabecera del Excel: {str(e)}")
             
             # Paso 2: Extraer detalle con distribuciones por tienda
@@ -355,72 +432,9 @@ class PedidoService:
                 resultado["formato_detectado"] = "dos_hojas"
                 logger.info("📋 Formato DOS HOJAS detectado: CABECERA_PEDIDO + DETALLE_ARTICULO")
                 
-                # PASO 1: Parsear cabecera usando parsear_excel_pedido (solo para cabecera)
+                # PASO 1: Parsear cabecera usando _parsear_cabecera (soporta formato horizontal y vertical)
                 excel_file_cabecera = pd.ExcelFile(io.BytesIO(file_content))
-                df_cabecera = pd.read_excel(excel_file_cabecera, sheet_name=hoja_cabecera_encontrada, header=None)
-                
-                # Parsear cabecera manualmente (similar a parsear_excel_pedido pero solo cabecera)
-                cabecera_parseada = {}
-                if len(df_cabecera.columns) >= 2:
-                    primera_fila = df_cabecera.iloc[0] if len(df_cabecera) > 0 else None
-                    tiene_header = False
-                    col_campo_idx = None
-                    col_valor_idx = None
-                    
-                    if primera_fila is not None:
-                        primera_fila_str = [str(v).upper().strip() if pd.notna(v) else "" for v in primera_fila.values]
-                        if "CAMPO" in primera_fila_str or "VALOR" in primera_fila_str:
-                            tiene_header = True
-                            for idx, val in enumerate(primera_fila_str):
-                                if "CAMPO" in val:
-                                    col_campo_idx = idx
-                                elif "VALOR" in val:
-                                    col_valor_idx = idx
-                            start_row = 1
-                        else:
-                            col_campo_idx = 0
-                            col_valor_idx = 1
-                            start_row = 0
-                    else:
-                        col_campo_idx = 0
-                        col_valor_idx = 1
-                        start_row = 0
-                    
-                    if col_campo_idx is None:
-                        col_campo_idx = 0
-                    if col_valor_idx is None:
-                        col_valor_idx = 1
-                    
-                    mapeo_campos_cabecera = {
-                        "CODIGO PEDIDO": "numero_pedido",
-                        "CÓDIGO PEDIDO": "numero_pedido",
-                        "FECHA PEDIDO": "fecha_pedido",
-                        "FECHA ENTREGA": "fecha_entrega",
-                        "FORMA PAGO": "forma_pago",
-                        "FORMA DE PAGO": "forma_pago",
-                        "ODC": "odc",
-                        "NOMBRE PROVEEDOR": "proveedor_nombre",
-                        "COMPRADOR NOMBRE": "comprador_nombre",
-                        "COD COMPRADOR": "comprador_codigo",
-                        "CÓD COMPRADOR": "comprador_codigo",
-                        "CODIGO COMPRADOR": "comprador_codigo",
-                        "ORIGEN TRASLADO": "origen_traslado",
-                        "SERIE": "serie"
-                    }
-                    
-                    for idx in range(start_row, len(df_cabecera)):
-                        campo_raw = df_cabecera.iloc[idx, col_campo_idx] if col_campo_idx < len(df_cabecera.columns) else None
-                        valor_raw = df_cabecera.iloc[idx, col_valor_idx] if col_valor_idx < len(df_cabecera.columns) else None
-                        
-                        if campo_raw is not None and not pd.isna(campo_raw):
-                            campo = str(campo_raw).strip()
-                            valor = str(valor_raw).strip() if valor_raw is not None and not pd.isna(valor_raw) else None
-                            
-                            if campo and valor:
-                                cabecera_parseada[campo] = valor
-                                campo_upper = campo.upper().strip()
-                                if campo_upper in mapeo_campos_cabecera:
-                                    cabecera_parseada[mapeo_campos_cabecera[campo_upper]] = valor
+                cabecera_parseada = self.parser._parsear_cabecera(excel_file_cabecera, hoja_cabecera_encontrada)
                 
                 # Convertir cabecera a formato BD
                 cabecera = self._normalizar_cabecera_para_bd(
