@@ -844,5 +844,99 @@ class PedidoRepository:
             raise
         finally:
             cursor.close()
+    
+    def get_ultimo_pedido(self, usuario_id: str) -> Optional[Dict[str, Any]]:
+        """
+        Obtiene el último pedido cargado por un usuario específico.
+        
+        Args:
+            usuario_id: ID del usuario autenticado (creado_por)
+        
+        Returns:
+            Dict con datos básicos del último pedido del usuario
+            o None si el usuario no tiene pedidos
+        """
+        cursor = self.conn.cursor()
+        
+        try:
+            # Verificar si existe columna estado
+            cursor.execute("""
+                SELECT COUNT(*) 
+                FROM INFORMATION_SCHEMA.COLUMNS 
+                WHERE TABLE_NAME = 'pedido' 
+                AND COLUMN_NAME = 'estado'
+            """)
+            row_check = cursor.fetchone()
+            tiene_estado = (row_check[0] if row_check else 0) > 0
+            
+            # Obtener el último pedido DEL USUARIO
+            if tiene_estado:
+                cursor.execute("""
+                    SELECT TOP 1
+                        pedido_id, numero_pedido, fecha_pedido, fecha_entrega,
+                        forma_pago, odc, proveedor_nombre, comprador_nombre,
+                        comprador_codigo, origen_traslado, serie, archivo_nombre,
+                        creado_por, estado, creado_en
+                    FROM pedido
+                    WHERE creado_por = ?
+                    ORDER BY creado_en DESC
+                """, (usuario_id,))
+            else:
+                cursor.execute("""
+                    SELECT TOP 1
+                        pedido_id, numero_pedido, fecha_pedido, fecha_entrega,
+                        forma_pago, odc, proveedor_nombre, comprador_nombre,
+                        comprador_codigo, origen_traslado, serie, archivo_nombre,
+                        creado_por, creado_en
+                    FROM pedido
+                    WHERE creado_por = ?
+                    ORDER BY creado_en DESC
+                """, (usuario_id,))
+            
+            row = cursor.fetchone()
+            if not row:
+                return None
+            
+            if tiene_estado:
+                return {
+                    "pedido_id": str(row[0]),
+                    "numero_pedido": row[1],
+                    "fecha_pedido": row[2].isoformat() if row[2] else None,
+                    "fecha_entrega": row[3],
+                    "forma_pago": row[4],
+                    "odc": row[5],
+                    "proveedor_nombre": row[6],
+                    "comprador_nombre": row[7],
+                    "comprador_codigo": row[8],
+                    "origen_traslado": row[9],
+                    "serie": row[10],
+                    "archivo_nombre": row[11],
+                    "creado_por": row[12],
+                    "estado": row[13],
+                    "creado_en": row[14].isoformat() if row[14] else None,
+                }
+            else:
+                return {
+                    "pedido_id": str(row[0]),
+                    "numero_pedido": row[1],
+                    "fecha_pedido": row[2].isoformat() if row[2] else None,
+                    "fecha_entrega": row[3],
+                    "forma_pago": row[4],
+                    "odc": row[5],
+                    "proveedor_nombre": row[6],
+                    "comprador_nombre": row[7],
+                    "comprador_codigo": row[8],
+                    "origen_traslado": row[9],
+                    "serie": row[10],
+                    "archivo_nombre": row[11],
+                    "creado_por": row[12],
+                    "creado_en": row[13].isoformat() if row[13] else None,
+                }
+                
+        except Exception as e:
+            logger.error(f"❌ Error al obtener último pedido del usuario {usuario_id}: {e}", exc_info=True)
+            raise
+        finally:
+            cursor.close()
 
 

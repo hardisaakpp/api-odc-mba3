@@ -48,6 +48,33 @@ def validate_excel_file(file: UploadFile) -> None:
         logger.warning(f"⚠️ Tipo MIME no reconocido: {file.content_type}, pero continuando con validación de extensión")
 
 
+def get_user_id(user: Dict) -> str:
+    """
+    Normaliza y obtiene el ID del usuario del JWT.
+    
+    Usa el mismo identificador que se usa al guardar pedidos (creado_por).
+    Esto asegura consistencia entre creación y consulta.
+    
+    Args:
+        user: Diccionario del JWT decodificado
+        
+    Returns:
+        ID del usuario normalizado
+        
+    Raises:
+        HTTPException: Si el usuario no tiene ID válido
+    """
+    user_id = user.get('id') or user.get('username')
+    
+    if not user_id:
+        raise HTTPException(
+            status_code=401,
+            detail="Usuario inválido: no se pudo obtener el ID del usuario"
+        )
+    
+    return user_id
+
+
 def register_plantillas_endpoints(app: FastAPI):
     """
     Registra los endpoints de plantillas Excel en la aplicación FastAPI.
@@ -154,8 +181,8 @@ def register_plantillas_endpoints(app: FastAPI):
                     detail="El archivo está vacío"
                 )
             
-            # Obtener ID del usuario
-            user_id = user.get('id') or user.get('username', 'unknown')
+            # Obtener ID del usuario (normalizado)
+            user_id = get_user_id(user)
             
             # Procesar el archivo Excel con validación
             from src.database.services.pedido_service import PedidoService
@@ -232,6 +259,101 @@ def register_plantillas_endpoints(app: FastAPI):
             raise HTTPException(
                 status_code=500,
                 detail=f"Error interno al procesar la plantilla: {str(e)}"
+            )
+    
+    @app.get("/api/plantillas/ultimo", tags=["Plantillas"])
+    async def get_ultimo_pedido(
+        incluir_respuesta: bool = Query(False, description="Incluir respuesta del proveedor si existe"),
+        user: Dict = Depends(verify_jwt_token),
+        _: None = Depends(require_permission('mba3-consultas.facturas.view'))
+    ):
+        """
+        Obtiene el último pedido cargado por el usuario autenticado.
+        
+        **Características:**
+        - ✅ Filtrado por usuario (cada usuario ve solo sus pedidos)
+        - ✅ Devuelve el mismo formato que GET /api/plantillas/{identificador}
+        - ✅ Útil para mostrar automáticamente el último Excel en la página de cargar plantillas
+        
+        **Query Parameters:**
+        - `incluir_respuesta` (bool, default: false): Si true, incluye respuesta del proveedor si existe
+        
+        **Respuesta exitosa:**
+        Mismo formato que GET /api/plantillas/{identificador}:
+        ```json
+        {
+            "cabecera": {
+                "pedido_id": "...",
+                "numero_pedido": "...",
+                "fecha_pedido": "...",
+                ...
+            },
+            "detalles": [...],
+            "respuesta_proveedor": {...}  // Solo si incluir_respuesta=true
+        }
+        ```
+        
+        **Respuesta si no hay pedidos:**
+        ```json
+        {
+            "status": "not_found",
+            "message": "No hay pedidos cargados para este usuario"
+        }
+        ```
+        
+        Returns:
+            JSON con pedido completo (mismo formato que GET /api/plantillas/{identificador})
+            O 404 si el usuario no tiene pedidos
+        """
+        try:
+            from src.database.connection import get_db_connection_context
+            from src.database.repositories.pedido_repository import PedidoRepository
+            from src.database.repositories.pedido_respuesta_repository import PedidoRespuestaRepository
+            
+            # Obtener ID del usuario (normalizado, mismo que al subir Excel)
+            user_id = get_user_id(user)
+            
+            with get_db_connection_context() as conn:
+                repo = PedidoRepository(conn)
+                
+                # Obtener el último pedido DEL USUARIO
+                ultimo_pedido = repo.get_ultimo_pedido(user_id)
+                
+                if not ultimo_pedido:
+                    return JSONResponse(
+                        status_code=404,
+                        content={
+                            "status": "not_found",
+                            "message": "No hay pedidos cargados para este usuario"
+                        }
+                    )
+                
+                # Obtener pedido completo (mismo método que GET /api/plantillas/{identificador})
+                pedido_completo = repo.get_pedido_completo(ultimo_pedido["pedido_id"])
+                
+                if not pedido_completo:
+                    raise HTTPException(
+                        status_code=500,
+                        detail="Error al obtener detalles del último pedido"
+                    )
+                
+                # Agregar respuesta si se solicita (mismo comportamiento que el endpoint existente)
+                if incluir_respuesta:
+                    respuesta_repo = PedidoRespuestaRepository(conn)
+                    pedido_id = pedido_completo["cabecera"]["pedido_id"]
+                    respuesta = respuesta_repo.obtener_respuesta_activa(pedido_id)
+                    if respuesta:
+                        pedido_completo["respuesta_proveedor"] = respuesta
+                
+                return JSONResponse(status_code=200, content=pedido_completo)
+            
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"❌ Error al obtener último pedido: {e}", exc_info=True)
+            raise HTTPException(
+                status_code=500,
+                detail=f"Error interno al obtener último pedido: {str(e)}"
             )
     
     @app.get("/api/plantillas/{identificador}", tags=["Plantillas"])
@@ -690,7 +812,7 @@ def register_plantillas_endpoints(app: FastAPI):
             from src.database.services.pedido_proveedor_service import PedidoProveedorService
             
             service = PedidoProveedorService()
-            usuario_id = user.get('id') or user.get('username', 'unknown')
+            usuario_id = get_user_id(user)
             
             resultado = service.importar_respuesta_proveedor(
                 pedido_id=pedido_id,
