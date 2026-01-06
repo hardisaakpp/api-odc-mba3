@@ -451,3 +451,121 @@ class HomologacionSkuSincronizarResponse(BaseModel):
     status: str = Field(..., description="Estado de la respuesta")
     data: Dict[str, Any] = Field(..., description="Resultados de la sincronización")
 
+
+# ============================================================================
+# MODELOS PARA RESPUESTA DEL PROVEEDOR (FASE 3 - INTERFAZ WEB)
+# ============================================================================
+
+class TiendaRespuesta(BaseModel):
+    """Modelo para respuesta por tienda (opcional, para distribución detallada)."""
+    
+    tienda_id: str = Field(..., description="ID de la tienda")
+    cantidad_confirmada: Optional[int] = Field(None, ge=0, description="Cantidad confirmada para esta tienda específica")
+
+
+class ProductoRespuesta(BaseModel):
+    """Modelo para respuesta de un producto del proveedor."""
+    
+    pedido_detalle_id: str = Field(..., description="ID del detalle del pedido")
+    codigo_producto: str = Field(..., description="Código del producto")
+    cantidad_confirmada_total: int = Field(..., ge=0, description="Cantidad confirmada total (consolidado por producto)")
+    costo_unitario_ajustado: Optional[float] = Field(None, ge=0, description="Costo unitario ajustado (opcional)")
+    descuento_ajustado: Optional[float] = Field(None, ge=0, le=100, description="Descuento % ajustado (opcional, 0-100)")
+    observaciones: Optional[str] = Field(None, max_length=1000, description="Observaciones del proveedor para este producto")
+    distribucion_tiendas: Optional[List[TiendaRespuesta]] = Field(None, description="Distribución detallada por tienda (opcional)")
+
+
+class RespuestaProveedorRequest(BaseModel):
+    """Modelo para el request completo de respuesta del proveedor desde formulario web."""
+    
+    productos: List[ProductoRespuesta] = Field(..., min_length=1, description="Lista de productos con sus respuestas")
+    observaciones_generales: Optional[str] = Field(None, max_length=2000, description="Observaciones generales de la respuesta")
+    estado: str = Field("borrador", description="Estado de la respuesta: 'borrador' o 'confirmado'")
+    
+    @field_validator('estado')
+    @classmethod
+    def validate_estado(cls, v):
+        if v not in ['borrador', 'confirmado']:
+            raise ValueError("Estado debe ser 'borrador' o 'confirmado'")
+        return v
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "productos": [
+                    {
+                        "pedido_detalle_id": "uuid-123",
+                        "codigo_producto": "PROD001",
+                        "cantidad_confirmada_total": 100,
+                        "costo_unitario_ajustado": 50.00,
+                        "descuento_ajustado": 5.0,
+                        "observaciones": "Disponible en 2 semanas",
+                        "distribucion_tiendas": [
+                            {"tienda_id": "uuid-tienda-1", "cantidad_confirmada": 60},
+                            {"tienda_id": "uuid-tienda-2", "cantidad_confirmada": 40}
+                        ]
+                    }
+                ],
+                "observaciones_generales": "Todos los productos disponibles",
+                "estado": "confirmado"
+            }
+        }
+
+
+class TiendaFormulario(BaseModel):
+    """Modelo para mostrar tienda en el formulario."""
+    
+    tienda_id: str
+    codigo: str
+    nombre: Optional[str] = None
+    cantidad_solicitada: int = Field(..., ge=0)
+
+
+class ProductoFormulario(BaseModel):
+    """Modelo para mostrar producto en el formulario del proveedor."""
+    
+    pedido_detalle_id: str
+    codigo_producto: str
+    descripcion: Optional[str] = None
+    marca: Optional[str] = None
+    cantidad_total_solicitada: int = Field(..., ge=0)
+    costo_unitario_original: Optional[float] = None
+    descuento_original: Optional[float] = None
+    tiendas: List[TiendaFormulario] = Field(default_factory=list)
+    # Campos de respuesta existente (si ya respondió)
+    cantidad_confirmada_total: Optional[int] = None
+    costo_unitario_ajustado: Optional[float] = None
+    descuento_ajustado: Optional[float] = None
+    observaciones: Optional[str] = None
+
+
+class FormularioProveedorResponse(BaseModel):
+    """Modelo de respuesta para el GET del formulario del proveedor."""
+    
+    pedido_id: str
+    numero_pedido: str
+    fecha_pedido: Optional[str] = None
+    fecha_entrega: Optional[str] = None
+    proveedor_nombre: Optional[str] = None
+    estado_pedido: str = Field(..., description="Estado actual del pedido")
+    puede_responder: bool = Field(..., description="Si el proveedor puede responder (no está cerrado/bloqueado)")
+    tiene_respuesta: bool = Field(..., description="Si ya existe una respuesta previa")
+    respuesta_id: Optional[str] = None
+    version_respuesta: Optional[int] = None
+    estado_respuesta: Optional[str] = None
+    productos: List[ProductoFormulario] = Field(..., min_length=1)
+    mensaje_estado: Optional[str] = Field(None, description="Mensaje explicativo del estado actual")
+
+
+class RespuestaProveedorResponse(BaseModel):
+    """Modelo de respuesta para el POST de respuesta del proveedor."""
+    
+    status: str = Field(..., description="Estado del procesamiento: 'success', 'validation_error', 'error'")
+    message: str = Field(..., description="Mensaje descriptivo")
+    respuesta_id: Optional[str] = None
+    validacion: Dict[str, Any] = Field(..., description="Resultado de validaciones")
+    cantidades_guardadas: Optional[int] = None
+    precios_guardados: Optional[int] = None
+    pedido_id: str
+    estado_guardado: Optional[str] = Field(None, description="Estado en que se guardó: 'BORRADOR' o 'PENDIENTE_REVISION'")
+

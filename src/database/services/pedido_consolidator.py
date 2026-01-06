@@ -66,11 +66,15 @@ class PedidoConsolidator:
         
         if "fecha_pedido" in cabecera_parseada:
             cabecera_bd["fecha_pedido"] = cabecera_parseada["fecha_pedido"]
+        elif "FECHA DE PEDIDO" in cabecera_parseada:
+            cabecera_bd["fecha_pedido"] = cabecera_parseada["FECHA DE PEDIDO"]
         elif "FECHA PEDIDO" in cabecera_parseada:
             cabecera_bd["fecha_pedido"] = cabecera_parseada["FECHA PEDIDO"]
         
         if "fecha_entrega" in cabecera_parseada:
             cabecera_bd["fecha_entrega"] = cabecera_parseada["fecha_entrega"]
+        elif "FECHA DE ENTREGA" in cabecera_parseada:
+            cabecera_bd["fecha_entrega"] = cabecera_parseada["FECHA DE ENTREGA"]
         elif "FECHA ENTREGA" in cabecera_parseada:
             cabecera_bd["fecha_entrega"] = cabecera_parseada["FECHA ENTREGA"]
         
@@ -113,16 +117,64 @@ class PedidoConsolidator:
         elif "SERIE" in cabecera_parseada:
             cabecera_bd["serie"] = cabecera_parseada["SERIE"]
         
-        # Convertir fecha_pedido a DATE si es string
-        if cabecera_bd["fecha_pedido"] and isinstance(cabecera_bd["fecha_pedido"], str):
+        # Convertir fecha_pedido a DATE (manejar Timestamp, datetime, string)
+        if cabecera_bd["fecha_pedido"]:
             try:
-                if "/" in cabecera_bd["fecha_pedido"]:
-                    cabecera_bd["fecha_pedido"] = pd.to_datetime(cabecera_bd["fecha_pedido"], dayfirst=True).date()
-                else:
-                    cabecera_bd["fecha_pedido"] = pd.to_datetime(cabecera_bd["fecha_pedido"]).date()
+                import pandas as pd
+                from datetime import datetime, date
+                
+                valor = cabecera_bd["fecha_pedido"]
+                
+                # Si ya es date, dejar como está
+                if isinstance(valor, date) and not isinstance(valor, datetime):
+                    pass
+                # Si es datetime o Timestamp, convertir a date
+                elif isinstance(valor, (datetime, pd.Timestamp)):
+                    cabecera_bd["fecha_pedido"] = valor.date()
+                # Si es string, parsear
+                elif isinstance(valor, str):
+                    valor_limpio = valor.strip()
+                    if "/" in valor_limpio:
+                        cabecera_bd["fecha_pedido"] = pd.to_datetime(valor_limpio, dayfirst=True).date()
+                    else:
+                        cabecera_bd["fecha_pedido"] = pd.to_datetime(valor_limpio).date()
             except Exception as e:
-                logger.warning(f"⚠️ Error al parsear fecha_pedido: {e}")
+                logger.warning(f"⚠️ Error al parsear fecha_pedido '{cabecera_bd['fecha_pedido']}': {e}")
                 cabecera_bd["fecha_pedido"] = None
+        
+        # Convertir fecha_entrega a DATE (manejar Timestamp, datetime, string)
+        if cabecera_bd["fecha_entrega"]:
+            try:
+                import pandas as pd
+                from datetime import datetime, date
+                
+                valor = cabecera_bd["fecha_entrega"]
+                
+                # Si ya es date, dejar como está
+                if isinstance(valor, date) and not isinstance(valor, datetime):
+                    pass
+                # Si es datetime o Timestamp, convertir a date
+                elif isinstance(valor, (datetime, pd.Timestamp)):
+                    cabecera_bd["fecha_entrega"] = valor.date()
+                # Si es string, intentar parsear (pero si dice "INMEDIATO", dejar como está)
+                elif isinstance(valor, str):
+                    valor_limpio = valor.strip().upper()
+                    # Si es "INMEDIATO" u otro texto especial, mantener como string
+                    if valor_limpio in ("INMEDIATO", "ASAP", "URGE", ""):
+                        cabecera_bd["fecha_entrega"] = valor_limpio.lower() if valor_limpio else None
+                    else:
+                        # Intentar parsear como fecha
+                        try:
+                            if "/" in valor_limpio:
+                                cabecera_bd["fecha_entrega"] = pd.to_datetime(valor_limpio, dayfirst=True).date()
+                            else:
+                                cabecera_bd["fecha_entrega"] = pd.to_datetime(valor_limpio).date()
+                        except:
+                            # Si no es fecha, mantener el string original
+                            cabecera_bd["fecha_entrega"] = valor.lower()
+            except Exception as e:
+                logger.warning(f"⚠️ Error al parsear fecha_entrega '{cabecera_bd['fecha_entrega']}': {e}")
+                cabecera_bd["fecha_entrega"] = None
         
         return cabecera_bd
     

@@ -37,6 +37,28 @@ class PedidoRepository:
         Raises:
             Exception: Si falla la inserción
         """
+        # Normalizar fechas: convertir date/datetime/Timestamp a string ISO
+        from datetime import date
+        import pandas as pd
+        
+        datos_cabecera_normalizado = dict(datos_cabecera)
+        
+        if "fecha_pedido" in datos_cabecera_normalizado:
+            fp = datos_cabecera_normalizado["fecha_pedido"]
+            if fp is not None:
+                if isinstance(fp, date):
+                    datos_cabecera_normalizado["fecha_pedido"] = fp.isoformat() if hasattr(fp, 'isoformat') else str(fp)
+                elif isinstance(fp, pd.Timestamp):
+                    datos_cabecera_normalizado["fecha_pedido"] = fp.date().isoformat()
+        
+        if "fecha_entrega" in datos_cabecera_normalizado:
+            fe = datos_cabecera_normalizado["fecha_entrega"]
+            if fe is not None and not isinstance(fe, str):
+                if isinstance(fe, date):
+                    datos_cabecera_normalizado["fecha_entrega"] = fe.isoformat() if hasattr(fe, 'isoformat') else str(fe)
+                elif isinstance(fe, pd.Timestamp):
+                    datos_cabecera_normalizado["fecha_entrega"] = fe.date().isoformat()
+        
         cursor = self.conn.cursor()
         
         try:
@@ -77,21 +99,21 @@ class PedidoRepository:
                     creado_en
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, GETDATE())
                 """
-                estado = datos_cabecera.get("estado", "PENDIENTE_CONFIRMACION_PROVEEDOR")
+                estado = datos_cabecera_normalizado.get("estado", "PENDIENTE_CONFIRMACION_PROVEEDOR")
                 values = (
                     pedido_id,
-                    datos_cabecera.get("numero_pedido"),
-                    datos_cabecera.get("fecha_pedido"),
-                    datos_cabecera.get("fecha_entrega"),
-                    datos_cabecera.get("forma_pago"),
-                    datos_cabecera.get("odc"),
-                    datos_cabecera.get("proveedor_nombre"),
-                    datos_cabecera.get("comprador_nombre"),
-                    datos_cabecera.get("comprador_codigo"),
-                    datos_cabecera.get("origen_traslado"),
-                    datos_cabecera.get("serie"),
-                    datos_cabecera.get("archivo_nombre"),
-                    datos_cabecera.get("creado_por"),
+                    datos_cabecera_normalizado.get("numero_pedido"),
+                    datos_cabecera_normalizado.get("fecha_pedido"),
+                    datos_cabecera_normalizado.get("fecha_entrega"),
+                    datos_cabecera_normalizado.get("forma_pago"),
+                    datos_cabecera_normalizado.get("odc"),
+                    datos_cabecera_normalizado.get("proveedor_nombre"),
+                    datos_cabecera_normalizado.get("comprador_nombre"),
+                    datos_cabecera_normalizado.get("comprador_codigo"),
+                    datos_cabecera_normalizado.get("origen_traslado"),
+                    datos_cabecera_normalizado.get("serie"),
+                    datos_cabecera_normalizado.get("archivo_nombre"),
+                    datos_cabecera_normalizado.get("creado_por"),
                     estado,
                 )
             else:
@@ -115,24 +137,24 @@ class PedidoRepository:
                 """
                 values = (
                     pedido_id,
-                    datos_cabecera.get("numero_pedido"),
-                    datos_cabecera.get("fecha_pedido"),
-                    datos_cabecera.get("fecha_entrega"),
-                    datos_cabecera.get("forma_pago"),
-                    datos_cabecera.get("odc"),
-                    datos_cabecera.get("proveedor_nombre"),
-                    datos_cabecera.get("comprador_nombre"),
-                    datos_cabecera.get("comprador_codigo"),
-                    datos_cabecera.get("origen_traslado"),
-                    datos_cabecera.get("serie"),
-                    datos_cabecera.get("archivo_nombre"),
-                    datos_cabecera.get("creado_por"),
+                    datos_cabecera_normalizado.get("numero_pedido"),
+                    datos_cabecera_normalizado.get("fecha_pedido"),
+                    datos_cabecera_normalizado.get("fecha_entrega"),
+                    datos_cabecera_normalizado.get("forma_pago"),
+                    datos_cabecera_normalizado.get("odc"),
+                    datos_cabecera_normalizado.get("proveedor_nombre"),
+                    datos_cabecera_normalizado.get("comprador_nombre"),
+                    datos_cabecera_normalizado.get("comprador_codigo"),
+                    datos_cabecera_normalizado.get("origen_traslado"),
+                    datos_cabecera_normalizado.get("serie"),
+                    datos_cabecera_normalizado.get("archivo_nombre"),
+                    datos_cabecera_normalizado.get("creado_por"),
                 )
             
             cursor.execute(sql, values)
             self.conn.commit()
             
-            logger.debug(f"✅ Pedido cabecera insertada: {pedido_id} - Pedido: {datos_cabecera.get('numero_pedido')}")
+            logger.debug(f"✅ Pedido cabecera insertada: {pedido_id} - Pedido: {datos_cabecera_normalizado.get('numero_pedido')}")
             return pedido_id
             
         except pyodbc.IntegrityError as e:

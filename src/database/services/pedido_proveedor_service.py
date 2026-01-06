@@ -69,7 +69,7 @@ class PedidoProveedorService:
                 })
             
             # ✅ REGLA CRÍTICA: cantidad_confirmada ≤ solicitada
-            if cantidad_confirmada > cantidad_solicitada:
+            if cantidad_solicitada is not None and cantidad_confirmada > cantidad_solicitada:
                 errores.append({
                     "tipo": "ERROR",
                     "campo": "cantidad_confirmada_total",
@@ -78,7 +78,7 @@ class PedidoProveedorService:
                 })
             
             # Warning si confirma menos del 80%
-            if cantidad_solicitada > 0 and cantidad_confirmada < (cantidad_solicitada * 0.8):
+            if cantidad_solicitada is not None and cantidad_solicitada > 0 and cantidad_confirmada < (cantidad_solicitada * 0.8):
                 warnings.append({
                     "tipo": "WARNING",
                     "campo": "cantidad_confirmada_total",

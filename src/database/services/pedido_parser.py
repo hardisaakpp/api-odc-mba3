@@ -72,7 +72,7 @@ class PedidoParser:
                     "fila": 0,
                     "campo": "Hoja",
                     "tipo": "ERROR",
-                    "mensaje": f"La hoja '{hoja_cabecera}' no existe en el archivo. Hojas disponibles: {', '.join(excel_file.sheet_names)}"
+                    "mensaje": f"La hoja '{hoja_cabecera}' no existe en el archivo. Hojas disponibles: {', '.join(str(s) for s in excel_file.sheet_names)}"
                 })
                 resultado["resumen"]["filasInvalidas"] = 1
                 return resultado
@@ -82,7 +82,7 @@ class PedidoParser:
                     "fila": 0,
                     "campo": "Hoja",
                     "tipo": "ERROR",
-                    "mensaje": f"La hoja '{hoja_detalle}' no existe en el archivo. Hojas disponibles: {', '.join(excel_file.sheet_names)}"
+                    "mensaje": f"La hoja '{hoja_detalle}' no existe en el archivo. Hojas disponibles: {', '.join(str(s) for s in excel_file.sheet_names)}"
                 })
                 resultado["resumen"]["filasInvalidas"] = 1
                 return resultado
@@ -207,8 +207,8 @@ class PedidoParser:
             # Formato HORIZONTAL: campos en primera_fila_idx, valores en segunda_fila_idx
             logger.info("🔍 Procesando formato HORIZONTAL")
             for col_idx in range(len(df_cabecera.columns)):
-                campo_raw = df_cabecera.iloc[primera_fila_idx, col_idx] if col_idx < len(df_cabecera.columns) else None
-                valor_raw = df_cabecera.iloc[segunda_fila_idx, col_idx] if col_idx < len(df_cabecera.columns) else None
+                campo_raw = df_cabecera.iloc[int(primera_fila_idx) if primera_fila_idx is not None else 0, col_idx] if col_idx < len(df_cabecera.columns) else None
+                valor_raw = df_cabecera.iloc[int(segunda_fila_idx) if segunda_fila_idx is not None else 0, col_idx] if col_idx < len(df_cabecera.columns) else None
                 
                 if campo_raw is not None and not pd.isna(campo_raw):
                     campo = str(campo_raw).strip()
@@ -708,11 +708,20 @@ class PedidoParser:
             logger.debug(f"Error al obtener celda [{row}, {col}]: {e}")
             return None
     
-    def extraer_detalle_con_tiendas(self, df: pd.DataFrame) -> List[Dict[str, Any]]:
+    def extraer_detalle_con_tiendas(
+        self, 
+        df: pd.DataFrame,
+        catalogo_tiendas: Optional[Dict[str, Dict[str, Any]]] = None
+    ) -> List[Dict[str, Any]]:
         """
         Extrae detalles con distribuciones por tienda (formato complejo).
         
-        Retorna lista de dicts con detalle y distribuciones.
+        Args:
+            df: DataFrame con los datos del detalle
+            catalogo_tiendas: Diccionario opcional con tiendas válidas del Excel
+            
+        Returns:
+            Lista de dicts con detalle y distribuciones.
         """
         detalles = []
         
@@ -767,7 +776,8 @@ class PedidoParser:
                     "total": self.get_numeric_value(row, "total"),
                 }
                 
-                distribuciones = self.extraer_distribuciones_tienda(row, detalle_df.columns)
+                # Pasar catálogo de tiendas a la función de extracción
+                distribuciones = self.extraer_distribuciones_tienda(row, list(detalle_df.columns), catalogo_tiendas)
                 
                 detalles.append({
                     "detalle": detalle,
@@ -950,25 +960,444 @@ class PedidoParser:
             logger.debug(f"⚠️ Error al convertir valor numérico de columna '{column_name}': {e}")
             return None
     
-    def extraer_distribuciones_tienda(self, row: pd.Series, columnas: List[str]) -> List[Dict[str, Any]]:
-        """Extrae distribuciones por tienda desde las columnas del Excel."""
+    def leer_hoja_tiendas(self, file_content: bytes) -> Dict[str, Dict[str, Any]]:
+        """
+        Lee la hoja 'Tiendas' del Excel y retorna un diccionario de tiendas válidas.
+        
+        Estructura esperada:
+        - ID TIENDA: Código único corto (ej: TRL-QSN, TRL-SMA, TOUT-BOMB, RG-INT)
+        - NOMBRE_TIENDA: Nombre descriptivo completo
+        - ACTIVO: Estado de la tienda (SI/NO)
+        - ID_TIENDA_ACTIVA: Validación de tienda (puede repetir ID o nombre)
+        
+        Args:
+            file_content: Contenido del archivo Excel en bytes
+            
+        Returns:
+            Dict con código_tienda -> {nombre, activa, id_tienda_activa}
+            Ejemplo: {
+                "TRL-QSN": {
+                    "nombre": "ROLAND QUICENTRO NORTE", 
+                    "activa": True,
+                    "id_tienda_activa": "TRL-QSN"
+                }
+            }
+        """
+        tiendas = {}
+        
+        try:
+            excel_file = pd.ExcelFile(io.BytesIO(file_content))
+            
+            # Buscar hoja "Tiendas" (case-insensitive)
+            hoja_tiendas = None
+            for sheet_name in excel_file.sheet_names:
+                if str(sheet_name).upper().strip() == "TIENDAS":
+                    hoja_tiendas = sheet_name
+                    break
+            
+            if not hoja_tiendas:
+                logger.warning("⚠️ No se encontró hoja 'Tiendas' en el Excel")
+                return tiendas
+            
+            # Leer hoja con header en primera fila
+            df_tiendas = pd.read_excel(
+                excel_file, 
+                sheet_name=hoja_tiendas, 
+                header=0,
+                keep_default_na=False
+            )
+            
+            # Normalizar nombres de columnas (mantener espacios para búsqueda flexible)
+            columnas_originales = [str(col).strip() for col in df_tiendas.columns]
+            df_tiendas.columns = columnas_originales
+            
+            logger.info(f"📋 Hoja 'Tiendas' encontrada con {len(df_tiendas)} filas")
+            logger.info(f"🔍 Columnas en hoja Tiendas: {columnas_originales}")
+            
+            # Buscar columnas necesarias (flexible)
+            col_codigo = None
+            col_nombre = None
+            col_activa = None
+            col_id_activa = None
+            
+            for col in columnas_originales:
+                col_upper = str(col).upper().strip()
+                
+                if col_codigo is None and "ID" in col_upper and "TIENDA" in col_upper:
+                    # Preferir "ID TIENDA" antes que variaciones
+                    if "ID_TIENDA_ACTIVA" not in col_upper:
+                        col_codigo = col
+                
+                if col_nombre is None and "NOMBRE" in col_upper and "TIENDA" in col_upper:
+                    col_nombre = col
+                
+                if col_activa is None and "ACTIVA" in col_upper:
+                    # Preferir "ACTIVO" sin "_TIENDA"
+                    if "ID_TIENDA" not in col_upper:
+                        col_activa = col
+                
+                if col_id_activa is None and "ID_TIENDA_ACTIVA" in col_upper:
+                    col_id_activa = col
+            
+            if not col_codigo:
+                logger.warning("⚠️ No se encontró columna 'ID TIENDA' en hoja Tiendas")
+                return tiendas
+            
+            logger.info(f"   Usando columnas: ID TIENDA='{col_codigo}', NOMBRE='{col_nombre}', ACTIVO='{col_activa}'")
+            
+            # Procesar cada fila
+            for idx, row in df_tiendas.iterrows():
+                codigo = str(row.get(col_codigo, "")).strip()
+                if not codigo:
+                    continue
+                
+                # Normalizar código (mayúsculas, pero mantener guiones)
+                codigo = codigo.upper()
+                
+                nombre = str(row.get(col_nombre, "")).strip() if col_nombre else codigo
+                activa_str = str(row.get(col_activa, "SI")).strip().upper() if col_activa else "SI"
+                activa = activa_str in ["SI", "SÍ", "YES", "TRUE", "1", "ACTIVA"]
+                
+                id_tienda_activa = str(row.get(col_id_activa, codigo)).strip() if col_id_activa else codigo
+                
+                tiendas[codigo] = {
+                    "nombre": nombre,
+                    "activa": activa,
+                    "id_tienda_activa": id_tienda_activa
+                }
+                
+                logger.debug(f"   Tienda: {codigo} → {nombre} (Activa: {activa}, ID Activa: {id_tienda_activa})")
+            
+            logger.info(f"✅ Se cargaron {len(tiendas)} tiendas desde la hoja Tiendas")
+            logger.info(f"   Tiendas cargadas: {', '.join(tiendas.keys())}")
+            
+        except Exception as e:
+            logger.error(f"❌ Error al leer hoja 'Tiendas': {e}", exc_info=True)
+        
+        return tiendas
+    
+    def leer_hoja_movimiento(self, file_content: bytes, catalogo_tiendas: Optional[Dict[str, Dict[str, Any]]] = None) -> Dict[str, Any]:
+        """
+        Lee la hoja 'Movimiento' del Excel y retorna distribuciones por producto y tienda.
+        
+        Estructura esperada:
+        - CODIGO PRODUCTO: El SKU del producto
+        - TIENDAS: Nombre o código de la tienda
+        - CANTIDAD: Cantidad a enviar a esa tienda
+        
+        Args:
+            file_content: Contenido del archivo Excel en bytes
+            catalogo_tiendas: Diccionario opcional con tiendas válidas {código -> {nombre, activa}}
+            
+        Returns:
+            Dict con estructura:
+            {
+                "resumen": {
+                    "filas_leidas": N,
+                    "filas_validas": M,
+                    "productos_unicos": P,
+                    "distribuciones_totales": D
+                },
+                "datos": [
+                    {
+                        "codigo_producto": "MTF123.9",
+                        "tienda_codigo": "ROL01",
+                        "tienda_nombre": "ROLAND QUICENTRO NORTE",
+                        "cantidad": 10,
+                        "fila_origen": 3,
+                        "validacion": {"valida": True, "errores": [...], "warnings": [...]}
+                    },
+                    ...
+                ],
+                "errores": [...]
+            }
+        """
+        resultado = {
+            "resumen": {
+                "filas_leidas": 0,
+                "filas_validas": 0,
+                "productos_unicos": 0,
+                "distribuciones_totales": 0
+            },
+            "datos": [],
+            "errores": []
+        }
+        
+        try:
+            excel_file = pd.ExcelFile(io.BytesIO(file_content))
+            
+            # Buscar hoja "Movimiento" (case-insensitive)
+            hoja_movimiento = None
+            for sheet_name in excel_file.sheet_names:
+                if str(sheet_name).upper().strip() == "MOVIMIENTO":
+                    hoja_movimiento = sheet_name
+                    break
+            
+            if not hoja_movimiento:
+                logger.warning("⚠️ No se encontró hoja 'Movimiento' en el Excel")
+                return resultado
+            
+            # Leer hoja con header en primera fila
+            df_movimiento = pd.read_excel(
+                excel_file,
+                sheet_name=hoja_movimiento,
+                header=0,
+                keep_default_na=False
+            )
+            
+            # Normalizar nombres de columnas
+            df_movimiento.columns = [str(col).strip() for col in df_movimiento.columns]
+            
+            logger.info(f"📋 Hoja 'Movimiento' encontrada con {len(df_movimiento)} filas")
+            logger.info(f"🔍 Columnas en hoja Movimiento: {list(df_movimiento.columns)}")
+            
+            # Buscar columnas necesarias (flexible)
+            col_codigo = None
+            col_tienda = None
+            col_cantidad = None
+            
+            for col in df_movimiento.columns:
+                col_upper = str(col).upper().strip()
+                if col_codigo is None:
+                    if "CODIGO" in col_upper and "PRODUCTO" in col_upper:
+                        col_codigo = col
+                    elif col_upper in ["PRODUCTO", "SKU", "CODIGO"]:
+                        col_codigo = col
+                
+                if col_tienda is None:
+                    if "TIENDA" in col_upper:
+                        col_tienda = col
+                
+                if col_cantidad is None:
+                    if "CANTIDAD" in col_upper or col_upper in ["CANT", "QTY"]:
+                        col_cantidad = col
+            
+            # Validar que se encontraron las columnas obligatorias
+            if not col_codigo:
+                resultado["errores"].append("❌ No se encontró columna 'CODIGO PRODUCTO' en hoja Movimiento")
+                logger.error("❌ Columna CODIGO PRODUCTO no encontrada")
+                return resultado
+            
+            if not col_tienda:
+                resultado["errores"].append("❌ No se encontró columna 'TIENDAS' en hoja Movimiento")
+                logger.error("❌ Columna TIENDAS no encontrada")
+                return resultado
+            
+            if not col_cantidad:
+                resultado["errores"].append("❌ No se encontró columna 'CANTIDAD' en hoja Movimiento")
+                logger.error("❌ Columna CANTIDAD no encontrada")
+                return resultado
+            
+            logger.info(f"   Usando columnas: CODIGO PRODUCTO='{col_codigo}', TIENDAS='{col_tienda}', CANTIDAD='{col_cantidad}'")
+            
+            # Procesar cada fila
+            productos_vistos = set()
+            
+            for idx, row in df_movimiento.iterrows():
+                fila_num = (int(idx) if isinstance(idx, (int, float)) else 0) + 2  # +1 porque idx empieza en 0, +1 más para header
+                resultado["resumen"]["filas_leidas"] += 1
+                
+                codigo_producto = str(row.get(col_codigo, "")).strip()
+                tienda_str = str(row.get(col_tienda, "")).strip()
+                cantidad_raw = row.get(col_cantidad)
+                
+                # Validar campos obligatorios
+                if not codigo_producto:
+                    logger.debug(f"⚠️ Fila {fila_num}: CODIGO PRODUCTO vacío, ignorando")
+                    continue
+                
+                if not tienda_str:
+                    logger.debug(f"⚠️ Fila {fila_num}: TIENDA vacía, ignorando")
+                    continue
+                
+                if cantidad_raw is None or str(cantidad_raw).strip() == "":
+                    logger.debug(f"⚠️ Fila {fila_num}: CANTIDAD vacía, ignorando")
+                    continue
+                
+                # Convertir cantidad a entero
+                try:
+                    cantidad = int(float(str(cantidad_raw).replace(",", ".")))
+                    if cantidad <= 0:
+                        logger.debug(f"⚠️ Fila {fila_num}: Cantidad debe ser > 0 ({cantidad}), ignorando")
+                        continue
+                except (ValueError, TypeError):
+                    logger.debug(f"⚠️ Fila {fila_num}: Cantidad no es número válido: '{cantidad_raw}', ignorando")
+                    continue
+                
+                # Normalizar códigos
+                codigo_producto = codigo_producto.upper()
+                
+                # Normalizar código de tienda (puede ser nombre o código)
+                tienda_codigo = tienda_str.upper().replace(" ", "")
+                tienda_nombre = tienda_str
+                validacion_tienda = {"valida": True, "errores": [], "warnings": []}
+                
+                # Validar contra catálogo si está disponible
+                if catalogo_tiendas:
+                    # Buscar el código en el catálogo
+                    tienda_encontrada = False
+                    for cod_cat, info_cat in catalogo_tiendas.items():
+                        # Buscar por código exacto
+                        if tienda_codigo == cod_cat:
+                            tienda_codigo = cod_cat
+                            tienda_nombre = info_cat.get("nombre", tienda_str)
+                            tienda_encontrada = True
+                            
+                            # Validar que esté activa
+                            if not info_cat.get("activa", False):
+                                validacion_tienda["valida"] = False
+                                validacion_tienda["errores"].append(
+                                    f"Tienda '{tienda_codigo}' ({tienda_nombre}) está INACTIVA"
+                                )
+                            break
+                        # Buscar por nombre (case-insensitive, sin espacios)
+                        elif tienda_codigo == str(info_cat.get("nombre", "")).upper().replace(" ", ""):
+                            tienda_codigo = cod_cat
+                            tienda_nombre = info_cat.get("nombre", tienda_str)
+                            tienda_encontrada = True
+                            
+                            if not info_cat.get("activa", False):
+                                validacion_tienda["valida"] = False
+                                validacion_tienda["errores"].append(
+                                    f"Tienda '{tienda_codigo}' ({tienda_nombre}) está INACTIVA"
+                                )
+                            break
+                    
+                    if not tienda_encontrada:
+                        validacion_tienda["valida"] = False
+                        validacion_tienda["errores"].append(
+                            f"Tienda '{tienda_str}' no existe en el catálogo de tiendas"
+                        )
+                        logger.warning(f"⚠️ Fila {fila_num}: Tienda '{tienda_str}' no encontrada en catálogo")
+                else:
+                    validacion_tienda["warnings"].append(
+                        "No se encontró hoja 'Tiendas' para validar tiendas"
+                    )
+                
+                # Agregar distribución
+                distribucion = {
+                    "codigo_producto": codigo_producto,
+                    "tienda_codigo": tienda_codigo,
+                    "tienda_nombre": tienda_nombre,
+                    "cantidad": cantidad,
+                    "fila_origen": fila_num,
+                    "validacion": validacion_tienda
+                }
+                
+                resultado["datos"].append(distribucion)
+                resultado["resumen"]["filas_validas"] += 1
+                resultado["resumen"]["distribuciones_totales"] += 1
+                
+                # Contar productos únicos
+                if codigo_producto not in productos_vistos:
+                    productos_vistos.add(codigo_producto)
+                    resultado["resumen"]["productos_unicos"] += 1
+                
+                logger.debug(f"   ✓ Fila {fila_num}: {codigo_producto} → {tienda_nombre} x{cantidad}")
+            
+            logger.info(
+                f"✅ Hoja 'Movimiento' procesada: {resultado['resumen']['filas_validas']} filas válidas, "
+                f"{resultado['resumen']['productos_unicos']} productos únicos, "
+                f"{resultado['resumen']['distribuciones_totales']} distribuciones"
+            )
+            
+        except Exception as e:
+            logger.error(f"❌ Error al leer hoja 'Movimiento': {e}", exc_info=True)
+            resultado["errores"].append(f"Error al leer hoja 'Movimiento': {str(e)}")
+        
+        return resultado
+    
+    def extraer_distribuciones_tienda(
+        self, 
+        row: pd.Series, 
+        columnas: List[str],
+        catalogo_tiendas: Optional[Dict[str, Dict[str, Any]]] = None
+    ) -> List[Dict[str, Any]]:
+        """
+        Extrae distribuciones por tienda desde las columnas del Excel.
+        
+        Soporta dos formatos:
+        1. Formato antiguo: "ROLAND QUICENTRO NORTE", "ROLAND CC EL BOSQUE"
+        2. Formato nuevo: "ROL01", "ROL02", "ROL03" (códigos de tienda)
+        
+        Args:
+            row: Fila de datos con las cantidades
+            columnas: Lista de nombres de columnas
+            catalogo_tiendas: Diccionario opcional con tiendas válidas del Excel
+            
+        Returns:
+            Lista de distribuciones: [{"tienda_codigo": "ROL01", "tienda_nombre": "...", "cantidad": 10, "validacion": {...}}]
+        """
         distribuciones = []
-        PREFIJO_TIENDA = "roland "
+        
+        # Formato antiguo: columnas que empiezan con "roland "
+        PREFIJO_TIENDA_ANTIGUO = "roland "
         
         for col_name in columnas:
             col_lower = str(col_name).lower().strip()
+            col_upper = str(col_name).upper().strip()
             
-            if col_lower.startswith(PREFIJO_TIENDA):
-                nombre_tienda = col_name[len(PREFIJO_TIENDA):].strip()
+            # Formato nuevo: columnas tipo ROL01, ROL02, etc.
+            # Detectar si es código de tienda: empieza con letras y termina con números
+            import re
+            es_codigo_tienda = bool(re.match(r'^[A-Z]{3}\d{2}$', col_upper))
+            
+            # Formato antiguo: empieza con "roland "
+            es_formato_antiguo = col_lower.startswith(PREFIJO_TIENDA_ANTIGUO)
+            
+            if es_codigo_tienda or es_formato_antiguo:
                 cantidad = self.get_numeric_value(row, col_name)
                 
                 if cantidad and cantidad > 0:
                     cantidad_int = int(cantidad)
-                    distribuciones.append({
-                        "tienda_codigo": nombre_tienda.upper(),
-                        "tienda_nombre": nombre_tienda.title(),
-                        "cantidad": cantidad_int
-                    })
+                    
+                    if es_codigo_tienda:
+                        # Formato nuevo: usar código directamente
+                        tienda_codigo = col_upper
+                        validacion_tienda = {"valida": True, "errores": [], "warnings": []}
+                        
+                        # Validar contra catálogo si está disponible
+                        if catalogo_tiendas:
+                            if tienda_codigo not in catalogo_tiendas:
+                                validacion_tienda["valida"] = False
+                                validacion_tienda["errores"].append(
+                                    f"Código de tienda '{tienda_codigo}' no existe en hoja 'Tiendas'"
+                                )
+                                tienda_nombre = tienda_codigo
+                                logger.warning(f"⚠️ Tienda {tienda_codigo} no encontrada en catálogo")
+                            else:
+                                tienda_info = catalogo_tiendas[tienda_codigo]
+                                tienda_nombre = tienda_info.get("nombre", tienda_codigo)
+                                
+                                # Validar que esté activa
+                                if not tienda_info.get("activa", False):
+                                    validacion_tienda["valida"] = False
+                                    validacion_tienda["errores"].append(
+                                        f"Tienda '{tienda_codigo}' ({tienda_nombre}) está INACTIVA"
+                                    )
+                                    logger.warning(f"⚠️ Tienda {tienda_codigo} está inactiva")
+                        else:
+                            # No hay catálogo, usar código como nombre
+                            tienda_nombre = tienda_codigo
+                            validacion_tienda["warnings"].append(
+                                "No se encontró hoja 'Tiendas' para validar el código"
+                            )
+                        
+                        distribuciones.append({
+                            "tienda_codigo": tienda_codigo,
+                            "tienda_nombre": tienda_nombre,
+                            "cantidad": cantidad_int,
+                            "validacion": validacion_tienda
+                        })
+                    else:
+                        # Formato antiguo: extraer nombre después de "roland "
+                        nombre_tienda = col_name[len(PREFIJO_TIENDA_ANTIGUO):].strip()
+                        distribuciones.append({
+                            "tienda_codigo": nombre_tienda.upper(),
+                            "tienda_nombre": nombre_tienda.title(),
+                            "cantidad": cantidad_int,
+                            "validacion": {"valida": True, "errores": [], "warnings": []}
+                        })
         
         return distribuciones
     

@@ -337,14 +337,10 @@ MBA3_QUERY_REMISIONES = (
     "FROM CLNT_FACTURA_PRINCIPAL "
     "WHERE TIPO_DOCUMENTO='REM' AND CONFIRMADO='false' AND Remision_Facturada='false' "
     "AND ObjDatosFactura IS NULL AND FACTURA_IMPRESA='false' AND ANULADA='false'"
-)
-
-# ============================================================================
+)# ============================================================================
 # Configuración de Staging de Productos
 # ============================================================================
 # Activar staging para productos (maestros MBA3 y SAP)
-USE_PRODUCT_STAGING = os.getenv("USE_PRODUCT_STAGING", "true").lower() == "true"
-
-# Permitir fallback a ERP si staging falla (solo en desarrollo)
+USE_PRODUCT_STAGING = os.getenv("USE_PRODUCT_STAGING", "true").lower() == "true"# Permitir fallback a ERP si staging falla (solo en desarrollo)
 ENVIRONMENT = os.getenv("ENVIRONMENT", "production")  # 'development' | 'production'
 ALLOW_ERP_FALLBACK = os.getenv("ALLOW_ERP_FALLBACK", "false").lower() == "true" and ENVIRONMENT != "production"

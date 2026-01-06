@@ -161,9 +161,7 @@ docs/
 - Los archivos marcados con 🚀 son guías de inicio rápido
 - **Nuevo:** Sistema completo de Homologaciones SKU disponible
 - Para problemas específicos, consulta la sección de troubleshooting en cada documento
-- Toda la documentación está actualizada con las últimas implementaciones
-
-## 🆕 Últimas Adiciones### Módulo de Homologaciones SKU (Diciembre 2024)
+- Toda la documentación está actualizada con las últimas implementaciones## 🆕 Últimas Adiciones### Módulo de Homologaciones SKU (Diciembre 2024)
 - Sistema completo para gestionar correspondencias SKU entre MBA3 y SAP
 - 4 endpoints REST: listar, actualizar, bulk update, sincronizar
 - Detección automática de diferencias

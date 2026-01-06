@@ -6,10 +6,16 @@ import logging
 import base64
 from typing import Dict, Optional
 from datetime import datetime
-from fastapi import FastAPI, UploadFile, File, Depends, HTTPException, Path, Query, status
+from fastapi import FastAPI, UploadFile, File, Depends, HTTPException, Path, Query, Body, status
 from fastapi.responses import JSONResponse
 
 from src.security.jwt_auth import verify_jwt_token, require_permission
+from src.exceptions import BusinessException
+from src.models import (
+    RespuestaProveedorRequest,
+    FormularioProveedorResponse,
+    RespuestaProveedorResponse
+)
 
 logger = logging.getLogger(__name__)
 
@@ -254,6 +260,9 @@ def register_plantillas_endpoints(app: FastAPI):
         except HTTPException:
             # Re-lanzar excepciones HTTP
             raise
+        except BusinessException:
+            # BusinessException se maneja en el exception handler global
+            raise
         except Exception as e:
             logger.error(f"❌ Error al procesar plantilla: {e}", exc_info=True)
             raise HTTPException(
@@ -320,11 +329,14 @@ def register_plantillas_endpoints(app: FastAPI):
                 ultimo_pedido = repo.get_ultimo_pedido(user_id)
                 
                 if not ultimo_pedido:
+                    # Retornar 200 OK con respuesta clara (no es un error, es un estado válido)
                     return JSONResponse(
-                        status_code=404,
+                        status_code=200,
                         content={
-                            "status": "not_found",
-                            "message": "No hay pedidos cargados para este usuario"
+                            "status": "success",
+                            "hay_datos": False,
+                            "data": None,
+                            "mensaje": "No hay pedidos cargados para este usuario"
                         }
                     )
                 
@@ -345,7 +357,16 @@ def register_plantillas_endpoints(app: FastAPI):
                     if respuesta:
                         pedido_completo["respuesta_proveedor"] = respuesta
                 
-                return JSONResponse(status_code=200, content=pedido_completo)
+                # Retornar con estructura consistente (200 OK, con hay_datos=True)
+                return JSONResponse(
+                    status_code=200,
+                    content={
+                        "status": "success",
+                        "hay_datos": True,
+                        "data": pedido_completo,
+                        "mensaje": "Último pedido recuperado exitosamente"
+                    }
+                )
             
         except HTTPException:
             raise
@@ -465,6 +486,8 @@ def register_plantillas_endpoints(app: FastAPI):
         file: UploadFile = File(..., description="Archivo Excel (.xlsx) con hojas 'CABECERA_PEDIDO' y 'DETALLE_ARTICULO'"),
         hoja_cabecera: str = Query("CABECERA_PEDIDO", description="Nombre de la hoja de cabecera"),
         hoja_detalle: str = Query("DETALLE_ARTICULO", description="Nombre de la hoja de detalle"),
+        validar_sap: bool = Query(True, description="Validar códigos de producto contra SAP"),
+        sap_obligatorio: bool = Query(True, description="Si True, errores de SAP bloquean la importación. Si False, solo genera warnings"),
         user: Dict = Depends(verify_jwt_token),
         _: None = Depends(require_permission('mba3-consultas.proceso.execute'))
     ):
@@ -562,13 +585,130 @@ def register_plantillas_endpoints(app: FastAPI):
                 hoja_detalle=hoja_detalle
             )
             
-            # Retornar resultado del parsing
+            # ✅ VALIDACIÓN SAP POST-PARSING (si está habilitada)
+            if validar_sap and resultado.get("data"):
+                from src.database.services.pedido_validator import PedidoValidator
+                
+                # Extraer códigos únicos de productos (performance: validar una vez por código)
+                codigos_productos = list(set([
+                    item.get("codigoProducto")
+                    for item in resultado.get("data", [])
+                    if item.get("codigoProducto")
+                ]))
+                
+                if codigos_productos:
+                    validator = PedidoValidator()
+                    validacion_sap = validator.validar_productos_existen_en_sap(
+                        codigos_productos=codigos_productos,
+                        usar_cache=True,
+                        sap_obligatorio=sap_obligatorio
+                    )
+                    
+                    # Mapear códigos a filas para reportar errores por fila
+                    # Crear mapa código -> lista de filas que lo usan
+                    codigo_a_filas = {}
+                    for item in resultado.get("data", []):
+                        codigo = item.get("codigoProducto")
+                        fila = item.get("filaOrigen")
+                        if codigo and fila:
+                            if codigo not in codigo_a_filas:
+                                codigo_a_filas[codigo] = []
+                            codigo_a_filas[codigo].append(fila)
+                    
+                    # Agregar errores y warnings por fila
+                    codigos_no_encontrados = set(validacion_sap.get("no_encontrados", []))
+                    codigos_errores = set(validacion_sap.get("errores", []))
+                    codigos_warnings = set(validacion_sap.get("warnings", []))
+                    
+                    # Errores: códigos no encontrados o errores críticos
+                    for codigo in (codigos_no_encontrados | codigos_errores):
+                        detalle_codigo = validacion_sap.get("detalle", {}).get(codigo, {})
+                        mensaje = detalle_codigo.get("mensaje") or f"El código de producto '{codigo}' no es válido en SAP"
+                        
+                        # Agregar error a todas las filas que usan este código
+                        for fila in codigo_a_filas.get(codigo, []):
+                            resultado["errores"].append({
+                                "fila": fila,
+                                "campo": "CodigoProducto",
+                                "tipo": "ERROR",
+                                "mensaje": mensaje
+                            })
+                    
+                    # Warnings: errores de SAP pero no es obligatorio
+                    for codigo in codigos_warnings:
+                        detalle_codigo = validacion_sap.get("detalle", {}).get(codigo, {})
+                        mensaje = detalle_codigo.get("mensaje") or f"No se pudo validar el código '{codigo}' en SAP"
+                        
+                        # Agregar warning a todas las filas que usan este código
+                        for fila in codigo_a_filas.get(codigo, []):
+                            resultado["errores"].append({
+                                "fila": fila,
+                                "campo": "CodigoProducto",
+                                "tipo": "WARNING",
+                                "mensaje": mensaje
+                            })
+                    
+                    # ✅ RECALCULAR filasValidas/filasInvalidas (no modificar directamente)
+                    # Contar filas con errores críticos (ERROR, no WARNING)
+                    filas_con_errores_criticos = set()
+                    for error in resultado.get("errores", []):
+                        if error.get("tipo") == "ERROR":
+                            fila = error.get("fila")
+                            if fila and fila > 0:  # Fila válida (> 0)
+                                filas_con_errores_criticos.add(fila)
+                    
+                    # Recalcular contadores
+                    filas_leidas = resultado["resumen"].get("filasLeidas", 0)
+                    filas_invalidas_originales = resultado["resumen"].get("filasInvalidas", 0)
+                    
+                    # Filas inválidas = errores originales del parsing + filas con errores SAP
+                    # Pero solo contar una vez por fila
+                    filas_invalidas_finales = max(
+                        filas_invalidas_originales,
+                        len(filas_con_errores_criticos)
+                    )
+                    
+                    resultado["resumen"]["filasInvalidas"] = filas_invalidas_finales
+                    resultado["resumen"]["filasValidas"] = max(
+                        0,
+                        filas_leidas - filas_invalidas_finales
+                    )
+                    
+                    # Agregar resumen de validación SAP al resultado
+                    resultado["validacion_sap"] = {
+                        "total_codigos": len(codigos_productos),
+                        "validos": len(validacion_sap.get("validos", [])),
+                        "no_encontrados": len(codigos_no_encontrados),
+                        "errores": len(codigos_errores),
+                        "warnings": len(codigos_warnings),
+                        "todos_validos": validacion_sap.get("todos_validos", False),
+                        "detalle_validacion": {
+                            codigo: {
+                                "existe": info.get("existe"),
+                                "severity": info.get("severity"),
+                                "error": info.get("error"),
+                                "mensaje": info.get("mensaje")
+                            }
+                            for codigo, info in validacion_sap.get("detalle", {}).items()
+                        }
+                    }
+                    
+                    logger.info(
+                        f"📊 Validación SAP: {len(validacion_sap.get('validos', []))} válidos, "
+                        f"{len(codigos_no_encontrados)} no encontrados, "
+                        f"{len(codigos_errores)} errores, {len(codigos_warnings)} warnings"
+                    )
+            
+            # Retornar resultado del parsing con validación SAP
             return JSONResponse(
                 status_code=200,
                 content=resultado
             )
             
         except HTTPException:
+            raise
+        except BusinessException:
+            # BusinessException se maneja en el exception handler global
             raise
         except Exception as e:
             logger.error(f"❌ Error al importar Excel: {e}", exc_info=True)
@@ -1115,5 +1255,193 @@ def register_plantillas_endpoints(app: FastAPI):
                     "error": "internal_error",
                     "message": f"Error interno al crear orden de compra: {str(e)}"
                 }
+            )
+    
+    # ============================================================================
+    # ENDPOINTS FASE 3: Interfaz Web para Proveedor (NUEVO)
+    # ============================================================================
+    
+    @app.get("/api/pedidos/{pedido_id}/formulario-proveedor", 
+             response_model=FormularioProveedorResponse,
+             tags=["Pedidos - Proveedor"])
+    async def obtener_formulario_proveedor(
+        pedido_id: str = Path(..., description="UUID del pedido"),
+        user: Dict = Depends(verify_jwt_token),
+        _: None = Depends(require_permission('mba3-consultas.facturas.view'))
+    ):
+        """
+        Obtiene los datos del pedido formateados para el formulario web del proveedor.
+        
+        **Características:**
+        - ✅ Idempotente: muestra respuesta existente si ya respondió
+        - ✅ Indica si puede responder (no está cerrado/bloqueado)
+        - ✅ Incluye datos de respuesta previa si existe
+        - ✅ Muestra estado claro del pedido
+        
+        **Estados que bloquean respuesta:**
+        - `CONFIRMADO_PROVEEDOR`
+        - `ORDEN_COMPRA_CREADA`
+        - `ENVIADA_SAP`
+        - `CERRADO`
+        - `CANCELADO`
+        
+        **Respuesta exitosa:**
+        ```json
+        {
+            "pedido_id": "...",
+            "numero_pedido": "P-12.48 - 12 - 2025",
+            "fecha_pedido": "2025-01-21",
+            "proveedor_nombre": "Proveedor XYZ",
+            "estado_pedido": "PENDIENTE_CONFIRMACION_PROVEEDOR",
+            "puede_responder": true,
+            "tiene_respuesta": false,
+            "productos": [
+                {
+                    "pedido_detalle_id": "...",
+                    "codigo_producto": "PROD001",
+                    "descripcion": "Producto ejemplo",
+                    "cantidad_total_solicitada": 100,
+                    "costo_unitario_original": 50.00,
+                    "tiendas": [...]
+                }
+            ]
+        }
+        ```
+        
+        Returns:
+            JSON con datos formateados para formulario
+        """
+        try:
+            from src.database.services.pedido_proveedor_web_service import PedidoProveedorWebService
+            
+            service = PedidoProveedorWebService()
+            formulario = service.obtener_formulario_proveedor(pedido_id)
+            
+            return JSONResponse(status_code=200, content=formulario)
+            
+        except ValueError as e:
+            raise HTTPException(status_code=404, detail=str(e))
+        except Exception as e:
+            logger.error(f"❌ Error al obtener formulario proveedor: {e}", exc_info=True)
+            raise HTTPException(
+                status_code=500,
+                detail=f"Error interno al obtener formulario: {str(e)}"
+            )
+    
+    @app.post("/api/pedidos/{pedido_id}/enviar-respuesta-proveedor",
+              response_model=RespuestaProveedorResponse,
+              tags=["Pedidos - Proveedor"])
+    async def enviar_respuesta_proveedor(
+        pedido_id: str = Path(..., description="UUID del pedido"),
+        respuesta: RespuestaProveedorRequest = Body(...),
+        user: Dict = Depends(verify_jwt_token),
+        _: None = Depends(require_permission('mba3-consultas.proceso.execute'))
+    ):
+        """
+        Recibe la respuesta del proveedor desde el formulario web.
+        
+        **Características:**
+        - ✅ Reutiliza validaciones de PedidoProveedorService
+        - ✅ Soporta guardar como borrador o confirmado
+        - ✅ Validación estricta solo si es confirmado
+        - ✅ Borradores pueden tener errores (se guardan con warnings)
+        
+        **Estados de respuesta:**
+        - `borrador`: Guarda sin validación estricta, estado `BORRADOR`
+        - `confirmado`: Valida estrictamente, estado `PENDIENTE_REVISION`, actualiza pedido
+        
+        **Validaciones aplicadas:**
+        - ✅ Cantidad confirmada >= 0
+        - ✅ Cantidad confirmada <= cantidad solicitada (CRÍTICO)
+        - ✅ Precios ajustados >= 0
+        - ⚠️ Warning si confirma menos del 80%
+        - ⚠️ Warning si precio aumenta más del 10%
+        
+        **Request:**
+        ```json
+        {
+            "productos": [
+                {
+                    "pedido_detalle_id": "...",
+                    "codigo_producto": "PROD001",
+                    "cantidad_confirmada_total": 100,
+                    "costo_unitario_ajustado": 50.00,
+                    "descuento_ajustado": 5.0,
+                    "observaciones": "Disponible",
+                    "distribucion_tiendas": [
+                        {"tienda_id": "...", "cantidad_confirmada": 60}
+                    ]
+                }
+            ],
+            "observaciones_generales": "Todos disponibles",
+            "estado": "confirmado"
+        }
+        ```
+        
+        **Respuesta exitosa:**
+        ```json
+        {
+            "status": "success",
+            "message": "Respuesta del proveedor guardada como confirmado",
+            "respuesta_id": "...",
+            "validacion": {
+                "valido": true,
+                "errores": [],
+                "warnings": [...]
+            },
+            "cantidades_guardadas": 10,
+            "precios_guardados": 5,
+            "pedido_id": "...",
+            "estado_guardado": "PENDIENTE_REVISION"
+        }
+        ```
+        
+        **Respuesta con errores (solo si es confirmado):**
+        ```json
+        {
+            "status": "validation_error",
+            "message": "La respuesta contiene errores de validación y no puede ser confirmada",
+            "validacion": {
+                "valido": false,
+                "errores": [...],
+                "warnings": [...]
+            },
+            "pedido_id": "..."
+        }
+        ```
+        
+        Returns:
+            JSON con resultado del procesamiento
+        """
+        try:
+            from src.database.services.pedido_proveedor_web_service import PedidoProveedorWebService
+            
+            service = PedidoProveedorWebService()
+            usuario_id = get_user_id(user)
+            
+            # Convertir productos a formato dict
+            productos_dict = [producto.model_dump() for producto in respuesta.productos]
+            
+            resultado = service.procesar_respuesta_proveedor_web(
+                pedido_id=pedido_id,
+                productos=productos_dict,
+                observaciones_generales=respuesta.observaciones_generales,
+                estado=respuesta.estado,
+                usuario_id=usuario_id
+            )
+            
+            status_code = 200
+            if resultado["status"] == "validation_error":
+                status_code = 400
+            
+            return JSONResponse(status_code=status_code, content=resultado)
+            
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        except Exception as e:
+            logger.error(f"❌ Error al enviar respuesta del proveedor: {e}", exc_info=True)
+            raise HTTPException(
+                status_code=500,
+                detail=f"Error interno al procesar respuesta: {str(e)}"
             )
 

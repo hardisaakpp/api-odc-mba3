@@ -7,7 +7,7 @@ from fastapi import FastAPI, Request, status, HTTPException
 from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
 
-from src.exceptions import QueryValidationError, MBA3ConnectionError, MBA3QueryError
+from src.exceptions import QueryValidationError, MBA3ConnectionError, MBA3QueryError, BusinessException
 
 logger = logging.getLogger(__name__)
 
@@ -109,6 +109,37 @@ def setup_exception_handlers(app: FastAPI):
         return JSONResponse(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             content={"error": str(exc), "type": "mba3_query_error"}
+        )
+    
+    @app.exception_handler(BusinessException)
+    async def business_exception_handler(request: Request, exc: BusinessException):
+        """
+        Maneja errores de lógica de negocio (BusinessException).
+        
+        Estos errores representan validaciones críticas que bloquean operaciones,
+        como validación SAP obligatoria antes de persistir.
+        """
+        logger.warning(f"⚠️ Error de negocio: {str(exc)}")
+        
+        # Construir respuesta estructurada
+        response_content = {
+            "type": "business_exception",
+            "error_code": exc.error_code,
+            "message": exc.message,
+            "status_code": 400
+        }
+        
+        # Agregar datos estructurados si existen
+        if exc.data:
+            response_content.update(exc.data)
+        
+        # Mantener compatibilidad con código antiguo que espera "error"
+        if "error" not in response_content:
+            response_content["error"] = exc.message
+        
+        return JSONResponse(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            content=response_content
         )
     
     @app.exception_handler(Exception)
