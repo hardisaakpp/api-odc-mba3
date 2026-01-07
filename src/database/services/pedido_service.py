@@ -25,6 +25,10 @@ from .pedido_consolidator import PedidoConsolidator
 from .pedido_type_converter import PedidoTypeConverter
 from .pedido_format_handler import PedidoFormatHandler
 from .pedido_sap_handler import PedidoSAPHandler
+from .pedido_tiendas_handler import procesar_tiendas_y_validar_sap_v1_0
+from .pedido_detalle_handler import procesar_detalle_articulos_v1_0
+from .pedido_movimiento_handler import procesar_movimiento_y_coherencia_v1_0
+from .pedido_guardado_handler import guardar_pedido_v1_0
 
 logger = logging.getLogger(__name__)
 
@@ -1224,316 +1228,6 @@ class PedidoService:
             resultado["errores"].append(str(e))
             return resultado
     
-    def _procesar_tiendas_y_validar_sap_v1_0(
-        self, 
-        file_content: bytes, 
-        resultado: Dict[str, Any], 
-        validar_sap: bool, 
-        sap_obligatorio: bool,
-        hoja_tiendas: str
-    ) -> Optional[Dict[str, Any]]:
-        """Procesa hoja Tiendas y valida contra SAP. Retorna catálogo."""
-        logger.info("📋 PASO 1: Procesando hoja de Tiendas")
-        catalogo_tiendas = self.parser.leer_hoja_tiendas(file_content)
-        resultado["tiendas_cargadas"] = catalogo_tiendas if catalogo_tiendas else []
-        
-        if not catalogo_tiendas:
-            resultado["warnings"].append("⚠️ No se encontró o está vacía la hoja 'Tiendas'")
-            logger.warning("⚠️ Catálogo de tiendas vacío")
-        else:
-            resultado["resumen"]["tiendas_validadas"] = len(catalogo_tiendas)
-            resultado["resumen"]["hojas_procesadas"].append("Tiendas")
-            logger.info(f"✅ Tiendas cargadas: {len(catalogo_tiendas)}")
-
-        # Validación SAP de tiendas
-        if validar_sap and catalogo_tiendas:
-            logger.info("📋 Validación SAP (Tiendas): Verificando ID TIENDA contra SAP OWHS")
-            codigos_bodegas = list(catalogo_tiendas.keys())
-            try:
-                validacion_bodegas = self.validator.validar_bodegas_existen_en_sap(
-                    codigos_bodegas=codigos_bodegas,
-                    sap_obligatorio=sap_obligatorio
-                )
-                resultado["validacion_bodegas"] = {
-                    "total_codigos": len(codigos_bodegas),
-                    "validas": len(validacion_bodegas.get("validas", [])),
-                    "no_encontradas": len(validacion_bodegas.get("no_encontradas", [])),
-                    "errores": len(validacion_bodegas.get("errores", [])),
-                    "warnings": len(validacion_bodegas.get("warnings", [])),
-                    "todas_validas": validacion_bodegas.get("todas_validas", False)
-                }
-
-                if sap_obligatorio and not validacion_bodegas.get("todas_validas", False):
-                    no_encontradas = validacion_bodegas.get("no_encontradas", [])
-                    errores_sap = validacion_bodegas.get("errores", [])
-                    mensaje_error = "No se puede procesar: existen ID TIENDA que no existen en SAP (OWHS)."
-                    if no_encontradas:
-                        mensaje_error += f" No encontrados: {', '.join(no_encontradas[:5])}"
-                        if len(no_encontradas) > 5:
-                            mensaje_error += f" y {len(no_encontradas) - 5} más"
-                    if errores_sap:
-                        mensaje_error += f" Errores SAP: {', '.join(errores_sap[:3])}"
-                        if len(errores_sap) > 3:
-                            mensaje_error += f" y {len(errores_sap) - 3} más"
-                    resultado["status"] = "validation_error"
-                    resultado["errores"].append(mensaje_error)
-                    logger.error(f"❌ {mensaje_error}")
-                    return None
-                
-                logger.info(f"✅ Validación SAP (ID TIENDA): {len(validacion_bodegas.get('validas', []))} válidas")
-            except Exception as e:
-                logger.error(f"❌ Error en validación SAP de tiendas: {e}")
-                if sap_obligatorio:
-                    resultado["status"] = "validation_error"
-                    resultado["errores"].append(f"Error validando Tiendas contra SAP: {str(e)}")
-                    return None
-        
-        return catalogo_tiendas
-
-    def _procesar_detalle_articulos_v1_0(
-        self,
-        file_content: bytes,
-        resultado: Dict[str, Any],
-        validar_sap: bool,
-        hoja_detalle: str
-    ) -> Optional[Dict[str, Dict]]:
-        """Procesa hoja Detalle Articulos y valida contra SAP. Retorna productos_dict o None."""
-        logger.info("📋 PASO 3: Procesando hoja de Detalle Articulos")
-        excel_file = pd.ExcelFile(io.BytesIO(file_content))
-        df_detalle = pd.read_excel(excel_file, sheet_name=hoja_detalle, header=0, keep_default_na=False)
-        df_detalle.columns = [str(col).strip() for col in df_detalle.columns]
-        
-        # Detectar columnas
-        col_codigo = col_descripcion = col_marca = col_codigo_barras = col_pack = None
-        col_costo = col_descuento = col_pvp = col_bodega = None
-        
-        for col in df_detalle.columns:
-            col_upper = str(col).upper().strip()
-            if col_codigo is None and "CODIGO" in col_upper and "PRODUCTO" in col_upper:
-                col_codigo = col
-            elif col_descripcion is None and ("DESCRIPCION" in col_upper or "DESCRIPCIÓN" in col_upper) and "SAP" in col_upper:
-                col_descripcion = col
-            elif col_marca is None and "MARCA" in col_upper:
-                col_marca = col
-            elif col_codigo_barras is None and ("CODIGO" in col_upper or "CÓDIGO" in col_upper) and "BARRAS" in col_upper:
-                col_codigo_barras = col
-            elif col_pack is None and "PACK" in col_upper:
-                col_pack = col
-            elif col_costo is None and "COSTO" in col_upper and "SIN" in col_upper and "IVA" in col_upper:
-                col_costo = col
-            elif col_descuento is None and "DESCUENTO" in col_upper:
-                col_descuento = col
-            elif col_pvp is None and "PVP" in col_upper:
-                col_pvp = col
-            elif col_bodega is None and "BODEGA" in col_upper:
-                col_bodega = col
-        
-        if not col_codigo:
-            resultado["errores"].append("❌ No se encontró columna 'CODIGO PRODUCTO' en Detalle Articulos")
-            resultado["status"] = "error"
-            return None
-        
-        # Cargar productos en diccionario
-        productos_dict = {}
-        for idx, row in df_detalle.iterrows():
-            codigo = str(row.get(col_codigo, "")).strip()
-            if not codigo:
-                continue
-            
-            productos_dict[codigo.upper()] = {
-                "codigo_interno": codigo.upper(),
-                "descripcion_sap": str(row.get(col_descripcion, "")).strip() if col_descripcion else None,
-                "marca": str(row.get(col_marca, "")).strip() if col_marca else None,
-                "codigo_barras": str(row.get(col_codigo_barras, "")).strip() if col_codigo_barras else None,
-                "pack": str(row.get(col_pack, "")).strip() if col_pack else None,
-                "costo_doc_sin_iva": self._convertir_a_decimal(row.get(col_costo)) if col_costo else None,
-                "descuento_1": self._convertir_a_decimal(row.get(col_descuento)) if col_descuento else None,
-                "pvp": self._convertir_a_decimal(row.get(col_pvp)) if col_pvp else None,
-                "bodega": self._convertir_a_entero(row.get(col_bodega)) if col_bodega else None,
-            }
-        
-        resultado["resumen"]["productos_cargados"] = len(productos_dict)
-        resultado["resumen"]["hojas_procesadas"].append("Detalle Articulos")
-        logger.info(f"✅ Productos cargados: {len(productos_dict)}")
-        
-        # Validar contra SAP
-        if validar_sap and productos_dict:
-            logger.info("📋 Validando códigos de productos en Detalle Articulos contra SAP")
-            codigos_detalle = list(productos_dict.keys())
-            validacion_detalle_sap = self.validator.validar_productos_existen_en_sap(
-                codigos_productos=codigos_detalle, usar_cache=True, sap_obligatorio=True
-            )
-            
-            no_encontrados = validacion_detalle_sap.get("no_encontrados", [])
-            errores = validacion_detalle_sap.get("errores", [])
-            
-            if no_encontrados or errores:
-                errores_lista = []
-                if no_encontrados:
-                    errores_lista.append(f"No encontrados en SAP: {', '.join(no_encontrados[:5])}")
-                    if len(no_encontrados) > 5:
-                        errores_lista[-1] += f" y {len(no_encontrados) - 5} más"
-                if errores:
-                    errores_lista.append(f"Errores SAP: {', '.join(errores[:3])}")
-                    if len(errores) > 3:
-                        errores_lista[-1] += f" y {len(errores) - 3} más"
-                
-                mensaje_error = "No se puede procesar: productos no válidos en SAP (Detalle Articulos). " + " ".join(errores_lista)
-                resultado["status"] = "validation_error"
-                resultado["errores"].append(mensaje_error)
-                logger.error(f"❌ {mensaje_error}")
-                raise BusinessException(message=mensaje_error, error_code="PRODUCTOS_NO_VALIDOS_SAP_DETALLE_ARTICULOS")
-            
-            logger.info(f"✅ Validación SAP (Detalle): {len(validacion_detalle_sap.get('validos', []))} válidos")
-        
-        return productos_dict
-
-    def _procesar_movimiento_y_coherencia_v1_0(
-        self,
-        file_content: bytes,
-        resultado: Dict[str, Any],
-        catalogo_tiendas: Dict,
-        productos_dict: Dict,
-        validar_sap: bool,
-        hoja_movimiento: str
-    ) -> Optional[List[Dict]]:
-        """Procesa Movimiento, valida SAP y coherencia con Detalle. Retorna distribuciones o None."""
-        logger.info("📋 PASO 4: Procesando hoja de Movimiento")
-        movimiento_result = self.parser.leer_hoja_movimiento(file_content, catalogo_tiendas)
-        
-        if movimiento_result.get("errores"):
-            resultado["errores"].extend(movimiento_result["errores"])
-            resultado["status"] = "error"
-            return None
-        
-        distribuciones_movimiento = movimiento_result.get("datos", [])
-        resultado["resumen"]["distribuciones_totales"] = len(distribuciones_movimiento)
-        resultado["resumen"]["hojas_procesadas"].append("Movimiento")
-        logger.info(f"✅ Movimiento procesado: {movimiento_result['resumen']['filas_validas']} filas")
-        
-        # Validar SAP primero
-        if validar_sap:
-            codigos_mov_sap = list({
-                str(dist.get("codigo_producto")).strip().upper()
-                for dist in distribuciones_movimiento if dist.get("codigo_producto")
-            })
-            if codigos_mov_sap:
-                logger.info("📋 Validación SAP: verificando códigos Movimiento en SAP")
-                validacion_mov_sap = self.validator.validar_productos_existen_en_sap(
-                    codigos_productos=codigos_mov_sap, usar_cache=True, sap_obligatorio=True
-                )
-                
-                mov_no_encontrados = validacion_mov_sap.get("no_encontrados", [])
-                mov_errores = validacion_mov_sap.get("errores", [])
-                
-                if mov_no_encontrados or mov_errores:
-                    errores_lista = []
-                    if mov_no_encontrados:
-                        errores_lista.append(f"No encontrados: {', '.join(mov_no_encontrados[:5])}")
-                    if mov_errores:
-                        errores_lista.append(f"Errores: {', '.join(mov_errores[:3])}")
-                    
-                    mensaje_error = "No se puede procesar: productos Movimiento no válidos en SAP. " + " ".join(errores_lista)
-                    resultado["status"] = "validation_error"
-                    resultado["errores"].append(mensaje_error)
-                    logger.error(f"❌ {mensaje_error}")
-                    raise BusinessException(message=mensaje_error, error_code="PRODUCTOS_NO_VALIDOS_SAP_MOVIMIENTO")
-                
-                logger.info(f"✅ Validación SAP (Movimiento): {len(validacion_mov_sap.get('validos', []))} válidos")
-        
-        # Validar coherencia
-        logger.info("📋 Validación: Coherencia Movimiento vs Detalle Articulos")
-        codigos_detalle = set(productos_dict.keys())
-        codigos_movimiento = {str(d["codigo_producto"]).strip().upper() for d in distribuciones_movimiento if d.get("codigo_producto")}
-        
-        validacion_coherencia = self.validator.validar_coherencia_articulos(
-            codigos_detalle=codigos_detalle, codigos_movimiento=codigos_movimiento
-        )
-        
-        if not validacion_coherencia["coherente"]:
-            logger.error(f"❌ Coherencia falló: {validacion_coherencia['resumen']}")
-            resultado["status"] = "validation_error"
-            resultado["errores"].append(validacion_coherencia["resumen"])
-            resultado["validation"] = {
-                "valid": False,
-                "coherencia_articulos": {
-                    "coherente": False,
-                    "codigos_invalidos": validacion_coherencia["codigos_invalidos"],
-                    "cantidad_invalidos": len(validacion_coherencia["codigos_invalidos"]),
-                    "accion_recomendada": "Verifique que todos los códigos usados en Movimiento existan en Detalle Articulos",
-                    "detalle_errores": validacion_coherencia["errores"]
-                }
-            }
-            return None
-        
-        logger.info(f"✅ {validacion_coherencia['resumen']}")
-        return distribuciones_movimiento
-
-    def _guardar_pedido_v1_0(
-        self,
-        resultado: Dict[str, Any],
-        pedido_id: str,
-        detalles_finales: List[Dict],
-        cabecera: Dict
-    ) -> bool:
-        """Guarda pedido en BD. Retorna True si éxito, False si error."""
-        logger.info("📋 PASO 7: Guardando en base de datos")
-        
-        try:
-            with get_db_connection_context() as conn:
-                repository = PedidoRepository(conn)
-                
-                # Insertar cabecera
-                try:
-                    cabecera["estado"] = "PENDIENTE_CONFIRMACION_PROVEEDOR"
-                except Exception:
-                    pass
-                
-                pedido_id = repository.insert_cabecera(cabecera)
-                resultado["pedido_id"] = pedido_id
-                logger.info(f"✅ Cabecera guardada: {pedido_id}")
-                
-                # Procesar cada artículo
-                for detalle_data in detalles_finales:
-                    try:
-                        pedido_detalle_id = repository.insert_detalle(pedido_id=pedido_id, datos_detalle=detalle_data["detalle"])
-                        resultado["articulos_cargados"] += 1
-                        
-                        if detalle_data.get("distribuciones"):
-                            distribuciones = []
-                            for dist in detalle_data["distribuciones"]:
-                                tienda_codigo = dist.get("tienda_codigo")
-                                cantidad = dist.get("cantidad")
-                                if tienda_codigo and cantidad and cantidad > 0:
-                                    tienda_id = repository.get_or_create_tienda(
-                                        codigo=tienda_codigo,
-                                        nombre=dist.get("tienda_nombre")
-                                    )
-                                    distribuciones.append({
-                                        "tienda_id": tienda_id,
-                                        "cantidad": cantidad,
-                                        "fila_origen": dist.get("fila_origen")
-                                    })
-                            
-                            if distribuciones:
-                                distribuciones_insertadas = repository.insert_detalle_tiendas(
-                                    pedido_detalle_id=pedido_detalle_id, distribuciones=distribuciones
-                                )
-                                resultado["distribuciones_cargadas"] += distribuciones_insertadas
-                    except Exception as e:
-                        error_msg = f"Error procesando artículo: {str(e)}"
-                        logger.warning(f"⚠️ {error_msg}")
-                        resultado["warnings"].append(error_msg)
-                        continue
-            
-            logger.info(f"✅ Plantilla v1.0 guardada: {resultado['pedido_id']}")
-            return True
-        except Exception as e:
-            logger.error(f"❌ Error guardando: {e}")
-            resultado["status"] = "error"
-            resultado["errores"].append(str(e))
-            return False
-
     def _procesar_formato_v1_0(
         self,
         file_content: bytes,
@@ -1593,8 +1287,8 @@ class PedidoService:
         
         try:
             # PASO 1: Procesar Tiendas y validar SAP
-            catalogo_tiendas = self._procesar_tiendas_y_validar_sap_v1_0(
-                file_content, resultado, validar_sap, sap_obligatorio, hoja_tiendas
+            catalogo_tiendas = procesar_tiendas_y_validar_sap_v1_0(
+                self, file_content, resultado, sap_obligatorio, hoja_tiendas
             )
             if catalogo_tiendas is None and resultado.get("status") == "validation_error":
                 return resultado
@@ -1625,67 +1319,16 @@ class PedidoService:
             resultado["resumen"]["hojas_procesadas"].append("Cabecera Pedido")
             logger.info(f"✅ Cabecera parseada: {cabecera.get('numero_pedido', 'SIN NÚMERO')}")
             
-            # PASO 3: Leer y procesar hoja de Detalle Articulos
-            logger.info("📋 PASO 3: Procesando hoja de Detalle Articulos")
-            df_detalle = pd.read_excel(
-                excel_file,
-                sheet_name=hoja_detalle,
-                header=0,
-                keep_default_na=False
-            )
-            
-            # Normalizar columnas para búsqueda flexible
-            df_detalle.columns = [str(col).strip() for col in df_detalle.columns]
-            
-            # Buscar columnas importantes
-            col_codigo = None
-            col_descripcion = None
-            col_marca = None
-            col_codigo_barras = None
-            col_pack = None
-            col_costo = None
-            col_descuento = None
-            col_pvp = None
-            col_bodega = None
-            
-            for col in df_detalle.columns:
-                col_upper = str(col).upper().strip()
-                if col_codigo is None and "CODIGO" in col_upper and "PRODUCTO" in col_upper:
-                    col_codigo = col
-                elif col_descripcion is None and ("DESCRIPCION" in col_upper or "DESCRIPCIÓN" in col_upper) and "SAP" in col_upper:
-                    col_descripcion = col
-                elif col_marca is None and "MARCA" in col_upper:
-                    col_marca = col
-                elif col_codigo_barras is None and ("CODIGO" in col_upper or "CÓDIGO" in col_upper) and "BARRAS" in col_upper:
-                    col_codigo_barras = col
-                elif col_pack is None and "PACK" in col_upper:
-                    col_pack = col
-                elif col_costo is None and "COSTO" in col_upper and "SIN" in col_upper and "IVA" in col_upper:
-                    col_costo = col
-                elif col_descuento is None and "DESCUENTO" in col_upper:
-                    col_descuento = col
-                elif col_pvp is None and "PVP" in col_upper:
-                    col_pvp = col
-                elif col_bodega is None and "BODEGA" in col_upper:
-                    col_bodega = col
-            
-            if not col_codigo:
-                resultado["errores"].append("❌ No se encontró columna 'CODIGO PRODUCTO' en Detalle Articulos")
-                resultado["status"] = "error"
-                return resultado
-            
-            logger.info(f"   Columnas detectadas: codigo='{col_codigo}', descripcion='{col_descripcion}', marca='{col_marca}'")
-            
             # PASO 3 & 4: Procesar Detalle Articulos y Movimiento, validar coherencia
             try:
-                productos_dict = self._procesar_detalle_articulos_v1_0(
-                    file_content, resultado, validar_sap, hoja_detalle
+                productos_dict = procesar_detalle_articulos_v1_0(
+                    self, file_content, resultado, validar_sap, hoja_detalle
                 )
                 if productos_dict is None:
                     return resultado
-                
-                distribuciones_movimiento = self._procesar_movimiento_y_coherencia_v1_0(
-                    file_content, resultado, catalogo_tiendas, productos_dict, validar_sap, hoja_movimiento
+
+                distribuciones_movimiento = procesar_movimiento_y_coherencia_v1_0(
+                    self, file_content, resultado, catalogo_tiendas, productos_dict, validar_sap, hoja_movimiento
                 )
                 if distribuciones_movimiento is None:
                     return resultado
@@ -1999,69 +1642,7 @@ class PedidoService:
             
             # PASO 7: Guardar en base de datos
             if ENABLE_SQL_SERVER_STORAGE:
-                logger.info("📋 PASO 7: Guardando en base de datos")
-                
-                with get_db_connection_context() as conn:
-                    repository = PedidoRepository(conn)
-                    
-                    # Insertar cabecera
-                    try:
-                        cabecera["estado"] = "PENDIENTE_CONFIRMACION_PROVEEDOR"
-                    except Exception:
-                        pass
-                    pedido_id = repository.insert_cabecera(cabecera)
-                    resultado["pedido_id"] = pedido_id
-                    logger.info(f"✅ Cabecera guardada: {pedido_id}")
-                    
-                    # Procesar cada artículo con sus distribuciones
-                    for detalle_data in detalles_finales:
-                        try:
-                            # Insertar detalle (artículo)
-                            pedido_detalle_id = repository.insert_detalle(
-                                pedido_id=pedido_id,
-                                datos_detalle=detalle_data["detalle"]
-                            )
-                            resultado["articulos_cargados"] += 1
-                            
-                            # Procesar distribuciones por tienda
-                            if detalle_data.get("distribuciones"):
-                                distribuciones = []
-                                for dist in detalle_data["distribuciones"]:
-                                    tienda_codigo = dist.get("tienda_codigo")
-                                    cantidad = dist.get("cantidad")
-                                    fila_origen = dist.get("fila_origen")
-                                    
-                                    if tienda_codigo and cantidad and cantidad > 0:
-                                        # Obtener o crear tienda
-                                        tienda_id = repository.get_or_create_tienda(
-                                            codigo=tienda_codigo,
-                                            nombre=dist.get("tienda_nombre")
-                                        )
-                                        distribuciones.append({
-                                            "tienda_id": tienda_id,
-                                            "cantidad": cantidad,
-                                            "fila_origen": fila_origen
-                                        })
-                                
-                                if distribuciones:
-                                    distribuciones_insertadas = repository.insert_detalle_tiendas(
-                                        pedido_detalle_id=pedido_detalle_id,
-                                        distribuciones=distribuciones
-                                    )
-                                    resultado["distribuciones_cargadas"] += distribuciones_insertadas
-                                    
-                        except Exception as e:
-                            error_msg = f"Error al procesar artículo {detalle_data.get('detalle', {}).get('codigo_interno')}: {str(e)}"
-                            logger.warning(f"⚠️ {error_msg}")
-                            resultado["warnings"].append(error_msg)
-                            continue
-                
-                logger.info(
-                    f"✅ Plantilla v1.0 procesada exitosamente: {filename} "
-                    f"(pedido_id: {resultado['pedido_id']}, "
-                    f"artículos: {resultado['articulos_cargados']}, "
-                    f"distribuciones: {resultado['distribuciones_cargadas']})"
-                )
+                guardar_pedido_v1_0(resultado, resultado.get("pedido_id"), detalles_finales, cabecera)
             else:
                 logger.info("⚠️ SQL Server storage deshabilitado, no se guardó en BD")
             

@@ -9,17 +9,20 @@ Al momento de cargar el Excel, se validan los códigos de la columna **ID TIENDA
 ## 🎯 Funcionalidad Implementada
 
 ### ✅ Validación en Tiempo Real
+
 - Los códigos de tienda se validan **contra SAP OWHS** en el momento de la carga
 - No depende del catálogo Excel (hoja Tiendas)
 - Si alguna tienda no existe en SAP → **se rechaza la carga** inmediatamente
 
 ### ✅ Cobertura Completa
+
 - ✅ Formato v1.0 (4 hojas): Cabecera, Detalle, Movimiento, Tiendas
 - ✅ Formato DOS HOJAS: Cabecera, Detalle
 - ✅ Formato SIMPLE: CodigoProducto, IdTienda, Cantidad
 - ✅ Formato COMPLEJO (legacy): Estructura con cabecera y columnas de tiendas
 
 ### ✅ Respuestas Claras
+
 - Mensaje de error específico indicando cuáles tiendas no son válidas
 - Información detallada en JSON para integración frontend
 - Sugerencias de acción para el usuario
@@ -29,6 +32,7 @@ Al momento de cargar el Excel, se validan los códigos de la columna **ID TIENDA
 ## 📁 Cambios en el Código
 
 ### 1. Nuevo Método: `validar_tiendas_existen_en_sap()`
+
 **Archivo:** `src/database/services/pedido_validator.py` (línea 1181)
 
 ```python
@@ -40,11 +44,13 @@ def validar_tiendas_existen_en_sap(
 ```
 
 **Responsabilidades:**
+
 - Obtener catálogo de tiendas desde SAP OWHS
 - Validar cada código contra el catálogo
 - Retornar información detallada sobre validez de tiendas
 
 **Ejemplo de retorno:**
+
 ```python
 {
     "validas": ["ROL01", "ROL02"],
@@ -62,11 +68,13 @@ def validar_tiendas_existen_en_sap(
 ---
 
 ### 2. Integración en Formato v1.0
+
 **Archivo:** `src/database/services/pedido_service.py` (línea 1337)
 
 **Ubicación:** En método `_procesar_formato_v1_0()` después de procesar Movimiento
 
 **Flujo:**
+
 ```python
 1. Procesar hoja Movimiento
 2. Extraer códigos únicos de tiendas
@@ -82,11 +90,13 @@ def validar_tiendas_existen_en_sap(
 ---
 
 ### 3. Integración en Formato DOS HOJAS
+
 **Archivo:** `src/database/services/pedido_service.py` (línea 672)
 
 Integración idéntica a v1.0, pero aplicada al flujo de dos hojas.
 
 **Ambas integraciones:**
+
 - Extraen tiendas del detalle consolidado
 - Validan contra SAP directamente
 - Bloquean si hay tiendas inválidas y `sap_obligatorio=True`
@@ -111,11 +121,11 @@ Excel subido por usuario
 │  - Hoja Detalle Articulos
 └─ ✅ Pasa → Continuar
            ↓
-┌─ VALIDACIÓN 4: ← NUEVA ← ← ← ← ← ← ← ← ← ← ← ← ← ← ← ← ← ← ← ← 
+┌─ VALIDACIÓN 4: ← NUEVA ← ← ← ← ← ← ← ← ← ← ← ← ← ← ← ← ← ← ← ←
 │  TIENDAS vs SAP
 │  - Hoja Movimiento
 │  - Validar cada código contra SAP OWHS
-│  
+│
 │  ❌ Si hay tiendas no válidas:
 │     → Rechazar inmediatamente
 │     → Mensaje: "Tiendas no encontradas: ROL99, ROL98"
@@ -142,6 +152,7 @@ Excel subido por usuario
 ## 🧪 Ejemplos de Uso
 
 ### Caso 1: ✅ Éxito (todas las tiendas válidas)
+
 ```bash
 curl -X POST http://localhost:8000/api/plantillas/upload \
   -F "file=@pedido_valido.xlsx" \
@@ -161,6 +172,7 @@ Response:
 ```
 
 ### Caso 2: ❌ Error (tienda no existe)
+
 ```bash
 curl -X POST http://localhost:8000/api/plantillas/upload \
   -F "file=@pedido_con_tienda_invalida.xlsx" \
@@ -181,6 +193,7 @@ Response (400):
 ```
 
 ### Caso 3: ⚠️ Warning (no obligatorio)
+
 ```bash
 curl -X POST http://localhost:8000/api/plantillas/upload \
   -F "file=@pedido_con_tienda_invalida.xlsx" \
@@ -206,12 +219,14 @@ Response (200):
 ## 🔐 Seguridad y Validez
 
 ### Garantías
+
 ✅ **Solo tiendas válidas:** Si la tienda no existe en SAP → rechazado  
 ✅ **Tiempo real:** Se valida contra SAP en el momento de la carga  
 ✅ **Consistencia:** Sistema y SAP están sincronizados  
-✅ **Auditabilidad:** Se registra qué tiendas fueron validadas  
+✅ **Auditabilidad:** Se registra qué tiendas fueron validadas
 
 ### Excepciones Controladas
+
 - Conexión a SAP no disponible → Error claro (no rechaza sin intentar)
 - Tienda vacía → Ignorada silenciosamente (no causa error)
 - Códigos duplicados → Se validan una sola vez
@@ -263,11 +278,13 @@ TEST 5: Estructura respuesta → ✅ PASÓ
 Se incluyen 3 documentos detallados:
 
 1. **VALIDACION_TIENDAS_SAP.md** (raíz del proyecto)
+
    - Descripción general
    - Cambios técnicos
    - Integración en flujo
 
 2. **docs/VALIDACION_TIENDAS_SAP.md**
+
    - Documentación ejecutiva
    - Diagramas de flujo
    - Casos de uso
@@ -281,16 +298,16 @@ Se incluyen 3 documentos detallados:
 
 ## ✨ Resumen
 
-| Aspecto | Detalle |
-|---------|---------|
-| **Función** | Validar tiendas contra SAP al cargar Excel |
-| **Cobertura** | Todos los formatos de Excel |
-| **Validación** | Contra SAP OWHS en tiempo real |
-| **Rechazo** | Si tienda no existe en SAP (cuando sap_obligatorio=true) |
-| **Mensaje** | Claro, indica exactamente qué tiendas fallan |
-| **Control** | Parámetro `sap_obligatorio` (true/false) |
-| **Integración** | 2 ubicaciones: formato v1.0 + formato dos hojas |
-| **Tests** | Script incluido para validar |
+| Aspecto         | Detalle                                                  |
+| --------------- | -------------------------------------------------------- |
+| **Función**     | Validar tiendas contra SAP al cargar Excel               |
+| **Cobertura**   | Todos los formatos de Excel                              |
+| **Validación**  | Contra SAP OWHS en tiempo real                           |
+| **Rechazo**     | Si tienda no existe en SAP (cuando sap_obligatorio=true) |
+| **Mensaje**     | Claro, indica exactamente qué tiendas fallan             |
+| **Control**     | Parámetro `sap_obligatorio` (true/false)                 |
+| **Integración** | 2 ubicaciones: formato v1.0 + formato dos hojas          |
+| **Tests**       | Script incluido para validar                             |
 
 ---
 

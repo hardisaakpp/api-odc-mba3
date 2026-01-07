@@ -9,6 +9,7 @@
 Convierte valores entre tipos de datos.
 
 ### Instalación
+
 ```python
 from src.database.services.pedido_type_converter import PedidoTypeConverter
 ```
@@ -16,7 +17,9 @@ from src.database.services.pedido_type_converter import PedidoTypeConverter
 ### Métodos Disponibles
 
 #### convertir_a_decimal()
+
 Convierte strings a float. Tolera múltiples formatos.
+
 ```python
 # Formatos soportados
 PedidoTypeConverter.convertir_a_decimal("1.5")      # → 1.5
@@ -27,7 +30,9 @@ PedidoTypeConverter.convertir_a_decimal(None)       # → None
 ```
 
 #### convertir_a_entero()
+
 Convierte strings a int. Redondea si es necesario.
+
 ```python
 PedidoTypeConverter.convertir_a_entero("10")        # → 10
 PedidoTypeConverter.convertir_a_entero("10.5")      # → 10 (redondea)
@@ -36,7 +41,9 @@ PedidoTypeConverter.convertir_a_entero(None)        # → None
 ```
 
 #### parsear_fecha_texto()
+
 Parsea fechas en múltiples formatos. Retorna date o valor original.
+
 ```python
 # Formatos soportados
 PedidoTypeConverter.parsear_fecha_texto("01/01/2024")  # → date(2024, 1, 1)
@@ -47,20 +54,26 @@ PedidoTypeConverter.parsear_fecha_texto(None)          # → None
 ```
 
 #### normalizar_codigo_producto()
+
 Normaliza códigos de producto para SAP.
+
 ```python
 PedidoTypeConverter.normalizar_codigo_producto(" abc123 ")  # → "ABC123"
 PedidoTypeConverter.normalizar_codigo_producto(None)         # → None
 ```
 
 #### normalizar_codigo_tienda()
+
 Normaliza códigos de tienda.
+
 ```python
 PedidoTypeConverter.normalizar_codigo_tienda(" tienda 01 ")  # → "TIENDA01"
 ```
 
 #### booleano_desde_texto()
+
 Convierte strings a booleano.
+
 ```python
 PedidoTypeConverter.booleano_desde_texto("sí")      # → True
 PedidoTypeConverter.booleano_desde_texto("no")      # → False
@@ -74,6 +87,7 @@ PedidoTypeConverter.booleano_desde_texto("activo")  # → True
 Detecta formatos de Excel y lee hojas.
 
 ### Instalación
+
 ```python
 from src.database.services.pedido_format_handler import PedidoFormatHandler
 ```
@@ -81,7 +95,9 @@ from src.database.services.pedido_format_handler import PedidoFormatHandler
 ### Métodos Disponibles
 
 #### detectar_hojas_excel()
+
 Encuentra las hojas del Excel.
+
 ```python
 hojas = PedidoFormatHandler.detectar_hojas_excel(file_content)
 # Retorna:
@@ -94,7 +110,9 @@ hojas = PedidoFormatHandler.detectar_hojas_excel(file_content)
 ```
 
 #### detectar_formato_excel()
+
 Determina el formato basado en hojas encontradas.
+
 ```python
 hojas = PedidoFormatHandler.detectar_hojas_excel(file_content)
 formato = PedidoFormatHandler.detectar_formato_excel(hojas)
@@ -109,7 +127,9 @@ else:
 ```
 
 #### detectar_formato_detalle()
+
 Identifica si el detalle es simple o complejo.
+
 ```python
 es_simple, columnas_tiendas = PedidoFormatHandler.detectar_formato_detalle(
     excel_file,
@@ -123,7 +143,9 @@ else:
 ```
 
 #### leer_hoja_segura()
+
 Lee una hoja con fallback robusto.
+
 ```python
 df = PedidoFormatHandler.leer_hoja_segura(
     excel_file,
@@ -139,6 +161,7 @@ df = PedidoFormatHandler.leer_hoja_segura(
 Valida contra SAP y construye mensajes de error.
 
 ### Instalación
+
 ```python
 from src.database.services.pedido_sap_handler import PedidoSAPHandler
 from src.database.services.pedido_validator import PedidoValidator
@@ -150,7 +173,9 @@ sap_handler = PedidoSAPHandler(validator)
 ### Métodos Disponibles
 
 #### validar_tiendas_contra_sap()
+
 Valida que los códigos de tienda existan en SAP OWHS.
+
 ```python
 resultado = sap_handler.validar_tiendas_contra_sap(
     codigos_tiendas=['01', '02', '03'],
@@ -168,7 +193,9 @@ resultado = sap_handler.validar_tiendas_contra_sap(
 ```
 
 #### validar_productos_contra_sap()
+
 Valida que los códigos de producto existan en SAP ITEMS.
+
 ```python
 resultado = sap_handler.validar_productos_contra_sap(
     codigos_productos=['PROD001', 'PROD002'],
@@ -184,18 +211,22 @@ else:
 ```
 
 #### construir_mensaje_error_tiendas_invalidas()
+
 Construye mensaje legible para tiendas inválidas.
+
 ```python
 validacion = sap_handler.validar_tiendas_contra_sap(['01', '02'])
 if not validacion['todas_validas']:
     mensaje = sap_handler.construir_mensaje_error_tiendas_invalidas(validacion)
     print(mensaje)
-    # Output: "No se puede procesar la plantilla: existen tiendas (ID TIENDA) 
+    # Output: "No se puede procesar la plantilla: existen tiendas (ID TIENDA)
     #         no válidas en SAP. Tiendas no encontradas: 01, 02"
 ```
 
 #### construir_mensaje_error_productos_invalidos()
+
 Construye mensaje legible para productos inválidos.
+
 ```python
 validacion = sap_handler.validar_productos_contra_sap(['PROD001'])
 if not validacion['todos_validos']:
@@ -204,7 +235,9 @@ if not validacion['todos_validos']:
 ```
 
 #### construir_datos_validacion_error()
+
 Construye estructura de respuesta para API.
+
 ```python
 datos = sap_handler.construir_datos_validacion_error(
     error_type='tiendas',
@@ -244,6 +277,7 @@ resultado = service.validar_y_procesar_archivo_excel(
 ## 5. Ejemplos Completos
 
 ### Validar Tiendas en SAP
+
 ```python
 from src.database.services.pedido_sap_handler import PedidoSAPHandler
 from src.database.services.pedido_validator import PedidoValidator
@@ -264,6 +298,7 @@ else:
 ```
 
 ### Detectar Formato y Procesar
+
 ```python
 from src.database.services.pedido_format_handler import PedidoFormatHandler
 import pandas as pd
@@ -278,13 +313,14 @@ if formato == 'cuatro_hojas_v1_0':
     # Procesar v1.0
     excel_file = pd.ExcelFile(io.BytesIO(file_content))
     es_simple, cols_tiendas = PedidoFormatHandler.detectar_formato_detalle(
-        excel_file, 
+        excel_file,
         hojas['detalle']
     )
     print(f"Detalle simple: {es_simple}, Tiendas: {cols_tiendas}")
 ```
 
 ### Convertir Múltiples Valores
+
 ```python
 from src.database.services.pedido_type_converter import PedidoTypeConverter
 
@@ -307,15 +343,19 @@ activo = converter.booleano_desde_texto(fila_datos['activo'])    # → True
 ## 6. Preguntas Frecuentes
 
 ### ¿Puedo seguir usando PedidoService como antes?
+
 **Sí.** La interfaz pública no ha cambiado. El código cliente funciona igual.
 
 ### ¿Qué pasa si necesito usar PedidoTypeConverter en otro lugar?
+
 **Perfecto.** Es reutilizable. Puedes importarlo en cualquier servicio.
 
 ### ¿Los nuevos módulos tienen dependencias externas?
+
 **No.** Solo usan librerías estándar (pandas, datetime, re) que ya están en requirements.
 
 ### ¿Cómo testeo los nuevos módulos?
+
 ```python
 # Test unitario de PedidoTypeConverter
 def test_convertir_a_decimal():

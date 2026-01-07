@@ -1506,21 +1506,44 @@ class PedidoParser:
             
             if col_codigo is None:
                 raise ValueError(f"Hoja 'Tiendas' debe tener columna 'id_tienda' o 'Código'. Headers encontrados: {list(headers.values())}")
+            if col_nombre is None:
+                raise ValueError(f"Hoja 'Tiendas' debe tener columna 'Nombre Tienda'. Headers encontrados: {list(headers.values())}")
+            if col_activa is None:
+                raise ValueError(f"Hoja 'Tiendas' debe tener columna 'ACTIVO'. Headers encontrados: {list(headers.values())}")
             
             # ✅ Leer filas de datos (desde fila 2)
             for fila_idx in range(2, ws.max_row + 1):
-                # Obtener valores usando get_cell (columna código es obligatoria)
                 codigo_bruto = ws.cell(row=fila_idx, column=(col_codigo + 1)).value
                 nombre_bruto = ws.cell(row=fila_idx, column=(col_nombre + 1)).value if col_nombre is not None else None
                 activa_bruto = ws.cell(row=fila_idx, column=(col_activa + 1)).value if col_activa is not None else True
                 
-                # Validación de alineación: si hay datos en la fila, las columnas clave deben estar completas
-                has_codigo = bool(str(codigo_bruto).strip()) if codigo_bruto is not None else False
-                has_nombre = bool(str(nombre_bruto).strip()) if nombre_bruto is not None else False
-                has_activa = bool(str(activa_bruto).strip()) if (col_activa is not None and activa_bruto is not None) else (col_activa is None)
-                if (has_codigo or has_nombre or (col_activa is not None and (activa_bruto is not None and str(activa_bruto).strip() != ""))) and not (has_codigo and has_nombre and (has_activa or col_activa is None)):
-                    misaligned_rows_tiendas.append(fila_idx)
-                    logger.warning(f"❌ Fila {fila_idx}: columnas 'ID TIENDA', 'NOMBRE_TIENDA' y 'ACTIVO' deben estar alineadas")
+                # ✅ VALIDACIÓN ESTRICTA DE ALINEACIÓN:
+                # Si CUALQUIERA de las 3 columnas tiene datos, TODAS deben tener datos
+                has_codigo = bool(codigo_bruto is not None and str(codigo_bruto).strip())
+                has_nombre = bool(nombre_bruto is not None and str(nombre_bruto).strip())
+                has_activa = bool(activa_bruto is not None and str(activa_bruto).strip())
+
+                fila_tiene_datos = has_codigo or has_nombre or has_activa
+
+                if fila_tiene_datos:
+                    columnas_requeridas_completas = has_codigo and has_nombre and (col_activa is None or has_activa)
+                
+                    if not columnas_requeridas_completas:
+                        misaligned_rows_tiendas.append(fila_idx)
+                        columnas_vacias = []
+                        if not has_codigo:
+                            columnas_vacias.append("'ID TIENDA'")
+                        if not has_nombre:
+                            columnas_vacias.append("'NOMBRE_TIENDA'")
+                        if col_activa is not None and not has_activa:
+                            columnas_vacias.append("'ACTIVO'")
+                        logger.warning(
+                            f"❌ Fila {fila_idx}: Faltan columnas obligatorias: {', '.join(columnas_vacias)}. "
+                            f"Si una fila tiene datos, TODAS las columnas deben estar completas."
+                        )
+                        continue
+
+                if not fila_tiene_datos:
                     continue
                 
                 # ✅ NORMALIZACIÓN CRÍTICA
@@ -1581,7 +1604,11 @@ class PedidoParser:
             if misaligned_rows_tiendas:
                 filas = ", ".join(str(n) for n in misaligned_rows_tiendas[:10])
                 extra = f" y {len(misaligned_rows_tiendas) - 10} más" if len(misaligned_rows_tiendas) > 10 else ""
-                raise ValueError(f"Hoja 'Tiendas' con filas desalineadas (faltan datos obligatorios): {filas}{extra}")
+                raise ValueError(
+                    f"Hoja 'Tiendas': filas con columnas incompletas (filas {filas}{extra}). "
+                    f"Si una fila tiene datos en alguna columna (ID TIENDA, NOMBRE_TIENDA o ACTIVO), "
+                    f"TODAS las columnas deben estar completas. No se permiten filas parciales."
+                )
             
             if not catalogo:
                 logger.warning("⚠️ No se encontraron tiendas válidas en la hoja 'Tiendas'")

@@ -1,11 +1,13 @@
 # RESUMEN DE IMPLEMENTACIÓN: Validación de Tiendas contra SAP
 
 ## 🎯 Objetivo
+
 Validar códigos de tienda (ID TIENDA) contra SAP directamente al cargar el Excel. Si alguna tienda no existe en SAP, se rechaza la carga.
 
 ## ✅ Cambios Implementados
 
 ### 1️⃣ Nuevo Método en PedidoValidator
+
 **Archivo:** `src/database/services/pedido_validator.py` (línea 1181+)
 
 ```python
@@ -17,6 +19,7 @@ def validar_tiendas_existen_en_sap(
 ```
 
 **Lo que hace:**
+
 - Obtiene todas las tiendas de SAP OWHS
 - Valida cada código de tienda contra el catálogo SAP
 - Retorna: tiendas válidas, no encontradas, errores, etc.
@@ -24,11 +27,13 @@ def validar_tiendas_existen_en_sap(
 ---
 
 ### 2️⃣ Integración en Formato v1.0
+
 **Archivo:** `src/database/services/pedido_service.py` (línea 1337+)
 
 **Ubicación:** En `_procesar_formato_v1_0()` después de procesar Movimiento
 
 **Flujo:**
+
 ```
 1. Leer hoja Movimiento
 2. Extraer códigos únicos de tiendas
@@ -40,6 +45,7 @@ def validar_tiendas_existen_en_sap(
 ---
 
 ### 3️� Integración en Formato DOS HOJAS
+
 **Archivo:** `src/database/services/pedido_service.py` (línea 672+)
 
 **Ubicación:** En `validar_y_procesar_archivo_excel()` después de consolidar detalles
@@ -96,6 +102,7 @@ def validar_tiendas_existen_en_sap(
 ## 🔧 Cómo Funciona
 
 ### Paso 1: Extrae tiendas del Excel
+
 ```python
 # De la hoja "Movimiento" o "Detalle Articulo"
 # Identifica todos los códigos únicos de tienda
@@ -103,6 +110,7 @@ def validar_tiendas_existen_en_sap(
 ```
 
 ### Paso 2: Consulta SAP
+
 ```python
 # GET todas las tiendas de SAP OWHS
 sap_client.get_todas_bodegas()
@@ -114,6 +122,7 @@ sap_client.get_todas_bodegas()
 ```
 
 ### Paso 3: Valida cada código
+
 ```python
 # Para cada tienda en el Excel:
 # ✅ Si existe en SAP → VÁLIDA
@@ -128,39 +137,41 @@ sap_client.get_todas_bodegas()
 ## 📋 Ejemplo: Respuesta de Error
 
 ### Cuando hay tiendas inválidas:
+
 ```json
 {
-    "status": "validation_error",
-    "message": "No se puede procesar la plantilla: existen tiendas (ID TIENDA) no válidas en SAP. Tiendas no encontradas en SAP OWHS: ROL99, ROL98",
-    "pedido_id": null,
-    "validacion_tiendas_sap": {
-        "total_codigos": 5,
-        "validas": 3,           // ROL01, ROL02, ROL03
-        "no_encontradas": 2,    // ROL99, ROL98
-        "errores": 0,
-        "warnings": 0,
-        "todas_validas": false
-    },
-    "errores": [
-        "No se puede procesar la plantilla: existen tiendas (ID TIENDA) no válidas en SAP..."
-    ]
+  "status": "validation_error",
+  "message": "No se puede procesar la plantilla: existen tiendas (ID TIENDA) no válidas en SAP. Tiendas no encontradas en SAP OWHS: ROL99, ROL98",
+  "pedido_id": null,
+  "validacion_tiendas_sap": {
+    "total_codigos": 5,
+    "validas": 3, // ROL01, ROL02, ROL03
+    "no_encontradas": 2, // ROL99, ROL98
+    "errores": 0,
+    "warnings": 0,
+    "todas_validas": false
+  },
+  "errores": [
+    "No se puede procesar la plantilla: existen tiendas (ID TIENDA) no válidas en SAP..."
+  ]
 }
 ```
 
 ### Cuando todas las tiendas son válidas:
+
 ```json
 {
-    "status": "success",
-    "message": "Plantilla procesada y guardada exitosamente",
-    "pedido_id": "PED-2025-01-07-123456",
-    "validacion_tiendas_sap": {
-        "total_codigos": 3,
-        "validas": 3,
-        "no_encontradas": 0,
-        "errores": 0,
-        "warnings": 0,
-        "todas_validas": true
-    }
+  "status": "success",
+  "message": "Plantilla procesada y guardada exitosamente",
+  "pedido_id": "PED-2025-01-07-123456",
+  "validacion_tiendas_sap": {
+    "total_codigos": 3,
+    "validas": 3,
+    "no_encontradas": 0,
+    "errores": 0,
+    "warnings": 0,
+    "todas_validas": true
+  }
 }
 ```
 
@@ -169,6 +180,7 @@ sap_client.get_todas_bodegas()
 ## 🎮 Cómo Probar
 
 ### Test 1: Excel con tiendas válidas ✅
+
 ```
 1. Crear Excel con: ROL01, ROL02 (tiendas que existen en SAP)
 2. Subir: POST /api/plantillas/upload?sap_obligatorio=true
@@ -176,6 +188,7 @@ sap_client.get_todas_bodegas()
 ```
 
 ### Test 2: Excel con tiendas inválidas ❌
+
 ```
 1. Crear Excel con: ROL99, ROL98 (tiendas que NO existen en SAP)
 2. Subir: POST /api/plantillas/upload?sap_obligatorio=true
@@ -185,6 +198,7 @@ sap_client.get_todas_bodegas()
 ```
 
 ### Test 3: Desactivar validación obligatoria ⚠️
+
 ```
 1. Crear Excel con tiendas inválidas
 2. Subir: POST /api/plantillas/upload?sap_obligatorio=false
@@ -250,6 +264,7 @@ VALIDACION_TIENDAS_SAP.md      ← Documentación detallada (nuevo archivo)
 **Antes:** Las tiendas se validaban solo contra el catálogo en el Excel (hoja Tiendas)
 
 **Ahora:** Las tiendas se validan **directamente contra SAP OWHS**
+
 - Si la tienda no existe en SAP → Rechaza el Excel
 - Mayor seguridad y consistencia
 - El usuario ve exactamente qué tiendas son problemáticas

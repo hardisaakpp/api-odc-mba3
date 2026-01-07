@@ -1,11 +1,13 @@
 # Validación de Tiendas contra SAP en Carga de Excel
 
 ## Descripción General
+
 Se implementó validación de códigos de tienda (ID TIENDA) contra SAP directamente en el momento de la carga del archivo Excel. Esto asegura que **cualquier código de tienda utilizado en la plantilla debe existir en SAP OWHS**, rechazando la subida si hay tiendas no válidas.
 
 ## Cambios Realizados
 
 ### 1. Nuevo Método en PedidoValidator
+
 **Archivo:** `src/database/services/pedido_validator.py`
 
 Se agregó el método `validar_tiendas_existen_en_sap()`:
@@ -18,11 +20,11 @@ def validar_tiendas_existen_en_sap(
 ) -> Dict[str, Any]:
     """
     Valida que los códigos de tienda existan directamente en SAP OWHS.
-    
+
     Args:
         codigos_tiendas: Lista de códigos de tiendas a validar (ej: ["ROL01", "ROL02"])
         sap_obligatorio: Si True, errores de SAP bloquean
-        
+
     Returns:
         {
             "validas": List[str],
@@ -36,6 +38,7 @@ def validar_tiendas_existen_en_sap(
 ```
 
 **Características:**
+
 - Obtiene el catálogo completo de tiendas desde SAP OWHS (tabla `OWHS`)
 - Valida cada código contra el catálogo SAP
 - Normaliza códigos a mayúsculas para comparación confiable
@@ -43,6 +46,7 @@ def validar_tiendas_existen_en_sap(
 - Maneja excepciones de SAP gracefully
 
 ### 2. Integración en Formato v1.0 (4 hojas)
+
 **Archivo:** `src/database/services/pedido_service.py`
 
 Se agregó validación de tiendas después del procesamiento de la hoja "Movimiento":
@@ -50,6 +54,7 @@ Se agregó validación de tiendas después del procesamiento de la hoja "Movimie
 **Ubicación:** En método `_procesar_formato_v1_0()` después de línea 1345
 
 **Flujo:**
+
 1. Extrae códigos únicos de tiendas de la hoja "Movimiento"
 2. Valida cada código contra SAP OWHS
 3. Si `sap_obligatorio=True` y hay tiendas no encontradas:
@@ -58,22 +63,24 @@ Se agregó validación de tiendas después del procesamiento de la hoja "Movimie
    - Lanza `BusinessException` con información estructurada
 
 **Respuesta de Error:**
+
 ```json
 {
-    "status": "validation_error",
-    "message": "No se puede procesar la plantilla: existen tiendas (ID TIENDA) no válidas en SAP...",
-    "errores": ["Tiendas no encontradas en SAP OWHS: ROL99, ROL98"],
-    "validacion_tiendas_sap": {
-        "total_codigos": 5,
-        "validas": 3,
-        "no_encontradas": 2,
-        "errores": 0,
-        "todas_validas": false
-    }
+  "status": "validation_error",
+  "message": "No se puede procesar la plantilla: existen tiendas (ID TIENDA) no válidas en SAP...",
+  "errores": ["Tiendas no encontradas en SAP OWHS: ROL99, ROL98"],
+  "validacion_tiendas_sap": {
+    "total_codigos": 5,
+    "validas": 3,
+    "no_encontradas": 2,
+    "errores": 0,
+    "todas_validas": false
+  }
 }
 ```
 
 ### 3. Integración en Formato DOS HOJAS (Cabecera + Detalle)
+
 **Archivo:** `src/database/services/pedido_service.py`
 
 Se agregó la misma validación para compatibilidad con el formato antiguo (CABECERA_PEDIDO + DETALLE_ARTICULO).
@@ -83,6 +90,7 @@ Se agregó la misma validación para compatibilidad con el formato antiguo (CABE
 **Flujo idéntico al formato v1.0**, extrayendo tiendas de los detalles con tiendas consolidados.
 
 ### 4. Integración en Formato SIMPLE
+
 La validación se aplica automáticamente a cualquier formato que contenga distribuciones por tienda, incluyendo el formato simple (CodigoProducto, IdTienda, Cantidad).
 
 ## Parámetro de Control
@@ -94,12 +102,14 @@ sap_obligatorio: bool = True  # En todos los endpoints de upload
 ```
 
 **Comportamiento:**
+
 - `sap_obligatorio=True` (default): Las tiendas no válidas en SAP BLOQUEAN la carga
 - `sap_obligatorio=False`: Las tiendas no válidas generan WARNING pero no bloquean
 
 ## Integración con Flujo Existente
 
 ### Orden de Validaciones
+
 1. **Validación de archivo:** Formato Excel, tamaño, etc.
 2. **Parsing:** Lectura de hojas
 3. **Validación SAP de Productos** (Detalle Articulos): Productos contra SAP
@@ -109,7 +119,9 @@ sap_obligatorio: bool = True  # En todos los endpoints de upload
 7. **Persistencia:** Si todas las validaciones pasan
 
 ### Error Handling
+
 Si la validación falla:
+
 - La excepción `BusinessException` es capturada por el middleware global
 - Se retorna respuesta HTTP 400 con detalles de validación
 - El pedido NO se guarda en BD
@@ -117,6 +129,7 @@ Si la validación falla:
 ## Casos de Uso
 
 ### Caso 1: Excel con Tiendas Válidas
+
 ```
 Resultado: ✅ Aceptado
 - Todas las tiendas en Movimiento existen en SAP
@@ -124,6 +137,7 @@ Resultado: ✅ Aceptado
 ```
 
 ### Caso 2: Excel con Tiendas No Válidas
+
 ```
 Resultado: ❌ Rechazado
 - Se detecta tienda "ROL99" que no existe en SAP OWHS
@@ -132,6 +146,7 @@ Resultado: ❌ Rechazado
 ```
 
 ### Caso 3: Sin validación obligatoria (`sap_obligatorio=False`)
+
 ```
 Resultado: ⚠️ Aceptado con advertencia
 - Las tiendas inválidas generan WARNING
@@ -175,12 +190,14 @@ Para probar la implementación:
 
 ## Diferencias con Validación Anterior
 
-**Antes:** 
+**Antes:**
+
 - Tiendas se validaban solo contra la hoja "Tiendas" del Excel
 - Dependía de que el usuario mantuviera catálogo actualizado
 - No validaba contra SAP en tiempo real
 
 **Ahora:**
+
 - Tiendas se validan directamente contra SAP OWHS
 - Garantiza que solo tiendas válidas en SAP puedan usarse
 - Validación es independiente del catálogo Excel (aunque sigue siendo útil)

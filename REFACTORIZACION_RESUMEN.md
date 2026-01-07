@@ -6,6 +6,7 @@
 ## Problema Resuelto
 
 El archivo `pedido_service.py` había crecido a **2128 líneas** con múltiples responsabilidades, causando:
+
 - ❌ Errores "Code is too complex to analyze" de Pylance
 - ❌ Dificultad para mantener el código
 - ❌ Código difícil de testear
@@ -17,12 +18,12 @@ Se dividió `pedido_service.py` en **4 módulos especializados** sin dañar ning
 
 ### 📁 Nuevos Módulos Creados
 
-| Módulo | Líneas | Responsabilidad |
-|--------|--------|-----------------|
-| `pedido_type_converter.py` | 180 | Conversión de tipos (decimales, enteros, fechas) |
-| `pedido_format_handler.py` | 170 | Detección de formatos Excel |
-| `pedido_sap_handler.py` | 184 | Validación contra SAP |
-| `pedido_service.py` | 800 | Orquestación (reducido 62%) |
+| Módulo                     | Líneas | Responsabilidad                                  |
+| -------------------------- | ------ | ------------------------------------------------ |
+| `pedido_type_converter.py` | 180    | Conversión de tipos (decimales, enteros, fechas) |
+| `pedido_format_handler.py` | 170    | Detección de formatos Excel                      |
+| `pedido_sap_handler.py`    | 184    | Validación contra SAP                            |
+| `pedido_service.py`        | 800    | Orquestación (reducido 62%)                      |
 
 ### 📊 Impacto de la Refactorización
 
@@ -30,13 +31,13 @@ Se dividió `pedido_service.py` en **4 módulos especializados** sin dañar ning
 ANTES:                          DESPUES:
 pedido_service.py               pedido_service.py
   └─ 2128 líneas                 └─ 800 líneas (-62%)
-  └─ 23 métodos              
+  └─ 23 métodos
   └─ Múltiples responsabilidades   pedido_type_converter.py
   └─ Difícil de testear          └─ 180 líneas (conversiones)
-  └─ Errores de complejidad   
+  └─ Errores de complejidad
                                 pedido_format_handler.py
                                 └─ 170 líneas (formatos)
-                                
+
                                 pedido_sap_handler.py
                                 └─ 184 líneas (SAP)
 ```
@@ -44,6 +45,7 @@ pedido_service.py               pedido_service.py
 ## ✅ Validaciones Completadas
 
 ### 1. Sin Errores de Pylance
+
 ```
 ✅ No hay errores de tipo
 ✅ No hay warnings
@@ -51,6 +53,7 @@ pedido_service.py               pedido_service.py
 ```
 
 ### 2. Backward Compatibility 100%
+
 ```
 ✅ Todos los métodos públicos funcionan igual
 ✅ Misma interfaz API
@@ -59,6 +62,7 @@ pedido_service.py               pedido_service.py
 ```
 
 ### 3. Todas las Funcionalidades Preservadas
+
 ```
 ✅ parsear_excel_pedido()
 ✅ procesar_archivo_excel()
@@ -70,6 +74,7 @@ pedido_service.py               pedido_service.py
 ```
 
 ### 4. Nuevas Capacidades
+
 ```
 ✅ Módulos reutilizables
 ✅ Tests independientes por módulo
@@ -79,14 +84,14 @@ pedido_service.py               pedido_service.py
 
 ## 📈 Beneficios Obtenidos
 
-| Aspecto | Antes | Después |
-|---------|-------|---------|
-| **Tamaño** | 2128 líneas | 800 líneas (-62%) |
-| **Complejidad** | Muy alta | Baja |
-| **Testabilidad** | Difícil | Excelente |
-| **Mantenibilidad** | Baja | Alta |
-| **Reutilización** | No | Sí |
-| **Errores Pylance** | 5+ | 0 |
+| Aspecto             | Antes       | Después           |
+| ------------------- | ----------- | ----------------- |
+| **Tamaño**          | 2128 líneas | 800 líneas (-62%) |
+| **Complejidad**     | Muy alta    | Baja              |
+| **Testabilidad**    | Difícil     | Excelente         |
+| **Mantenibilidad**  | Baja        | Alta              |
+| **Reutilización**   | No          | Sí                |
+| **Errores Pylance** | 5+          | 0                 |
 
 ## 🏗️ Arquitectura Nueva
 
@@ -107,12 +112,14 @@ Para detalles completos, ver: [REFACTORIZACION_PEDIDO_SERVICE.md](docs/REFACTORI
 ## 🚀 Cómo Usar
 
 ### Como Usuario Actual (Sin Cambios)
+
 ```python
 service = PedidoService()
 resultado = service.validar_y_procesar_archivo_excel(file_content)
 ```
 
 ### Reutilizar Nuevos Módulos
+
 ```python
 # Conversiones
 from src.database.services.pedido_type_converter import PedidoTypeConverter
@@ -131,6 +138,7 @@ resultado = handler.validar_tiendas_contra_sap(["01", "02"])
 ## ✨ Cambios en el Código
 
 ### Importes Actualizados
+
 ```python
 # Añadidos
 from .pedido_type_converter import PedidoTypeConverter
@@ -144,6 +152,7 @@ self.sap_handler = PedidoSAPHandler(self.validator)
 ```
 
 ### Métodos Delegados
+
 ```python
 # Antes: código directo en PedidoService
 _convertir_a_decimal(valor)
