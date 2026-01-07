@@ -1512,6 +1512,13 @@ class PedidoParser:
                 raise ValueError(f"Hoja 'Tiendas' debe tener columna 'ACTIVO'. Headers encontrados: {list(headers.values())}")
             
             # ✅ Leer filas de datos (desde fila 2)
+            detalles_alineacion = {}  # Para diagnóstico detallado
+            
+            logger.info(f"📊 Leyendo hoja 'Tiendas': {ws.max_row} filas totales (incluyendo header)")
+            logger.info(f"   Columna ID TIENDA: índice {col_codigo}")
+            logger.info(f"   Columna NOMBRE TIENDA: índice {col_nombre}")
+            logger.info(f"   Columna ACTIVO: índice {col_activa}")
+            
             for fila_idx in range(2, ws.max_row + 1):
                 codigo_bruto = ws.cell(row=fila_idx, column=(col_codigo + 1)).value
                 nombre_bruto = ws.cell(row=fila_idx, column=(col_nombre + 1)).value if col_nombre is not None else None
@@ -1530,20 +1537,31 @@ class PedidoParser:
                 
                     if not columnas_requeridas_completas:
                         misaligned_rows_tiendas.append(fila_idx)
+                        detalles_alineacion[fila_idx] = {
+                            "ID TIENDA": codigo_bruto if has_codigo else "[VACÍO]",
+                            "NOMBRE TIENDA": nombre_bruto if has_nombre else "[VACÍO]",
+                            "ACTIVO": activa_bruto if has_activa else "[VACÍO]"
+                        }
+                        
+                        # LOG DETALLADO para diagnóstico
+                        logger.error(
+                            f"\n❌ FILA {fila_idx} (Excel): INCOMPLETA\n"
+                            f"   ID TIENDA      = {repr(codigo_bruto):30} → {'' if has_codigo else '❌ VACÍO'}\n"
+                            f"   NOMBRE TIENDA  = {repr(nombre_bruto):30} → {'' if has_nombre else '❌ VACÍO'}\n"
+                            f"   ACTIVO         = {repr(activa_bruto):30} → {'' if has_activa else '❌ VACÍO'}\n"
+                        )
+                        
                         columnas_vacias = []
                         if not has_codigo:
                             columnas_vacias.append("'ID TIENDA'")
                         if not has_nombre:
-                            columnas_vacias.append("'NOMBRE_TIENDA'")
+                            columnas_vacias.append("'NOMBRE TIENDA'")
                         if col_activa is not None and not has_activa:
                             columnas_vacias.append("'ACTIVO'")
-                        logger.warning(
-                            f"❌ Fila {fila_idx}: Faltan columnas obligatorias: {', '.join(columnas_vacias)}. "
-                            f"Si una fila tiene datos, TODAS las columnas deben estar completas."
-                        )
                         continue
 
                 if not fila_tiene_datos:
+                    # Fila completamente vacía, ignorar sin error
                     continue
                 
                 # ✅ NORMALIZACIÓN CRÍTICA
@@ -1604,10 +1622,19 @@ class PedidoParser:
             if misaligned_rows_tiendas:
                 filas = ", ".join(str(n) for n in misaligned_rows_tiendas[:10])
                 extra = f" y {len(misaligned_rows_tiendas) - 10} más" if len(misaligned_rows_tiendas) > 10 else ""
+                
+                # Mostrar detalles de filas problemáticas en el log
+                logger.error(f"❌ FILAS CON COLUMNAS INCOMPLETAS (Total: {len(misaligned_rows_tiendas)}):")
+                for num_fila, detalles in list(detalles_alineacion.items())[:5]:
+                    logger.error(f"   Fila {num_fila}: {detalles}")
+                if len(detalles_alineacion) > 5:
+                    logger.error(f"   ... y {len(detalles_alineacion) - 5} filas más")
+                
                 raise ValueError(
-                    f"Hoja 'Tiendas': filas con columnas incompletas (filas {filas}{extra}). "
-                    f"Si una fila tiene datos en alguna columna (ID TIENDA, NOMBRE_TIENDA o ACTIVO), "
-                    f"TODAS las columnas deben estar completas. No se permiten filas parciales."
+                    f"❌ Validación fallida: existen celdas vacías en columnas obligatorias (ID TIENDA, NOMBRE TIENDA, ACTIVO). "
+                    f"Filas con problemas: {filas}{extra}. "
+                    f"REGLA: Si una fila tiene datos en CUALQUIER columna, TODAS deben estar completas. "
+                    f"Las filas completamente vacías se ignoran automáticamente."
                 )
             
             if not catalogo:

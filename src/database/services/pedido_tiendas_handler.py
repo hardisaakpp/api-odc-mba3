@@ -37,15 +37,18 @@ def procesar_tiendas_y_validar_sap_v1_0(
         return None
 
     # Validación de celdas vacías en columnas obligatorias
+    # NOTA: La clave es "activa" (booleano), no "activo" (string)
     logger.info("📋 Validando que todas las celdas obligatorias contengan información")
     celdas_vacias = []
     for id_tienda, tienda_info in catalogo_tiendas.items():
         if not id_tienda or str(id_tienda).strip() == "":
-            celdas_vacias.append(f"ID TIENDA vacío en fila")
+            celdas_vacias.append(f"ID TIENDA vacío")
         if not tienda_info.get("nombre") or str(tienda_info.get("nombre", "")).strip() == "":
             celdas_vacias.append(f"NOMBRE TIENDA vacío para ID: {id_tienda}")
-        if tienda_info.get("activo") is None or str(tienda_info.get("activo", "")).strip() == "":
-            celdas_vacias.append(f"ACTIVO vacío para ID: {id_tienda}")
+        # ✅ CORREGIDO: La clave es "activa" (booleano), y siempre tiene valor (True por defecto)
+        # No validar como string, simplemente verificar que exista
+        if "activa" not in tienda_info:
+            celdas_vacias.append(f"ACTIVO no encontrado para ID: {id_tienda}")
 
     if celdas_vacias:
         mensaje_error = "Validación fallida: existen celdas vacías en columnas obligatorias (ID TIENDA, NOMBRE TIENDA, ACTIVO). No se puede procesar el archivo."
