@@ -435,4 +435,151 @@ class SAPClient:
                     conn.close()
                 except:
                     pass
+    
+    def get_bodega_info(self, whs_code: str) -> Optional[Dict[str, Any]]:
+        """
+        Consulta información de una bodega desde SAP usando OPENQUERY.
+        
+        Args:
+            whs_code: Código de bodega (WhsCode) a consultar
+            
+        Returns:
+            Diccionario con información de la bodega:
+            {
+                "WhsCode": "RL-CD",
+                "WhsName": "BODEGA ROLAND CD"
+            }
+            O None si no se encuentra o hay error
+            
+        Raises:
+            Exception: Si hay error de conexión o consulta
+        """
+        if not self.enabled:
+            logger.debug(f"⏭️ Consulta SAP deshabilitada para WhsCode: {whs_code}")
+            return None
+        
+        # Validar formato del whs_code antes de procesarlo
+        if not whs_code or not whs_code.strip():
+            logger.warning(f"⚠️ WhsCode vacío")
+            return None
+        
+        # Normalizar whs_code (quitar espacios)
+        whs_code_normalized = whs_code.strip()
+        
+        # Escapar comillas simples
+        whs_code_escaped = whs_code_normalized.replace("'", "''")
+        
+        query = f"""
+        SELECT 
+            T0."WhsCode" AS "WhsCode",
+            T0."WhsName" AS "WhsName"
+        FROM OPENQUERY([{SAP_LINKED_SERVER}], '
+            SELECT 
+                "WhsCode",
+                "WhsName"
+            FROM "{SAP_DATABASE}"."OWHS"
+            WHERE "WhsCode" = ''{whs_code_escaped}''
+        ') T0;
+        """
+        
+        conn = None
+        try:
+            logger.info(f"🔍 SAP: Consultando bodega WhsCode='{whs_code_normalized}'")
+            conn = get_sap_db_connection()
+            cursor = conn.cursor()
+            
+            cursor.execute(query)
+            row = cursor.fetchone()
+            
+            if row:
+                bodega_info = {
+                    "WhsCode": row[0] if row[0] else None,
+                    "WhsName": row[1] if row[1] else None
+                }
+                logger.info(f"✅ SAP: Bodega '{whs_code_normalized}' encontrada: {bodega_info['WhsName']}")
+                return bodega_info
+            else:
+                logger.warning(f"⚠️ SAP: Bodega '{whs_code_normalized}' no encontrada en OWHS")
+                return None
+                
+        except pyodbc.Error as e:
+            error_msg = f"Error al consultar bodega '{whs_code_normalized}': {str(e)}"
+            logger.error(f"❌ SAP: {error_msg}")
+            raise Exception(error_msg) from e
+        except Exception as e:
+            error_msg = f"Error inesperado al consultar bodega '{whs_code_normalized}': {str(e)}"
+            logger.error(f"❌ SAP: {error_msg}", exc_info=True)
+            raise Exception(error_msg) from e
+        finally:
+            if conn:
+                try:
+                    cursor.close()
+                    conn.close()
+                except:
+                    pass
+    
+    def get_todas_bodegas(self) -> List[Dict[str, Any]]:
+        """
+        Obtiene TODAS las bodegas desde SAP tabla OWHS.
+        
+        Returns:
+            Lista de diccionarios con información de bodegas:
+            [
+                {"WhsCode": "RL-CD", "WhsName": "BODEGA ROLAND CD"},
+                {"WhsCode": "TRL-QSN", "WhsName": "ROLAND QUICENTRO NORTE"},
+                ...
+            ]
+            O lista vacía si hay error
+        """
+        if not self.enabled:
+            logger.debug(f"⏭️ Consulta SAP deshabilitada para obtener todas las bodegas")
+            return []
+        
+        query = f"""
+        SELECT 
+            T0."WhsCode" AS "WhsCode",
+            T0."WhsName" AS "WhsName"
+        FROM OPENQUERY([{SAP_LINKED_SERVER}], '
+            SELECT 
+                "WhsCode",
+                "WhsName"
+            FROM "{SAP_DATABASE}"."OWHS"
+            ORDER BY "WhsCode"
+        ') T0;
+        """
+        
+        conn = None
+        try:
+            logger.info(f"🔍 SAP: Consultando TODAS las bodegas desde OWHS")
+            conn = get_sap_db_connection()
+            cursor = conn.cursor()
+            
+            cursor.execute(query)
+            rows = cursor.fetchall()
+            
+            bodegas = []
+            for row in rows:
+                bodegas.append({
+                    "WhsCode": row[0] if row[0] else None,
+                    "WhsName": row[1] if row[1] else None
+                })
+            
+            logger.info(f"✅ SAP: {len(bodegas)} bodegas encontradas en OWHS")
+            return bodegas
+                
+        except pyodbc.Error as e:
+            error_msg = f"Error al consultar todas las bodegas: {str(e)}"
+            logger.error(f"❌ SAP: {error_msg}")
+            return []
+        except Exception as e:
+            error_msg = f"Error inesperado al consultar todas las bodegas: {str(e)}"
+            logger.error(f"❌ SAP: {error_msg}", exc_info=True)
+            return []
+        finally:
+            if conn:
+                try:
+                    cursor.close()
+                    conn.close()
+                except:
+                    pass
 

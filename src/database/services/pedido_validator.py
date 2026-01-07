@@ -994,5 +994,515 @@ class PedidoValidator:
             "todos_validos": todos_validos,
             "detalle": detalle
         }
-
-
+    
+    def validar_bodegas_existen_en_sap(
+        self,
+        codigos_bodegas: List[str],
+        sap_obligatorio: bool = True
+    ) -> Dict[str, Any]:
+        """
+        Valida que los códigos de bodega existan en SAP OWHS.
+        Obtiene TODAS las bodegas de SAP y valida contra ese catálogo completo.
+        
+        Args:
+            codigos_bodegas: Lista de códigos de bodegas a validar
+            sap_obligatorio: Si True, errores de SAP bloquean
+            
+        Returns:
+            {
+                "validas": List[str],  # Códigos que existen en SAP
+                "no_encontradas": List[str],  # Códigos que NO existen
+                "errores": List[str],  # Códigos con error al consultar
+                "warnings": List[str],  # Warnings
+                "todas_validas": bool,
+                "detalle": Dict[str, Dict[str, Any]]
+            }
+        """
+        from ..clients.sap_client import SAPClient
+        from src.config import ENABLE_SAP_QUERIES
+        
+        if not codigos_bodegas:
+            return {
+                "validas": [],
+                "no_encontradas": [],
+                "errores": [],
+                "warnings": [],
+                "todas_validas": True,
+                "detalle": {}
+            }
+        
+        if not ENABLE_SAP_QUERIES:
+            logger.warning("⚠️ Consultas SAP deshabilitadas (ENABLE_SAP_QUERIES=False)")
+            if sap_obligatorio:
+                detalle = {
+                    codigo: {
+                        "existe": False,
+                        "info": None,
+                        "error": "SAP deshabilitado",
+                        "severity": "ERROR"
+                    }
+                    for codigo in codigos_bodegas
+                }
+                return {
+                    "validas": [],
+                    "no_encontradas": [],
+                    "errores": list(codigos_bodegas),
+                    "warnings": [],
+                    "todas_validas": False,
+                    "detalle": detalle
+                }
+            else:
+                detalle = {
+                    codigo: {
+                        "existe": False,
+                        "info": None,
+                        "error": "SAP deshabilitado",
+                        "severity": "WARNING"
+                    }
+                    for codigo in codigos_bodegas
+                }
+                return {
+                    "validas": [],
+                    "no_encontradas": [],
+                    "errores": [],
+                    "warnings": list(codigos_bodegas),
+                    "todas_validas": False,
+                    "detalle": detalle
+                }
+        
+        detalle = {}
+        validas = []
+        no_encontradas = []
+        errores = []
+        warnings = []
+        
+        sap_client = SAPClient()
+        
+        try:
+            # Obtener TODAS las bodegas de SAP de una sola vez
+            logger.info("🔍 Obteniendo catálogo completo de bodegas desde SAP OWHS")
+            todas_bodegas_sap = sap_client.get_todas_bodegas()
+            
+            if not todas_bodegas_sap:
+                logger.error("❌ No se pudo obtener el catálogo de bodegas desde SAP")
+                if sap_obligatorio:
+                    detalle = {
+                        codigo: {
+                            "existe": False,
+                            "info": None,
+                            "error": "No se pudo obtener catálogo SAP",
+                            "severity": "ERROR"
+                        }
+                        for codigo in codigos_bodegas
+                    }
+                    return {
+                        "validas": [],
+                        "no_encontradas": [],
+                        "errores": list(codigos_bodegas),
+                        "warnings": [],
+                        "todas_validas": False,
+                        "detalle": detalle
+                    }
+            
+            # Crear diccionario de bodegas SAP para búsqueda rápida
+            bodegas_sap_dict = {
+                bodega["WhsCode"]: bodega 
+                for bodega in todas_bodegas_sap 
+                if bodega.get("WhsCode")
+            }
+            
+            logger.info(f"📋 Catálogo SAP: {len(bodegas_sap_dict)} bodegas disponibles")
+            
+            # Validar cada código contra el catálogo
+            for codigo in codigos_bodegas:
+                codigo_clean = codigo.strip() if codigo else ""
+                
+                if not codigo_clean:
+                    detalle[codigo] = {
+                        "existe": False,
+                        "info": None,
+                        "error": "Código vacío",
+                        "severity": "ERROR"
+                    }
+                    no_encontradas.append(codigo)
+                    continue
+                
+                # Buscar en el catálogo SAP
+                if codigo_clean in bodegas_sap_dict:
+                    bodega_info = bodegas_sap_dict[codigo_clean]
+                    detalle[codigo] = {
+                        "existe": True,
+                        "info": bodega_info,
+                        "error": None,
+                        "severity": None
+                    }
+                    validas.append(codigo)
+                    logger.debug(f"✅ Bodega validada en SAP: {codigo_clean}")
+                else:
+                    detalle[codigo] = {
+                        "existe": False,
+                        "info": None,
+                        "error": "no_existe",
+                        "severity": "ERROR",
+                        "mensaje": f"La bodega '{codigo_clean}' no existe en SAP OWHS"
+                    }
+                    no_encontradas.append(codigo)
+                    
+        except Exception as e:
+            logger.error(f"❌ Error al validar bodegas en SAP: {e}", exc_info=True)
+            severity = "ERROR" if sap_obligatorio else "WARNING"
+            for codigo in codigos_bodegas:
+                detalle[codigo] = {
+                    "existe": False,
+                    "info": None,
+                    "error": str(e),
+                    "severity": severity
+                }
+                if sap_obligatorio:
+                    errores.append(codigo)
+                else:
+                    warnings.append(codigo)
+        
+        todas_validas = len(no_encontradas) == 0 and len(errores) == 0
+        
+        logger.info(
+            f"📊 Validación bodegas SAP: {len(validas)} válidas, "
+            f"{len(no_encontradas)} no encontradas, {len(errores)} errores"
+        )
+        
+        return {
+            "validas": validas,
+            "no_encontradas": no_encontradas,
+            "errores": errores,
+            "warnings": warnings,
+            "todas_validas": todas_validas,
+            "detalle": detalle
+        }
+    
+    def validar_tiendas_existen_en_sap(
+        self,
+        codigos_tiendas: List[str],
+        sap_obligatorio: bool = True
+    ) -> Dict[str, Any]:
+        """
+        Valida que los códigos de tienda existan directamente en SAP OWHS.
+        
+        NUEVO: Valida ID TIENDA contra SAP sin depender de catálogo Excel.
+        Obtiene TODAS las tiendas de SAP y valida contra ese catálogo completo.
+        
+        Args:
+            codigos_tiendas: Lista de códigos de tiendas a validar (ej: ["ROL01", "ROL02"])
+            sap_obligatorio: Si True, errores de SAP bloquean
+            
+        Returns:
+            {
+                "validas": List[str],  # Códigos que existen en SAP
+                "no_encontradas": List[str],  # Códigos que NO existen
+                "errores": List[str],  # Códigos con error al consultar
+                "warnings": List[str],  # Warnings
+                "todas_validas": bool,
+                "detalle": Dict[str, Dict[str, Any]]
+            }
+        """
+        validas = []
+        no_encontradas = []
+        errores = []
+        warnings = []
+        detalle = {}
+        
+        from ..clients.sap_client import SAPClient
+        
+        sap_client = SAPClient()
+        
+        try:
+            # Obtener TODAS las tiendas de SAP de una sola vez
+            logger.info("🔍 Obteniendo catálogo completo de tiendas desde SAP OWHS")
+            todas_tiendas_sap = sap_client.get_todas_bodegas()
+            
+            if not todas_tiendas_sap:
+                logger.error("❌ No se pudo obtener el catálogo de tiendas desde SAP")
+                if sap_obligatorio:
+                    detalle = {
+                        codigo: {
+                            "existe": False,
+                            "info": None,
+                            "error": "No se pudo obtener catálogo SAP",
+                            "severity": "ERROR"
+                        }
+                        for codigo in codigos_tiendas
+                    }
+                    return {
+                        "validas": [],
+                        "no_encontradas": [],
+                        "errores": list(codigos_tiendas),
+                        "warnings": [],
+                        "todas_validas": False,
+                        "detalle": detalle
+                    }
+            
+            # Crear diccionario de tiendas SAP para búsqueda rápida por código
+            # SAP usa WhsCode (ej: "ROL01", "ROL02") como clave
+            tiendas_sap_dict = {}
+            for tienda in todas_tiendas_sap:
+                whscode = tienda.get("WhsCode")
+                if whscode:
+                    # Normalizar: SAP usa mayúsculas
+                    tiendas_sap_dict[whscode.upper()] = tienda
+            
+            logger.info(f"📋 Catálogo SAP: {len(tiendas_sap_dict)} tiendas disponibles")
+            
+            # Validar cada código contra el catálogo
+            for codigo in codigos_tiendas:
+                codigo_clean = codigo.strip() if codigo else ""
+                
+                if not codigo_clean:
+                    detalle[codigo] = {
+                        "existe": False,
+                        "info": None,
+                        "error": "Código vacío",
+                        "severity": "ERROR"
+                    }
+                    no_encontradas.append(codigo)
+                    continue
+                
+                # Normalizar para búsqueda
+                codigo_upper = codigo_clean.upper()
+                
+                # Buscar en el catálogo SAP
+                if codigo_upper in tiendas_sap_dict:
+                    tienda_info = tiendas_sap_dict[codigo_upper]
+                    detalle[codigo] = {
+                        "existe": True,
+                        "info": {
+                            "codigo": tienda_info.get("WhsCode"),
+                            "nombre": tienda_info.get("WhsName"),
+                            "ubicacion": tienda_info.get("Location"),
+                            "activa": tienda_info.get("Inactive", "N") != "Y"
+                        },
+                        "error": None,
+                        "severity": None
+                    }
+                    validas.append(codigo)
+                    logger.debug(f"✅ Tienda validada en SAP: {codigo_clean}")
+                else:
+                    detalle[codigo] = {
+                        "existe": False,
+                        "info": None,
+                        "error": "no_existe",
+                        "severity": "ERROR",
+                        "mensaje": f"La tienda '{codigo_clean}' no existe en SAP OWHS"
+                    }
+                    no_encontradas.append(codigo)
+                    logger.warning(f"⚠️ Tienda {codigo_clean} no encontrada en SAP")
+                    
+        except Exception as e:
+            logger.error(f"❌ Error al validar tiendas en SAP: {e}", exc_info=True)
+            severity = "ERROR" if sap_obligatorio else "WARNING"
+            for codigo in codigos_tiendas:
+                detalle[codigo] = {
+                    "existe": False,
+                    "info": None,
+                    "error": str(e),
+                    "severity": severity
+                }
+                if sap_obligatorio:
+                    errores.append(codigo)
+                else:
+                    warnings.append(codigo)
+        
+        todas_validas = len(no_encontradas) == 0 and len(errores) == 0
+        
+        logger.info(
+            f"📊 Validación tiendas SAP: {len(validas)} válidas, "
+            f"{len(no_encontradas)} no encontradas, {len(errores)} errores"
+        )
+        
+        return {
+            "validas": validas,
+            "no_encontradas": no_encontradas,
+            "errores": errores,
+            "warnings": warnings,
+            "todas_validas": todas_validas,
+            "detalle": detalle
+        }
+    
+    def validar_coherencia_articulos(
+        self,
+        codigos_detalle: set,
+        codigos_movimiento: set,
+        mapear_a_filas: Optional[dict] = None
+    ) -> dict:
+        """
+        Valida que TODOS los códigos en Movimiento estén en Detalle Articulos.
+        
+        REGLA ARQUITECTÓNICA: Movimiento depende de Detalle Articulos, no al revés.
+        
+        Esta es una validación de COHERENCIA INTERNA del pedido, no de existencia
+        en SAP. Los códigos validados aquí ya fueron normalizados.
+        
+        Args:
+            codigos_detalle: Códigos únicos de "Detalle Articulos"
+            codigos_movimiento: Códigos únicos de "Movimiento"
+            mapear_a_filas: Dict opcional {codigo: [filas]} para trazabilidad
+            
+        Returns:
+            {
+                "coherente": bool,
+                "codigos_invalidos": List[str],
+                "errores": List[Dict],
+                "resumen": str
+            }
+        """
+        resultado = {
+            "coherente": True,
+            "codigos_invalidos": [],
+            "errores": [],
+            "resumen": "Coherencia de artículos: OK"
+        }
+        
+        # ✅ Normalizar inputs (robustez: no depender del caller)
+        codigos_detalle_norm = {str(c).strip().upper() for c in (codigos_detalle or set()) if c}
+        codigos_movimiento_norm = {str(c).strip().upper() for c in (codigos_movimiento or set()) if c}
+        
+        # ✅ Normalizar mapeo de filas si existe
+        mapa_norm = {}
+        if mapear_a_filas:
+            mapa_norm = {
+                str(k).strip().upper(): v
+                for k, v in mapear_a_filas.items()
+            }
+        
+        # ✅ Detectar códigos en Movimiento que NO están en Detalle
+        diferencia = codigos_movimiento_norm - codigos_detalle_norm
+        
+        if diferencia:
+            resultado["coherente"] = False
+            resultado["codigos_invalidos"] = sorted(list(diferencia))
+            resultado["resumen"] = (
+                f"❌ {len(diferencia)} código(s) en 'Movimiento' no declarado(s) en 'Detalle Articulos'"
+            )
+            
+            # ✅ Crear error por código (NO por fila dentro del validador)
+            for codigo in sorted(diferencia):
+                error_dict = {
+                    "codigo": codigo,
+                    "campo": "CODIGO PRODUCTO",
+                    "tipo": "ERROR",
+                    "severity": "CRITICO",
+                    "mensaje": (
+                        f"El código '{codigo}' está en 'Movimiento' "
+                        f"pero NO está declarado en 'Detalle Articulos'. "
+                        f"Todos los códigos de movimiento deben estar primero en Detalle Articulos."
+                    ),
+                    "accion_recomendada": (
+                        f"Opción 1: Agregar '{codigo}' a 'Detalle Articulos'\n"
+                        f"Opción 2: Eliminar '{codigo}' de 'Movimiento'"
+                    ),
+                    "ubicacion": "Hoja: Movimiento"
+                }
+                
+                # Si existe mapeo, incluir filas (pero no explotar por fila aquí)
+                if codigo in mapa_norm:
+                    error_dict["filas"] = mapa_norm[codigo]
+                
+                resultado["errores"].append(error_dict)
+        
+        else:
+            resultado["resumen"] = (
+                f"✅ Coherencia OK: {len(codigos_movimiento_norm)} código(s) validado(s)"
+            )
+        
+        logger.info(resultado["resumen"])
+        return resultado
+    
+    def validar_tiendas_contra_catalogo(
+        self,
+        tiendas_movimiento: list,
+        catalogo_tiendas: dict,
+        mapear_a_filas: Optional[dict] = None
+    ) -> dict:
+        """
+        Valida tiendas de Movimiento contra catálogo normalizado.
+        
+        REGLA: TODAS las tiendas en Movimiento deben estar en el catálogo y activas.
+        
+        Args:
+            tiendas_movimiento: Códigos de tienda (pueden estar sin normalizar)
+            catalogo_tiendas: Catálogo ya normalizado por leer_hoja_tiendas()
+            mapear_a_filas: Dict {codigo: [filas]} para reportar por fila
+            
+        Returns:
+            {
+                "valido": bool,
+                "tiendas_validas": List[str],
+                "tiendas_no_encontradas": List[str],
+                "tiendas_inactivas": List[str],
+                "errores": List[Dict]
+            }
+        """
+        resultado = {
+            "valido": True,
+            "tiendas_validas": [],
+            "tiendas_no_encontradas": [],
+            "tiendas_inactivas": [],
+            "errores": []
+        }
+        
+        # ✅ Normalizar tiendas de movimiento para comparación
+        tiendas_normalizar = set()
+        for tienda in tiendas_movimiento:
+            if tienda:
+                tienda_norm = str(tienda).strip().upper()
+                tiendas_normalizar.add(tienda_norm)
+        
+        # Validar cada tienda
+        for tienda_codigo in tiendas_normalizar:
+            if tienda_codigo not in catalogo_tiendas:
+                resultado["tiendas_no_encontradas"].append(tienda_codigo)
+                resultado["valido"] = False
+                
+                error_dict = {
+                    "campo": "IdTienda",
+                    "tipo": "ERROR",
+                    "mensaje": f"La tienda '{tienda_codigo}' no está declarada en la hoja 'Tiendas'",
+                    "valor": tienda_codigo,
+                    "accion_recomendada": f"Agregar '{tienda_codigo}' a la hoja 'Tiendas' con sus datos completos"
+                }
+                
+                # Mapear a filas si se proporciona
+                if mapear_a_filas and tienda_codigo in mapear_a_filas:
+                    for fila in mapear_a_filas[tienda_codigo]:
+                        error_dict_fila = error_dict.copy()
+                        error_dict_fila["fila"] = fila
+                        resultado["errores"].append(error_dict_fila)
+                else:
+                    resultado["errores"].append(error_dict)
+            
+            else:
+                info_tienda = catalogo_tiendas[tienda_codigo]
+                
+                if not info_tienda.get("activa", True):
+                    resultado["tiendas_inactivas"].append(tienda_codigo)
+                    resultado["valido"] = False
+                    
+                    error_dict = {
+                        "campo": "IdTienda",
+                        "tipo": "ERROR",
+                        "mensaje": f"La tienda '{tienda_codigo}' está marcada como INACTIVA",
+                        "valor": tienda_codigo,
+                        "accion_recomendada": f"Marcar '{tienda_codigo}' como activa en la hoja 'Tiendas' o usar otra tienda"
+                    }
+                    
+                    # Mapear a filas
+                    if mapear_a_filas and tienda_codigo in mapear_a_filas:
+                        for fila in mapear_a_filas[tienda_codigo]:
+                            error_dict_fila = error_dict.copy()
+                            error_dict_fila["fila"] = fila
+                            resultado["errores"].append(error_dict_fila)
+                    else:
+                        resultado["errores"].append(error_dict)
+                
+                else:
+                    resultado["tiendas_validas"].append(tienda_codigo)
+        
+        return resultado

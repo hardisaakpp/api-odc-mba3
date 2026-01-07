@@ -13,11 +13,13 @@ El sistema ha sido actualizado para soportar un nuevo formato mejorado de planti
 ### ¿Qué cambió?
 
 **Formato Anterior (2 hojas):**
+
 ```
 CABECERA_PEDIDO + DETALLE_ARTICULO
 ```
 
 **Nuevo Formato v1.0 (4 hojas):**
+
 ```
 Cabecera Pedido + Detalle Articulos + Movimiento + Tiendas
 ```
@@ -27,7 +29,9 @@ Cabecera Pedido + Detalle Articulos + Movimiento + Tiendas
 ## 🎯 Nuevo Formato v1.0 - Descripción de las 4 Hojas
 
 ### 1️⃣ **Cabecera Pedido** (Metadatos)
+
 Información general del pedido:
+
 - Código de pedido (identificador único)
 - Fechas (pedido y entrega)
 - Información del proveedor
@@ -36,7 +40,9 @@ Información general del pedido:
 - Bodega origen
 
 ### 2️⃣ **Detalle Articulos** (Catálogo de Productos)
+
 Maestro de productos:
+
 - Código de producto (SKU)
 - Marca
 - Descripción SAP
@@ -48,24 +54,30 @@ Maestro de productos:
 - Cantidad en bodega (informativa)
 
 ### 3️⃣ **Movimiento** (Distribución a Tiendas) ⭐ **CRÍTICA**
+
 Asignación de cantidades por tienda:
+
 - CODIGO PRODUCTO (SKU a distribuir)
 - TIENDAS (código o nombre de tienda)
 - CANTIDAD (unidades a enviar)
 
 **Características:**
+
 - Un producto puede distribuirse a múltiples tiendas
 - Soporta códigos cortos (`TRL-QSN`) o nombres completos
 - Validación automática contra catálogo de tiendas
 
 ### 4️⃣ **Tiendas** (Maestro de Tiendas)
+
 Catálogo de puntos de venta:
+
 - ID TIENDA (código único)
 - NOMBRE_TIENDA (descripción)
 - ACTIVO (SI/NO)
 - ID_TIENDA_ACTIVA (validación)
 
 **Segmentación:**
+
 - Tiendas ROLAND (`TRL-*`)
 - Tiendas DESCUENTON (`TOUT-*`)
 - Tiendas REGIONS (`RG-*`)
@@ -78,32 +90,37 @@ Catálogo de puntos de venta:
 ### 1. **pedido_parser.py** - Nuevos Métodos
 
 #### Método: `leer_hoja_movimiento()`
+
 ```python
 def leer_hoja_movimiento(
-    self, 
-    file_content: bytes, 
+    self,
+    file_content: bytes,
     catalogo_tiendas: Optional[Dict[str, Dict[str, Any]]] = None
 ) -> Dict[str, Any]
 ```
 
 **Funcionalidad:**
+
 - Lee la hoja "Movimiento"
 - Procesa distribuciones de productos a tiendas
 - Valida códigos de tienda contra catálogo
 - Retorna distribuciones estructuradas con validaciones
 
 **Validaciones incluidas:**
+
 - ✅ Códigos de producto no vacíos
 - ✅ Tiendas existentes en catálogo
 - ✅ Cantidades válidas (enteros > 0)
 - ✅ Tiendas activas
 
 #### Método: `leer_hoja_tiendas()` - Mejorado
+
 ```python
 def leer_hoja_tiendas(self, file_content: bytes) -> Dict[str, Dict[str, Any]]
 ```
 
 **Mejoras:**
+
 - Ahora retorna más información (nombre, estado activo, ID de validación)
 - Mejor detección de columnas (flexible)
 - Logging detallado de tiendas cargadas
@@ -113,7 +130,9 @@ def leer_hoja_tiendas(self, file_content: bytes) -> Dict[str, Dict[str, Any]]
 ### 2. **pedido_service.py** - Nuevo Flujo
 
 #### Detección Automática de Formato
+
 En `validar_y_procesar_archivo_excel()`:
+
 ```python
 # Detecta si tiene 4 hojas y usa el nuevo flujo
 if tiene_cabecera_pedido and tiene_detalle_articulo and tiene_movimiento and tiene_tiendas:
@@ -121,6 +140,7 @@ if tiene_cabecera_pedido and tiene_detalle_articulo and tiene_movimiento and tie
 ```
 
 #### Nuevo Método: `_procesar_formato_v1_0()`
+
 ```python
 def _procesar_formato_v1_0(
     self,
@@ -138,29 +158,35 @@ def _procesar_formato_v1_0(
 **Pasos del procesamiento:**
 
 1. **PASO 1:** Leer hoja "Tiendas"
+
    - Cargar catálogo de tiendas válidas
    - Validar estados (ACTIVO/INACTIVO)
 
 2. **PASO 2:** Leer hoja "Cabecera Pedido"
+
    - Extraer metadatos
    - Normalizar campos
    - Generar Pedido ID
 
 3. **PASO 3:** Leer hoja "Detalle Articulos"
+
    - Cargar catálogo de SKUs
    - Obtener costos y precios
    - Crear diccionario de referencia
 
 4. **PASO 4:** Leer hoja "Movimiento"
+
    - Procesar distribuciones
    - Validar productos y tiendas
    - Validar cantidades
 
 5. **PASO 5:** Consolidar por producto
+
    - Agrupar distribuciones
    - Consolidar cantidades
 
 6. **PASO 6:** Validación pre-negocio
+
    - Ejecutar validaciones completas
    - Generar reportes de errores
 
@@ -174,6 +200,7 @@ def _procesar_formato_v1_0(
 ## 📊 Respuesta del Sistema
 
 ### Formato v1.0 Exitoso
+
 ```json
 {
   "status": "success",
@@ -182,7 +209,12 @@ def _procesar_formato_v1_0(
   "articulos_cargados": 3,
   "distribuciones_cargados": 12,
   "resumen": {
-    "hojas_procesadas": ["Tiendas", "Cabecera Pedido", "Detalle Articulos", "Movimiento"],
+    "hojas_procesadas": [
+      "Tiendas",
+      "Cabecera Pedido",
+      "Detalle Articulos",
+      "Movimiento"
+    ],
     "tiendas_validadas": 15,
     "productos_cargados": 3,
     "distribuciones_totales": 12
@@ -229,6 +261,7 @@ python scripts/procesar_plantilla_pedido.py pedido.xlsx --verbose --output-json 
 **Archivo Principal:** [docs/PLANTILLA_PEDIDO_INICIAL_v1_0.md](../docs/PLANTILLA_PEDIDO_INICIAL_v1_0.md)
 
 Contiene:
+
 - ✅ Descripción detallada de cada hoja
 - ✅ Estructura exacta de columnas
 - ✅ Ejemplos de datos reales
@@ -241,20 +274,22 @@ Contiene:
 ## ✅ Validaciones Implementadas
 
 ### Validaciones de Estructura
-| Validación | Nivel | Descripción |
-|-----------|-------|-------------|
-| Hojas obligatorias | ERROR | Todas las 4 hojas deben existir |
-| CODIGO PEDIDO obligatorio | ERROR | Cabecera debe tener número |
-| CODIGO PRODUCTO no vacío | ERROR | Cada fila de Movimiento debe tener SKU |
-| TIENDA no vacía | ERROR | Cada fila de Movimiento debe tener tienda |
-| CANTIDAD válida | ERROR | Debe ser entero > 0 |
+
+| Validación                | Nivel | Descripción                               |
+| ------------------------- | ----- | ----------------------------------------- |
+| Hojas obligatorias        | ERROR | Todas las 4 hojas deben existir           |
+| CODIGO PEDIDO obligatorio | ERROR | Cabecera debe tener número                |
+| CODIGO PRODUCTO no vacío  | ERROR | Cada fila de Movimiento debe tener SKU    |
+| TIENDA no vacía           | ERROR | Cada fila de Movimiento debe tener tienda |
+| CANTIDAD válida           | ERROR | Debe ser entero > 0                       |
 
 ### Validaciones de Referencia
-| Validación | Nivel | Descripción |
-|-----------|-------|-------------|
-| Producto existe | ERROR | CODIGO PRODUCTO debe estar en Detalle Articulos |
-| Tienda existe | ERROR | TIENDA debe estar en hoja Tiendas |
-| Tienda activa | WARNING | Si tienda está INACTIVO |
+
+| Validación      | Nivel   | Descripción                                     |
+| --------------- | ------- | ----------------------------------------------- |
+| Producto existe | ERROR   | CODIGO PRODUCTO debe estar en Detalle Articulos |
+| Tienda existe   | ERROR   | TIENDA debe estar en hoja Tiendas               |
+| Tienda activa   | WARNING | Si tienda está INACTIVO                         |
 
 ---
 
@@ -268,6 +303,7 @@ El sistema **mantiene compatibilidad hacia atrás** con el formato anterior de 2
 ```
 
 **Detección automática:**
+
 - Si archivo tiene 4 hojas → Usa flujo v1.0
 - Si archivo tiene 2 hojas → Usa flujo antiguo
 
@@ -276,16 +312,20 @@ El sistema **mantiene compatibilidad hacia atrás** con el formato anterior de 2
 ## 🐛 Errores Comunes y Soluciones
 
 ### Error: "Tienda no encontrada"
+
 **Causa:** Tienda en Movimiento no existe en Tiendas o está inactiva
 **Solución:** Verificar código exacto en hoja Tiendas
 
 ### Error: "Producto no encontrado"
+
 **Causa:** CODIGO PRODUCTO en Movimiento no existe en Detalle Articulos
 **Solución:** Verificar que SKU esté en Detalle Articulos
 
 ### Error: "Hoja no encontrada"
+
 **Causa:** Falta alguna de las 4 hojas requeridas
 **Solución:** Verificar que existan las hojas exactas:
+
 - `Cabecera Pedido` (o similar)
 - `Detalle Articulos` (o similar)
 - `Movimiento`
@@ -296,13 +336,16 @@ El sistema **mantiene compatibilidad hacia atrás** con el formato anterior de 2
 ## 📝 Archivos Modificados
 
 ### Código Fuente
+
 - ✅ `src/database/services/pedido_parser.py` - Nuevos métodos para leer hojas
 - ✅ `src/database/services/pedido_service.py` - Nuevo flujo v1.0 + detección automática
 
 ### Scripts
+
 - ✅ `scripts/procesar_plantilla_pedido.py` - Nuevo script CLI para procesamiento
 
 ### Documentación
+
 - ✅ `docs/PLANTILLA_PEDIDO_INICIAL_v1_0.md` - Documentación completa del nuevo formato
 
 ---
@@ -346,14 +389,14 @@ Para preguntas o problemas:
 
 ## ✨ Beneficios del Nuevo Formato
 
-| Aspecto | Anterior | Nuevo v1.0 |
-|--------|----------|-----------|
-| **Claridad** | Confuso | Muy clara (4 hojas especializadas) |
-| **Mantenibilidad** | Difícil | Fácil (cada hoja con un propósito) |
-| **Escalabilidad** | Limitada | Excelente (soporta muchas tiendas) |
-| **Validaciones** | Básicas | Completas (tiendas, productos, cantidades) |
-| **Trazabilidad** | Limitada | Completa (fila de origen, auditoría) |
-| **Debugging** | Difícil | Fácil (errores detallados por hoja) |
+| Aspecto            | Anterior | Nuevo v1.0                                 |
+| ------------------ | -------- | ------------------------------------------ |
+| **Claridad**       | Confuso  | Muy clara (4 hojas especializadas)         |
+| **Mantenibilidad** | Difícil  | Fácil (cada hoja con un propósito)         |
+| **Escalabilidad**  | Limitada | Excelente (soporta muchas tiendas)         |
+| **Validaciones**   | Básicas  | Completas (tiendas, productos, cantidades) |
+| **Trazabilidad**   | Limitada | Completa (fila de origen, auditoría)       |
+| **Debugging**      | Difícil  | Fácil (errores detallados por hoja)        |
 
 ---
 

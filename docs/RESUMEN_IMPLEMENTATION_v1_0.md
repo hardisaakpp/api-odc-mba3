@@ -26,15 +26,17 @@ Se requería actualizar la funcionalidad del sistema para parsear y procesar est
 **Archivo:** `src/database/services/pedido_parser.py`
 
 #### Nuevo Método: `leer_hoja_movimiento()`
+
 ```python
 def leer_hoja_movimiento(
-    self, 
-    file_content: bytes, 
+    self,
+    file_content: bytes,
     catalogo_tiendas: Optional[Dict] = None
 ) -> Dict[str, Any]
 ```
 
 **Funcionalidad:**
+
 - Lee la hoja "Movimiento" del Excel
 - Procesa distribuciones de productos a tiendas
 - Valida códigos de tienda contra catálogo
@@ -46,11 +48,13 @@ def leer_hoja_movimiento(
   - Tiendas activas (warnings para inactivas)
 
 #### Mejora: `leer_hoja_tiendas()`
+
 ```python
 def leer_hoja_tiendas(self, file_content: bytes) -> Dict[str, Dict[str, Any]]
 ```
 
 **Mejoras:**
+
 - Retorna más información (nombre, estado activo, ID de validación)
 - Mejor detección de columnas (búsqueda flexible)
 - Logging detallado de tiendas cargadas
@@ -63,12 +67,14 @@ def leer_hoja_tiendas(self, file_content: bytes) -> Dict[str, Dict[str, Any]]
 **Archivo:** `src/database/services/pedido_service.py`
 
 #### Detección Automática de Formato
+
 ```python
 if tiene_cabecera_pedido and tiene_detalle_articulo and tiene_movimiento and tiene_tiendas:
     return self._procesar_formato_v1_0(...)
 ```
 
 **Comportamiento:**
+
 - Automáticamente detecta si el Excel tiene 4 hojas
 - Si sí → Usa nuevo flujo v1.0
 - Si no → Usa flujo antiguo (compatible hacia atrás)
@@ -79,26 +85,32 @@ if tiene_cabecera_pedido and tiene_detalle_articulo and tiene_movimiento and tie
 **Pasos del Procesamiento (7 etapas):**
 
 1. **PASO 1:** Leer hoja "Tiendas"
+
    - Cargar catálogo de tiendas válidas
    - Validar estados
 
 2. **PASO 2:** Leer hoja "Cabecera Pedido"
+
    - Extraer metadatos
    - Normalizar campos
 
 3. **PASO 3:** Leer hoja "Detalle Articulos"
+
    - Cargar catálogo de SKUs
    - Crear diccionario de referencia
 
 4. **PASO 4:** Leer hoja "Movimiento"
+
    - Procesar distribuciones
    - Validar referencias
 
 5. **PASO 5:** Consolidar por producto
+
    - Agrupar distribuciones
    - Consolidar cantidades
 
 6. **PASO 6:** Validación pre-negocio
+
    - Ejecutar validaciones completas
    - Generar reportes
 
@@ -113,6 +125,7 @@ if tiene_cabecera_pedido and tiene_detalle_articulo and tiene_movimiento and tie
 **Archivo:** `scripts/procesar_plantilla_pedido.py`
 
 **Uso:**
+
 ```bash
 # Procesamiento básico
 python scripts/procesar_plantilla_pedido.py Template_Pedido_Inicial_v1.0.xlsx
@@ -125,6 +138,7 @@ python scripts/procesar_plantilla_pedido.py pedido.xlsx --verbose --output-json 
 ```
 
 **Características:**
+
 - ✅ Argumentos con defaults sensatos
 - ✅ Logging detallado
 - ✅ Exportación a JSON opcional
@@ -136,7 +150,9 @@ python scripts/procesar_plantilla_pedido.py pedido.xlsx --verbose --output-json 
 ### 4. **Documentación Completa** ✅
 
 #### Documento 1: `docs/PLANTILLA_PEDIDO_INICIAL_v1_0.md`
+
 **Descripción Detallada:**
+
 - ✅ Descripción de cada hoja (4 páginas)
 - ✅ Estructura exacta de columnas
 - ✅ Ejemplos de datos reales
@@ -146,7 +162,9 @@ python scripts/procesar_plantilla_pedido.py pedido.xlsx --verbose --output-json 
 - ✅ Troubleshooting y soluciones
 
 #### Documento 2: `docs/ACTUALIZACION_FORMATO_v1_0.md`
+
 **Resumen Técnico:**
+
 - ✅ Cambios en `pedido_parser.py`
 - ✅ Cambios en `pedido_service.py`
 - ✅ Detección automática de formato
@@ -154,7 +172,9 @@ python scripts/procesar_plantilla_pedido.py pedido.xlsx --verbose --output-json 
 - ✅ Beneficios del nuevo formato
 
 #### Documento 3: `docs/GUIA_VISUAL_FORMATO_v1_0.md`
+
 **Referencia Rápida Visual:**
+
 - ✅ Vista de Excel (tablas visuales)
 - ✅ Estructura de cada hoja
 - ✅ Segmentación de tiendas
@@ -167,20 +187,22 @@ python scripts/procesar_plantilla_pedido.py pedido.xlsx --verbose --output-json 
 ## 📊 Validaciones Implementadas
 
 ### Validaciones de Estructura
-| Validación | Nivel | Descripción |
-|-----------|-------|-------------|
-| Hojas obligatorias | ERROR | Todas las 4 hojas deben existir |
-| CODIGO PEDIDO obligatorio | ERROR | Cabecera debe tener número |
-| CODIGO PRODUCTO no vacío | ERROR | Cada fila debe tener SKU |
-| TIENDA no vacía | ERROR | Cada fila debe tener tienda |
-| CANTIDAD válida | ERROR | Entero > 0 |
+
+| Validación                | Nivel | Descripción                     |
+| ------------------------- | ----- | ------------------------------- |
+| Hojas obligatorias        | ERROR | Todas las 4 hojas deben existir |
+| CODIGO PEDIDO obligatorio | ERROR | Cabecera debe tener número      |
+| CODIGO PRODUCTO no vacío  | ERROR | Cada fila debe tener SKU        |
+| TIENDA no vacía           | ERROR | Cada fila debe tener tienda     |
+| CANTIDAD válida           | ERROR | Entero > 0                      |
 
 ### Validaciones de Referencia
-| Validación | Nivel | Descripción |
-|-----------|-------|-------------|
-| Producto existe | ERROR | Debe estar en Detalle Articulos |
-| Tienda existe | ERROR | Debe estar en Tiendas |
-| Tienda activa | WARNING | Si está INACTIVO |
+
+| Validación      | Nivel   | Descripción                     |
+| --------------- | ------- | ------------------------------- |
+| Producto existe | ERROR   | Debe estar en Detalle Articulos |
+| Tienda existe   | ERROR   | Debe estar en Tiendas           |
+| Tienda activa   | WARNING | Si está INACTIVO                |
 
 ---
 
@@ -212,6 +234,7 @@ ARCHIVO EXCEL (4 HOJAS)
 ## 📈 Ejemplo de Respuesta del Sistema
 
 ### Caso Exitoso
+
 ```json
 {
   "status": "success",
@@ -220,7 +243,12 @@ ARCHIVO EXCEL (4 HOJAS)
   "articulos_cargados": 3,
   "distribuciones_cargados": 12,
   "resumen": {
-    "hojas_procesadas": ["Tiendas", "Cabecera Pedido", "Detalle Articulos", "Movimiento"],
+    "hojas_procesadas": [
+      "Tiendas",
+      "Cabecera Pedido",
+      "Detalle Articulos",
+      "Movimiento"
+    ],
     "tiendas_validadas": 15,
     "productos_cargados": 3,
     "distribuciones_totales": 12
@@ -233,11 +261,13 @@ ARCHIVO EXCEL (4 HOJAS)
 ## 🔧 Compatibilidad
 
 ✅ **Compatibilidad hacia atrás:**
+
 - Archivos con 2 hojas (formato antiguo) siguen funcionando
 - No se requieren cambios en endpoints
 - Detección automática sin intervención del usuario
 
 ✅ **Compatibilidad hacia adelante:**
+
 - Sistema preparado para futuras mejoras
 - Arquitectura extensible
 
@@ -246,6 +276,7 @@ ARCHIVO EXCEL (4 HOJAS)
 ## 📚 Archivos Entregados
 
 ### Código Fuente (Modificados/Creados)
+
 ```
 ✅ src/database/services/pedido_parser.py
    ├─ + leer_hoja_movimiento()
@@ -260,6 +291,7 @@ ARCHIVO EXCEL (4 HOJAS)
 ```
 
 ### Documentación (Creados)
+
 ```
 ✅ docs/PLANTILLA_PEDIDO_INICIAL_v1_0.md (8 KB)
    └─ Documentación técnica completa
@@ -278,30 +310,34 @@ ARCHIVO EXCEL (4 HOJAS)
 
 ## ✨ Beneficios Logrados
 
-| Aspecto | Anterior | Ahora v1.0 |
-|--------|----------|-----------|
-| **Claridad** | ⚠️ Confuso | ✅ Muy clara |
-| **Estructuración** | ⚠️ Todo en 2 hojas | ✅ 4 hojas especializadas |
-| **Mantenibilidad** | ⚠️ Difícil | ✅ Fácil |
-| **Escalabilidad** | ⚠️ Limitada | ✅ Excelente |
-| **Validaciones** | ⚠️ Básicas | ✅ Completas |
-| **Trazabilidad** | ⚠️ Limitada | ✅ Completa (fila de origen) |
-| **Debugging** | ⚠️ Difícil | ✅ Fácil (errores por hoja) |
+| Aspecto            | Anterior           | Ahora v1.0                   |
+| ------------------ | ------------------ | ---------------------------- |
+| **Claridad**       | ⚠️ Confuso         | ✅ Muy clara                 |
+| **Estructuración** | ⚠️ Todo en 2 hojas | ✅ 4 hojas especializadas    |
+| **Mantenibilidad** | ⚠️ Difícil         | ✅ Fácil                     |
+| **Escalabilidad**  | ⚠️ Limitada        | ✅ Excelente                 |
+| **Validaciones**   | ⚠️ Básicas         | ✅ Completas                 |
+| **Trazabilidad**   | ⚠️ Limitada        | ✅ Completa (fila de origen) |
+| **Debugging**      | ⚠️ Difícil         | ✅ Fácil (errores por hoja)  |
 
 ---
 
 ## 🎯 Casos de Uso Soportados
 
 ### 1. Importación Inicial Completa ✅
+
 Crear un nuevo pedido con distribución a múltiples tiendas
 
 ### 2. Reabastecimiento a Tienda Específica ✅
+
 Crear un pedido pequeño dirigido a una o pocas tiendas
 
 ### 3. Actualización de Distribución ✅
+
 Modificar cantidades en distribución existente (nuevo pedido)
 
 ### 4. Integración con SAP ✅
+
 Validar códigos de producto contra SAP (opcional)
 
 ---
@@ -309,6 +345,7 @@ Validar códigos de producto contra SAP (opcional)
 ## 🔍 Ejemplos de Uso
 
 ### Vía API REST
+
 ```bash
 POST /pedidos/importar-excel
 Content-Type: multipart/form-data
@@ -318,6 +355,7 @@ validar_sap: true
 ```
 
 ### Vía Script CLI
+
 ```bash
 python scripts/procesar_plantilla_pedido.py \
   Template_Pedido_Inicial_v1.0.xlsx \
@@ -373,18 +411,23 @@ Todos los códigos fueron verificados:
 ## 🎓 Preguntas Frecuentes
 
 ### ¿Necesito cambiar algo en mis archivos anteriores?
+
 **No.** El sistema detecta automáticamente el formato y procesa ambos tipos.
 
 ### ¿Qué pasa si tengo un Excel con menos de 4 hojas?
+
 **Se usa el flujo antiguo.** El sistema es totalmente compatible hacia atrás.
 
 ### ¿Puedo mezclar formatos?
+
 **No recomendado.** Usa uno u otro, no mezcles en el mismo archivo.
 
 ### ¿Qué pasa si una tienda está inactiva?
+
 **Se genera un WARNING pero el procesamiento continúa** (configurable).
 
 ### ¿Puedo distribuir un producto a la misma tienda en múltiples filas?
+
 **No.** Daría error de duplicado. Consolida las cantidades en una sola fila.
 
 ---
@@ -404,6 +447,7 @@ Para preguntas, problemas o sugerencias sobre la actualización:
 ✨ **Se ha completado exitosamente la actualización del sistema para soportar el nuevo formato v1.0 con 4 hojas especializadas.**
 
 **Beneficiarios:**
+
 - ✅ Usuarios: Más claridad en estructura
 - ✅ Desarrolladores: Mejor mantenibilidad
 - ✅ Operaciones: Mejor trazabilidad y debugging

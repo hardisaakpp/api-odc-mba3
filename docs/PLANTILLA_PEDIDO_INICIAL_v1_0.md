@@ -29,20 +29,21 @@ Este archivo se utiliza para importación masiva de órdenes de compra y distrib
 **Formato:** Clave-Valor en formato vertical  
 **Estructura:**
 
-| Campo | Valor | Ejemplo |
-|-------|-------|---------|
-| CODIGO PEDIDO | P-12.48 - 12 - 2025 | Identificador único del pedido |
-| FECHA DE PEDIDO | 2025-12-22 | Fecha de emisión (formato YYYY-MM-DD) |
-| FECHA DE ENTREGA | INMEDIATO | Plazo de entrega o instrucción logística |
-| FORMA DE PAGO | 120 DIAS | Condición de crédito con proveedor |
-| ODC | (vacío) | Orden de Compra interna (opcional) |
-| NOMBRE PROVEEDOR | TEXTILES EL RAYO S.A. | Entidad que suministra la mercancía |
-| COMPRADOR NOMBRE | VACA ANDREA | Persona responsable de la gestión |
-| COD COMPRADOR | 801 | ID interno del comprador |
-| ORIGEN TRASLADO | RL-CD | Bodega/Centro de Distribución origen |
-| SERIE | 10131 | Número de serie del documento |
+| Campo            | Valor                 | Ejemplo                                  |
+| ---------------- | --------------------- | ---------------------------------------- |
+| CODIGO PEDIDO    | P-12.48 - 12 - 2025   | Identificador único del pedido           |
+| FECHA DE PEDIDO  | 2025-12-22            | Fecha de emisión (formato YYYY-MM-DD)    |
+| FECHA DE ENTREGA | INMEDIATO             | Plazo de entrega o instrucción logística |
+| FORMA DE PAGO    | 120 DIAS              | Condición de crédito con proveedor       |
+| ODC              | (vacío)               | Orden de Compra interna (opcional)       |
+| NOMBRE PROVEEDOR | TEXTILES EL RAYO S.A. | Entidad que suministra la mercancía      |
+| COMPRADOR NOMBRE | VACA ANDREA           | Persona responsable de la gestión        |
+| COD COMPRADOR    | 801                   | ID interno del comprador                 |
+| ORIGEN TRASLADO  | RL-CD                 | Bodega/Centro de Distribución origen     |
+| SERIE            | 10131                 | Número de serie del documento            |
 
 **Notas:**
+
 - Los campos pueden estar en **formato vertical** (Campo | Valor) o **horizontal** (campos en fila 1, valores en fila 2)
 - El sistema detecta automáticamente el formato
 - `CODIGO PEDIDO` es obligatorio
@@ -57,17 +58,17 @@ Este archivo se utiliza para importación masiva de órdenes de compra y distrib
 **Formato:** Tabular con encabezados en primera fila  
 **Estructura:**
 
-| Columna | Tipo | Descripción |
-|---------|------|-------------|
-| CODIGO PRODUCTO | Texto | SKU único (ej: `MTF123.9`, `R5000.1012-2`) |
-| MARCA | Texto | Fabricante del producto (ej: `ROLAND`) |
-| DESCRIPCION SAP | Texto | Nombre técnico en el ERP (ej: `VALETAS C. TALONERA LISA`) |
-| CODIGO BARRAS | Texto | EAN/UPC para escaneo (ej: `7861224113401`) |
-| PACK | Texto | Unidad de empaque (ej: `X1`, `X6`, `X12`) |
-| COSTO SIN IVA | Decimal | Costo de adquisición por unidad (ej: `5.65`) |
-| DESCUENTO | Decimal | Porcentaje de descuento (ej: `0.2` para 20%) |
-| PVP | Decimal | Precio de Venta al Público (ej: `9.99`) |
-| BODEGA | Entero | Cantidad disponible en bodega central |
+| Columna         | Tipo    | Descripción                                               |
+| --------------- | ------- | --------------------------------------------------------- |
+| CODIGO PRODUCTO | Texto   | SKU único (ej: `MTF123.9`, `R5000.1012-2`)                |
+| MARCA           | Texto   | Fabricante del producto (ej: `ROLAND`)                    |
+| DESCRIPCION SAP | Texto   | Nombre técnico en el ERP (ej: `VALETAS C. TALONERA LISA`) |
+| CODIGO BARRAS   | Texto   | EAN/UPC para escaneo (ej: `7861224113401`)                |
+| PACK            | Texto   | Unidad de empaque (ej: `X1`, `X6`, `X12`)                 |
+| COSTO SIN IVA   | Decimal | Costo de adquisición por unidad (ej: `5.65`)              |
+| DESCUENTO       | Decimal | Porcentaje de descuento (ej: `0.2` para 20%)              |
+| PVP             | Decimal | Precio de Venta al Público (ej: `9.99`)                   |
+| BODEGA          | Entero  | Cantidad disponible en bodega central                     |
 
 **Ejemplo de Datos:**
 
@@ -78,6 +79,7 @@ R5000.1012-2    | ROLAND | MEDIA TOBILLERA              | 7861224113402 | X1   |
 ```
 
 **Notas:**
+
 - Cada fila representa un SKU único
 - Los costos y precios deben ser decimales (usar `.` como separador)
 - La columna `BODEGA` es informativa (no se utiliza en distribución)
@@ -92,11 +94,11 @@ R5000.1012-2    | ROLAND | MEDIA TOBILLERA              | 7861224113402 | X1   |
 **Formato:** Tabular con encabezados en primera fila  
 **Estructura:**
 
-| Columna | Tipo | Descripción |
-|---------|------|-------------|
-| CODIGO PRODUCTO | Texto | SKU a distribuir (debe existir en Detalle Articulos) |
-| TIENDAS | Texto | Código o nombre de la tienda (debe existir en hoja Tiendas) |
-| CANTIDAD | Entero | Número de unidades a enviar (> 0) |
+| Columna         | Tipo   | Descripción                                                 |
+| --------------- | ------ | ----------------------------------------------------------- |
+| CODIGO PRODUCTO | Texto  | SKU a distribuir (debe existir en Detalle Articulos)        |
+| TIENDAS         | Texto  | Código o nombre de la tienda (debe existir en hoja Tiendas) |
+| CANTIDAD        | Entero | Número de unidades a enviar (> 0)                           |
 
 **Ejemplo de Datos:**
 
@@ -120,6 +122,7 @@ R5000.1012-2    | TOUT-BOMB                    | 2
 - **Fila Origen:** El sistema registra la fila exacta para auditoría y debugging
 
 **Orden de Procesamiento:**
+
 1. El sistema lee todas las distribuciones
 2. Las consolida por producto
 3. Valida cada tienda contra el catálogo
@@ -134,12 +137,12 @@ R5000.1012-2    | TOUT-BOMB                    | 2
 **Formato:** Tabular con encabezados en primera fila  
 **Estructura:**
 
-| Columna | Tipo | Descripción |
-|---------|------|-------------|
-| ID TIENDA | Texto | Código único corto (ej: `TRL-QSN`, `TOUT-BOMB`, `RG-INT`) |
-| NOMBRE_TIENDA | Texto | Descripción completa (ej: `ROLAND QUICENTRO NORTE`) |
-| ACTIVO | Texto | Estado (`SI` o `NO`) |
-| ID_TIENDA_ACTIVA | Texto | Validación/confirmación (puede repetir ID) |
+| Columna          | Tipo  | Descripción                                               |
+| ---------------- | ----- | --------------------------------------------------------- |
+| ID TIENDA        | Texto | Código único corto (ej: `TRL-QSN`, `TOUT-BOMB`, `RG-INT`) |
+| NOMBRE_TIENDA    | Texto | Descripción completa (ej: `ROLAND QUICENTRO NORTE`)       |
+| ACTIVO           | Texto | Estado (`SI` o `NO`)                                      |
+| ID_TIENDA_ACTIVA | Texto | Validación/confirmación (puede repetir ID)                |
 
 **Ejemplo de Datos:**
 
@@ -156,23 +159,27 @@ OUT-CD          | BODEGA OUTLET                    | SI     | OUT-CD
 **Segmentación Observada:**
 
 1. **Tiendas ROLAND (TRL-):**
+
    - Tiendas principales de la marca
    - Ubicaciones premium (Malls, centros comerciales)
    - Ejemplos: Quicentro, San Marino, CC El Bosque
 
 2. **Tiendas DESCUENTON (TOUT-):**
+
    - Outlets o tiendas de descuento
    - Ejemplos: Bombolí, Mapasingue
 
 3. **Tiendas REGIONS (RG-):**
+
    - Puntos de venta en aeropuertos
    - Ejemplos: Regional Quito (INT y NAC), Regional Guayaquil
 
-4. **Bodegas (.*-CD):**
+4. **Bodegas (.\*-CD):**
    - Centros de distribución
    - Ejemplos: RL-CD (ROLAND CD), OUT-CD, RG-CD
 
 **Notas:**
+
 - El sistema valida que tiendas referenciadas en Movimiento existan aquí
 - Solo tiendas con `ACTIVO = SI` son aceptadas (con warnings para inactivas)
 - El código en `ID TIENDA` debe ser único
@@ -247,6 +254,7 @@ Output: Pedido cargado exitosamente
 El sistema detecta automáticamente si el Excel es formato **v1.0** (4 hojas) o **anterior** (2 hojas):
 
 ### Formato v1.0 (4 hojas):
+
 ```
 ✅ Cabecera Pedido    (obligatoria)
 ✅ Detalle Articulos  (obligatoria)
@@ -257,6 +265,7 @@ El sistema detecta automáticamente si el Excel es formato **v1.0** (4 hojas) o 
 **Acción:** Usa el nuevo flujo `_procesar_formato_v1_0()`
 
 ### Formato Anterior (2 hojas):
+
 ```
 ✅ CABECERA_PEDIDO     (obligatoria)
 ✅ DETALLE_ARTICULO    (obligatoria)
@@ -272,27 +281,27 @@ El sistema detecta automáticamente si el Excel es formato **v1.0** (4 hojas) o 
 
 ### Validaciones de Estructura:
 
-| Validación | Nivel | Descripción |
-|-----------|-------|-------------|
-| Hojas obligatorias | ERROR | Todas las 4 hojas deben existir |
-| CODIGO PEDIDO obligatorio | ERROR | Cabecera debe tener número de pedido |
-| CODIGO PRODUCTO no vacío | ERROR | Cada fila de Movimiento debe tener SKU |
-| TIENDA no vacía | ERROR | Cada fila de Movimiento debe tener tienda |
-| CANTIDAD válida | ERROR | Debe ser entero > 0 |
+| Validación                | Nivel | Descripción                               |
+| ------------------------- | ----- | ----------------------------------------- |
+| Hojas obligatorias        | ERROR | Todas las 4 hojas deben existir           |
+| CODIGO PEDIDO obligatorio | ERROR | Cabecera debe tener número de pedido      |
+| CODIGO PRODUCTO no vacío  | ERROR | Cada fila de Movimiento debe tener SKU    |
+| TIENDA no vacía           | ERROR | Cada fila de Movimiento debe tener tienda |
+| CANTIDAD válida           | ERROR | Debe ser entero > 0                       |
 
 ### Validaciones de Referencia:
 
-| Validación | Nivel | Descripción |
-|-----------|-------|-------------|
-| Producto existe | ERROR | CODIGO PRODUCTO debe estar en Detalle Articulos |
-| Tienda existe | ERROR | TIENDA debe estar en hoja Tiendas |
-| Tienda activa | WARNING | Si tienda está INACTIVO |
+| Validación      | Nivel   | Descripción                                     |
+| --------------- | ------- | ----------------------------------------------- |
+| Producto existe | ERROR   | CODIGO PRODUCTO debe estar en Detalle Articulos |
+| Tienda existe   | ERROR   | TIENDA debe estar en hoja Tiendas               |
+| Tienda activa   | WARNING | Si tienda está INACTIVO                         |
 
 ### Validaciones de Negocio:
 
-| Validación | Nivel | Descripción |
-|-----------|-------|-------------|
-| Cantidad > 0 | ERROR | No se permite cantidad 0 o negativa |
+| Validación            | Nivel | Descripción                                         |
+| --------------------- | ----- | --------------------------------------------------- |
+| Cantidad > 0          | ERROR | No se permite cantidad 0 o negativa                 |
 | Duplicados por tienda | ERROR | Un producto no puede distribuirse 2x a misma tienda |
 
 ---
@@ -314,7 +323,12 @@ El sistema detecta automáticamente si el Excel es formato **v1.0** (4 hojas) o 
     "warnings": []
   },
   "resumen": {
-    "hojas_procesadas": ["Tiendas", "Cabecera Pedido", "Detalle Articulos", "Movimiento"],
+    "hojas_procesadas": [
+      "Tiendas",
+      "Cabecera Pedido",
+      "Detalle Articulos",
+      "Movimiento"
+    ],
     "tiendas_validadas": 15,
     "productos_cargados": 3,
     "distribuciones_totales": 12
@@ -337,9 +351,7 @@ El sistema detecta automáticamente si el Excel es formato **v1.0** (4 hojas) o 
       "Fila 5: Tienda 'TRL-XYZ' no existe en catálogo",
       "Fila 8: CODIGO PRODUCTO 'SKU999' no encontrado en Detalle Articulos"
     ],
-    "warnings": [
-      "Fila 12: Tienda 'TOUT-INACTIVA' está INACTIVA"
-    ]
+    "warnings": ["Fila 12: Tienda 'TOUT-INACTIVA' está INACTIVA"]
   },
   "errores": [],
   "warnings": []
@@ -392,19 +404,23 @@ El sistema detecta automáticamente si el Excel es formato **v1.0** (4 hojas) o 
 ## 📝 Notas Importantes
 
 ### Sobre Formato de Fechas:
+
 - Usar formato YYYY-MM-DD (ej: `2025-12-22`)
 - El sistema intenta detectar otros formatos pero YYYY-MM-DD es preferido
 
 ### Sobre Números Decimales:
+
 - Usar `.` (punto) como separador decimal, NO `,` (coma)
 - Para cantidades: solo enteros (sin decimales)
 
 ### Sobre Códigos:
+
 - Los códigos de tienda pueden tener guiones (`TRL-QSN`) - se mantienen
 - Los códigos de producto pueden tener puntos (`MTF123.9`) - se mantienen
 - Todos se normalizan a MAYÚSCULAS para comparación
 
 ### Sobre Errores:
+
 - El sistema detiene el procesamiento en errores CRÍTICOS
 - Los WARNINGS se registran pero el pedido se procesa de todas formas
 - Revisar sección "Validaciones" para entender qué es error vs warning
@@ -418,6 +434,7 @@ El sistema detecta automáticamente si el Excel es formato **v1.0** (4 hojas) o 
 **Causa:** La tienda en Movimiento no existe en hoja Tiendas o está inactiva.
 
 **Solución:**
+
 1. Verificar el código exacto en Movimiento
 2. Verificar que esté en hoja Tiendas
 3. Verificar que ACTIVO = SI en hoja Tiendas
@@ -427,6 +444,7 @@ El sistema detecta automáticamente si el Excel es formato **v1.0** (4 hojas) o 
 **Causa:** CODIGO PRODUCTO en Movimiento no existe en Detalle Articulos.
 
 **Solución:**
+
 1. Verificar el SKU exacto en Movimiento
 2. Verificar que esté en Detalle Articulos
 3. Verificar espacios en blanco (trim)
@@ -436,6 +454,7 @@ El sistema detecta automáticamente si el Excel es formato **v1.0** (4 hojas) o 
 **Causa:** El Excel no tiene las 4 hojas requeridas.
 
 **Solución:**
+
 1. Verificar que existan exactamente estas hojas:
    - `Cabecera Pedido` (o similar)
    - `Detalle Articulos` (o similar)

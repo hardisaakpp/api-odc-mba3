@@ -6,6 +6,7 @@ import logging
 from typing import Dict, Optional
 from fastapi import FastAPI, Request, HTTPException, Depends, Query
 from fastapi.responses import JSONResponse
+from fastapi.exceptions import RequestValidationError
 
 from src.database.services.homologacion_service import HomologacionService
 from src.security.jwt_auth import verify_jwt_token
@@ -81,6 +82,34 @@ def register_homologaciones_sku_endpoints(app: FastAPI):
     Args:
         app: Instancia de FastAPI
     """
+    
+    # Handler global para errores de validación
+    @app.exception_handler(RequestValidationError)
+    async def validation_exception_handler(request: Request, exc: RequestValidationError):
+        """Maneja errores de validación de forma consistente"""
+        return JSONResponse(
+            status_code=400,
+            content={
+                "status": "error",
+                "detail": "Error de validación en la solicitud",
+                "message": "Error de validación en la solicitud",
+                "errors": exc.errors()
+            }
+        )
+    
+    # Handler global para HTTPException
+    @app.exception_handler(HTTPException)
+    async def http_exception_handler(request: Request, exc: HTTPException):
+        """Maneja HTTPException de forma consistente"""
+        return JSONResponse(
+            status_code=exc.status_code,
+            content={
+                "status": "error",
+                "detail": exc.detail,
+                "message": exc.detail,  # Asegurar que el mensaje esté en ambos campos
+                "error_code": getattr(exc, 'error_code', None)
+            }
+        )
     
     @app.get("/api/homologaciones-sku",
              tags=["Homologaciones SKU"])

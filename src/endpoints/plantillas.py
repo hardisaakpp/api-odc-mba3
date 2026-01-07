@@ -95,6 +95,15 @@ def register_plantillas_endpoints(app: FastAPI):
         validar: bool = Query(True, description="Validar datos antes de guardar"),
         bloquea_con_errores: bool = Query(True, description="Bloquear guardado si hay errores críticos"),
         exportar_log: bool = Query(False, description="Incluir log de validación en respuesta (base64)"),
+        modo_tiendas: str = Query(
+            "validar_estricto",
+            description="Modo de validación de tiendas: 'validar_estricto' (recomendado) | 'crear_si_no_existe' (legacy) | 'sincronizar_maestro' (admin)",
+            regex="^(validar_estricto|crear_si_no_existe|sincronizar_maestro)$"
+        ),
+        confirmar_sincronizacion: bool = Query(
+            False,
+            description="⚠️ REQUERIDO si modo_tiendas='sincronizar_maestro'. Confirma que deseas DESACTIVAR tiendas no presentes en Excel"
+        ),
         user: Dict = Depends(verify_jwt_token),
         _: None = Depends(require_permission('mba3-consultas.proceso.execute'))
     ):
@@ -167,6 +176,29 @@ def register_plantillas_endpoints(app: FastAPI):
             JSON con resultado del procesamiento incluyendo validación
         """
         try:
+            # ✅ VALIDACIÓN EXPLÍCITA PARA SINCRONIZAR (AJUSTE 3)
+            if modo_tiendas == "sincronizar_maestro":
+                if not confirmar_sincronizacion:
+                    raise HTTPException(
+                        status_code=400,
+                        detail={
+                            "error": "confirmation_required",
+                            "message": (
+                                "El modo 'sincronizar_maestro' requiere confirmación explícita. "
+                                "Esta operación va a DESACTIVAR tiendas no presentes en el Excel. "
+                                "Envía el parámetro ?confirmar_sincronizacion=true si estás seguro."
+                            ),
+                            "modo_tiendas": "sincronizar_maestro",
+                            "accion_recomendada": "Revisar Excel antes de confirmar"
+                        }
+                    )
+                
+                logger.warning(
+                    f"⚠️⚠️⚠️ OPERACIÓN DESTRUCTIVA CONFIRMADA ⚠️⚠️⚠️ - "
+                    f"Usuario {get_user_id(user)} activó modo SINCRONIZAR_MAESTRO con confirmación. "
+                    f"Se va a actualizar el maestro de tiendas (puede desactivar existentes)."
+                )
+            
             # Validar archivo
             validate_excel_file(file)
             
@@ -210,14 +242,23 @@ def register_plantillas_endpoints(app: FastAPI):
                 tiendas_permitidas=None  # None = todas permitidas
             )
             
+            # Construir mensaje de respuesta
+            # Si hay errores en el resultado, usar el primer error como mensaje principal
+            mensaje_respuesta = "Plantilla procesada y guardada exitosamente"
+            if resultado["status"] == "validation_error":
+                # Usar el primer error de la lista de errores si existe
+                errores = resultado.get("errores", [])
+                if errores:
+                    mensaje_respuesta = errores[0]  # Mensaje específico del error
+                else:
+                    mensaje_respuesta = "Plantilla validada pero tiene errores críticos"
+            elif resultado["status"] == "error":
+                mensaje_respuesta = resultado.get("message", "Error al procesar plantilla")
+            
             # Construir respuesta
             response_data = {
                 "status": resultado["status"],
-                "message": (
-                    "Plantilla procesada y guardada exitosamente" if resultado["status"] == "success"
-                    else "Plantilla validada pero tiene errores críticos" if resultado["status"] == "validation_error"
-                    else "Error al procesar plantilla"
-                ),
+                "message": mensaje_respuesta,
                 "pedido_id": resultado.get("pedido_id"),
                 "formato_detectado": resultado.get("formato_detectado"),
                 "articulos_cargados": resultado.get("articulos_cargados", 0),

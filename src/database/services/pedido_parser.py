@@ -409,6 +409,12 @@ class PedidoParser:
         
         resultado["resumen"]["filasLeidas"] = len(df_detalle)
         
+        # Ensure df_detalle is a DataFrame (not Series)
+        if not isinstance(df_detalle, pd.DataFrame):
+            resultado["errores"].append(f"❌ Formato inválido en hoja '{hoja_detalle}': no es un DataFrame válido")
+            resultado["status"] = "error"
+            return resultado
+        
         # Normalizar nombres de columnas
         df_detalle.columns = [str(col).strip() if pd.notna(col) else f"col_{i}" 
                              for i, col in enumerate(df_detalle.columns)]
@@ -960,122 +966,6 @@ class PedidoParser:
             logger.debug(f"⚠️ Error al convertir valor numérico de columna '{column_name}': {e}")
             return None
     
-    def leer_hoja_tiendas(self, file_content: bytes) -> Dict[str, Dict[str, Any]]:
-        """
-        Lee la hoja 'Tiendas' del Excel y retorna un diccionario de tiendas válidas.
-        
-        Estructura esperada:
-        - ID TIENDA: Código único corto (ej: TRL-QSN, TRL-SMA, TOUT-BOMB, RG-INT)
-        - NOMBRE_TIENDA: Nombre descriptivo completo
-        - ACTIVO: Estado de la tienda (SI/NO)
-        - ID_TIENDA_ACTIVA: Validación de tienda (puede repetir ID o nombre)
-        
-        Args:
-            file_content: Contenido del archivo Excel en bytes
-            
-        Returns:
-            Dict con código_tienda -> {nombre, activa, id_tienda_activa}
-            Ejemplo: {
-                "TRL-QSN": {
-                    "nombre": "ROLAND QUICENTRO NORTE", 
-                    "activa": True,
-                    "id_tienda_activa": "TRL-QSN"
-                }
-            }
-        """
-        tiendas = {}
-        
-        try:
-            excel_file = pd.ExcelFile(io.BytesIO(file_content))
-            
-            # Buscar hoja "Tiendas" (case-insensitive)
-            hoja_tiendas = None
-            for sheet_name in excel_file.sheet_names:
-                if str(sheet_name).upper().strip() == "TIENDAS":
-                    hoja_tiendas = sheet_name
-                    break
-            
-            if not hoja_tiendas:
-                logger.warning("⚠️ No se encontró hoja 'Tiendas' en el Excel")
-                return tiendas
-            
-            # Leer hoja con header en primera fila
-            df_tiendas = pd.read_excel(
-                excel_file, 
-                sheet_name=hoja_tiendas, 
-                header=0,
-                keep_default_na=False
-            )
-            
-            # Normalizar nombres de columnas (mantener espacios para búsqueda flexible)
-            columnas_originales = [str(col).strip() for col in df_tiendas.columns]
-            df_tiendas.columns = columnas_originales
-            
-            logger.info(f"📋 Hoja 'Tiendas' encontrada con {len(df_tiendas)} filas")
-            logger.info(f"🔍 Columnas en hoja Tiendas: {columnas_originales}")
-            
-            # Buscar columnas necesarias (flexible)
-            col_codigo = None
-            col_nombre = None
-            col_activa = None
-            col_id_activa = None
-            
-            for col in columnas_originales:
-                col_upper = str(col).upper().strip()
-                
-                if col_codigo is None and "ID" in col_upper and "TIENDA" in col_upper:
-                    # Preferir "ID TIENDA" antes que variaciones
-                    if "ID_TIENDA_ACTIVA" not in col_upper:
-                        col_codigo = col
-                
-                if col_nombre is None and "NOMBRE" in col_upper and "TIENDA" in col_upper:
-                    col_nombre = col
-                
-                if col_activa is None and "ACTIVA" in col_upper:
-                    # Preferir "ACTIVO" sin "_TIENDA"
-                    if "ID_TIENDA" not in col_upper:
-                        col_activa = col
-                
-                if col_id_activa is None and "ID_TIENDA_ACTIVA" in col_upper:
-                    col_id_activa = col
-            
-            if not col_codigo:
-                logger.warning("⚠️ No se encontró columna 'ID TIENDA' en hoja Tiendas")
-                return tiendas
-            
-            logger.info(f"   Usando columnas: ID TIENDA='{col_codigo}', NOMBRE='{col_nombre}', ACTIVO='{col_activa}'")
-            
-            # Procesar cada fila
-            for idx, row in df_tiendas.iterrows():
-                codigo = str(row.get(col_codigo, "")).strip()
-                if not codigo:
-                    continue
-                
-                # Normalizar código (mayúsculas, pero mantener guiones)
-                codigo = codigo.upper()
-                
-                nombre = str(row.get(col_nombre, "")).strip() if col_nombre else codigo
-                activa_str = str(row.get(col_activa, "SI")).strip().upper() if col_activa else "SI"
-                activa = activa_str in ["SI", "SÍ", "YES", "TRUE", "1", "ACTIVA"]
-                
-                id_tienda_activa = str(row.get(col_id_activa, codigo)).strip() if col_id_activa else codigo
-                
-                tiendas[codigo] = {
-                    "nombre": nombre,
-                    "activa": activa,
-                    "id_tienda_activa": id_tienda_activa
-                }
-                
-                logger.debug(f"   Tienda: {codigo} → {nombre} (Activa: {activa}, ID Activa: {id_tienda_activa})")
-            
-            logger.info(f"✅ Se cargaron {len(tiendas)} tiendas desde la hoja Tiendas")
-            logger.info(f"   Tiendas cargadas: {', '.join(tiendas.keys())}")
-            
-        except Exception as e:
-            logger.error(f"❌ Error al leer hoja 'Tiendas': {e}", exc_info=True)
-        
-        return tiendas
-    
     def leer_hoja_movimiento(self, file_content: bytes, catalogo_tiendas: Optional[Dict[str, Dict[str, Any]]] = None) -> Dict[str, Any]:
         """
         Lee la hoja 'Movimiento' del Excel y retorna distribuciones por producto y tienda.
@@ -1201,27 +1091,37 @@ class PedidoParser:
                 tienda_str = str(row.get(col_tienda, "")).strip()
                 cantidad_raw = row.get(col_cantidad)
                 
-                # Validar campos obligatorios
+                # Validar campos obligatorios (alineación estricta: las 3 columnas deben tener datos)
                 if not codigo_producto:
-                    logger.debug(f"⚠️ Fila {fila_num}: CODIGO PRODUCTO vacío, ignorando")
+                    msg = f"Fila {fila_num}: 'CODIGO PRODUCTO' es obligatorio"
+                    logger.warning(f"❌ {msg}")
+                    resultado["errores"].append(msg)
                     continue
                 
                 if not tienda_str:
-                    logger.debug(f"⚠️ Fila {fila_num}: TIENDA vacía, ignorando")
+                    msg = f"Fila {fila_num}: 'TIENDAS' es obligatorio"
+                    logger.warning(f"❌ {msg}")
+                    resultado["errores"].append(msg)
                     continue
                 
                 if cantidad_raw is None or str(cantidad_raw).strip() == "":
-                    logger.debug(f"⚠️ Fila {fila_num}: CANTIDAD vacía, ignorando")
+                    msg = f"Fila {fila_num}: 'CANTIDAD' es obligatoria"
+                    logger.warning(f"❌ {msg}")
+                    resultado["errores"].append(msg)
                     continue
                 
                 # Convertir cantidad a entero
                 try:
                     cantidad = int(float(str(cantidad_raw).replace(",", ".")))
                     if cantidad <= 0:
-                        logger.debug(f"⚠️ Fila {fila_num}: Cantidad debe ser > 0 ({cantidad}), ignorando")
+                        msg = f"Fila {fila_num}: 'CANTIDAD' debe ser un entero > 0 (recibido {cantidad})"
+                        logger.warning(f"❌ {msg}")
+                        resultado["errores"].append(msg)
                         continue
                 except (ValueError, TypeError):
-                    logger.debug(f"⚠️ Fila {fila_num}: Cantidad no es número válido: '{cantidad_raw}', ignorando")
+                    msg = f"Fila {fila_num}: 'CANTIDAD' no es un número entero válido (recibido '{cantidad_raw}')"
+                    logger.warning(f"❌ {msg}")
+                    resultado["errores"].append(msg)
                     continue
                 
                 # Normalizar códigos
@@ -1518,4 +1418,178 @@ class PedidoParser:
         except Exception as e:
             logger.error(f"❌ Error al extraer detalle formato simple: {e}", exc_info=True)
             raise
+    
+    def leer_hoja_tiendas(self, file_content: bytes) -> Dict[str, Dict]:
+        """
+        Lee la hoja "Tiendas" y retorna catálogo NORMALIZADO.
+        
+        IMPORTANTE: Normaliza TODOS los datos para evitar falsos errores
+        (espacios, mayúsculas, booleanos).
+        
+        Args:
+            file_content: Contenido del archivo Excel en bytes
+            
+        Returns:
+            {
+                "TRL-QSN": {
+                    "codigo": "TRL-QSN",
+                    "nombre": "ROLAND QUICENTRO NORTE",
+                    "activa": True,
+                    "codigo_original": "TRL-qsn",
+                    "fila_origen": 2
+                },
+                ...
+            }
+            
+        Raises:
+            ValueError: Si hay error al leer la hoja
+        """
+        import openpyxl
+        import re  # ✅ AGREGAR IMPORT
+        import unicodedata
+        
+        try:
+            workbook = openpyxl.load_workbook(io.BytesIO(file_content), data_only=True)
+            
+            # ✅ Buscar hoja "Tiendas" (case-insensitive)
+            sheet_name = None
+            for name in workbook.sheetnames:
+                if name.lower() == "tiendas":
+                    sheet_name = name
+                    break
+            
+            if not sheet_name:
+                logger.warning("⚠️ Hoja 'Tiendas' no encontrada en Excel")
+                return {}  # Retornar vacío si no existe (permisivo para formato simple)
+            
+            ws = workbook[sheet_name]
+            catalogo = {}
+            misaligned_rows_tiendas: List[int] = []
+            
+            # ✅ Leer headers de la primera fila con normalización robusta
+            def _normalize_header(text: str) -> str:
+                # Minúsculas, sin acentos, sin espacios ni signos
+                t = str(text).lower().strip()
+                # Remover acentos
+                t = ''.join(
+                    c for c in unicodedata.normalize('NFD', t)
+                    if unicodedata.category(c) != 'Mn'
+                )
+                # Reemplazar espacios y guiones por nada para comparación flexible
+                t = t.replace(' ', '')
+                t = t.replace('-', '')
+                return t
+
+            headers = {}
+            for col_idx, cell in enumerate(ws[1]):
+                if cell.value:
+                    header_normalized = _normalize_header(str(cell.value))
+                    headers[col_idx] = header_normalized
+            
+            # Validar que existan columnas mínimas
+            col_codigo = None
+            col_nombre = None
+            col_activa = None
+            
+            # Mapear columnas por candidatos exactos tras normalización
+            codigo_candidates = {"idtienda", "codigo", "codigo_tienda", "codigotienda", "code"}
+            nombre_candidates = {"nombretienda", "nombre", "tienda", "nombredetienda"}
+            activa_candidates = {"activo", "activa", "active", "estado"}
+
+            for col_idx, header in headers.items():
+                if header in codigo_candidates or any(h in header for h in codigo_candidates):
+                    col_codigo = col_idx
+                elif header in nombre_candidates or any(h in header for h in nombre_candidates):
+                    col_nombre = col_idx
+                elif header in activa_candidates or any(h in header for h in activa_candidates):
+                    col_activa = col_idx
+            
+            if col_codigo is None:
+                raise ValueError(f"Hoja 'Tiendas' debe tener columna 'id_tienda' o 'Código'. Headers encontrados: {list(headers.values())}")
+            
+            # ✅ Leer filas de datos (desde fila 2)
+            for fila_idx in range(2, ws.max_row + 1):
+                # Obtener valores usando get_cell (columna código es obligatoria)
+                codigo_bruto = ws.cell(row=fila_idx, column=(col_codigo + 1)).value
+                nombre_bruto = ws.cell(row=fila_idx, column=(col_nombre + 1)).value if col_nombre is not None else None
+                activa_bruto = ws.cell(row=fila_idx, column=(col_activa + 1)).value if col_activa is not None else True
+                
+                # Validación de alineación: si hay datos en la fila, las columnas clave deben estar completas
+                has_codigo = bool(str(codigo_bruto).strip()) if codigo_bruto is not None else False
+                has_nombre = bool(str(nombre_bruto).strip()) if nombre_bruto is not None else False
+                has_activa = bool(str(activa_bruto).strip()) if (col_activa is not None and activa_bruto is not None) else (col_activa is None)
+                if (has_codigo or has_nombre or (col_activa is not None and (activa_bruto is not None and str(activa_bruto).strip() != ""))) and not (has_codigo and has_nombre and (has_activa or col_activa is None)):
+                    misaligned_rows_tiendas.append(fila_idx)
+                    logger.warning(f"❌ Fila {fila_idx}: columnas 'ID TIENDA', 'NOMBRE_TIENDA' y 'ACTIVO' deben estar alineadas")
+                    continue
+                
+                # ✅ NORMALIZACIÓN CRÍTICA
+                if not codigo_bruto:
+                    logger.warning(f"⚠️ Fila {fila_idx}: Código de tienda vacío, omitiendo")
+                    continue
+                
+                # Normalizar código (strip + upper)
+                codigo_normalizado = str(codigo_bruto).strip().upper()
+                
+                # Validar código (caracteres permitidos: A-Z, 0-9, guión, punto)
+                if not re.match(r'^[A-Z0-9\-\.]+$', codigo_normalizado):
+                    logger.warning(
+                        f"⚠️ Fila {fila_idx}: Código '{codigo_normalizado}' contiene caracteres inválidos"
+                    )
+                    continue
+                
+                # Normalizar nombre (strip + title case)
+                nombre_normalizado = str(nombre_bruto).strip() if nombre_bruto else codigo_normalizado
+                
+                # ✅ CONVERTIR BOOLEANO (CRÍTICO)
+                activa_normalizada = True
+                if activa_bruto is not None:
+                    activa_str = str(activa_bruto).lower().strip()
+                    if activa_str in ("no", "false", "0", "f"):
+                        activa_normalizada = False
+                    elif activa_str in ("si", "yes", "true", "1", "v"):
+                        activa_normalizada = True
+                    else:
+                        # Valor desconocido, por defecto activa
+                        logger.warning(
+                            f"⚠️ Fila {fila_idx}: Valor 'Activa' inválido '{activa_bruto}', asumiendo SI"
+                        )
+                        activa_normalizada = True
+                
+                # Detectar duplicados (mismo código)
+                if codigo_normalizado in catalogo:
+                    logger.warning(
+                        f"⚠️ Código de tienda '{codigo_normalizado}' duplicado "
+                        f"(filas {catalogo[codigo_normalizado]['fila_origen']} y {fila_idx}), "
+                        f"usando última ocurrencia"
+                    )
+                
+                # ✅ GUARDAR EN CATÁLOGO
+                catalogo[codigo_normalizado] = {
+                    "codigo": codigo_normalizado,  # Normalizado
+                    "nombre": nombre_normalizado,
+                    "activa": activa_normalizada,
+                    "codigo_original": codigo_bruto,  # Guardar original para auditoría
+                    "fila_origen": fila_idx
+                }
+                
+                logger.debug(
+                    f"✅ Tienda cargada: {codigo_normalizado} "
+                    f"(Activa: {activa_normalizada}, Fila: {fila_idx})"
+                )
+            
+            if misaligned_rows_tiendas:
+                filas = ", ".join(str(n) for n in misaligned_rows_tiendas[:10])
+                extra = f" y {len(misaligned_rows_tiendas) - 10} más" if len(misaligned_rows_tiendas) > 10 else ""
+                raise ValueError(f"Hoja 'Tiendas' con filas desalineadas (faltan datos obligatorios): {filas}{extra}")
+            
+            if not catalogo:
+                logger.warning("⚠️ No se encontraron tiendas válidas en la hoja 'Tiendas'")
+            
+            logger.info(f"📊 Catálogo de tiendas cargado: {len(catalogo)} tiendas válidas")
+            return catalogo
+            
+        except Exception as e:
+            logger.error(f"❌ Error al leer hoja 'Tiendas': {e}", exc_info=True)
+            raise ValueError(f"Error al leer catálogo de tiendas: {str(e)}")
 

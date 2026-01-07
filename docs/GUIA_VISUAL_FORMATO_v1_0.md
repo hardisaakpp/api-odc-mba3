@@ -62,6 +62,7 @@
 ```
 
 **Columnas Importantes:**
+
 - ✅ **CODIGO PRODUCTO** - SKU único (obligatorio, debe coincidir con Movimiento)
 - ✅ **MARCA** - Fabricante
 - ✅ **DESCRIPCION SAP** - Nombre técnico del producto
@@ -100,15 +101,15 @@ RESUMEN:
 
 **Características:**
 
-| Característica | Ejemplo | Notas |
-|---|---|---|
-| **Un producto a varias tiendas** | MTF123.9 → 4 tiendas | Distribución normal |
-| **Mismo producto a mismo código de tienda** | ❌ No permitido | Error: Duplicado |
-| **Código corto de tienda** | TRL-QSN | Soportado ✅ |
-| **Nombre completo de tienda** | ROLAND MALL DEL SOL | Soportado ✅ |
-| **Cantidad decimal** | 5.5 | ❌ Error: Debe ser entero |
-| **Cantidad cero** | 0 | ❌ Error: Debe ser > 0 |
-| **Cantidad negativa** | -5 | ❌ Error: Debe ser > 0 |
+| Característica                              | Ejemplo              | Notas                     |
+| ------------------------------------------- | -------------------- | ------------------------- |
+| **Un producto a varias tiendas**            | MTF123.9 → 4 tiendas | Distribución normal       |
+| **Mismo producto a mismo código de tienda** | ❌ No permitido      | Error: Duplicado          |
+| **Código corto de tienda**                  | TRL-QSN              | Soportado ✅              |
+| **Nombre completo de tienda**               | ROLAND MALL DEL SOL  | Soportado ✅              |
+| **Cantidad decimal**                        | 5.5                  | ❌ Error: Debe ser entero |
+| **Cantidad cero**                           | 0                    | ❌ Error: Debe ser > 0    |
+| **Cantidad negativa**                       | -5                   | ❌ Error: Debe ser > 0    |
 
 ---
 

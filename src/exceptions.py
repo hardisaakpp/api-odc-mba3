@@ -1,6 +1,7 @@
 """
 Excepciones personalizadas para la aplicación.
 """
+from typing import Optional
 
 
 class QueryValidationError(Exception):
@@ -30,7 +31,7 @@ class BusinessException(Exception):
         error_code: Código de error para identificación programática
         data: Datos estructurados adicionales (dict) para el frontend
     """
-    def __init__(self, message: str, error_code: str = None, data: dict = None):
+    def __init__(self, message: str, error_code: Optional[str] = None, data: Optional[dict] = None):
         super().__init__(message)
         self.message = message
         self.error_code = error_code or "BUSINESS_ERROR"
