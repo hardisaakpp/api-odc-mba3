@@ -1,6 +1,10 @@
 """
 Motor de validación para pedidos desde Excel.
 Valida datos pre-negocio antes de enviar al ERP.
+
+REFACTORIZADO: Las validaciones contra SAP fueron movidas a pedido_sap_validator.py
+para mejorar separación de responsabilidades. Este módulo mantiene solo validaciones
+básicas de estructura, formato y coherencia.
 """
 
 import logging
@@ -121,7 +125,7 @@ class PedidoValidator:
                         ))
             elif isinstance(fecha_pedido, date):
                 fecha_parsed = fecha_pedido
-            
+
             # Validar que fecha_pedido no sea muy antigua (ej: > 1 año)
             if fecha_parsed:
                 hoy = date.today()
@@ -133,7 +137,7 @@ class PedidoValidator:
                         message=f"La fecha de pedido es muy antigua: {fecha_parsed}",
                         value=fecha_parsed
                     ))
-        
+
         # Validar fecha_entrega
         fecha_entrega = cabecera.get("fecha_entrega")
         if fecha_entrega and str(fecha_entrega).upper() != "INMEDIATO":
@@ -165,9 +169,9 @@ class PedidoValidator:
                                 message=f"La fecha de entrega no puede ser pasada: {fecha_entrega_dt}",
                                 value=fecha_entrega_dt
                             ))
-        
+
         return issues
-    
+
     def validar_detalle(
         self,
         detalle: Dict[str, Any],
@@ -176,17 +180,17 @@ class PedidoValidator:
     ) -> List[ValidationIssue]:
         """
         Valida un detalle (producto) con sus distribuciones por tienda.
-        
+
         Args:
             detalle: Diccionario con datos del detalle
             distribuciones: Lista de distribuciones por tienda
             row_number: Número de fila en el Excel (para reporte)
-            
+
         Returns:
             Lista de issues de validación
         """
         issues = []
-        
+
         # Validar código interno (catálogo)
         codigo_interno = detalle.get("codigo_interno")
         if not codigo_interno or not str(codigo_interno).strip():
@@ -208,7 +212,7 @@ class PedidoValidator:
                     message="El código interno contiene caracteres no permitidos. Solo se permiten letras, números, guiones, puntos y espacios",
                     value=codigo_str
                 ))
-        
+
         # Validar distribuciones por tienda
         if not distribuciones:
             issues.append(ValidationIssue(
@@ -222,12 +226,12 @@ class PedidoValidator:
             # Calcular cantidad total
             cantidad_total = 0
             tiendas_usadas = set()
-            
+
             for dist in distribuciones:
                 tienda_codigo = dist.get("tienda_codigo")
                 cantidad = dist.get("cantidad")
                 validacion_tienda = dist.get("validacion", {})
-                
+
                 # Validar tienda
                 if not tienda_codigo or not str(tienda_codigo).strip():
                     issues.append(ValidationIssue(
@@ -239,7 +243,7 @@ class PedidoValidator:
                     ))
                 else:
                     tienda_codigo_str = str(tienda_codigo).strip().upper()
-                    
+
                     # Procesar validaciones del parser (hoja Tiendas)
                     if validacion_tienda:
                         # Agregar errores de validación del parser
@@ -251,7 +255,7 @@ class PedidoValidator:
                                 message=error_msg,
                                 value=tienda_codigo_str
                             ))
-                        
+
                         # Agregar warnings de validación del parser
                         for warning_msg in validacion_tienda.get("warnings", []):
                             issues.append(ValidationIssue(
@@ -261,7 +265,7 @@ class PedidoValidator:
                                 message=warning_msg,
                                 value=tienda_codigo_str
                             ))
-                    
+
                     # Validar que la tienda esté en la lista permitida (si se especifica)
                     if self.tiendas_permitidas and tienda_codigo_str not in self.tiendas_permitidas:
                         issues.append(ValidationIssue(
@@ -271,7 +275,7 @@ class PedidoValidator:
                             message=f"La tienda '{tienda_codigo_str}' no está en la lista de tiendas permitidas",
                             value=tienda_codigo_str
                         ))
-                    
+
                     # Detectar duplicados (misma tienda repetida)
                     if tienda_codigo_str in tiendas_usadas:
                         issues.append(ValidationIssue(
@@ -282,7 +286,7 @@ class PedidoValidator:
                             value=tienda_codigo_str
                         ))
                     tiendas_usadas.add(tienda_codigo_str)
-                
+
                 # Validar cantidad
                 if cantidad is None:
                     issues.append(ValidationIssue(
@@ -313,7 +317,7 @@ class PedidoValidator:
                             ))
                         else:
                             cantidad_total += cantidad_int
-                            
+
                             # Validar límite por tienda
                             if self.max_cantidad_por_tienda and cantidad_int > self.max_cantidad_por_tienda:
                                 issues.append(ValidationIssue(
@@ -331,7 +335,7 @@ class PedidoValidator:
                             message=f"La cantidad debe ser un número entero válido. Valor recibido: {cantidad}",
                             value=cantidad
                         ))
-            
+
             # Validar cantidad total
             if cantidad_total > 0:
                 if self.max_cantidad_total and cantidad_total > self.max_cantidad_total:
@@ -342,7 +346,7 @@ class PedidoValidator:
                         message=f"La cantidad total ({cantidad_total}) excede el límite razonable ({self.max_cantidad_total})",
                         value=cantidad_total
                     ))
-        
+
         # Validar precios e impuestos (reglas regionales)
         if self.validar_precios:
             precio_issues = self._validar_precios_impuestos(detalle, row_number)
@@ -364,7 +368,7 @@ class PedidoValidator:
         - Descuentos en rango válido (0-100%)
         - Coherencia entre costo, descuento y PVP
         - Coherencia entre subtotal y total
-        
+
         Args:
             detalle: Diccionario con datos del detalle
             row_number: Número de fila en el Excel
@@ -378,15 +382,15 @@ class PedidoValidator:
             """Parsea un valor numérico, manejando formato regional."""
             if value is None or pd.isna(value):
                 return None
-            
+
             # Convertir a string y limpiar
             str_value = str(value).strip()
             if not str_value:
                 return None
-            
+
             # Remover símbolos de moneda comunes
             str_value = str_value.replace('$', '').replace('€', '').replace('USD', '').strip()
-            
+
             # Manejar formato regional (comas vs puntos)
             if self.usar_comas_decimales:
                 # Formato europeo: 10,50 (coma como decimal)
@@ -406,7 +410,7 @@ class PedidoValidator:
                 elif ',' in str_value and '.' in str_value:
                     # Tiene ambos: asumir coma=miles, punto=decimal
                     str_value = str_value.replace(',', '')
-            
+
             try:
                 return float(str_value)
             except (ValueError, TypeError):
@@ -418,7 +422,7 @@ class PedidoValidator:
                     value=value
                 ))
                 return None
-        
+
         # Validar costo sin IVA
         costo_sin_iva = parse_numeric_value(detalle.get("costo_doc_sin_iva"), "costo_doc_sin_iva")
         if costo_sin_iva is not None:
@@ -438,11 +442,11 @@ class PedidoValidator:
                     message="El costo sin IVA es cero. Verifique que sea correcto",
                     value=costo_sin_iva
                 ))
-        
+
         # Validar descuento
         descuento = parse_numeric_value(detalle.get("descuento_1"), "descuento_1")
         descuento_porcentaje = None
-        
+
         if descuento is not None:
             # El descuento puede venir como porcentaje (0-100) o como decimal (0-1)
             if descuento > 1 and descuento <= 100:
@@ -459,7 +463,7 @@ class PedidoValidator:
                     message=f"El descuento debe estar entre 0 y 100% (o 0 y 1 si es decimal). Valor recibido: {descuento}",
                     value=descuento
                 ))
-            
+
             if descuento_porcentaje is not None:
                 if descuento_porcentaje < 0 or descuento_porcentaje > 100:
                     issues.append(ValidationIssue(
@@ -477,7 +481,7 @@ class PedidoValidator:
                         message=f"El descuento es muy alto ({descuento_porcentaje}%). Verifique que sea correcto",
                         value=descuento
                     ))
-        
+
         # Validar PVP (Precio de Venta al Público)
         pvp = parse_numeric_value(detalle.get("pvp"), "pvp")
         if pvp is not None:
@@ -497,7 +501,7 @@ class PedidoValidator:
                     message="El PVP es cero. Verifique que sea correcto",
                     value=pvp
                 ))
-            
+
             # Validar coherencia: PVP debería ser >= costo (después de aplicar descuento)
             if costo_sin_iva is not None and pvp > 0:
                 costo_con_iva = costo_sin_iva * (1 + self.iva_porcentaje / 100)
@@ -505,7 +509,7 @@ class PedidoValidator:
                     costo_con_descuento = costo_con_iva * (1 - descuento_porcentaje / 100)
                 else:
                     costo_con_descuento = costo_con_iva
-                
+
                 # PVP debería ser razonablemente mayor o igual al costo con descuento
                 # Permitir hasta 10% de diferencia por redondeo
                 if pvp < costo_con_descuento * 0.9:
@@ -516,11 +520,11 @@ class PedidoValidator:
                         message=f"El PVP ({pvp:.2f}) es menor que el costo con IVA y descuento ({costo_con_descuento:.2f}). Verifique los cálculos",
                         value=pvp
                     ))
-        
+
         # Validar subtotal y total
         subtotal = parse_numeric_value(detalle.get("subtotal"), "subtotal")
         total = parse_numeric_value(detalle.get("total"), "total")
-        
+
         if subtotal is not None and subtotal < 0:
             issues.append(ValidationIssue(
                 row_number=row_number,
@@ -549,7 +553,7 @@ class PedidoValidator:
                     message=f"El total ({total:.2f}) es menor que el subtotal ({subtotal:.2f}). Verifique los cálculos",
                     value=total
                 ))
-        
+
         return issues
     
     def validar_detalle_formato_simple(
@@ -776,11 +780,7 @@ class PedidoValidator:
         """
         Valida que los códigos de producto existan directamente en SAP.
         
-        REGLAS DE VALIDACIÓN:
-        - ItemCode debe coincidir EXACTO con el código del Excel
-        - Si SAP no responde y sap_obligatorio=True → ERROR
-        - Si SAP no responde y sap_obligatorio=False → WARNING
-        - Código no encontrado → ERROR (siempre)
+        REFACTORIZADO: Delega a PedidoSAPValidator para mantener compatibilidad.
         
         Args:
             codigos_productos: Lista de códigos de productos a validar (deben ser únicos)
@@ -797,203 +797,13 @@ class PedidoValidator:
                 "detalle": Dict[str, Dict[str, Any]]  # {codigo: {"existe": bool, "info": {...}, "error": str, "severity": str}}
             }
         """
-        from ..services.sap_service import SAPService
-        from src.config import ENABLE_SAP_QUERIES
-        
-        if not codigos_productos:
-            return {
-                "validos": [],
-                "no_encontrados": [],
-                "errores": [],
-                "warnings": [],
-                "todos_validos": True,
-                "detalle": {}
-            }
-        
-        # Verificar si SAP está habilitado
-        if not ENABLE_SAP_QUERIES:
-            logger.warning("⚠️ Consultas SAP deshabilitadas (ENABLE_SAP_QUERIES=False)")
-            if sap_obligatorio:
-                # Si SAP es obligatorio pero está deshabilitado, todo es error
-                detalle = {
-                    codigo: {
-                        "existe": False,
-                        "info": None,
-                        "error": "SAP deshabilitado",
-                        "severity": "ERROR"
-                    }
-                    for codigo in codigos_productos
-                }
-                return {
-                    "validos": [],
-                    "no_encontrados": [],
-                    "errores": list(codigos_productos),
-                    "warnings": [],
-                    "todos_validos": False,
-                    "detalle": detalle
-                }
-            else:
-                # Si no es obligatorio, retornar warnings
-                detalle = {
-                    codigo: {
-                        "existe": False,
-                        "info": None,
-                        "error": "SAP deshabilitado",
-                        "severity": "WARNING"
-                    }
-                    for codigo in codigos_productos
-                }
-                return {
-                    "validos": [],
-                    "no_encontrados": [],
-                    "errores": [],
-                    "warnings": list(codigos_productos),
-                    "todos_validos": False,
-                    "detalle": detalle
-                }
-        
-        detalle = {}
-        validos = []
-        no_encontrados = []
-        errores = []
-        warnings = []
-        
-        # Usar SAPService que tiene cache
-        sap_service = SAPService()
-        
-        for codigo in codigos_productos:
-            try:
-                # Normalizar código (quitar espacios)
-                codigo_clean = codigo.strip() if codigo else ""
-                
-                if not codigo_clean:
-                    detalle[codigo] = {
-                        "existe": False,
-                        "info": None,
-                        "error": "Código vacío",
-                        "severity": "ERROR"
-                    }
-                    no_encontrados.append(codigo)
-                    continue
-                
-                # Consultar SAP (usa cache si está disponible)
-                producto_info = sap_service.get_or_fetch_producto_info(codigo_clean)
-                
-                # Verificar si hay error
-                if producto_info and producto_info.get("_error"):
-                    error_type = producto_info.get("_error_type")
-                    
-                    if error_type == "no_existe":
-                        # Código no existe en SAP → ERROR siempre
-                        detalle[codigo] = {
-                            "existe": False,
-                            "info": None,
-                            "error": "no_existe",
-                            "severity": "ERROR",
-                            "mensaje": f"El código '{codigo_clean}' no existe en SAP"
-                        }
-                        no_encontrados.append(codigo)
-                        
-                    elif error_type == "mismatch":
-                        # SAP retornó un ItemCode diferente → ERROR (no coincide exacto)
-                        item_code_sap = producto_info.get("_item_code_sap", "N/A")
-                        detalle[codigo] = {
-                            "existe": False,
-                            "info": None,
-                            "error": "mismatch",
-                            "severity": "ERROR",
-                            "mensaje": f"El código '{codigo_clean}' no coincide exacto con ItemCode SAP '{item_code_sap}'",
-                            "item_code_sap": item_code_sap
-                        }
-                        no_encontrados.append(codigo)
-                        
-                    elif error_type == "error":
-                        # Error de conexión o consulta a SAP
-                        error_msg = producto_info.get("_error_message", "Error desconocido")
-                        severity = "ERROR" if sap_obligatorio else "WARNING"
-                        
-                        detalle[codigo] = {
-                            "existe": False,
-                            "info": None,
-                            "error": error_type,
-                            "severity": severity,
-                            "mensaje": f"Error al consultar SAP para '{codigo_clean}': {error_msg}"
-                        }
-                        
-                        if sap_obligatorio:
-                            errores.append(codigo)
-                        else:
-                            warnings.append(codigo)
-                    else:
-                        # Error desconocido
-                        severity = "ERROR" if sap_obligatorio else "WARNING"
-                        detalle[codigo] = {
-                            "existe": False,
-                            "info": None,
-                            "error": error_type or "error_desconocido",
-                            "severity": severity
-                        }
-                        if sap_obligatorio:
-                            errores.append(codigo)
-                        else:
-                            warnings.append(codigo)
-                            
-                elif producto_info:
-                    # ✅ Producto encontrado correctamente - ItemCode coincide exacto
-                    detalle[codigo] = {
-                        "existe": True,
-                        "info": {
-                            "item_code": producto_info.get("item_code"),
-                            "item_name": producto_info.get("item_name"),
-                            "pack_sap": producto_info.get("pack_sap"),
-                            "grupo_articulos": producto_info.get("grupo_articulos"),
-                            "unidad_conversion": producto_info.get("unidad_conversion")
-                        },
-                        "severity": None
-                    }
-                    validos.append(codigo)
-                    logger.debug(f"✅ Código validado en SAP: {codigo_clean}")
-                    
-                else:
-                    # None retornado sin error (caso edge, tratarlo como no existe)
-                    detalle[codigo] = {
-                        "existe": False,
-                        "info": None,
-                        "error": "no_existe",
-                        "severity": "ERROR",
-                        "mensaje": f"No se encontró información en SAP para '{codigo_clean}'"
-                    }
-                    no_encontrados.append(codigo)
-                    
-            except Exception as e:
-                logger.error(f"❌ Error inesperado al validar código {codigo} en SAP: {e}", exc_info=True)
-                severity = "ERROR" if sap_obligatorio else "WARNING"
-                detalle[codigo] = {
-                    "existe": False,
-                    "info": None,
-                    "error": str(e),
-                    "severity": severity
-                }
-                if sap_obligatorio:
-                    errores.append(codigo)
-                else:
-                    warnings.append(codigo)
-        
-        todos_validos = len(no_encontrados) == 0 and len(errores) == 0
-        
-        logger.info(
-            f"📊 Validación SAP completada: {len(validos)} válidos, "
-            f"{len(no_encontrados)} no encontrados, {len(errores)} errores, {len(warnings)} warnings"
+        from .pedido_sap_validator import PedidoSAPValidator
+        sap_validator = PedidoSAPValidator()
+        return sap_validator.validar_productos_existen_en_sap(
+            codigos_productos=codigos_productos,
+            usar_cache=usar_cache,
+            sap_obligatorio=sap_obligatorio
         )
-        
-        return {
-            "validos": validos,
-            "no_encontrados": no_encontrados,
-            "errores": errores,
-            "warnings": warnings,
-            "todos_validos": todos_validos,
-            "detalle": detalle
-        }
     
     def validar_bodegas_existen_en_sap(
         self,
@@ -1003,6 +813,8 @@ class PedidoValidator:
         """
         Valida que los códigos de bodega existan en SAP OWHS.
         Obtiene TODAS las bodegas de SAP y valida contra ese catálogo completo.
+        
+        REFACTORIZADO: Delega a PedidoSAPValidator para mantener compatibilidad.
         
         Args:
             codigos_bodegas: Lista de códigos de bodegas a validar
@@ -1018,166 +830,12 @@ class PedidoValidator:
                 "detalle": Dict[str, Dict[str, Any]]
             }
         """
-        from ..clients.sap_client import SAPClient
-        from src.config import ENABLE_SAP_QUERIES
-        
-        if not codigos_bodegas:
-            return {
-                "validas": [],
-                "no_encontradas": [],
-                "errores": [],
-                "warnings": [],
-                "todas_validas": True,
-                "detalle": {}
-            }
-        
-        if not ENABLE_SAP_QUERIES:
-            logger.warning("⚠️ Consultas SAP deshabilitadas (ENABLE_SAP_QUERIES=False)")
-            if sap_obligatorio:
-                detalle = {
-                    codigo: {
-                        "existe": False,
-                        "info": None,
-                        "error": "SAP deshabilitado",
-                        "severity": "ERROR"
-                    }
-                    for codigo in codigos_bodegas
-                }
-                return {
-                    "validas": [],
-                    "no_encontradas": [],
-                    "errores": list(codigos_bodegas),
-                    "warnings": [],
-                    "todas_validas": False,
-                    "detalle": detalle
-                }
-            else:
-                detalle = {
-                    codigo: {
-                        "existe": False,
-                        "info": None,
-                        "error": "SAP deshabilitado",
-                        "severity": "WARNING"
-                    }
-                    for codigo in codigos_bodegas
-                }
-                return {
-                    "validas": [],
-                    "no_encontradas": [],
-                    "errores": [],
-                    "warnings": list(codigos_bodegas),
-                    "todas_validas": False,
-                    "detalle": detalle
-                }
-        
-        detalle = {}
-        validas = []
-        no_encontradas = []
-        errores = []
-        warnings = []
-        
-        sap_client = SAPClient()
-        
-        try:
-            # Obtener TODAS las bodegas de SAP de una sola vez
-            logger.info("🔍 Obteniendo catálogo completo de bodegas desde SAP OWHS")
-            todas_bodegas_sap = sap_client.get_todas_bodegas()
-            
-            if not todas_bodegas_sap:
-                logger.error("❌ No se pudo obtener el catálogo de bodegas desde SAP")
-                if sap_obligatorio:
-                    detalle = {
-                        codigo: {
-                            "existe": False,
-                            "info": None,
-                            "error": "No se pudo obtener catálogo SAP",
-                            "severity": "ERROR"
-                        }
-                        for codigo in codigos_bodegas
-                    }
-                    return {
-                        "validas": [],
-                        "no_encontradas": [],
-                        "errores": list(codigos_bodegas),
-                        "warnings": [],
-                        "todas_validas": False,
-                        "detalle": detalle
-                    }
-            
-            # Crear diccionario de bodegas SAP para búsqueda rápida
-            bodegas_sap_dict = {
-                bodega["WhsCode"]: bodega 
-                for bodega in todas_bodegas_sap 
-                if bodega.get("WhsCode")
-            }
-            
-            logger.info(f"📋 Catálogo SAP: {len(bodegas_sap_dict)} bodegas disponibles")
-            
-            # Validar cada código contra el catálogo
-            for codigo in codigos_bodegas:
-                codigo_clean = codigo.strip() if codigo else ""
-                
-                if not codigo_clean:
-                    detalle[codigo] = {
-                        "existe": False,
-                        "info": None,
-                        "error": "Código vacío",
-                        "severity": "ERROR"
-                    }
-                    no_encontradas.append(codigo)
-                    continue
-                
-                # Buscar en el catálogo SAP
-                if codigo_clean in bodegas_sap_dict:
-                    bodega_info = bodegas_sap_dict[codigo_clean]
-                    detalle[codigo] = {
-                        "existe": True,
-                        "info": bodega_info,
-                        "error": None,
-                        "severity": None
-                    }
-                    validas.append(codigo)
-                    logger.debug(f"✅ Bodega validada en SAP: {codigo_clean}")
-                else:
-                    detalle[codigo] = {
-                        "existe": False,
-                        "info": None,
-                        "error": "no_existe",
-                        "severity": "ERROR",
-                        "mensaje": f"La bodega '{codigo_clean}' no existe en SAP OWHS"
-                    }
-                    no_encontradas.append(codigo)
-                    
-        except Exception as e:
-            logger.error(f"❌ Error al validar bodegas en SAP: {e}", exc_info=True)
-            severity = "ERROR" if sap_obligatorio else "WARNING"
-            for codigo in codigos_bodegas:
-                detalle[codigo] = {
-                    "existe": False,
-                    "info": None,
-                    "error": str(e),
-                    "severity": severity
-                }
-                if sap_obligatorio:
-                    errores.append(codigo)
-                else:
-                    warnings.append(codigo)
-        
-        todas_validas = len(no_encontradas) == 0 and len(errores) == 0
-        
-        logger.info(
-            f"📊 Validación bodegas SAP: {len(validas)} válidas, "
-            f"{len(no_encontradas)} no encontradas, {len(errores)} errores"
+        from .pedido_sap_validator import PedidoSAPValidator
+        sap_validator = PedidoSAPValidator()
+        return sap_validator.validar_bodegas_existen_en_sap(
+            codigos_bodegas=codigos_bodegas,
+            sap_obligatorio=sap_obligatorio
         )
-        
-        return {
-            "validas": validas,
-            "no_encontradas": no_encontradas,
-            "errores": errores,
-            "warnings": warnings,
-            "todas_validas": todas_validas,
-            "detalle": detalle
-        }
     
     def validar_tiendas_existen_en_sap(
         self,
@@ -1189,6 +847,8 @@ class PedidoValidator:
         
         NUEVO: Valida ID TIENDA contra SAP sin depender de catálogo Excel.
         Obtiene TODAS las tiendas de SAP y valida contra ese catálogo completo.
+        
+        REFACTORIZADO: Delega a PedidoSAPValidator para mantener compatibilidad.
         
         Args:
             codigos_tiendas: Lista de códigos de tiendas a validar (ej: ["ROL01", "ROL02"])
@@ -1204,127 +864,12 @@ class PedidoValidator:
                 "detalle": Dict[str, Dict[str, Any]]
             }
         """
-        validas = []
-        no_encontradas = []
-        errores = []
-        warnings = []
-        detalle = {}
-        
-        from ..clients.sap_client import SAPClient
-        
-        sap_client = SAPClient()
-        
-        try:
-            # Obtener TODAS las tiendas de SAP de una sola vez
-            logger.info("🔍 Obteniendo catálogo completo de tiendas desde SAP OWHS")
-            todas_tiendas_sap = sap_client.get_todas_bodegas()
-            
-            if not todas_tiendas_sap:
-                logger.error("❌ No se pudo obtener el catálogo de tiendas desde SAP")
-                if sap_obligatorio:
-                    detalle = {
-                        codigo: {
-                            "existe": False,
-                            "info": None,
-                            "error": "No se pudo obtener catálogo SAP",
-                            "severity": "ERROR"
-                        }
-                        for codigo in codigos_tiendas
-                    }
-                    return {
-                        "validas": [],
-                        "no_encontradas": [],
-                        "errores": list(codigos_tiendas),
-                        "warnings": [],
-                        "todas_validas": False,
-                        "detalle": detalle
-                    }
-            
-            # Crear diccionario de tiendas SAP para búsqueda rápida por código
-            # SAP usa WhsCode (ej: "ROL01", "ROL02") como clave
-            tiendas_sap_dict = {}
-            for tienda in todas_tiendas_sap:
-                whscode = tienda.get("WhsCode")
-                if whscode:
-                    # Normalizar: SAP usa mayúsculas
-                    tiendas_sap_dict[whscode.upper()] = tienda
-            
-            logger.info(f"📋 Catálogo SAP: {len(tiendas_sap_dict)} tiendas disponibles")
-            
-            # Validar cada código contra el catálogo
-            for codigo in codigos_tiendas:
-                codigo_clean = codigo.strip() if codigo else ""
-                
-                if not codigo_clean:
-                    detalle[codigo] = {
-                        "existe": False,
-                        "info": None,
-                        "error": "Código vacío",
-                        "severity": "ERROR"
-                    }
-                    no_encontradas.append(codigo)
-                    continue
-                
-                # Normalizar para búsqueda
-                codigo_upper = codigo_clean.upper()
-                
-                # Buscar en el catálogo SAP
-                if codigo_upper in tiendas_sap_dict:
-                    tienda_info = tiendas_sap_dict[codigo_upper]
-                    detalle[codigo] = {
-                        "existe": True,
-                        "info": {
-                            "codigo": tienda_info.get("WhsCode"),
-                            "nombre": tienda_info.get("WhsName"),
-                            "ubicacion": tienda_info.get("Location"),
-                            "activa": tienda_info.get("Inactive", "N") != "Y"
-                        },
-                        "error": None,
-                        "severity": None
-                    }
-                    validas.append(codigo)
-                    logger.debug(f"✅ Tienda validada en SAP: {codigo_clean}")
-                else:
-                    detalle[codigo] = {
-                        "existe": False,
-                        "info": None,
-                        "error": "no_existe",
-                        "severity": "ERROR",
-                        "mensaje": f"La tienda '{codigo_clean}' no existe en SAP OWHS"
-                    }
-                    no_encontradas.append(codigo)
-                    logger.warning(f"⚠️ Tienda {codigo_clean} no encontrada en SAP")
-                    
-        except Exception as e:
-            logger.error(f"❌ Error al validar tiendas en SAP: {e}", exc_info=True)
-            severity = "ERROR" if sap_obligatorio else "WARNING"
-            for codigo in codigos_tiendas:
-                detalle[codigo] = {
-                    "existe": False,
-                    "info": None,
-                    "error": str(e),
-                    "severity": severity
-                }
-                if sap_obligatorio:
-                    errores.append(codigo)
-                else:
-                    warnings.append(codigo)
-        
-        todas_validas = len(no_encontradas) == 0 and len(errores) == 0
-        
-        logger.info(
-            f"📊 Validación tiendas SAP: {len(validas)} válidas, "
-            f"{len(no_encontradas)} no encontradas, {len(errores)} errores"
+        from .pedido_sap_validator import PedidoSAPValidator
+        sap_validator = PedidoSAPValidator()
+        return sap_validator.validar_tiendas_existen_en_sap(
+            codigos_tiendas=codigos_tiendas,
+            sap_obligatorio=sap_obligatorio
         )
-        
-        return {
-            "validas": validas,
-            "no_encontradas": no_encontradas,
-            "errores": errores,
-            "warnings": warnings,
-            "todas_validas": todas_validas,
-            "detalle": detalle
-        }
     
     def validar_coherencia_articulos(
         self,

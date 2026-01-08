@@ -118,30 +118,59 @@ El archivo Excel contiene **dos hojas independientes**:
 
 ## 📊 Mapeo a Base de Datos
 
-### Del Excel a las Tablas
+### Mapeo de CABECERA_PEDIDO → `pedido`
 
-**CABECERA_PEDIDO → `pedido`**
-```
-Número de pedido → numero_pedido
-Fecha de pedido → fecha_pedido
-Fecha de entrega → fecha_entrega
-Forma de pago → forma_pago
-Código de proveedor → proveedor_codigo (si existe)
-Nombre de proveedor → proveedor_nombre
-...
+Según el encabezado real de la hoja `CABECERA_PEDIDO`, los campos se mapean así:
+
+| Campo Excel | Campo BD | Tipo | Notas |
+|-------------|----------|------|-------|
+| **CODIGO PEDIDO** | `numero_pedido` | NVARCHAR(50) | UNIQUE, obligatorio |
+| **FECHA PEDIDO** | `fecha_pedido` | DATE | Convertido de string (DD/MM/YYYY) |
+| **FECHA ENTREGA** | `fecha_entrega` | NVARCHAR(50) | Puede ser "INMEDIATO" o fecha |
+| **FORMA PAGO** | `forma_pago` | NVARCHAR(50) | |
+| **ODC** | `odc` | NVARCHAR(50) | |
+| **NOMBRE PROVEEDOR** | `proveedor_nombre` | NVARCHAR(150) | |
+| **COMPRADOR NOMBRE** | `comprador_nombre` | NVARCHAR(150) | |
+| **COD COMPRADOR** | `comprador_codigo` | NVARCHAR(50) | |
+| **ORIGEN TRASLADO** | `origen_traslado` | NVARCHAR(50) | |
+| **SERIE** | `serie` | NVARCHAR(50) | |
+| (generado) | `archivo_nombre` | NVARCHAR(255) | Nombre del Excel subido |
+| (generado) | `creado_por` | NVARCHAR(450) | User ID del JWT |
+| (generado) | `creado_en` | DATETIME | Timestamp automático |
+
+**Ejemplo de mapeo:**
+```python
+mapeo_campos_cabecera = {
+    "CODIGO PEDIDO": "numero_pedido",
+    "FECHA PEDIDO": "fecha_pedido",
+    "FECHA ENTREGA": "fecha_entrega",
+    "FORMA PAGO": "forma_pago",
+    "ODC": "odc",
+    "NOMBRE PROVEEDOR": "proveedor_nombre",
+    "COMPRADOR NOMBRE": "comprador_nombre",
+    "COD COMPRADOR": "comprador_codigo",
+    "ORIGEN TRASLADO": "origen_traslado",
+    "SERIE": "serie"
+}
 ```
 
-**DETALLE_ARTICULO → `pedido_detalle` + `pedido_detalle_tienda`**
-```
-Código/SKU → pedido_detalle.codigo_interno
-Marca → pedido_detalle.marca
-Código de barras → pedido_detalle.codigo_barras
-Descripción SAP → pedido_detalle.descripcion_sap
-Pack → pedido_detalle.pack
-Cantidad → pedido_detalle_tienda.cantidad
-IdTienda → pedido_detalle_tienda.tienda_id (vía tabla tienda)
-Fila del Excel → pedido_detalle_tienda.fila_origen
-```
+**Conversión de tipos:**
+- **Fechas**: Se convierten de string (DD/MM/YYYY) a `date`
+- **Strings**: Se mantienen como están (con trim)
+- **NULLs**: Se preservan si el campo está vacío en el Excel
+
+### Mapeo de DETALLE_ARTICULO → `pedido_detalle` + `pedido_detalle_tienda`
+
+| Campo Excel | Campo BD | Tabla | Notas |
+|-------------|----------|-------|-------|
+| **Código/SKU** | `codigo_interno` | `pedido_detalle` | Obligatorio |
+| **Marca** | `marca` | `pedido_detalle` | |
+| **Código de barras** | `codigo_barras` | `pedido_detalle` | |
+| **Descripción SAP** | `descripcion_sap` | `pedido_detalle` | |
+| **Pack** | `pack` | `pedido_detalle` | |
+| **Cantidad** | `cantidad` | `pedido_detalle_tienda` | Obligatorio, entero > 0 |
+| **IdTienda** | `tienda_id` | `pedido_detalle_tienda` | Obligatorio (vía tabla `tienda`) |
+| (generado) | `fila_origen` | `pedido_detalle_tienda` | Fila del Excel (auditoría) |
 
 ---
 
@@ -266,6 +295,57 @@ fila_origen: 4
 
 ---
 
+## 📝 Ejemplo Completo de Mapeo
+
+### Excel Input (CABECERA_PEDIDO)
+
+| Campo | Valor |
+|-------|-------|
+| CODIGO PEDIDO | P-12.48 |
+| FECHA PEDIDO | 21/01/2025 |
+| FECHA ENTREGA | INMEDIATO |
+| FORMA PAGO | Contado |
+| ODC | ODC-001 |
+| NOMBRE PROVEEDOR | Proveedor XYZ |
+| COMPRADOR NOMBRE | Juan Pérez |
+| COD COMPRADOR | COMP001 |
+| ORIGEN TRASLADO | Almacén Central |
+| SERIE | A |
+
+### Resultado en Base de Datos
+
+**Registro en `pedido`:**
+```sql
+pedido_id: 'abc-123-def-456...'
+numero_pedido: 'P-12.48'
+fecha_pedido: '2025-01-21'  -- Convertido a DATE
+fecha_entrega: 'INMEDIATO'
+forma_pago: 'Contado'
+odc: 'ODC-001'
+proveedor_nombre: 'Proveedor XYZ'
+comprador_nombre: 'Juan Pérez'
+comprador_codigo: 'COMP001'
+origen_traslado: 'Almacén Central'
+serie: 'A'
+archivo_nombre: 'Template_Pedido_Inicial_v1.0.xlsx'
+creado_por: 'user123'
+creado_en: '2025-01-21 12:00:00'
+```
+
+## ✅ Validaciones del Mapeo
+
+### Campos Obligatorios
+- `numero_pedido` (CODIGO PEDIDO) - **Obligatorio**
+- Otros campos son opcionales según reglas de negocio
+
+### Conversión de Fechas
+- Formato aceptado: `DD/MM/YYYY` o `YYYY-MM-DD`
+- Si falla la conversión, se guarda como NULL y se registra warning
+
+### Case-Insensitive
+- El mapeo funciona con variaciones de mayúsculas/minúsculas
+- Se mantienen nombres originales además de normalizados para retrocompatibilidad
+
 ## 📝 Notas Importantes
 
 1. **No se consolidan duplicados**: Si hay duplicados (mismo CodigoProducto + IdTienda), se marcan como ERROR en el parsing.
@@ -277,4 +357,6 @@ fila_origen: 4
 4. **Tiendas se crean automáticamente**: Si una tienda no existe, se crea automáticamente al procesar el pedido.
 
 5. **Relación implícita**: La relación entre cabecera y detalle se construye durante el parsing (no hay clave externa en el Excel).
+
+6. **Mapeo implementado**: Todos los campos de la cabecera se mapean correctamente con conversión automática de tipos.
 

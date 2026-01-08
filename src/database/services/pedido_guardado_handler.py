@@ -31,14 +31,26 @@ def guardar_pedido_v1_0(
 
             for detalle_data in detalles_finales:
                 try:
+                    # ✅ Calcular subtotal sumando cantidades de distribuciones
+                    distribuciones_data = detalle_data.get("distribuciones", [])
+                    subtotal_calculado = sum(
+                        dist.get("cantidad", 0)
+                        for dist in distribuciones_data
+                        if isinstance(dist.get("cantidad"), (int, float)) and dist.get("cantidad", 0) > 0
+                    )
+                    
+                    # Actualizar detalle con subtotal calculado
+                    detalle_actualizado = detalle_data["detalle"].copy()
+                    detalle_actualizado["subtotal"] = subtotal_calculado
+                    
                     pedido_detalle_id = repository.insert_detalle(
-                        pedido_id=pedido_id, datos_detalle=detalle_data["detalle"]
+                        pedido_id=pedido_id, datos_detalle=detalle_actualizado
                     )
                     resultado["articulos_cargados"] += 1
 
-                    if detalle_data.get("distribuciones"):
+                    if distribuciones_data:
                         distribuciones = []
-                        for dist in detalle_data["distribuciones"]:
+                        for dist in distribuciones_data:
                             tienda_codigo = dist.get("tienda_codigo")
                             cantidad = dist.get("cantidad")
                             if tienda_codigo and cantidad and cantidad > 0:

@@ -1524,8 +1524,8 @@ class PedidoParser:
                 nombre_bruto = ws.cell(row=fila_idx, column=(col_nombre + 1)).value if col_nombre is not None else None
                 activa_bruto = ws.cell(row=fila_idx, column=(col_activa + 1)).value if col_activa is not None else True
                 
-                # ✅ VALIDACIÓN ESTRICTA DE ALINEACIÓN:
-                # Si CUALQUIERA de las 3 columnas tiene datos, TODAS deben tener datos
+                # ✅ VALIDACIÓN ESTRICTA: ID TIENDA y NOMBRE TIENDA deben estar SINCRONIZADOS
+                # Si hay información en una columna, DEBE haber información en la otra
                 has_codigo = bool(codigo_bruto is not None and str(codigo_bruto).strip())
                 has_nombre = bool(nombre_bruto is not None and str(nombre_bruto).strip())
                 has_activa = bool(activa_bruto is not None and str(activa_bruto).strip())
@@ -1533,9 +1533,11 @@ class PedidoParser:
                 fila_tiene_datos = has_codigo or has_nombre or has_activa
 
                 if fila_tiene_datos:
-                    columnas_requeridas_completas = has_codigo and has_nombre and (col_activa is None or has_activa)
+                    # Validar sincronización entre ID TIENDA y NOMBRE TIENDA
+                    # REGLA: Si una está llena, la otra DEBE estar llena
+                    sincronizacion_correcta = (has_codigo and has_nombre) or (not has_codigo and not has_nombre)
                 
-                    if not columnas_requeridas_completas:
+                    if not sincronizacion_correcta:
                         misaligned_rows_tiendas.append(fila_idx)
                         detalles_alineacion[fila_idx] = {
                             "ID TIENDA": codigo_bruto if has_codigo else "[VACÍO]",
@@ -1545,19 +1547,16 @@ class PedidoParser:
                         
                         # LOG DETALLADO para diagnóstico
                         logger.error(
-                            f"\n❌ FILA {fila_idx} (Excel): INCOMPLETA\n"
+                            f"\n❌ FILA {fila_idx} (Excel): INCOMPLETA - FALTA SINCRONIZACIÓN ENTRE ID TIENDA Y NOMBRE TIENDA\n"
                             f"   ID TIENDA      = {repr(codigo_bruto):30} → {'' if has_codigo else '❌ VACÍO'}\n"
                             f"   NOMBRE TIENDA  = {repr(nombre_bruto):30} → {'' if has_nombre else '❌ VACÍO'}\n"
-                            f"   ACTIVO         = {repr(activa_bruto):30} → {'' if has_activa else '❌ VACÍO'}\n"
+                            f"   ACTIVO         = {repr(activa_bruto):30}\n"
                         )
                         
-                        columnas_vacias = []
-                        if not has_codigo:
-                            columnas_vacias.append("'ID TIENDA'")
-                        if not has_nombre:
-                            columnas_vacias.append("'NOMBRE TIENDA'")
-                        if col_activa is not None and not has_activa:
-                            columnas_vacias.append("'ACTIVO'")
+                        if not has_codigo and has_nombre:
+                            logger.error(f"   ❌ PROBLEMA: NOMBRE TIENDA tiene valor pero ID TIENDA está vacío")
+                        elif has_codigo and not has_nombre:
+                            logger.error(f"   ❌ PROBLEMA: ID TIENDA tiene valor pero NOMBRE TIENDA está vacío")
                         continue
 
                 if not fila_tiene_datos:
@@ -1624,16 +1623,16 @@ class PedidoParser:
                 extra = f" y {len(misaligned_rows_tiendas) - 10} más" if len(misaligned_rows_tiendas) > 10 else ""
                 
                 # Mostrar detalles de filas problemáticas en el log
-                logger.error(f"❌ FILAS CON COLUMNAS INCOMPLETAS (Total: {len(misaligned_rows_tiendas)}):")
+                logger.error(f"❌ FILAS CON FALTA DE SINCRONIZACIÓN (Total: {len(misaligned_rows_tiendas)}):")
                 for num_fila, detalles in list(detalles_alineacion.items())[:5]:
                     logger.error(f"   Fila {num_fila}: {detalles}")
                 if len(detalles_alineacion) > 5:
                     logger.error(f"   ... y {len(detalles_alineacion) - 5} filas más")
                 
                 raise ValueError(
-                    f"❌ Validación fallida: existen celdas vacías en columnas obligatorias (ID TIENDA, NOMBRE TIENDA, ACTIVO). "
-                    f"Filas con problemas: {filas}{extra}. "
-                    f"REGLA: Si una fila tiene datos en CUALQUIER columna, TODAS deben estar completas. "
+                    f"❌ Validación fallida en hoja 'Tiendas': falta sincronización entre columnas ID TIENDA y NOMBRE TIENDA. "
+                    f"Filas problemáticas: {filas}{extra}. "
+                    f"REGLA: Si hay información en la columna ID TIENDA, DEBE haber información en NOMBRE TIENDA y viceversa. "
                     f"Las filas completamente vacías se ignoran automáticamente."
                 )
             

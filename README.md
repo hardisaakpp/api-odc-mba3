@@ -132,23 +132,31 @@ Ver [docs/ENDPOINTS.md](docs/ENDPOINTS.md) para documentación completa.
 
 ## 📚 Documentación
 
+La documentación está organizada en el directorio `docs/`. Ver el [índice completo](docs/README.md) para una guía detallada.
+
 ### Documentación Principal
 
-- [Índice de Documentación](docs/README.md) - Índice completo de documentación técnica
-- [Configuración](docs/CONFIGURACION.md) - Variables de entorno y setup completo
-- [Endpoints](docs/ENDPOINTS.md) - Documentación completa de API
-- [Flujo Completo](docs/FLUJO_COMPLETO.md) - Flujo de los 4 endpoints principales
+- **[Índice de Documentación](docs/README.md)** ⭐ - Índice completo de documentación técnica
+- **[Configuración](docs/CONFIGURACION.md)** - Variables de entorno y setup completo
+- **[Endpoints](docs/ENDPOINTS.md)** - Documentación completa de API
+- **[Flujo Completo](docs/FLUJO_COMPLETO.md)** - Flujo de los 4 endpoints principales
+- **[Estructura de BD](docs/ESTRUCTURA_BD_PEDIDOS.md)** - Modelo de datos completo
+
+### Guías de Inicio Rápido 🚀
+
+- [Celery Quick Start](docs/CELERY_QUICKSTART.md) - Procesos automáticos con Celery en 5 pasos
+- [Quick Start Homologaciones](docs/QUICKSTART_HOMOLOGACIONES.md) - Instalación en 3 pasos
 
 ### Documentación Especializada
 
-- [Celery Quick Start](docs/CELERY_QUICKSTART.md) 🚀 - Procesos automáticos con Celery en 5 pasos
 - [Celery Implementation](docs/CELERY_IMPLEMENTATION.md) - Documentación completa de Celery
 - [Integración SAP](docs/INTEGRACION_SAP.md) - Configuración e integración con SAP
 - [Homologaciones SKU](docs/HOMOLOGACIONES_SKU.md) ⭐ - Sistema de gestión de homologaciones SKU
-- [Quick Start Homologaciones](docs/QUICKSTART_HOMOLOGACIONES.md) 🚀 - Instalación en 3 pasos
 - [Seguridad](docs/SEGURIDAD.md) - Configuración de seguridad opcional
 - [Testing](docs/TESTING.md) - Guía de pruebas
 - [Frontend](frontend/README.md) - Guía del frontend Vue.js
+
+> 💡 **Nota**: La documentación histórica y de referencia se encuentra en [docs/archivo/](docs/archivo/README.md)
 
 ## 🛠️ Desarrollo
 

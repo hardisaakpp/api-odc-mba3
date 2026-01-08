@@ -17,13 +17,17 @@ docs/
 │   ├── CELERY_QUICKSTART.md 🚀       Celery en 5 pasos rápidos
 │   └── QUICKSTART_HOMOLOGACIONES.md 🚀 Homologaciones en 3 pasos
 │
-├── ⚙️ PROCESOS AUTOMÁTICOS
-│   └── CELERY_IMPLEMENTATION.md      Implementación completa de Celery
-│
 ├── 📖 DOCUMENTACIÓN DE API
 │   ├── ENDPOINTS.md                  Todos los endpoints REST
 │   ├── FLUJO_COMPLETO.md            4 endpoints principales
 │   └── ORDEN_COMPRA_COPIA.md        Proceso de ODCs
+│
+├── 🗄️ BASE DE DATOS
+│   ├── ESTRUCTURA_BD_PEDIDOS.md ⭐   Modelo de datos completo
+│   └── FORMATO_EXCEL_PEDIDOS.md ⭐   Formato del Excel (incluye mapeo)
+│
+├── ⚙️ PROCESOS AUTOMÁTICOS
+│   └── CELERY_IMPLEMENTATION.md      Implementación completa de Celery
 │
 ├── 🔌 INTEGRACIÓN SAP
 │   ├── INTEGRACION_SAP.md           Guía principal SAP
@@ -37,8 +41,7 @@ docs/
 │   └── IMPLEMENTACION_HOMOLOGACIONES_SKU.md Resumen técnico
 │
 ├── 🔒 SEGURIDAD Y AUTENTICACIÓN
-│   ├── SEGURIDAD.md                 Configuración de seguridad
-│   ├── JWT_AUTHENTICATION.md        Sistema JWT
+│   ├── SEGURIDAD.md ⭐              Configuración de seguridad (incluye JWT)
 │   └── REGISTRO_PERMISOS_CORE.md    Registro de permisos
 │
 ├── 👤 PREFERENCIAS DE USUARIO
@@ -51,7 +54,12 @@ docs/
 │       ├── PRUEBAS_POWERSHELL.md    Scripts PowerShell
 │       └── test_endpoints.ps1       Script de pruebas
 │
-└── NOTA: Frontend tiene su propio README.md en frontend/
+├── 📚 ORGANIZACIÓN
+│   └── ESTRUCTURA_DOCUMENTACION.md  Este archivo
+│
+└── 📦 ARCHIVO
+    └── archivo/                      Documentación histórica
+        └── README.md                 Índice de archivo
 ```
 
 ## 🎯 Guía de Uso por Objetivo

@@ -11,7 +11,7 @@ REFACTORIZADO (Fase 2): Separado en módulos especializados:
 
 import logging
 import pandas as pd
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, cast
 from datetime import datetime, date
 import io
 
@@ -29,6 +29,10 @@ from .pedido_tiendas_handler import procesar_tiendas_y_validar_sap_v1_0
 from .pedido_detalle_handler import procesar_detalle_articulos_v1_0
 from .pedido_movimiento_handler import procesar_movimiento_y_coherencia_v1_0
 from .pedido_guardado_handler import guardar_pedido_v1_0
+from .pedido_format_detector import PedidoFormatDetector
+from .pedido_sap_validator_helper import PedidoSAPValidatorHelper
+from .pedido_formato_processor import PedidoFormatoProcessor
+from .pedido_formato_v1_processor import PedidoFormatoV1Processor
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +58,20 @@ class PedidoService:
         self.type_converter = PedidoTypeConverter()
         self.format_handler = PedidoFormatHandler()
         self.sap_handler = PedidoSAPHandler(self.validator)
+        # Módulos auxiliares para refactorización
+        self.format_detector = PedidoFormatDetector()
+        self.sap_validator_helper = PedidoSAPValidatorHelper(self.validator)
+        self.formato_processor = PedidoFormatoProcessor(
+            self.parser,
+            self.consolidator,
+            self.type_converter
+        )
+        self.formato_v1_processor = PedidoFormatoV1Processor(
+            self.parser,
+            self.consolidator,
+            self.validator,
+            self.type_converter
+        )
     
     def parsear_excel_pedido(
         self,
@@ -162,7 +180,9 @@ class PedidoService:
         
         try:
             # Leer Excel sin headers (para poder buscar la cabecera)
-            df_raw = pd.read_excel(io.BytesIO(file_content), sheet_name=0, header=None)
+            df_raw_result = pd.read_excel(io.BytesIO(file_content), sheet_name=0, header=None)
+            # Type assertion: sheet_name=0 returns a single DataFrame, not a dict
+            df_raw = cast(pd.DataFrame, df_raw_result)
             
             # Log para debug: mostrar primeras filas del Excel
             logger.info(f"Shape del DataFrame: {df_raw.shape} (filas x columnas)")
@@ -378,39 +398,29 @@ class PedidoService:
         Detecta el formato del Excel y lo procesa. 
         Retorna True si éxito, False si error (resultado actualizado con errores).
         """
-        excel_file = pd.ExcelFile(io.BytesIO(file_content))
-        hoja_cabecera: Optional[str] = None
-        hoja_detalle: Optional[str] = None
-        hoja_movimiento: Optional[str] = None
-        hoja_tiendas: Optional[str] = None
-        
-        for sheet_name in excel_file.sheet_names:
-            sheet_upper = str(sheet_name).upper().strip()
-            if not hoja_cabecera and ("CABECERA" in sheet_upper and "PEDIDO" in sheet_upper):
-                hoja_cabecera = str(sheet_name)
-            if not hoja_detalle and ("DETALLE" in sheet_upper and ("ARTICULO" in sheet_upper or "ARTÍCULO" in sheet_upper)):
-                hoja_detalle = str(sheet_name)
-            if not hoja_movimiento and sheet_upper == "MOVIMIENTO":
-                hoja_movimiento = str(sheet_name)
-            if not hoja_tiendas and sheet_upper == "TIENDAS":
-                hoja_tiendas = str(sheet_name)
+        # Usar el detector de formatos
+        hojas = self.format_detector.detectar_hojas(file_content)
+        formato = self.format_detector.detectar_formato(hojas)
         
         # Formato v1.0: 4 hojas
-        if hoja_cabecera and hoja_detalle and hoja_movimiento and hoja_tiendas:
+        if formato == 'cuatro_hojas_v1_0':
             logger.info("📋 Detectado formato v1.0 (4 hojas)")
             resultado["formato_detectado"] = "cuatro_hojas_v1_0"
-            resultado_v1 = self._procesar_formato_v1_0(
-                file_content, filename, usuario_id,
-                hoja_cabecera, hoja_detalle, hoja_movimiento, hoja_tiendas,
-                validar_antes_de_guardar, tiendas_permitidas, bloquea_con_errores,
-                validar_sap, sap_obligatorio, modo_tiendas
-            )
-            resultado.update(resultado_v1)
-            return resultado.get("status") == "success"
+            # Asegurar que todas las hojas están presentes (ya validado por formato)
+            if hojas['cabecera'] and hojas['detalle'] and hojas['movimiento'] and hojas['tiendas']:
+                resultado_v1 = self.formato_v1_processor.procesar(
+                    file_content, filename, usuario_id,
+                    str(hojas['cabecera']), str(hojas['detalle']), 
+                    str(hojas['movimiento']), str(hojas['tiendas']),
+                    validar_antes_de_guardar, tiendas_permitidas, bloquea_con_errores,
+                    validar_sap, sap_obligatorio, modo_tiendas
+                )
+                resultado.update(resultado_v1)
+                return resultado.get("status") == "success"
         
         # Otros formatos: dos hojas o simple (legacy)
         logger.info("📋 Detectado formato legacy (dos hojas o simple)")
-        resultado["formato_detectado"] = "dos_hojas_simple" if hoja_cabecera and hoja_detalle else "simple"
+        resultado["formato_detectado"] = "dos_hojas_simple" if hojas['cabecera'] and hojas['detalle'] else "simple"
         
         # [Aquí va la lógica legacy - simplificada para brevedad]
         # Para este refactor, solo retornamos éxito si se procesa sin excepciones
@@ -428,117 +438,17 @@ class PedidoService:
         """
         Procesa formato de dos hojas (CABECERA_PEDIDO + DETALLE_ARTICULO) o simple.
         Retorna (cabecera_dict, detalles_list) o (None, None) si error.
+        
+        NOTA: Este método delega al PedidoFormatoProcessor para mantener compatibilidad.
         """
-        # Extraer datos de cabecera
-        cabecera_parseada = self.parser._parsear_cabecera(excel_file, str(hoja_cabecera_encontrada))
-        cabecera = self._normalizar_cabecera_para_bd(
-            cabecera_parseada=cabecera_parseada,
+        return self.formato_processor.procesar_formato_dos_hojas_o_simple(
+            file_content=file_content,
             filename=filename,
-            usuario_id=usuario_id
+            usuario_id=usuario_id,
+            excel_file=excel_file,
+            hoja_cabecera_encontrada=hoja_cabecera_encontrada,
+            hoja_detalle_encontrada=hoja_detalle_encontrada
         )
-        
-        # Coerción de fechas
-        try:
-            valor_fecha_pedido = cabecera.get("fecha_pedido", cabecera.get("fecha_de_pedido"))
-            if valor_fecha_pedido is not None:
-                cabecera["fecha_pedido"] = self._parsear_fecha_texto(valor_fecha_pedido)
-            valor_fecha_entrega = cabecera.get("fecha_entrega", cabecera.get("fecha_de_entrega"))
-            if valor_fecha_entrega is not None:
-                cabecera["fecha_entrega"] = self._parsear_fecha_texto(valor_fecha_entrega)
-        except Exception:
-            pass
-        
-        # Detectar formato del detalle
-        df_detalle_detection = pd.read_excel(
-            excel_file, 
-            sheet_name=str(hoja_detalle_encontrada), 
-            header=0, 
-            nrows=1,
-            keep_default_na=False
-        )
-        
-        # Normalizar nombres de columnas
-        if not isinstance(df_detalle_detection, pd.DataFrame):
-            return cabecera, None
-            
-        df_detalle_detection.columns = [str(col).strip() if pd.notna(col) and str(col).strip() != "" else "" 
-                                       for col in df_detalle_detection.columns]
-        
-        # Buscar columnas de tiendas
-        columnas_tiendas = []
-        import re
-        for col in df_detalle_detection.columns:
-            col_upper = str(col).upper().strip()
-            es_codigo_tienda = bool(re.match(r'^[A-Z]{3}\d{2}$', col_upper))
-            es_formato_antiguo = "ROLAND" in col_upper and col_upper != "ROLAND"
-            if es_codigo_tienda or es_formato_antiguo:
-                columnas_tiendas.append(col)
-        
-        # Detección de formato simple
-        df_detalle_detection_lower = df_detalle_detection.copy()
-        df_detalle_detection_lower.columns = [str(col).strip().lower() if pd.notna(col) else "" 
-                                              for col in df_detalle_detection_lower.columns]
-        has_producto = any('codigoproducto' in col or 'codigo producto' in col for col in df_detalle_detection_lower.columns)
-        has_idtienda = any('idtienda' in col or 'id tienda' in col for col in df_detalle_detection_lower.columns)
-        has_cantidad = any('cantidad' in col for col in df_detalle_detection_lower.columns)
-        is_detalle_simple = (has_producto and has_idtienda and has_cantidad) and not columnas_tiendas
-        
-        if is_detalle_simple:
-            logger.info("📋 Detalle en formato SIMPLE")
-            resultado_parsing = self.parsear_excel_pedido(
-                file_content=file_content,
-                hoja_cabecera=str(hoja_cabecera_encontrada),
-                hoja_detalle=str(hoja_detalle_encontrada)
-            )
-            detalles: List[Dict[str, Any]] = self.consolidator.consolidar_detalles_simple(resultado_parsing.get("data", []))
-        else:
-            logger.info("📋 Detalle en formato COMPLEJO")
-            catalogo_tiendas = self.parser.leer_hoja_tiendas(file_content)
-            
-            try:
-                df_detalle: pd.DataFrame = pd.read_excel(
-                    excel_file, 
-                    sheet_name=str(hoja_detalle_encontrada), 
-                    header=0,
-                    keep_default_na=False
-                )
-                if not isinstance(df_detalle, pd.DataFrame):
-                    return cabecera, None
-            except Exception as e:
-                try:
-                    df_detalle_raw: pd.DataFrame = pd.read_excel(
-                        excel_file, 
-                        sheet_name=str(hoja_detalle_encontrada), 
-                        header=None,
-                        keep_default_na=False
-                    )
-                    if not isinstance(df_detalle_raw, pd.DataFrame):
-                        return cabecera, None
-                        
-                    if len(df_detalle_raw) > 0:
-                        df_detalle = df_detalle_raw.iloc[1:].copy()
-                        df_detalle.columns = df_detalle_raw.iloc[0].values
-                        df_detalle.columns = [str(col).strip() if pd.notna(col) and str(col).strip() != "" else f"col_{i}" 
-                                             for i, col in enumerate(df_detalle.columns)]
-                    else:
-                        df_detalle = pd.DataFrame()
-                except Exception:
-                    df_detalle = pd.DataFrame()
-            
-            if len(df_detalle) == 0:
-                detalles = []
-            else:
-                df_detalle_sin_header = df_detalle.copy()
-                columnas_lista = list(df_detalle.columns)
-                headers_row = pd.DataFrame([columnas_lista], columns=pd.Index(columnas_lista))
-                df_detalle_sin_header = pd.concat([headers_row, df_detalle.reset_index(drop=True)], ignore_index=True)
-                df_detalle_sin_header.columns = [str(i) for i in range(len(df_detalle_sin_header.columns))]
-                detalles = self.parser.extraer_detalle_con_tiendas(
-                    df_detalle_sin_header,
-                    catalogo_tiendas=catalogo_tiendas
-                )
-        
-        return cabecera, detalles
     
     def validar_y_procesar_archivo_excel(
         self,
@@ -587,48 +497,14 @@ class PedidoService:
         }
         
         try:
-            # Detectar formato: verificar hojas del Excel
+            # Detectar formato: verificar hojas del Excel usando el detector
             excel_file = pd.ExcelFile(io.BytesIO(file_content))
+            hojas = self.format_detector.detectar_hojas(file_content)
             
-            # Buscar hojas con nombres similares (case-insensitive, tolerante a espacios)
-            hoja_cabecera_encontrada = None
-            hoja_detalle_encontrada = None
-            hoja_movimiento_encontrada = None
-            hoja_tiendas_encontrada = None
-            
-            logger.info(f"📄 Hojas encontradas en el Excel: {excel_file.sheet_names}")
-            
-            for sheet_name in excel_file.sheet_names:
-                sheet_name_upper = str(sheet_name).upper().strip()
-                # Buscar variaciones de CABECERA_PEDIDO
-                if not hoja_cabecera_encontrada:
-                    if ("CABECERA" in sheet_name_upper and "PEDIDO" in sheet_name_upper) or \
-                       sheet_name_upper == "CABECERA_PEDIDO" or \
-                       sheet_name_upper == "CABECERA PEDIDO":
-                        hoja_cabecera_encontrada = str(sheet_name)
-                        logger.info(f"✅ Hoja de cabecera detectada: '{sheet_name}'")
-                
-                # Buscar variaciones de DETALLE_ARTICULO
-                if not hoja_detalle_encontrada:
-                    if ("DETALLE" in sheet_name_upper and "ARTICULO" in sheet_name_upper) or \
-                       ("DETALLE" in sheet_name_upper and "ARTÍCULO" in sheet_name_upper) or \
-                       sheet_name_upper == "DETALLE_ARTICULO" or \
-                       sheet_name_upper == "DETALLE ARTICULO":
-                        hoja_detalle_encontrada = str(sheet_name)
-                        logger.info(f"✅ Hoja de detalle detectada: '{sheet_name}'")
-                
-                # Buscar variaciones de MOVIMIENTO (nuevo formato v1.0)
-                if not hoja_movimiento_encontrada:
-                    if sheet_name_upper == "MOVIMIENTO":
-                        hoja_movimiento_encontrada = str(sheet_name)
-                        logger.info(f"✅ Hoja de movimiento detectada: '{sheet_name}'")
-                
-                # Buscar variaciones de TIENDAS (nuevo formato v1.0)
-                if not hoja_tiendas_encontrada:
-                    if sheet_name_upper == "TIENDAS":
-                        hoja_tiendas_encontrada = str(sheet_name)
-                        logger.info(f"✅ Hoja de tiendas detectada: '{sheet_name}'")
-            
+            hoja_cabecera_encontrada = hojas['cabecera']
+            hoja_detalle_encontrada = hojas['detalle']
+            hoja_movimiento_encontrada = hojas['movimiento']
+            hoja_tiendas_encontrada = hojas['tiendas']
             
             tiene_cabecera_pedido = hoja_cabecera_encontrada is not None
             tiene_detalle_articulo = hoja_detalle_encontrada is not None
@@ -648,7 +524,7 @@ class PedidoService:
                 
                 # NUEVO FLUJO: Procesar formato v1.0 con 4 hojas
                 # Las variables han sido validadas arriba, aseguramos tipos con cast
-                return self._procesar_formato_v1_0(
+                return self.formato_v1_processor.procesar(
                     file_content=file_content,
                     filename=filename,
                     usuario_id=usuario_id,
@@ -669,7 +545,7 @@ class PedidoService:
                 resultado["formato_detectado"] = "dos_hojas"
                 logger.info("📋 Formato DOS HOJAS detectado: CABECERA_PEDIDO + DETALLE_ARTICULO")
                 
-                cabecera_tupla, detalles_con_tiendas = self._procesar_formato_dos_hojas_o_simple(
+                cabecera_tupla, detalles_con_tiendas = self.formato_processor.procesar_formato_dos_hojas_o_simple(
                     file_content=file_content,
                     filename=filename,
                     usuario_id=usuario_id,
@@ -688,16 +564,7 @@ class PedidoService:
                 
             else:
                 # Detectar formato simple o complejo (legacy)
-                df_detection = pd.read_excel(io.BytesIO(file_content), sheet_name=0, header=0, nrows=5)
-                df_detection.columns = [str(col).strip().lower() if pd.notna(col) else "" 
-                                       for col in df_detection.columns]
-                
-                # Detectar si es formato simple
-                has_producto = any('codigoproducto' in col or 'producto' in col for col in df_detection.columns)
-                has_idtienda = any('idtienda' in col or 'id tienda' in col for col in df_detection.columns)
-                has_cantidad = any('cantidad' in col for col in df_detection.columns)
-                
-                is_formato_simple = has_producto and has_idtienda and has_cantidad
+                is_formato_simple = self.format_detector.detectar_formato_detalle_simple(file_content)
                 
                 if is_formato_simple:
                     resultado["formato_detectado"] = "simple"
@@ -723,7 +590,9 @@ class PedidoService:
                     # Formato complejo (existente) o formato no reconocido
                     # Primero verificar si realmente es formato complejo
                     try:
-                        df_raw = pd.read_excel(io.BytesIO(file_content), sheet_name=0, header=None)
+                        df_raw_result = pd.read_excel(io.BytesIO(file_content), sheet_name=0, header=None)
+                        # Type assertion: sheet_name=0 returns a single DataFrame, not a dict
+                        df_raw = cast(pd.DataFrame, df_raw_result)
                         # Intentar extraer cabecera (puede fallar si no es formato complejo)
                         cabecera = self.parser.extraer_cabecera(df_raw, filename, usuario_id)
                         detalles_con_tiendas = self.parser.extraer_detalle_con_tiendas(df_raw)
@@ -749,8 +618,6 @@ class PedidoService:
             
             # VALIDAR TIENDAS CONTRA SAP (para todos los formatos antes de la validación general)
             if validar_sap and detalles_con_tiendas:
-                logger.info("📋 Validación SAP: Verificando códigos de tienda contra SAP OWHS")
-                
                 # Extraer códigos únicos de tiendas del detalle
                 codigos_tiendas_set = set()
                 for detalle_item in detalles_con_tiendas:
@@ -762,41 +629,17 @@ class PedidoService:
                                 codigos_tiendas_set.add(tienda_codigo)
                 
                 if codigos_tiendas_set:
-                    validator_tiendas = PedidoValidator()
-                    validacion_tiendas_sap = validator_tiendas.validar_tiendas_existen_en_sap(
+                    validacion_tiendas_sap = self.sap_validator_helper.validar_tiendas_sap(
                         codigos_tiendas=list(codigos_tiendas_set),
+                        resultado=resultado,
                         sap_obligatorio=sap_obligatorio
                     )
                     
-                    resultado["validacion_tiendas_sap"] = {
-                        "total_codigos": len(codigos_tiendas_set),
-                        "validas": len(validacion_tiendas_sap.get("validas", [])),
-                        "no_encontradas": len(validacion_tiendas_sap.get("no_encontradas", [])),
-                        "errores": len(validacion_tiendas_sap.get("errores", [])),
-                        "warnings": len(validacion_tiendas_sap.get("warnings", [])),
-                        "todas_validas": validacion_tiendas_sap.get("todas_validas", False)
-                    }
-                    
-                    # Si SAP es obligatorio y hay tiendas no encontradas, BLOQUEAR
+                    # Si hay error y es obligatorio, lanzar BusinessException
                     if sap_obligatorio and not validacion_tiendas_sap.get("todas_validas", False):
                         no_encontradas = validacion_tiendas_sap.get("no_encontradas", [])
                         errores_sap = validacion_tiendas_sap.get("errores", [])
                         
-                        mensaje_error = "No se puede procesar la plantilla: existen tiendas (ID TIENDA) no válidas en SAP."
-                        if no_encontradas:
-                            mensaje_error += f" Tiendas no encontradas en SAP OWHS: {', '.join(no_encontradas[:5])}"
-                            if len(no_encontradas) > 5:
-                                mensaje_error += f" y {len(no_encontradas) - 5} más"
-                        if errores_sap:
-                            mensaje_error += f" Errores al consultar SAP: {', '.join(errores_sap[:3])}"
-                            if len(errores_sap) > 3:
-                                mensaje_error += f" y {len(errores_sap) - 3} más"
-                        
-                        resultado["status"] = "validation_error"
-                        resultado["errores"].append(mensaje_error)
-                        logger.error(f"❌ {mensaje_error}")
-                        
-                        # Construir datos estructurados para el frontend
                         datos_estructurados = {
                             "validacion": {
                                 "tiendas": {
@@ -818,15 +661,10 @@ class PedidoService:
                         }
                         
                         raise BusinessException(
-                            message=mensaje_error,
+                            message=resultado["errores"][-1] if resultado.get("errores") else "Tiendas no válidas en SAP",
                             error_code="TIENDAS_NO_VALIDAS_SAP",
                             data=datos_estructurados
                         )
-                    
-                    logger.info(
-                        f"📊 Validación SAP (Tiendas): {len(validacion_tiendas_sap.get('validas', []))} válidas, "
-                        f"{len(validacion_tiendas_sap.get('no_encontradas', []))} no encontradas"
-                    )
             
             # VALIDAR
             if validar_antes_de_guardar:
@@ -892,46 +730,20 @@ class PedidoService:
                 ]))
                 
                 if codigos_productos:
-                    validator = PedidoValidator()
-                    validacion_sap = validator.validar_productos_existen_en_sap(
+                    validacion_sap = self.sap_validator_helper.validar_productos_sap(
                         codigos_productos=codigos_productos,
+                        resultado=resultado,
                         usar_cache=True,
                         sap_obligatorio=sap_obligatorio
                     )
                     
-                    resultado["validacion_sap"] = {
-                        "total_codigos": len(codigos_productos),
-                        "validos": len(validacion_sap.get("validos", [])),
-                        "no_encontrados": len(validacion_sap.get("no_encontrados", [])),
-                        "errores": len(validacion_sap.get("errores", [])),
-                        "warnings": len(validacion_sap.get("warnings", [])),
-                        "todos_validos": validacion_sap.get("todos_validos", False)
-                    }
-                    
-                    # 🔒 GUARDIA DURA: Si SAP es obligatorio y hay errores, NO persistir
-                    if sap_obligatorio and not validacion_sap.get("todos_validos", False):
-                        no_encontrados = validacion_sap.get("no_encontrados", [])
-                        errores = validacion_sap.get("errores", [])
-                        validos = validacion_sap.get("validos", [])
+                    # Si hay error y es obligatorio, lanzar BusinessException
+                    if validacion_sap is None and sap_obligatorio:
+                        # El helper ya actualizó resultado con errores
+                        no_encontrados = resultado.get("validacion_sap", {}).get("no_encontrados", [])
+                        errores = resultado.get("validacion_sap", {}).get("errores", [])
+                        validos = resultado.get("validacion_sap", {}).get("validos", [])
                         
-                        # Construir mensaje legible (para logs y fallback)
-                        errores_lista = []
-                        if no_encontrados:
-                            errores_lista.append(f"Productos no encontrados en SAP: {', '.join(no_encontrados[:5])}")
-                            if len(no_encontrados) > 5:
-                                errores_lista[-1] += f" y {len(no_encontrados) - 5} más"
-                        if errores:
-                            errores_lista.append(f"Errores al consultar SAP: {', '.join(errores[:3])}")
-                            if len(errores) > 3:
-                                errores_lista[-1] += f" y {len(errores) - 3} más"
-                        
-                        mensaje_error = "No se puede persistir el pedido: existen productos no válidos en SAP. " + " ".join(errores_lista)
-                        
-                        resultado["status"] = "validation_error"
-                        resultado["errores"].append(mensaje_error)
-                        logger.error(f"❌ {mensaje_error}")
-                        
-                        # Construir datos estructurados para el frontend
                         datos_estructurados = {
                             "validacion": {
                                 "productos": {
@@ -941,115 +753,25 @@ class PedidoService:
                                     "total_invalidos": len(no_encontrados) + len(errores)
                                 }
                             },
-                            "validacion_sap": {
-                                "validos": len(validos),
-                                "no_encontrados": len(no_encontrados),
-                                "errores": len(errores),
-                                "warnings": validacion_sap.get("warnings", 0),
-                                "total_codigos": len(codigos_productos),
-                                "todos_validos": False
-                            }
+                            "validacion_sap": resultado.get("validacion_sap", {})
                         }
                         
                         raise BusinessException(
-                            message=mensaje_error,
+                            message=resultado["errores"][-1] if resultado.get("errores") else "Productos no válidos en SAP",
                             error_code="PRODUCTOS_NO_VALIDOS_SAP",
                             data=datos_estructurados
                         )
-                    
-                    logger.info(
-                        f"📊 Validación SAP: {len(validacion_sap.get('validos', []))} válidos, "
-                        f"{len(validacion_sap.get('no_encontrados', []))} no encontrados"
-                    )
             
             # GUARDAR (solo si pasó validación o no se valida)
-            # ✅ FILTRAR productos no validados en SAP (si se validó SAP)
-            with get_db_connection_context() as conn:
-                repository = PedidoRepository(conn)
-                pedido_id = repository.insert_cabecera(cabecera)
-                resultado["pedido_id"] = pedido_id
-                
-                # Crear conjunto de códigos válidos en SAP (si se validó)
-                codigos_validos_sap = set()
-                info_sap_por_codigo = {}
-                if validacion_sap:
-                    codigos_validos_sap = set(validacion_sap.get("validos", []))
-                    # Guardar info SAP para usar al persistir
-                    for codigo, detalle in validacion_sap.get("detalle", {}).items():
-                        if detalle.get("existe") and detalle.get("info"):
-                            info_sap_por_codigo[codigo] = detalle["info"]
-                
-                for detalle_data in detalles_con_tiendas:
-                    # ✅ AJUSTE 2: NO guardar codigo_interno si no hay info SAP válida
-                    codigo_interno = detalle_data.get("detalle", {}).get("codigo_interno")
-                    
-                    # Si se validó SAP, solo persistir productos válidos
-                    if validar_sap and validacion_sap:
-                        if not codigo_interno or codigo_interno not in codigos_validos_sap:
-                            # Producto no validado o no encontrado en SAP → SKIP (no guardar)
-                            logger.warning(
-                                f"⚠️ Producto '{codigo_interno}' no validado en SAP, "
-                                f"no se persistirá en pedido_detalle"
-                            )
-                            resultado["errores"].append(
-                                f"Producto '{codigo_interno}' omitido: no válido en SAP"
-                            )
-                            continue  # ✅ NUNCA preparar detalle_preparado si no está validado
-                    
-                    # ✅ Producto validado (o validación SAP deshabilitada) → continuar con persistencia
-                    try:
-                        # Preparar datos del detalle (incluir info SAP si está disponible)
-                        datos_detalle = detalle_data["detalle"].copy()
-                        
-                        # Si hay info SAP válida, enriquecer con datos de SAP
-                        if codigo_interno and codigo_interno in info_sap_por_codigo:
-                            info_sap = info_sap_por_codigo[codigo_interno]
-                            # Usar campos existentes de pedido_detalle para guardar info SAP
-                            if info_sap.get("item_name") and not datos_detalle.get("descripcion_sap"):
-                                datos_detalle["descripcion_sap"] = info_sap["item_name"]
-                            if info_sap.get("pack_sap") and not datos_detalle.get("pack"):
-                                datos_detalle["pack"] = info_sap["pack_sap"]
-                            # grupo_articulos no tiene campo directo, pero se puede guardar en descripcion_sap si no existe
-                        
-                        pedido_detalle_id = repository.insert_detalle(
-                            pedido_id=pedido_id,
-                            datos_detalle=datos_detalle
-                        )
-                        resultado["articulos_cargados"] += 1
-                        
-                        if detalle_data.get("distribuciones"):
-                            distribuciones = []
-                            for dist in detalle_data["distribuciones"]:
-                                tienda_codigo = dist.get("tienda_codigo")
-                                cantidad = dist.get("cantidad")
-                                fila_origen = dist.get("fila_origen")  # Preservar fila origen si existe
-                                
-                                if tienda_codigo and cantidad and cantidad > 0:
-                                    tienda_id = repository.get_or_create_tienda(
-                                        codigo=tienda_codigo,
-                                        nombre=dist.get("tienda_nombre")
-                                    )
-                                    distribucion_item = {
-                                        "tienda_id": tienda_id,
-                                        "cantidad": int(cantidad)
-                                    }
-                                    # Agregar fila_origen si está disponible
-                                    if fila_origen is not None:
-                                        distribucion_item["fila_origen"] = int(fila_origen)
-                                    distribuciones.append(distribucion_item)
-                            
-                            if distribuciones:
-                                distribuciones_insertadas = repository.insert_detalle_tiendas(
-                                    pedido_detalle_id=pedido_detalle_id,
-                                    distribuciones=distribuciones
-                                )
-                                resultado["distribuciones_cargadas"] += distribuciones_insertadas
-                    except Exception as e:
-                        error_msg = f"Error al procesar artículo {detalle_data.get('detalle', {}).get('codigo_interno')}: {str(e)}"
-                        logger.warning(f"⚠️ {error_msg}")
-                        resultado["errores"].append(error_msg)
-                        continue
+            self._persistir_pedido(
+                cabecera=cabecera,
+                detalles_con_tiendas=detalles_con_tiendas,
+                resultado=resultado,
+                validar_sap=validar_sap,
+                validacion_sap=validacion_sap
+            )
             
+            pedido_id = resultado.get("pedido_id")
             logger.info(
                 f"✅ Pedido procesado: {filename} "
                 f"(pedido_id: {pedido_id}, formato: {resultado['formato_detectado']}, "
@@ -1134,7 +856,9 @@ class PedidoService:
                 cabecera = self._normalizar_cabecera_para_bd(resultado_parsing.get("cabecera", {}), filename, usuario_id)
                 es_formato_simple = True
             else:
-                df_raw = pd.read_excel(io.BytesIO(file_content), sheet_name=0, header=None)
+                df_raw_result = pd.read_excel(io.BytesIO(file_content), sheet_name=0, header=None)
+                # Type assertion: sheet_name=0 returns a single DataFrame, not a dict
+                df_raw = cast(pd.DataFrame, df_raw_result)
                 cabecera = self.parser.extraer_cabecera(df_raw, filename, usuario_id)
                 detalles_con_tiendas = self.parser.extraer_detalle_con_tiendas(df_raw)
                 es_formato_simple = False
@@ -1245,12 +969,11 @@ class PedidoService:
         modo_tiendas: str = "validar_estricto"
     ) -> Dict[str, Any]:
         """
-        Procesa el nuevo formato v1.0 con 4 hojas:
-        1. Cabecera Pedido: Metadatos del pedido
-        2. Detalle Articulos: Catálogo de productos
-        3. Movimiento: Distribuciones por tienda (CodigoProducto, Tienda, Cantidad)
-        4. Tiendas: Maestro de tiendas con validación
-
+        Procesa el nuevo formato v1.0 con 4 hojas.
+        
+        REFACTORIZADO: Ahora delega a PedidoFormatoV1Processor.
+        Se mantiene este método para compatibilidad hacia atrás.
+        
         Args:
             file_content: Contenido del archivo Excel
             filename: Nombre del archivo
@@ -1264,395 +987,130 @@ class PedidoService:
             bloquea_con_errores: Si True, no guarda si hay errores
             validar_sap: Si True, valida códigos contra SAP
             sap_obligatorio: Si True, errores de SAP bloquean persistencia
-
+            
         Returns:
             Dict con resultado del procesamiento
         """
-        resultado = {
-            "status": "success",
-            "formato_detectado": "cuatro_hojas_v1_0",
-            "validation": None,
-            "pedido_id": None,
-            "articulos_cargados": 0,
-            "distribuciones_cargadas": 0,
-            "errores": [],
-            "warnings": [],
-            "resumen": {
-                "hojas_procesadas": [],
-                "tiendas_validadas": 0,
-                "productos_cargados": 0,
-                "distribuciones_totales": 0
-            }
-        }
+        return self.formato_v1_processor.procesar(
+            file_content=file_content,
+            filename=filename,
+            usuario_id=usuario_id,
+            hoja_cabecera=hoja_cabecera,
+            hoja_detalle=hoja_detalle,
+            hoja_movimiento=hoja_movimiento,
+            hoja_tiendas=hoja_tiendas,
+            validar_antes_de_guardar=validar_antes_de_guardar,
+            tiendas_permitidas=tiendas_permitidas,
+            bloquea_con_errores=bloquea_con_errores,
+            validar_sap=validar_sap,
+            sap_obligatorio=sap_obligatorio,
+            modo_tiendas=modo_tiendas
+        )
+    
+    def _persistir_pedido(
+        self,
+        cabecera: Dict[str, Any],
+        detalles_con_tiendas: List[Dict[str, Any]],
+        resultado: Dict[str, Any],
+        validar_sap: bool,
+        validacion_sap: Optional[Dict[str, Any]]
+    ) -> None:
+        """
+        Persiste un pedido en la base de datos.
         
-        try:
-            # PASO 1: Procesar Tiendas y validar SAP
-            catalogo_tiendas = procesar_tiendas_y_validar_sap_v1_0(
-                self, file_content, resultado, sap_obligatorio, hoja_tiendas
-            )
-            if catalogo_tiendas is None and resultado.get("status") == "validation_error":
-                return resultado
-            if catalogo_tiendas is None:
-                catalogo_tiendas = {}
+        Args:
+            cabecera: Datos de cabecera del pedido
+            detalles_con_tiendas: Lista de detalles con distribuciones
+            resultado: Dict de resultado donde se actualizará el estado
+            validar_sap: Si True, filtra productos no validados en SAP
+            validacion_sap: Resultado de validación SAP (opcional)
+        """
+        # ✅ FILTRAR productos no validados en SAP (si se validó SAP)
+        with get_db_connection_context() as conn:
+            repository = PedidoRepository(conn)
+            pedido_id = repository.insert_cabecera(cabecera)
+            resultado["pedido_id"] = pedido_id
             
-            # PASO 2: Leer y procesar hoja de Cabecera Pedido
-            logger.info("📋 PASO 2: Procesando hoja de Cabecera Pedido")
-            excel_file = pd.ExcelFile(io.BytesIO(file_content))
-            cabecera_parseada = self.parser._parsear_cabecera(excel_file, hoja_cabecera)
+            # Crear conjunto de códigos válidos en SAP (si se validó)
+            codigos_validos_sap = set()
+            info_sap_por_codigo = {}
+            if validacion_sap:
+                codigos_validos_sap = set(validacion_sap.get("validos", []))
+                # Guardar info SAP para usar al persistir
+                for codigo, detalle in validacion_sap.get("detalle", {}).items():
+                    if detalle.get("existe") and detalle.get("info"):
+                        info_sap_por_codigo[codigo] = detalle["info"]
             
-            cabecera = self._normalizar_cabecera_para_bd(
-                cabecera_parseada=cabecera_parseada,
-                filename=filename,
-                usuario_id=usuario_id
-            )
-            # Coerción de fechas desde texto si aplica
-            try:
-                valor_fecha_pedido = cabecera.get("fecha_pedido", cabecera.get("fecha_de_pedido"))
-                if valor_fecha_pedido is not None:
-                    cabecera["fecha_pedido"] = self._parsear_fecha_texto(valor_fecha_pedido)
-                valor_fecha_entrega = cabecera.get("fecha_entrega", cabecera.get("fecha_de_entrega"))
-                if valor_fecha_entrega is not None:
-                    cabecera["fecha_entrega"] = self._parsear_fecha_texto(valor_fecha_entrega)
-            except Exception:
-                # No bloquear por error de parseo de fecha; se mantiene valor original
-                pass
-            resultado["resumen"]["hojas_procesadas"].append("Cabecera Pedido")
-            logger.info(f"✅ Cabecera parseada: {cabecera.get('numero_pedido', 'SIN NÚMERO')}")
-            
-            # PASO 3 & 4: Procesar Detalle Articulos y Movimiento, validar coherencia
-            try:
-                productos_dict = procesar_detalle_articulos_v1_0(
-                    self, file_content, resultado, validar_sap, hoja_detalle
-                )
-                if productos_dict is None:
-                    return resultado
-
-                distribuciones_movimiento = procesar_movimiento_y_coherencia_v1_0(
-                    self, file_content, resultado, catalogo_tiendas, productos_dict, validar_sap, hoja_movimiento
-                )
-                if distribuciones_movimiento is None:
-                    return resultado
-            except BusinessException:
-                raise
-            except Exception as e:
-                logger.error(f"❌ Error en procesamiento Detalle/Movimiento: {e}", exc_info=True)
-                resultado["status"] = "error"
-                resultado["errores"].append(str(e))
-                return resultado
-
-            logger.info("📋 PASO 5: Consolidando distribuciones por producto")
-            
-            detalles_consolidados = {}
-            for dist in distribuciones_movimiento:
-                codigo_producto = dist["codigo_producto"]
+            for detalle_data in detalles_con_tiendas:
+                # ✅ AJUSTE 2: NO guardar codigo_interno si no hay info SAP válida
+                codigo_interno = detalle_data.get("detalle", {}).get("codigo_interno")
                 
-                if codigo_producto not in detalles_consolidados:
-                    # Obtener info del producto del catálogo
-                    info_producto = productos_dict.get(codigo_producto, {
-                        "codigo_interno": codigo_producto,
-                        "descripcion_sap": None,
-                        "marca": None,
-                        "codigo_barras": None,
-                        "pack": None,
-                        "costo_doc_sin_iva": None,
-                        "descuento_1": None,
-                        "pvp": None,
-                    })
-                    
-                    detalles_consolidados[codigo_producto] = {
-                        "detalle": info_producto,
-                        "distribuciones": []
-                    }
-                
-                # Agregar distribución (validar que tienda sea válida)
-                tienda_valida = dist["validacion"]["valida"]
-                if not tienda_valida and bloquea_con_errores:
-                    # Si hay validaciones y están en error, registrar warning
-                    for error in dist["validacion"]["errores"]:
-                        resultado["warnings"].append(f"⚠️ Fila {dist['fila_origen']}: {error}")
-                else:
-                    detalles_consolidados[codigo_producto]["distribuciones"].append({
-                        "tienda_codigo": dist["tienda_codigo"],
-                        "tienda_nombre": dist["tienda_nombre"],
-                        "cantidad": dist["cantidad"],
-                        "fila_origen": dist["fila_origen"]
-                    })
-            
-            detalles_finales = [{"detalle": data["detalle"], "distribuciones": data["distribuciones"]} 
-                               for data in detalles_consolidados.values()]
-            
-            logger.info(f"✅ Consolidación completa: {len(detalles_finales)} productos con distribuciones")
-            
-            # Consolidador: resumen global (cantidad total por producto y general)
-            try:
-                consolidacion = self.consolidator.consolidar_pedido_por_producto(detalles_finales)
-                # Añadir resumen de consolidación al resultado (compatibilidad con Fase 2)
-                resultado["consolidacion"] = consolidacion.get("resumen", {"total_productos": 0, "cantidad_total": 0})
-            except Exception as e:
-                logger.warning(f"⚠️ No se pudo calcular consolidación por producto: {e}")
-                resultado["consolidacion"] = {"total_productos": len(detalles_finales), "cantidad_total": 0}
-            
-            # VALIDACIÓN SAP: Validar códigos de productos contra SAP
-            if validar_sap and detalles_finales:
-                logger.info("📋 Validación SAP: Verificando productos en SAP")
-                # Extraer códigos únicos de productos
-                codigos_productos = list(set([
-                    det.get("detalle", {}).get("codigo_interno")
-                    for det in detalles_finales
-                    if det.get("detalle", {}).get("codigo_interno")
-                ]))
-                
-                if codigos_productos:
-                    validator = PedidoValidator()
-                    validacion_sap = validator.validar_productos_existen_en_sap(
-                        codigos_productos=codigos_productos,
-                        usar_cache=True,
-                        sap_obligatorio=sap_obligatorio
-                    )
-                    
-                    resultado["validacion_sap"] = {
-                        "total_codigos": len(codigos_productos),
-                        "validos": len(validacion_sap.get("validos", [])),
-                        "no_encontrados": len(validacion_sap.get("no_encontrados", [])),
-                        "errores": len(validacion_sap.get("errores", [])),
-                        "warnings": len(validacion_sap.get("warnings", [])),
-                        "todos_validos": validacion_sap.get("todos_validos", False)
-                    }
-                    
-                    # Si SAP es obligatorio y hay errores, NO persistir
-                    if sap_obligatorio and not validacion_sap.get("todos_validos", False):
-                        no_encontrados = validacion_sap.get("no_encontrados", [])
-                        errores_sap = validacion_sap.get("errores", [])
-                        
-                        mensaje_error = "No se puede persistir el pedido: existen productos no válidos en SAP."
-                        if no_encontrados:
-                            mensaje_error += f" Productos no encontrados en SAP: {', '.join(no_encontrados[:5])}"
-                            if len(no_encontrados) > 5:
-                                mensaje_error += f" y {len(no_encontrados) - 5} más"
-                        if errores_sap:
-                            mensaje_error += f" Errores al consultar SAP: {', '.join(errores_sap[:3])}"
-                            if len(errores_sap) > 3:
-                                mensaje_error += f" y {len(errores_sap) - 3} más"
-                        
-                        resultado["status"] = "validation_error"
-                        resultado["errores"].append(mensaje_error)
-                        logger.error(f"❌ {mensaje_error}")
-                        return resultado
-                    
-                    logger.info(
-                        f"✅ Validación SAP: {len(validacion_sap.get('validos', []))} válidos, "
-                        f"{len(validacion_sap.get('no_encontrados', []))} no encontrados"
-                    )
-            
-            # VALIDACIÓN DE BODEGAS (evitar duplicar si ya se validó al inicio)
-            if resultado.get("tiendas_cargadas") and validar_sap and "validacion_bodegas" not in resultado:
-                logger.info("📋 Validación de bodegas: Verificando bodegas contra SAP OWHS")
-                
-                # Extraer códigos de bodegas del catálogo (hoja Tiendas)
-                codigos_bodegas_set: set[str] = set()
-                tiendas_cargadas = resultado.get("tiendas_cargadas", {})
-                if isinstance(tiendas_cargadas, dict):
-                    codigos_bodegas_set = set(tiendas_cargadas.keys())
-                elif isinstance(tiendas_cargadas, list):
-                    for item in tiendas_cargadas:
-                        if isinstance(item, dict):
-                            codigo = item.get("codigo")
-                            if codigo:
-                                codigos_bodegas_set.add(codigo)
-                        elif isinstance(item, str) and item.strip():
-                            codigos_bodegas_set.add(item.strip())
-                
-                codigos_bodegas = list(codigos_bodegas_set)
-                
-                if codigos_bodegas:
-                    validator = PedidoValidator()
-                    validacion_bodegas = validator.validar_bodegas_existen_en_sap(
-                        codigos_bodegas=list(codigos_bodegas),
-                        sap_obligatorio=sap_obligatorio
-                    )
-                    
-                    resultado["validacion_bodegas"] = {
-                        "total_codigos": len(codigos_bodegas),
-                        "validas": len(validacion_bodegas.get("validas", [])),
-                        "no_encontradas": len(validacion_bodegas.get("no_encontradas", [])),
-                        "errores": len(validacion_bodegas.get("errores", [])),
-                        "warnings": len(validacion_bodegas.get("warnings", [])),
-                        "todas_validas": validacion_bodegas.get("todas_validas", False)
-                    }
-                    
-                    # Si hay bodegas no encontradas, agregar warning o error
-                    if validacion_bodegas.get("no_encontradas"):
-                        no_encontradas = validacion_bodegas["no_encontradas"]
-                        mensaje = (
-                            f"Bodegas no encontradas en SAP OWHS: "
-                            f"{', '.join(no_encontradas[:5])}"
+                # Si se validó SAP, solo persistir productos válidos
+                if validar_sap and validacion_sap:
+                    if not codigo_interno or codigo_interno not in codigos_validos_sap:
+                        # Producto no validado o no encontrado en SAP → SKIP (no guardar)
+                        logger.warning(
+                            f"⚠️ Producto '{codigo_interno}' no validado en SAP, "
+                            f"no se persistirá en pedido_detalle"
                         )
-                        if len(no_encontradas) > 5:
-                            mensaje += f" y {len(no_encontradas) - 5} más"
-                        
-                        if sap_obligatorio:
-                            resultado["errores"].append(mensaje)
-                            logger.error(f"❌ {mensaje}")
-                        else:
-                            resultado["warnings"].append(mensaje)
-                            logger.warning(f"⚠️ {mensaje}")
-                    
-                    # Si SAP es obligatorio y hay bodegas inválidas, retornar error
-                    if sap_obligatorio and not validacion_bodegas.get("todas_validas", False):
-                        resultado["status"] = "validation_error"
-                        logger.error(f"❌ Errores de validación de bodegas en SAP")
-                        return resultado
-                    
-                    logger.info(
-                        f"📊 Validación bodegas: {len(validacion_bodegas.get('validas', []))} válidas, "
-                        f"{len(validacion_bodegas.get('no_encontradas', []))} no encontradas"
-                    )
-
-            
-            # PASO 6: Validación antes de guardar
-            if validar_antes_de_guardar:
-                logger.info("📋 PASO 6: Validando pedido completo")
-                validator = PedidoValidator()
-                validacion_resultado = validator.validar_pedido_completo(cabecera, detalles_finales, es_formato_simple=False)
-                # Serializar resultado de validación a estructuras JSON-safe
-                resultado["validation"] = {
-                    "valid": validacion_resultado.get("valid", True),
-                    "total_issues": validacion_resultado.get("total_issues", 0),
-                    "errors": validacion_resultado.get("errors", 0),
-                    "warnings": validacion_resultado.get("warnings", 0),
-                    "issues_by_row": {
-                        str(row_num): [
-                            {
-                                "field": getattr(issue, "field", None),
-                                "severity": getattr(getattr(issue, "severity", None), "value", str(getattr(issue, "severity", None))),
-                                "message": getattr(issue, "message", None),
-                                "value": (str(issue.value) if getattr(issue, "value", None) is not None else None)
-                            }
-                            for issue in issues
-                        ]
-                        for row_num, issues in validacion_resultado.get("issues_by_row", {}).items()
-                    }
-                }
+                        resultado["errores"].append(
+                            f"Producto '{codigo_interno}' omitido: no válido en SAP"
+                        )
+                        continue  # ✅ NUNCA preparar detalle_preparado si no está validado
                 
-                # Validación de existencia en catálogos (productos contra SAP y bodegas contra SAP OWHS)
+                # ✅ Producto validado (o validación SAP deshabilitada) → continuar con persistencia
                 try:
-                    from src.database.services.pedido_validator import PedidoValidator as _PV
+                    # Preparar datos del detalle (incluir info SAP si está disponible)
+                    datos_detalle = detalle_data["detalle"].copy()
                     
-                    _validator = _PV()
-                    # Extraer códigos únicos de productos y tiendas
-                    codigos_productos = list(set([
-                        det.get("detalle", {}).get("codigo_interno")
-                        for det in detalles_finales
-                        if det.get("detalle", {}).get("codigo_interno")
-                    ]))
-                    # Extraer códigos de bodegas/tiendas desde el catálogo cargado
-                    codigos_bodegas: List[str] = []
-                    tiendas_cargadas = resultado.get("tiendas_cargadas", {})
-                    if isinstance(tiendas_cargadas, dict):
-                        # Formato esperado del parser: {codigo -> info}
-                        codigos_bodegas = list(tiendas_cargadas.keys())
-                    elif isinstance(tiendas_cargadas, list):
-                        # Fallback defensivo: lista de dicts o strings
-                        for item in tiendas_cargadas:
-                            if isinstance(item, dict):
-                                codigo = item.get("codigo")
-                                if codigo:
-                                    codigos_bodegas.append(codigo)
-                            elif isinstance(item, str) and item.strip():
-                                codigos_bodegas.append(item.strip())
-                        codigos_bodegas = list(set(codigos_bodegas))
+                    # Si hay info SAP válida, enriquecer con datos de SAP
+                    if codigo_interno and codigo_interno in info_sap_por_codigo:
+                        info_sap = info_sap_por_codigo[codigo_interno]
+                        # Usar campos existentes de pedido_detalle para guardar info SAP
+                        if info_sap.get("item_name") and not datos_detalle.get("descripcion_sap"):
+                            datos_detalle["descripcion_sap"] = info_sap["item_name"]
+                        if info_sap.get("pack_sap") and not datos_detalle.get("pack"):
+                            datos_detalle["pack"] = info_sap["pack_sap"]
+                        # grupo_articulos no tiene campo directo, pero se puede guardar en descripcion_sap si no existe
                     
-                    resultado.setdefault("validation", {})
+                    pedido_detalle_id = repository.insert_detalle(
+                        pedido_id=pedido_id,
+                        datos_detalle=datos_detalle
+                    )
+                    resultado["articulos_cargados"] += 1
                     
-                    # Validar productos contra SAP (no contra tabla local)
-                    if codigos_productos:
-                        vp = _validator.validar_productos_existen_en_sap(
-                            codigos_productos=codigos_productos,
-                            usar_cache=True,
-                            sap_obligatorio=sap_obligatorio
-                        )
-                        resultado["validation"]["productos"] = vp
-                        if bloquea_con_errores and not vp.get("todos_validos", True):
-                            no_encontrados = vp.get("no_encontrados", [])
-                            resultado["errores"].append(
-                                f"Productos no encontrados en SAP: {', '.join(no_encontrados[:5])}" +
-                                (f" y {len(no_encontrados)-5} más" if len(no_encontrados) > 5 else "")
+                    if detalle_data.get("distribuciones"):
+                        distribuciones = []
+                        for dist in detalle_data["distribuciones"]:
+                            tienda_codigo = dist.get("tienda_codigo")
+                            cantidad = dist.get("cantidad")
+                            fila_origen = dist.get("fila_origen")  # Preservar fila origen si existe
+                            
+                            if tienda_codigo and cantidad and cantidad > 0:
+                                tienda_id = repository.get_or_create_tienda(
+                                    codigo=tienda_codigo,
+                                    nombre=dist.get("tienda_nombre")
+                                )
+                                distribucion_item = {
+                                    "tienda_id": tienda_id,
+                                    "cantidad": int(cantidad)
+                                }
+                                # Agregar fila_origen si está disponible
+                                if fila_origen is not None:
+                                    distribucion_item["fila_origen"] = int(fila_origen)
+                                distribuciones.append(distribucion_item)
+                        
+                        if distribuciones:
+                            distribuciones_insertadas = repository.insert_detalle_tiendas(
+                                pedido_detalle_id=pedido_detalle_id,
+                                distribuciones=distribuciones
                             )
-                    
-                    # Validar bodegas contra SAP OWHS
-                    if codigos_bodegas:
-                        vb = _validator.validar_bodegas_existen_en_sap(
-                            codigos_bodegas=codigos_bodegas,
-                            sap_obligatorio=sap_obligatorio
-                        )
-                        resultado["validation"]["bodegas"] = vb
-                        if bloquea_con_errores and not vb.get("todas_validas", True):
-                            if vb.get("no_encontradas"):
-                                resultado["errores"].append(
-                                    f"Bodegas no encontradas en SAP: {', '.join(vb['no_encontradas'][:5])}" +
-                                    (f" y {len(vb['no_encontradas'])-5} más" if len(vb['no_encontradas']) > 5 else "")
-                                )
+                            resultado["distribuciones_cargadas"] += distribuciones_insertadas
                 except Exception as e:
-                    logger.warning(f"⚠️ Error en validación de existencia contra SAP (productos/bodegas): {e}")
-
-                # Guardia: si hay errores de validación y se debe bloquear, no continuar ni persistir
-                if bloquea_con_errores and resultado.get("errores"):
-                    resultado["status"] = "validation_error"
-                    logger.error(f"❌ Errores de validación: {resultado['errores']}")
-                    return resultado
-
-                # Validación explícita de cantidades: enteras y > 0
-                try:
-                    issues_cantidades = []
-                    for idx, det in enumerate(detalles_finales, start=1):
-                        for dist in det.get("distribuciones", []):
-                            qty = dist.get("cantidad")
-                            es_entero = isinstance(qty, int) or (isinstance(qty, str) and str(qty).isdigit())
-                            if not es_entero:
-                                issues_cantidades.append(
-                                    f"Fila {idx}: cantidad no entera '{qty}' en tienda {dist.get('tienda_codigo')}"
-                                )
-                            else:
-                                if int(qty) <= 0:
-                                    issues_cantidades.append(
-                                        f"Fila {idx}: cantidad debe ser > 0 (recibido {qty}) en tienda {dist.get('tienda_codigo')}"
-                                    )
-                    if issues_cantidades:
-                        resultado.setdefault("validation", {})
-                        resultado["validation"]["cantidades"] = {
-                            "validas": False,
-                            "issues": issues_cantidades
-                        }
-                        if bloquea_con_errores:
-                            resultado.setdefault("errores", [])
-                            resultado["errores"].extend(issues_cantidades)
-                except Exception as e:
-                    logger.warning(f"⚠️ Error en validación de cantidades: {e}")
-
-                # Guardar estado de error si existen errores acumulados
-                if bloquea_con_errores and resultado.get("errores"):
-                    resultado["status"] = "validation_error"
-                    logger.error(f"❌ Errores de validación: {resultado['errores']}")
-                    return resultado
-
-                if not validacion_resultado["valid"] and bloquea_con_errores:
-                    resultado["status"] = "validation_error"
-                    logger.error(f"❌ Errores de validación: {validacion_resultado['errors']}")
-                    return resultado
-            
-            # PASO 7: Guardar en base de datos
-            if ENABLE_SQL_SERVER_STORAGE:
-                guardar_pedido_v1_0(resultado, resultado.get("pedido_id"), detalles_finales, cabecera)
-            else:
-                logger.info("⚠️ SQL Server storage deshabilitado, no se guardó en BD")
-            
-            return resultado
-            
-        except Exception as e:
-            logger.error(f"❌ Error al procesar formato v1.0: {e}", exc_info=True)
-            resultado["status"] = "error"
-            resultado["errores"].append(str(e))
-            return resultado
+                    error_msg = f"Error al procesar artículo {detalle_data.get('detalle', {}).get('codigo_interno')}: {str(e)}"
+                    logger.warning(f"⚠️ {error_msg}")
+                    resultado["errores"].append(error_msg)
+                    continue
     
     def _convertir_a_decimal(self, valor) -> Optional[float]:
         """Delegado a PedidoTypeConverter."""

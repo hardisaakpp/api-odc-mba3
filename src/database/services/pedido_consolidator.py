@@ -326,3 +326,26 @@ class PedidoConsolidator:
             }
         }
 
+        @staticmethod
+        def calcular_subtotal_por_producto(distribuciones_movimiento: List[Dict[str, Any]]) -> Dict[str, int]:
+            """
+            Calcula el subtotal (suma de cantidades) para cada producto usando solo Movimiento.
+
+            Args:
+                distribuciones_movimiento: Lista de distribuciones, cada una con "codigo_producto" y "cantidad".
+
+            Returns:
+                Dict con codigo_producto como clave y la suma total de cantidades como valor.
+            """
+            subtotales: Dict[str, int] = {}
+
+            for dist in distribuciones_movimiento:
+                codigo = dist.get("codigo_producto")
+                cantidad = dist.get("cantidad", 0)
+
+                if codigo:
+                    # Suma todas las cantidades para el producto
+                    subtotales[codigo] = subtotales.get(codigo, 0) + cantidad
+
+            return subtotales
+

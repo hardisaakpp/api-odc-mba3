@@ -282,6 +282,15 @@ WHERE pdt.fila_origen = 18;
 
 ---
 
+## 📋 Formato Excel
+
+El sistema soporta el formato `Template_Pedido_Inicial_v1.0.xlsx` con dos hojas:
+
+1. **CABECERA_PEDIDO** (formato clave-valor) → Mapea a tabla `pedido`
+2. **DETALLE_ARTICULO** (formato tabular) → Mapea a `pedido_detalle` + `pedido_detalle_tienda`
+
+Ver [FORMATO_EXCEL_PEDIDOS.md](FORMATO_EXCEL_PEDIDOS.md) y [MAPEO_CABECERA_PEDIDO.md](MAPEO_CABECERA_PEDIDO.md) para detalles completos.
+
 ## 🆕 Cambios Recientes
 
 ### Campo `fila_origen` (Nuevo)
