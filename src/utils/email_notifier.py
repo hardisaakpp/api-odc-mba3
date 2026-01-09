@@ -6,6 +6,7 @@ import logging
 import smtplib
 import csv
 import io
+import os
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from email.mime.base import MIMEBase
@@ -23,6 +24,7 @@ from src.config import (
     EMAIL_TO_OPERACIONES,
     EMAIL_TO_HOMOLOGACIONES,
     EMAIL_TO_TECNICOS,
+    EMAIL_MABEL_TRADING,
     ENABLE_EMAIL_NOTIFICATIONS,
     EMAIL_WARNING_TIME_LIMIT_PERCENT,
     EMAIL_WARNING_HIGH_VOLUME_THRESHOLD,

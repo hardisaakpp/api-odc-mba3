@@ -17,7 +17,8 @@ from src.models import (
     RespuestaProveedorResponse,
     ActualizarCostoRequest,
     ActualizarTotalRequest,
-    ActualizarComentarioRequest
+    ActualizarComentarioRequest,
+    NotificarConfirmacionRequest
 )
 
 logger = logging.getLogger(__name__)
@@ -1591,6 +1592,119 @@ def register_plantillas_endpoints(app: FastAPI):
                 detail={
                     "error": "internal_error",
                     "message": f"Error interno al actualizar comentario: {str(e)}"
+                }
+            )
+    
+    @app.post("/api/pedidos/{numero_pedido}/notificar-confirmacion", tags=["Pedidos - Notificaciones"])
+    async def notificar_confirmacion_pedido(
+        numero_pedido: str = Path(..., description="Número del pedido"),
+        request_body: NotificarConfirmacionRequest = Body(..., description="Datos de la notificación"),
+        user: Dict = Depends(verify_jwt_token),
+        _: None = Depends(require_permission('mba3-consultas.proceso.execute'))
+    ):
+        """
+        Envía un correo electrónico a MABEL TRADING notificando que se requiere confirmación de un pedido.
+        
+        **Funcionalidad:**
+        - Obtiene los datos del pedido desde la base de datos
+        - Construye un correo HTML con información del pedido
+        - Incluye un link directo para confirmar el pedido
+        - Envía el correo usando la configuración SMTP existente
+        
+        **Request:**
+        ```json
+        {
+            "usuario_origen": "EL RAYO",
+            "usuario_destino": "MABEL TRADING",
+            "url_confirmacion": "https://tu-dominio.com/mba3-consultas/pedidos/P-12.48%20-%2012%20-%202025?modo=confirmacion&usuario=mabel-trading"
+        }
+        ```
+        
+        **Response:**
+        ```json
+        {
+            "status": "success",
+            "message": "Notificación enviada exitosamente a MABEL TRADING",
+            "data": {
+                "numero_pedido": "P-12.48 - 12 - 2025",
+                "email_enviado_a": "mabel.trading@example.com",
+                "fecha_envio": "2025-01-15T10:30:00Z"
+            }
+        }
+        ```
+        """
+        try:
+            from src.database.connection import get_db_connection_context
+            from src.database.repositories.pedido_repository import PedidoRepository
+            from src.utils.email_notifier_pedido import send_pedido_confirmacion_notification
+            from datetime import datetime
+            
+            # Obtener datos del request
+            usuario_origen = request_body.usuario_origen
+            usuario_destino = request_body.usuario_destino
+            email_destino = request_body.email_destino  # Opcional
+            url_confirmacion = request_body.url_confirmacion  # Opcional
+            
+            # Obtener pedido desde la base de datos
+            with get_db_connection_context() as conn:
+                repo = PedidoRepository(conn)
+                
+                # Intentar obtener por número de pedido primero
+                pedido_data = repo.get_pedido_completo_por_numero(numero_pedido)
+                
+                if not pedido_data:
+                    raise HTTPException(
+                        status_code=status.HTTP_404_NOT_FOUND,
+                        detail={
+                            "error": "pedido_not_found",
+                            "message": f"No se encontró el pedido con número: {numero_pedido}"
+                        }
+                    )
+            
+            # Enviar correo
+            fecha_envio = datetime.now()
+            email_enviado = send_pedido_confirmacion_notification(
+                pedido_data=pedido_data,
+                numero_pedido=numero_pedido,
+                usuario_origen=usuario_origen,
+                usuario_destino=usuario_destino,
+                email_destino=email_destino,
+                url_confirmacion=url_confirmacion,
+                fecha_ejecucion=fecha_envio
+            )
+            
+            if email_enviado:
+                logger.info(f"✅ Notificación de confirmación enviada para pedido {numero_pedido} por usuario {user.get('username', 'UNKNOWN')}")
+                return JSONResponse(
+                    status_code=status.HTTP_200_OK,
+                    content={
+                        "status": "success",
+                        "message": f"Notificación enviada exitosamente a {usuario_destino}",
+                        "data": {
+                            "numero_pedido": numero_pedido,
+                            "email_enviado_a": email_destino or "MABEL TRADING (configurado)",
+                            "fecha_envio": fecha_envio.isoformat()
+                        }
+                    }
+                )
+            else:
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail={
+                        "error": "email_send_failed",
+                        "message": "No se pudo enviar el correo electrónico. Verifique la configuración SMTP."
+                    }
+                )
+                
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"❌ Error al notificar confirmación de pedido: {e}", exc_info=True)
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail={
+                    "error": "internal_error",
+                    "message": f"Error interno al enviar notificación: {str(e)}"
                 }
             )
     

@@ -608,3 +608,21 @@ class ActualizarComentarioRequest(BaseModel):
             }
         }
 
+
+class NotificarConfirmacionRequest(BaseModel):
+    """Modelo para el request de notificar confirmación de pedido."""
+    
+    usuario_origen: str = Field(default="EL RAYO", description="Usuario que solicita la confirmación")
+    usuario_destino: str = Field(default="MABEL TRADING", description="Usuario que debe confirmar")
+    email_destino: Optional[str] = Field(None, description="Email del destinatario (opcional, usa EMAIL_MABEL_TRADING si no se proporciona)")
+    url_confirmacion: Optional[str] = Field(None, description="URL directa para confirmar el pedido (opcional, se genera automáticamente si no se proporciona)")
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "usuario_origen": "EL RAYO",
+                "usuario_destino": "MABEL TRADING",
+                "url_confirmacion": "https://tu-dominio.com/mba3-consultas/pedidos/P-12.48%20-%2012%20-%202025?modo=confirmacion&usuario=mabel-trading"
+            }
+        }
+

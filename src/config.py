@@ -302,6 +302,10 @@ EMAIL_TO = [email.strip() for email in _email_to_str.split(",") if email.strip()
 # TODO: En producción, obtener desde tabla cliente usando CardCode
 EMAIL_PROVEEDOR_PRUEBAS = os.getenv("EMAIL_PROVEEDOR_PRUEBAS", "cortiz@mabeltrading.com.ec")
 
+# Email de MABEL TRADING para notificaciones de confirmacion de pedidos
+# Usado cuando EL RAYO confirma un pedido y se debe notificar a MABEL TRADING
+EMAIL_MABEL_TRADING = os.getenv("EMAIL_MABEL_TRADING", "cortiz@mabeltrading.com.ec")
+
 
 # Configuración de advertencias técnicas
 # Porcentaje del time limit para enviar advertencia
