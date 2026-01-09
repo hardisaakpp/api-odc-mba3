@@ -5,44 +5,46 @@ Valida datos pre-negocio antes de enviar al ERP.
 REFACTORIZADO: Las validaciones contra SAP fueron movidas a pedido_sap_validator.py
 para mejorar separación de responsabilidades. Este módulo mantiene solo validaciones
 básicas de estructura, formato y coherencia.
+
+CHANGELOG:
+- 2026-01-08: Extraídos tipos comunes a pedido_validation_types.py
+- 2026-01-08: Extraída validación de cabecera a pedido_cabecera_validator.py
+- 2026-01-08: Extraída validación de precios a pedido_precio_validator.py
+- 2026-01-08: Refactorizado como facade que delega a validadores especializados
 """
 
 import logging
 import re
 from typing import Dict, Any, List, Optional
-from datetime import datetime, date
-from dataclasses import dataclass
-from enum import Enum
-import pandas as pd
+
+# Importar tipos comunes
+from .pedido_validation_types import ValidationIssue, ValidationSeverity
+
+# Importar validadores especializados
+from .pedido_cabecera_validator import PedidoCabeceraValidator
+from .pedido_precio_validator import PedidoPrecioValidator
+
+# Re-exportar para compatibilidad hacia atrás
+__all__ = ['PedidoValidator', 'ValidationIssue', 'ValidationSeverity']
 
 logger = logging.getLogger(__name__)
 
-
-class ValidationSeverity(Enum):
-    """Severidad de la validación."""
-    ERROR = "ERROR"      # Crítico - bloquea el proceso
-    WARNING = "WARNING"  # Advertencia - no bloquea
-
-
-@dataclass
-class ValidationIssue:
-    """Representa un problema de validación."""
-    row_number: int  # Número de fila en el Excel (1-based)
-    field: str       # Campo con el problema
-    severity: ValidationSeverity
-    message: str
-    value: Any = None  # Valor que causó el problema
 
 
 class PedidoValidator:
     """
     Motor de validación para pedidos.
     
+    REFACTORIZADO: Ahora delega a validadores especializados:
+    - PedidoCabeceraValidator: Validación de cabecera
+    - PedidoPrecioValidator: Validación de precios e impuestos
+
     Valida:
     - Catálogo (códigos de producto no vacíos, caracteres válidos)
     - Tiendas (IdTienda corresponde a sucursal/almacén permitido)
     - Unidades (enteros, máximos razonables por tienda en relación a total)
     - Fechas (no pasadas si se usa fecha de entrega, formato correcto)
+    - Precios e impuestos (formato regional, coherencia)
     """
     
     def __init__(
@@ -62,17 +64,23 @@ class PedidoValidator:
             max_cantidad_total: Cantidad total máxima por producto (None = sin límite)
             permitir_fechas_pasadas: Si False, valida que fecha_entrega no sea pasada
             validar_precios: Si True, valida reglas regionales de precio/impuestos
-            iva_porcentaje: Porcentaje de IVA para validaciones (default: 12.0 para Ecuador)
+            iva_porcentaje: Porcentaje de IVA para validaciones (default: 15.0 para Ecuador)
             usar_comas_decimales: Si True, acepta comas como separador decimal (formato europeo)
         """
         self.tiendas_permitidas = set(t.upper() if t else None for t in (tiendas_permitidas or []))
         self.max_cantidad_por_tienda = max_cantidad_por_tienda
         self.max_cantidad_total = max_cantidad_total
-        self.permitir_fechas_pasadas = permitir_fechas_pasadas
         self.validar_precios = validar_precios
-        self.iva_porcentaje = iva_porcentaje
-        self.usar_comas_decimales = usar_comas_decimales
-        
+
+        # Inicializar validadores especializados
+        self.cabecera_validator = PedidoCabeceraValidator(
+            permitir_fechas_pasadas=permitir_fechas_pasadas
+        )
+        self.precio_validator = PedidoPrecioValidator(
+            iva_porcentaje=iva_porcentaje,
+            usar_comas_decimales=usar_comas_decimales
+        )
+
         # Patrón para códigos de producto válidos (ajustar según necesidades)
         # Permite letras, números, puntos, guiones y espacios
         self.codigo_producto_pattern = re.compile(r'^[A-Za-z0-9.\-\s]{1,50}$')
@@ -85,6 +93,8 @@ class PedidoValidator:
         """
         Valida la cabecera del pedido.
         
+        DELEGA a PedidoCabeceraValidator.
+
         Args:
             cabecera: Diccionario con datos de cabecera
             row_number: Número de fila (para reporte)
@@ -92,85 +102,7 @@ class PedidoValidator:
         Returns:
             Lista de issues de validación
         """
-        issues = []
-        
-        # Validar numero_pedido (obligatorio)
-        numero_pedido = cabecera.get("numero_pedido")
-        if not numero_pedido or not str(numero_pedido).strip():
-            issues.append(ValidationIssue(
-                row_number=row_number,
-                field="numero_pedido",
-                severity=ValidationSeverity.ERROR,
-                message="El número de pedido es obligatorio",
-                value=numero_pedido
-            ))
-        
-        # Validar fecha_pedido
-        fecha_pedido = cabecera.get("fecha_pedido")
-        if fecha_pedido:
-            fecha_parsed = None
-            if isinstance(fecha_pedido, str):
-                try:
-                    fecha_parsed = datetime.strptime(fecha_pedido, "%Y-%m-%d").date()
-                except ValueError:
-                    try:
-                        fecha_parsed = datetime.strptime(fecha_pedido, "%d/%m/%Y").date()
-                    except ValueError:
-                        issues.append(ValidationIssue(
-                            row_number=row_number,
-                            field="fecha_pedido",
-                            severity=ValidationSeverity.ERROR,
-                            message="Formato de fecha inválido. Use YYYY-MM-DD o DD/MM/YYYY",
-                            value=cabecera.get("fecha_pedido")
-                        ))
-            elif isinstance(fecha_pedido, date):
-                fecha_parsed = fecha_pedido
-
-            # Validar que fecha_pedido no sea muy antigua (ej: > 1 año)
-            if fecha_parsed:
-                hoy = date.today()
-                if fecha_parsed < date(hoy.year - 1, hoy.month, hoy.day):
-                    issues.append(ValidationIssue(
-                        row_number=row_number,
-                        field="fecha_pedido",
-                        severity=ValidationSeverity.WARNING,
-                        message=f"La fecha de pedido es muy antigua: {fecha_parsed}",
-                        value=fecha_parsed
-                    ))
-
-        # Validar fecha_entrega
-        fecha_entrega = cabecera.get("fecha_entrega")
-        if fecha_entrega and str(fecha_entrega).upper() != "INMEDIATO":
-            # Intentar parsear como fecha
-            if isinstance(fecha_entrega, str):
-                try:
-                    fecha_entrega_dt = datetime.strptime(fecha_entrega, "%Y-%m-%d").date()
-                except ValueError:
-                    try:
-                        fecha_entrega_dt = datetime.strptime(fecha_entrega, "%d/%m/%Y").date()
-                    except ValueError:
-                        issues.append(ValidationIssue(
-                            row_number=row_number,
-                            field="fecha_entrega",
-                            severity=ValidationSeverity.ERROR,
-                            message="Formato de fecha de entrega inválido. Use YYYY-MM-DD, DD/MM/YYYY o 'INMEDIATO'",
-                            value=fecha_entrega
-                        ))
-                        fecha_entrega_dt = None
-                else:
-                    # Validar que fecha_entrega no sea pasada (si no se permite)
-                    if not self.permitir_fechas_pasadas and fecha_entrega_dt:
-                        hoy = date.today()
-                        if fecha_entrega_dt < hoy:
-                            issues.append(ValidationIssue(
-                                row_number=row_number,
-                                field="fecha_entrega",
-                                severity=ValidationSeverity.ERROR,
-                                message=f"La fecha de entrega no puede ser pasada: {fecha_entrega_dt}",
-                                value=fecha_entrega_dt
-                            ))
-
-        return issues
+        return self.cabecera_validator.validar(cabecera, row_number)
 
     def validar_detalle(
         self,
@@ -362,12 +294,7 @@ class PedidoValidator:
         """
         Valida reglas regionales de precio e impuestos.
         
-        Valida:
-        - Formato numérico (puntos vs comas como separador decimal)
-        - Precios positivos
-        - Descuentos en rango válido (0-100%)
-        - Coherencia entre costo, descuento y PVP
-        - Coherencia entre subtotal y total
+        DELEGA a PedidoPrecioValidator.
 
         Args:
             detalle: Diccionario con datos del detalle
@@ -376,186 +303,8 @@ class PedidoValidator:
         Returns:
             Lista de issues de validación
         """
-        issues = []
-        
-        def parse_numeric_value(value: Any, field_name: str) -> Optional[float]:
-            """Parsea un valor numérico, manejando formato regional."""
-            if value is None or pd.isna(value):
-                return None
+        return self.precio_validator.validar(detalle, row_number)
 
-            # Convertir a string y limpiar
-            str_value = str(value).strip()
-            if not str_value:
-                return None
-
-            # Remover símbolos de moneda comunes
-            str_value = str_value.replace('$', '').replace('€', '').replace('USD', '').strip()
-
-            # Manejar formato regional (comas vs puntos)
-            if self.usar_comas_decimales:
-                # Formato europeo: 10,50 (coma como decimal)
-                # Reemplazar punto de miles por nada y coma por punto
-                if '.' in str_value and ',' in str_value:
-                    # Tiene ambos: asumir punto=miles, coma=decimal
-                    str_value = str_value.replace('.', '').replace(',', '.')
-                elif ',' in str_value:
-                    # Solo coma: es decimal
-                    str_value = str_value.replace(',', '.')
-            else:
-                # Formato estándar: 10.50 (punto como decimal)
-                # Reemplazar coma por punto (si hay coma, asumir que es decimal mal formateado)
-                if ',' in str_value and '.' not in str_value:
-                    # Solo coma: intentar como decimal
-                    str_value = str_value.replace(',', '.')
-                elif ',' in str_value and '.' in str_value:
-                    # Tiene ambos: asumir coma=miles, punto=decimal
-                    str_value = str_value.replace(',', '')
-
-            try:
-                return float(str_value)
-            except (ValueError, TypeError):
-                issues.append(ValidationIssue(
-                    row_number=row_number,
-                    field=field_name,
-                    severity=ValidationSeverity.ERROR,
-                    message=f"El valor de {field_name} no es un número válido. Valor recibido: {value}",
-                    value=value
-                ))
-                return None
-
-        # Validar costo sin IVA
-        costo_sin_iva = parse_numeric_value(detalle.get("costo_doc_sin_iva"), "costo_doc_sin_iva")
-        if costo_sin_iva is not None:
-            if costo_sin_iva < 0:
-                issues.append(ValidationIssue(
-                    row_number=row_number,
-                    field="costo_doc_sin_iva",
-                    severity=ValidationSeverity.ERROR,
-                    message="El costo sin IVA no puede ser negativo",
-                    value=costo_sin_iva
-                ))
-            elif costo_sin_iva == 0:
-                issues.append(ValidationIssue(
-                    row_number=row_number,
-                    field="costo_doc_sin_iva",
-                    severity=ValidationSeverity.WARNING,
-                    message="El costo sin IVA es cero. Verifique que sea correcto",
-                    value=costo_sin_iva
-                ))
-
-        # Validar descuento
-        descuento = parse_numeric_value(detalle.get("descuento_1"), "descuento_1")
-        descuento_porcentaje = None
-
-        if descuento is not None:
-            # El descuento puede venir como porcentaje (0-100) o como decimal (0-1)
-            if descuento > 1 and descuento <= 100:
-                # Está como porcentaje (ej: 20 para 20%)
-                descuento_porcentaje = descuento
-            elif descuento >= 0 and descuento <= 1:
-                # Está como decimal (ej: 0.20 para 20%)
-                descuento_porcentaje = descuento * 100
-            else:
-                issues.append(ValidationIssue(
-                    row_number=row_number,
-                    field="descuento_1",
-                    severity=ValidationSeverity.ERROR,
-                    message=f"El descuento debe estar entre 0 y 100% (o 0 y 1 si es decimal). Valor recibido: {descuento}",
-                    value=descuento
-                ))
-
-            if descuento_porcentaje is not None:
-                if descuento_porcentaje < 0 or descuento_porcentaje > 100:
-                    issues.append(ValidationIssue(
-                        row_number=row_number,
-                        field="descuento_1",
-                        severity=ValidationSeverity.ERROR,
-                        message=f"El descuento debe estar entre 0 y 100%. Valor recibido: {descuento_porcentaje}%",
-                        value=descuento
-                    ))
-                elif descuento_porcentaje > 50:
-                    issues.append(ValidationIssue(
-                        row_number=row_number,
-                        field="descuento_1",
-                        severity=ValidationSeverity.WARNING,
-                        message=f"El descuento es muy alto ({descuento_porcentaje}%). Verifique que sea correcto",
-                        value=descuento
-                    ))
-
-        # Validar PVP (Precio de Venta al Público)
-        pvp = parse_numeric_value(detalle.get("pvp"), "pvp")
-        if pvp is not None:
-            if pvp < 0:
-                issues.append(ValidationIssue(
-                    row_number=row_number,
-                    field="pvp",
-                    severity=ValidationSeverity.ERROR,
-                    message="El PVP no puede ser negativo",
-                    value=pvp
-                ))
-            elif pvp == 0:
-                issues.append(ValidationIssue(
-                    row_number=row_number,
-                    field="pvp",
-                    severity=ValidationSeverity.WARNING,
-                    message="El PVP es cero. Verifique que sea correcto",
-                    value=pvp
-                ))
-
-            # Validar coherencia: PVP debería ser >= costo (después de aplicar descuento)
-            if costo_sin_iva is not None and pvp > 0:
-                costo_con_iva = costo_sin_iva * (1 + self.iva_porcentaje / 100)
-                if descuento is not None and descuento_porcentaje is not None:
-                    costo_con_descuento = costo_con_iva * (1 - descuento_porcentaje / 100)
-                else:
-                    costo_con_descuento = costo_con_iva
-
-                # PVP debería ser razonablemente mayor o igual al costo con descuento
-                # Permitir hasta 10% de diferencia por redondeo
-                if pvp < costo_con_descuento * 0.9:
-                    issues.append(ValidationIssue(
-                        row_number=row_number,
-                        field="pvp",
-                        severity=ValidationSeverity.WARNING,
-                        message=f"El PVP ({pvp:.2f}) es menor que el costo con IVA y descuento ({costo_con_descuento:.2f}). Verifique los cálculos",
-                        value=pvp
-                    ))
-
-        # Validar subtotal y total
-        subtotal = parse_numeric_value(detalle.get("subtotal"), "subtotal")
-        total = parse_numeric_value(detalle.get("total"), "total")
-
-        if subtotal is not None and subtotal < 0:
-            issues.append(ValidationIssue(
-                row_number=row_number,
-                field="subtotal",
-                severity=ValidationSeverity.ERROR,
-                message="El subtotal no puede ser negativo",
-                value=subtotal
-            ))
-        
-        if total is not None and total < 0:
-            issues.append(ValidationIssue(
-                row_number=row_number,
-                field="total",
-                severity=ValidationSeverity.ERROR,
-                message="El total no puede ser negativo",
-                value=total
-            ))
-        
-        # Validar coherencia: total debería ser >= subtotal
-        if subtotal is not None and total is not None:
-            if total < subtotal:
-                issues.append(ValidationIssue(
-                    row_number=row_number,
-                    field="total",
-                    severity=ValidationSeverity.WARNING,
-                    message=f"El total ({total:.2f}) es menor que el subtotal ({subtotal:.2f}). Verifique los cálculos",
-                    value=total
-                ))
-
-        return issues
-    
     def validar_detalle_formato_simple(
         self,
         detalle: Dict[str, Any],

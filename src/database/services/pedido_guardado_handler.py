@@ -39,9 +39,22 @@ def guardar_pedido_v1_0(
                         if isinstance(dist.get("cantidad"), (int, float)) and dist.get("cantidad", 0) > 0
                     )
                     
-                    # Actualizar detalle con subtotal calculado
+                    # ✅ Obtener bodega del detalle (manejar NULL)
+                    bodega = detalle_data["detalle"].get("bodega")
+                    bodega_valor = 0  # Default a 0 si es None
+                    if bodega is not None:
+                        try:
+                            bodega_valor = int(bodega) if isinstance(bodega, (int, float)) else 0
+                        except (ValueError, TypeError):
+                            bodega_valor = 0
+                    
+                    # ✅ Calcular TOTAL = SUBTOTAL + BODEGA
+                    total_calculado = subtotal_calculado + bodega_valor
+                    
+                    # Actualizar detalle con subtotal y total calculados
                     detalle_actualizado = detalle_data["detalle"].copy()
                     detalle_actualizado["subtotal"] = subtotal_calculado
+                    detalle_actualizado["total"] = total_calculado  # Total = Subtotal + Bodega
                     
                     pedido_detalle_id = repository.insert_detalle(
                         pedido_id=pedido_id, datos_detalle=detalle_actualizado

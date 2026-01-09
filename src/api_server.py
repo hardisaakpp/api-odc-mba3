@@ -271,5 +271,9 @@ if __name__ == "__main__":
         host="0.0.0.0",  # Escucha en todas las interfaces
         port=8000,
         reload=True,
-        log_level="info"
+        log_level="info",
+        timeout_keep_alive=120,  # Timeout para mantener conexión viva (120 segundos)
+        timeout_graceful_shutdown=30,  # Timeout para cierre ordenado (30 segundos)
+        limit_concurrency=100,  # Limitar conexiones concurrentes
+        backlog=2048  # Tamaño de la cola de conexiones pendientes
     )

@@ -112,6 +112,9 @@ def register_plantillas_endpoints(app: FastAPI):
         
         **Nuevo:** Incluye validación pre-negocio antes de guardar.
         
+        **⏱️ IMPORTANTE:** El procesamiento puede tardar hasta 2 minutos para archivos grandes.
+        El servidor está configurado con timeout de 120 segundos.
+        
         **Formatos soportados:**
         1. **Formato Simple:** CodigoProducto, IdTienda, Cantidad (consolida productos)
         2. **Formato Complejo:** Estructura con cabecera y columnas de tiendas
@@ -221,6 +224,12 @@ def register_plantillas_endpoints(app: FastAPI):
             
             # Obtener ID del usuario (normalizado)
             user_id = get_user_id(user)
+            
+            # Log informativo sobre el procesamiento
+            logger.info(
+                f"⏱️ Iniciando procesamiento de plantilla '{file.filename}' "
+                f"(tamaño: {file_size / 1024:.1f} KB). Esto puede tomar hasta 2 minutos."
+            )
             
             # Procesar el archivo Excel con validación
             from src.database.services.pedido_service import PedidoService

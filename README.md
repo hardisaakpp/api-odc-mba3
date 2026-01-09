@@ -205,6 +205,30 @@ Ver [docs/SEGURIDAD.md](docs/SEGURIDAD.md) para más detalles.
 - Las consultas SAP usan cache para mejorar rendimiento
 - Ver logs en consola para debugging
 
+## 🔧 Refactorizaciones Recientes
+
+### ✅ pedido_validator.py (2026-01-08)
+
+Se refactorizó el validador de pedidos siguiendo principios SOLID:
+
+**Estructura anterior:**
+- Un archivo monolítico de 802 líneas
+
+**Estructura actual:**
+- `pedido_validation_types.py` - Tipos comunes reutilizables
+- `pedido_cabecera_validator.py` - Validación de cabecera
+- `pedido_precio_validator.py` - Validación de precios e impuestos
+- `pedido_validator.py` - Facade que orquesta validadores
+
+**Beneficios:**
+- ✅ Reducción de complejidad ~50% por archivo
+- ✅ Separación de responsabilidades (SRP)
+- ✅ Mayor testabilidad y reutilización
+- ✅ 100% compatible con código existente
+- ✅ 33/33 tests pasando
+
+Ver [REFACTORIZACION_COMPLETADA.md](REFACTORIZACION_COMPLETADA.md) para detalles completos.
+
 ## 🤝 Contribuir
 
 1. Fork el proyecto

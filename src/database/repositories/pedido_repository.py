@@ -207,8 +207,9 @@ class PedidoRepository:
                 pvp,
                 subtotal,
                 total,
+                bodega,
                 created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, GETDATE())
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, GETDATE())
             """
             
             # NOTA: subtotal y total se guardan tal cual vienen del Excel (o NULL)
@@ -224,8 +225,9 @@ class PedidoRepository:
                 datos_detalle.get("costo_doc_sin_iva"),
                 datos_detalle.get("descuento_1"),
                 datos_detalle.get("pvp"),
-                datos_detalle.get("subtotal"),  # Tal cual viene del Excel
+                datos_detalle.get("subtotal"),  # Calculado al guardar
                 datos_detalle.get("total"),     # Tal cual viene del Excel
+                datos_detalle.get("bodega"),    # Bodega/almacén del producto
             )
             
             cursor.execute(sql, values)
@@ -482,7 +484,7 @@ class PedidoRepository:
                     pd.pedido_detalle_id,
                     pd.codigo_interno, pd.descripcion_sap, pd.marca, pd.codigo_barras,
                     pd.pack, pd.costo_doc_sin_iva, pd.descuento_1, pd.pvp,
-                    pd.subtotal, pd.total
+                    pd.subtotal, pd.total, pd.bodega
                 FROM pedido_detalle pd
                 WHERE pd.pedido_id = ?
                 ORDER BY pd.created_at
@@ -523,6 +525,7 @@ class PedidoRepository:
                     "pvp": float(row[8]) if row[8] else None,
                     "subtotal": float(row[9]) if row[9] else None,  # Tal cual se guardó
                     "total": float(row[10]) if row[10] else None,   # Tal cual se guardó
+                    "bodega": int(row[11]) if row[11] else None,    # Bodega/almacén
                     "tiendas": tiendas_distribucion,
                 })
             
@@ -631,7 +634,7 @@ class PedidoRepository:
                     pd.pedido_detalle_id,
                     pd.codigo_interno, pd.descripcion_sap, pd.marca, pd.codigo_barras,
                     pd.pack, pd.costo_doc_sin_iva, pd.descuento_1, pd.pvp,
-                    pd.subtotal, pd.total
+                    pd.subtotal, pd.total, pd.bodega
                 FROM pedido_detalle pd
                 WHERE pd.pedido_id = ?
                 ORDER BY pd.created_at
@@ -672,6 +675,7 @@ class PedidoRepository:
                     "pvp": float(row[8]) if row[8] else None,
                     "subtotal": float(row[9]) if row[9] else None,  # Tal cual se guardó
                     "total": float(row[10]) if row[10] else None,   # Tal cual se guardó
+                    "bodega": int(row[11]) if row[11] else None,    # Bodega/almacén
                     "tiendas": tiendas_distribucion,
                 })
             

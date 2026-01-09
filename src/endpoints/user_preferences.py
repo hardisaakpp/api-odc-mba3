@@ -23,7 +23,7 @@ from src.models import (
 logger = logging.getLogger(__name__)
 
 # Validar tableId permitidos
-VALID_TABLE_IDS = ["despachos", "ordenes-compra", "historial-ordenes", "remisiones"]
+VALID_TABLE_IDS = ["despachos", "ordenes-compra", "historial-ordenes", "remisiones", "productos-pedido"]
 
 # Exportar función principal para el linter
 __all__ = ["register_user_preferences_endpoints"]
@@ -165,12 +165,17 @@ def register_user_preferences_endpoints(app: FastAPI):
         }
         ```
         """
-        user_id = user.get('id')
-        if not user_id:
-            raise HTTPException(
-                status_code=401,
-                detail="No se pudo obtener el ID del usuario del token"
-            )
+        # Logging para diagnóstico
+        logger.info(f"🔍 GET /api/users/preferences: Iniciado")
+        logger.debug(f"   User object keys: {list(user.keys()) if user else 'None'}")
+        
+        # Usar función helper para obtener user_id con fallback a username
+        try:
+            user_id = get_user_id_or_username(user)
+            logger.debug(f"   User ID obtenido: {user_id}")
+        except HTTPException as e:
+            logger.error(f"❌ Error al obtener user_id: {e.detail}")
+            raise
         
         conn = None
         try:
@@ -337,7 +342,7 @@ def register_user_preferences_endpoints(app: FastAPI):
             
             repository.save_sidebar_preferences(
                 user_id,
-                prefs.dict(exclude_none=True)
+                prefs.model_dump(exclude_none=True)
             )
             
             return {
@@ -369,7 +374,7 @@ def register_user_preferences_endpoints(app: FastAPI):
         Obtiene las preferencias de una tabla específica para el usuario actual.
         
         **Parámetros:**
-        - `table_id`: ID de la tabla (despachos, ordenes-compra, historial-ordenes, remisiones)
+        - `table_id`: ID de la tabla (despachos, ordenes-compra, historial-ordenes, remisiones, productos-pedido)
         
         **Headers requeridos:**
         - `Authorization: Bearer {token}` - Token JWT válido
@@ -395,12 +400,17 @@ def register_user_preferences_endpoints(app: FastAPI):
         """
         validate_table_id(table_id)
         
-        user_id = user.get('id')
-        if not user_id:
-            raise HTTPException(
-                status_code=401,
-                detail="No se pudo obtener el ID del usuario del token"
-            )
+        # Logging para diagnóstico
+        logger.info(f"🔍 GET /api/users/preferences/{table_id}: Iniciado")
+        logger.debug(f"   User object keys: {list(user.keys()) if user else 'None'}")
+        
+        # Usar función helper para obtener user_id con fallback a username
+        try:
+            user_id = get_user_id_or_username(user)
+            logger.debug(f"   User ID obtenido: {user_id}")
+        except HTTPException as e:
+            logger.error(f"❌ Error al obtener user_id: {e.detail}")
+            raise
         
         conn = None
         try:
@@ -409,16 +419,26 @@ def register_user_preferences_endpoints(app: FastAPI):
             preferences = repository.get_table_preferences(user_id, table_id)
             
             if preferences:
+                logger.debug(f"✅ Preferencias encontradas para usuario {user_id}, tabla {table_id}")
                 return PreferencesResponse(
                     preferences=TablePreferencesDto(**preferences)
                 )
             else:
+                logger.debug(f"ℹ️ No se encontraron preferencias para usuario {user_id}, tabla {table_id}")
                 return PreferencesResponse(preferences=None)
                 
         except HTTPException:
             raise
+        except ValueError as ve:
+            # Errores de validación/parsing JSON
+            logger.error(f"❌ Error de validación al obtener preferencias: {ve}")
+            raise HTTPException(
+                status_code=500,
+                detail=f"Error al parsear preferencias guardadas: {str(ve)}"
+            )
         except Exception as e:
-            logger.error(f"Error al obtener preferencias: {e}")
+            logger.error(f"❌ Error inesperado al obtener preferencias: {e}")
+            logger.exception(e)  # Log completo del stack trace
             raise HTTPException(
                 status_code=500,
                 detail=f"Error al obtener preferencias: {str(e)}"
@@ -439,7 +459,7 @@ def register_user_preferences_endpoints(app: FastAPI):
         Guarda o actualiza las preferencias de una tabla específica.
         
         **Parámetros:**
-        - `table_id`: ID de la tabla (despachos, ordenes-compra, historial-ordenes, remisiones)
+        - `table_id`: ID de la tabla (despachos, ordenes-compra, historial-ordenes, remisiones, productos-pedido)
         
         **Headers requeridos:**
         - `Authorization: Bearer {token}` - Token JWT válido
@@ -467,19 +487,35 @@ def register_user_preferences_endpoints(app: FastAPI):
         """
         validate_table_id(table_id)
         
-        user_id = user.get('id')
-        if not user_id:
-            raise HTTPException(
-                status_code=401,
-                detail="No se pudo obtener el ID del usuario del token"
-            )
+        # Logging para diagnóstico
+        logger.info(f"🔍 POST /api/users/preferences/{table_id}: Iniciado")
+        logger.debug(f"   User object keys: {list(user.keys()) if user else 'None'}")
+        logger.debug(f"   Request body: {request_body}")
+        
+        # Usar función helper para obtener user_id con fallback a username
+        try:
+            user_id = get_user_id_or_username(user)
+            logger.debug(f"   User ID obtenido: {user_id}")
+        except HTTPException as e:
+            logger.error(f"❌ Error al obtener user_id: {e.detail}")
+            raise
         
         # Validar datos
         prefs = request_body.preferences
+        logger.debug(f"   Preferences recibidas: visibleColumns={prefs.visibleColumns}, columnOrder={prefs.columnOrder}")
+        
         if not prefs.visibleColumns or not prefs.columnOrder:
+            logger.warning(f"⚠️ Intento de guardar preferencias sin visibleColumns o columnOrder")
             raise HTTPException(
                 status_code=400,
-                detail="visibleColumns y columnOrder son requeridos"
+                detail="visibleColumns y columnOrder son requeridos y no pueden estar vacíos"
+            )
+        
+        if len(prefs.visibleColumns) == 0:
+            logger.warning(f"⚠️ Intento de guardar preferencias con visibleColumns vacío")
+            raise HTTPException(
+                status_code=400,
+                detail="Debe haber al menos una columna visible"
             )
         
         conn = None
@@ -487,12 +523,17 @@ def register_user_preferences_endpoints(app: FastAPI):
             conn = get_db_connection()
             repository = UserPreferencesRepository(conn)
             
+            # Convertir a dict para el repositorio
+            prefs_dict = prefs.model_dump(exclude_none=True)
+            logger.debug(f"   Preferences dict: {prefs_dict}")
+            
             repository.save_table_preferences(
                 user_id,
                 table_id,
-                prefs.dict(exclude_none=True)
+                prefs_dict
             )
             
+            logger.info(f"✅ Preferencias guardadas exitosamente para usuario {user_id}, tabla {table_id}")
             return {
                 "success": True,
                 "message": "Preferencias guardadas correctamente"
@@ -500,8 +541,16 @@ def register_user_preferences_endpoints(app: FastAPI):
             
         except HTTPException:
             raise
+        except ValueError as ve:
+            # Errores de validación/serialización JSON
+            logger.error(f"❌ Error de validación al guardar preferencias: {ve}")
+            raise HTTPException(
+                status_code=400,
+                detail=f"Error de validación: {str(ve)}"
+            )
         except Exception as e:
-            logger.error(f"Error al guardar preferencias: {e}")
+            logger.error(f"❌ Error inesperado al guardar preferencias: {e}")
+            logger.exception(e)  # Log completo del stack trace
             raise HTTPException(
                 status_code=500,
                 detail=f"Error al guardar preferencias: {str(e)}"
@@ -521,7 +570,7 @@ def register_user_preferences_endpoints(app: FastAPI):
         Elimina las preferencias de una tabla específica.
         
         **Parámetros:**
-        - `table_id`: ID de la tabla (despachos, ordenes-compra, historial-ordenes, remisiones)
+        - `table_id`: ID de la tabla (despachos, ordenes-compra, historial-ordenes, remisiones, productos-pedido)
         
         **Headers requeridos:**
         - `Authorization: Bearer {token}` - Token JWT válido
@@ -536,12 +585,17 @@ def register_user_preferences_endpoints(app: FastAPI):
         """
         validate_table_id(table_id)
         
-        user_id = user.get('id')
-        if not user_id:
-            raise HTTPException(
-                status_code=401,
-                detail="No se pudo obtener el ID del usuario del token"
-            )
+        # Logging para diagnóstico
+        logger.info(f"🔍 DELETE /api/users/preferences/{table_id}: Iniciado")
+        logger.debug(f"   User object keys: {list(user.keys()) if user else 'None'}")
+        
+        # Usar función helper para obtener user_id con fallback a username
+        try:
+            user_id = get_user_id_or_username(user)
+            logger.debug(f"   User ID obtenido: {user_id}")
+        except HTTPException as e:
+            logger.error(f"❌ Error al obtener user_id: {e.detail}")
+            raise
         
         conn = None
         try:
