@@ -569,3 +569,42 @@ class RespuestaProveedorResponse(BaseModel):
     pedido_id: str
     estado_guardado: Optional[str] = Field(None, description="Estado en que se guardó: 'BORRADOR' o 'PENDIENTE_REVISION'")
 
+
+class ActualizarCostoRequest(BaseModel):
+    """Modelo para el request de actualizar costo de un detalle de pedido."""
+    
+    costo_doc_sin_iva: float = Field(..., ge=0, description="Nuevo costo unitario sin IVA (DECIMAL, debe ser >= 0)")
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "costo_doc_sin_iva": 25.50
+            }
+        }
+
+
+class ActualizarTotalRequest(BaseModel):
+    """Modelo para el request de actualizar total de un detalle de pedido."""
+    
+    total: float = Field(..., ge=0, description="Nuevo total del detalle (DECIMAL, debe ser >= 0)")
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "total": 510.00
+            }
+        }
+
+
+class ActualizarComentarioRequest(BaseModel):
+    """Modelo para el request de actualizar comentario de un detalle de pedido."""
+    
+    comentario: Optional[str] = Field(None, max_length=2000, description="Nuevo comentario del detalle (máximo 2000 caracteres)")
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "comentario": "Producto con descuento especial"
+            }
+        }
+

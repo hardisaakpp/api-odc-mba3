@@ -479,16 +479,32 @@ class PedidoRepository:
                 }
             
             # Obtener detalles con sus distribuciones
-            cursor.execute("""
-                SELECT 
-                    pd.pedido_detalle_id,
-                    pd.codigo_interno, pd.descripcion_sap, pd.marca, pd.codigo_barras,
-                    pd.pack, pd.costo_doc_sin_iva, pd.descuento_1, pd.pvp,
-                    pd.subtotal, pd.total, pd.bodega
-                FROM pedido_detalle pd
-                WHERE pd.pedido_id = ?
-                ORDER BY pd.created_at
-            """, (pedido_id,))
+            # Nota: comentario puede no existir en BD antigua, se maneja con try/except
+            try:
+                cursor.execute("""
+                    SELECT 
+                        pd.pedido_detalle_id,
+                        pd.codigo_interno, pd.descripcion_sap, pd.marca, pd.codigo_barras,
+                        pd.pack, pd.costo_doc_sin_iva, pd.descuento_1, pd.pvp,
+                        pd.subtotal, pd.total, pd.bodega, pd.comentario
+                    FROM pedido_detalle pd
+                    WHERE pd.pedido_id = ?
+                    ORDER BY pd.created_at
+                """, (pedido_id,))
+                tiene_comentario = True
+            except Exception:
+                # Si el campo comentario no existe, usar consulta sin él
+                cursor.execute("""
+                    SELECT 
+                        pd.pedido_detalle_id,
+                        pd.codigo_interno, pd.descripcion_sap, pd.marca, pd.codigo_barras,
+                        pd.pack, pd.costo_doc_sin_iva, pd.descuento_1, pd.pvp,
+                        pd.subtotal, pd.total, pd.bodega
+                    FROM pedido_detalle pd
+                    WHERE pd.pedido_id = ?
+                    ORDER BY pd.created_at
+                """, (pedido_id,))
+                tiene_comentario = False
             
             detalles = []
             for row in cursor.fetchall():
@@ -513,7 +529,7 @@ class PedidoRepository:
                         "cantidad": dist_row[0],
                     })
                 
-                detalles.append({
+                detalle_dict = {
                     "pedido_detalle_id": pedido_detalle_id,
                     "codigo_interno": row[1],
                     "descripcion_sap": row[2],
@@ -527,7 +543,15 @@ class PedidoRepository:
                     "total": float(row[10]) if row[10] else None,   # Tal cual se guardó
                     "bodega": int(row[11]) if row[11] else None,    # Bodega/almacén
                     "tiendas": tiendas_distribucion,
-                })
+                }
+                
+                # Agregar comentario si existe en la consulta
+                if tiene_comentario and len(row) > 12:
+                    detalle_dict["comentario"] = row[12] if row[12] else None
+                else:
+                    detalle_dict["comentario"] = None
+                
+                detalles.append(detalle_dict)
             
             return {
                 "cabecera": cabecera,
@@ -629,16 +653,32 @@ class PedidoRepository:
                 }
             
             # Obtener detalles con sus distribuciones (usando pedido_id obtenido)
-            cursor.execute("""
-                SELECT 
-                    pd.pedido_detalle_id,
-                    pd.codigo_interno, pd.descripcion_sap, pd.marca, pd.codigo_barras,
-                    pd.pack, pd.costo_doc_sin_iva, pd.descuento_1, pd.pvp,
-                    pd.subtotal, pd.total, pd.bodega
-                FROM pedido_detalle pd
-                WHERE pd.pedido_id = ?
-                ORDER BY pd.created_at
-            """, (pedido_id,))
+            # Nota: comentario puede no existir en BD antigua, se maneja con try/except
+            try:
+                cursor.execute("""
+                    SELECT 
+                        pd.pedido_detalle_id,
+                        pd.codigo_interno, pd.descripcion_sap, pd.marca, pd.codigo_barras,
+                        pd.pack, pd.costo_doc_sin_iva, pd.descuento_1, pd.pvp,
+                        pd.subtotal, pd.total, pd.bodega, pd.comentario
+                    FROM pedido_detalle pd
+                    WHERE pd.pedido_id = ?
+                    ORDER BY pd.created_at
+                """, (pedido_id,))
+                tiene_comentario = True
+            except Exception:
+                # Si el campo comentario no existe, usar consulta sin él
+                cursor.execute("""
+                    SELECT 
+                        pd.pedido_detalle_id,
+                        pd.codigo_interno, pd.descripcion_sap, pd.marca, pd.codigo_barras,
+                        pd.pack, pd.costo_doc_sin_iva, pd.descuento_1, pd.pvp,
+                        pd.subtotal, pd.total, pd.bodega
+                    FROM pedido_detalle pd
+                    WHERE pd.pedido_id = ?
+                    ORDER BY pd.created_at
+                """, (pedido_id,))
+                tiene_comentario = False
             
             detalles = []
             for row in cursor.fetchall():
@@ -663,7 +703,7 @@ class PedidoRepository:
                         "cantidad": dist_row[0],
                     })
                 
-                detalles.append({
+                detalle_dict = {
                     "pedido_detalle_id": pedido_detalle_id,
                     "codigo_interno": row[1],
                     "descripcion_sap": row[2],
@@ -677,7 +717,19 @@ class PedidoRepository:
                     "total": float(row[10]) if row[10] else None,   # Tal cual se guardó
                     "bodega": int(row[11]) if row[11] else None,    # Bodega/almacén
                     "tiendas": tiendas_distribucion,
-                })
+                }
+                
+                # Agregar comentario si existe en la consulta
+                # IMPORTANTE: Verificar que el campo existe y tiene valor
+                if tiene_comentario:
+                    if len(row) > 12:
+                        detalle_dict["comentario"] = row[12] if row[12] else None
+                    else:
+                        detalle_dict["comentario"] = None
+                else:
+                    detalle_dict["comentario"] = None
+                
+                detalles.append(detalle_dict)
             
             return {
                 "cabecera": cabecera,
@@ -737,6 +789,320 @@ class PedidoRepository:
         except Exception as e:
             self.conn.rollback()
             logger.error(f"❌ Error al actualizar estado del pedido: {e}", exc_info=True)
+            raise
+        finally:
+            cursor.close()
+    
+    def update_costo_detalle(
+        self,
+        pedido_detalle_id: str,
+        nuevo_costo: float,
+        modificado_por: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Actualiza el costo unitario de un detalle de pedido.
+        
+        Args:
+            pedido_detalle_id: UUID del detalle del pedido
+            nuevo_costo: Nuevo valor del costo unitario (DECIMAL)
+            
+        Returns:
+            Dict con información de la actualización:
+            {
+                "success": bool,
+                "pedido_detalle_id": str,
+                "costo_anterior": float | None,
+                "costo_nuevo": float,
+                "total_actualizado": float | None,
+                "mensaje": str
+            }
+            
+        Raises:
+            Exception: Si falla la actualización
+        """
+        cursor = self.conn.cursor()
+        
+        try:
+            # 1. Obtener el costo anterior
+            cursor.execute("""
+                SELECT costo_doc_sin_iva, pedido_id
+                FROM pedido_detalle
+                WHERE pedido_detalle_id = ?
+            """, (pedido_detalle_id,))
+            
+            row = cursor.fetchone()
+            if not row:
+                return {
+                    "success": False,
+                    "pedido_detalle_id": pedido_detalle_id,
+                    "costo_anterior": None,
+                    "costo_nuevo": float(nuevo_costo),
+                    "mensaje": f"No se encontró el detalle del pedido con ID: {pedido_detalle_id}"
+                }
+            
+            costo_anterior = row[0]
+            pedido_id = row[1]
+            
+            # Convertir valores Decimal a float para serialización JSON
+            costo_anterior_float = float(costo_anterior) if costo_anterior is not None else None
+            
+            # 2. Actualizar el costo con campos de auditoría
+            set_clauses = ["costo_doc_sin_iva = ?", "updated_at = GETDATE()"]
+            values = [nuevo_costo]
+            
+            if modificado_por:
+                set_clauses.append("modificado_por = ?")
+                values.append(modificado_por)
+            
+            values.append(pedido_detalle_id)
+            
+            cursor.execute(f"""
+                UPDATE pedido_detalle
+                SET {', '.join(set_clauses)}
+                WHERE pedido_detalle_id = ?
+            """, values)
+            
+            rows_affected = cursor.rowcount
+            self.conn.commit()
+            
+            if rows_affected > 0:
+                # IMPORTANTE: El COSTO UNIT. es completamente independiente
+                # NO se calcula ni modifica SUBTOTAL, TOTAL ni ninguna otra columna
+                # Solo se guarda el valor modificado del costo
+                
+                logger.info(f"✅ Costo actualizado para pedido_detalle {pedido_detalle_id}")
+                logger.info(f"   - Costo anterior: {costo_anterior_float}")
+                logger.info(f"   - Costo nuevo: {nuevo_costo}")
+                logger.info(f"   - NOTA: SUBTOTAL y TOTAL no se modifican (COSTO UNIT. es independiente)")
+                
+                return {
+                    "success": True,
+                    "pedido_detalle_id": pedido_detalle_id,
+                    "costo_anterior": costo_anterior_float,
+                    "costo_nuevo": float(nuevo_costo),
+                    "mensaje": f"Costo actualizado correctamente"
+                }
+            else:
+                return {
+                    "success": False,
+                    "pedido_detalle_id": pedido_detalle_id,
+                    "costo_anterior": costo_anterior_float,
+                    "costo_nuevo": float(nuevo_costo),
+                    "total_actualizado": total_anterior_float,
+                    "mensaje": "No se pudo actualizar el costo (0 filas afectadas)"
+                }
+                
+        except Exception as e:
+            logger.error(f"❌ Error al actualizar costo de pedido_detalle: {e}", exc_info=True)
+            raise
+        finally:
+            cursor.close()
+    
+    def update_total_detalle(
+        self,
+        pedido_detalle_id: str,
+        nuevo_total: float,
+        modificado_por: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Actualiza el total de un detalle de pedido y recalcula el costo unitario.
+        
+        Args:
+            pedido_detalle_id: UUID del detalle del pedido
+            nuevo_total: Nuevo valor del total (DECIMAL)
+            
+        Returns:
+            Dict con información de la actualización:
+            {
+                "success": bool,
+                "pedido_detalle_id": str,
+                "total_anterior": float | None,
+                "total_nuevo": float,
+                "costo_actualizado": float | None,
+                "mensaje": str
+            }
+            
+        Raises:
+            Exception: Si falla la actualización
+        """
+        cursor = self.conn.cursor()
+        
+        try:
+            # 1. Obtener el total anterior, costo actual y cantidad
+            cursor.execute("""
+                SELECT total, costo_doc_sin_iva, pedido_id
+                FROM pedido_detalle
+                WHERE pedido_detalle_id = ?
+            """, (pedido_detalle_id,))
+            
+            row = cursor.fetchone()
+            if not row:
+                return {
+                    "success": False,
+                    "pedido_detalle_id": pedido_detalle_id,
+                    "total_anterior": None,
+                    "total_nuevo": nuevo_total,
+                    "costo_actualizado": None,
+                    "mensaje": f"No se encontró el detalle del pedido con ID: {pedido_detalle_id}"
+                }
+            
+            total_anterior = row[0]
+            costo_anterior = row[1]
+            pedido_id = row[2]
+            
+            # Convertir valores Decimal a float para serialización JSON
+            total_anterior_float = float(total_anterior) if total_anterior is not None else None
+            costo_anterior_float = float(costo_anterior) if costo_anterior is not None else None
+            
+            # 2. Actualizar SOLO el total (NO recalcular el costo ni el subtotal)
+            # NOTA: El costo y subtotal NO se modifican, solo el total
+            set_clauses = [
+                "total = ?",
+                "updated_at = GETDATE()"
+            ]
+            values = [nuevo_total]
+            
+            if modificado_por:
+                set_clauses.append("modificado_por = ?")
+                values.append(modificado_por)
+            
+            values.append(pedido_detalle_id)
+            
+            cursor.execute(f"""
+                UPDATE pedido_detalle
+                SET {', '.join(set_clauses)}
+                WHERE pedido_detalle_id = ?
+            """, values)
+            
+            rows_affected = cursor.rowcount
+            self.conn.commit()
+            
+            if rows_affected > 0:
+                logger.info(f"✅ Total actualizado para pedido_detalle {pedido_detalle_id}")
+                logger.info(f"   - Total anterior: {total_anterior_float}")
+                logger.info(f"   - Total nuevo: {nuevo_total}")
+                logger.info(f"   - Costo (sin cambios): {costo_anterior_float}")
+                
+                return {
+                    "success": True,
+                    "pedido_detalle_id": pedido_detalle_id,
+                    "total_anterior": total_anterior_float,
+                    "total_nuevo": float(nuevo_total),
+                    "costo_actualizado": costo_anterior_float,  # El costo NO cambia
+                    "mensaje": f"Total actualizado correctamente"
+                }
+            else:
+                return {
+                    "success": False,
+                    "pedido_detalle_id": pedido_detalle_id,
+                    "total_anterior": total_anterior_float,
+                    "total_nuevo": float(nuevo_total),
+                    "costo_actualizado": costo_anterior_float,
+                    "mensaje": "No se pudo actualizar el total (0 filas afectadas)"
+                }
+                
+        except Exception as e:
+            self.conn.rollback()
+            logger.error(f"❌ Error al actualizar total de pedido_detalle: {e}", exc_info=True)
+            raise
+        finally:
+            cursor.close()
+    
+    def update_comentario_detalle(
+        self,
+        pedido_detalle_id: str,
+        nuevo_comentario: Optional[str],
+        modificado_por: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Actualiza el comentario de un detalle de pedido.
+        
+        Args:
+            pedido_detalle_id: UUID del detalle del pedido
+            nuevo_comentario: Nuevo comentario (puede ser None para limpiar)
+            
+        Returns:
+            Dict con información de la actualización:
+            {
+                "success": bool,
+                "pedido_detalle_id": str,
+                "comentario_anterior": str | None,
+                "comentario_nuevo": str | None,
+                "mensaje": str
+            }
+            
+        Raises:
+            Exception: Si falla la actualización
+        """
+        cursor = self.conn.cursor()
+        
+        try:
+            # 1. Obtener el comentario anterior
+            cursor.execute("""
+                SELECT comentario
+                FROM pedido_detalle
+                WHERE pedido_detalle_id = ?
+            """, (pedido_detalle_id,))
+            
+            row = cursor.fetchone()
+            if not row:
+                return {
+                    "success": False,
+                    "pedido_detalle_id": pedido_detalle_id,
+                    "comentario_anterior": None,
+                    "comentario_nuevo": nuevo_comentario,
+                    "mensaje": f"No se encontró el detalle del pedido con ID: {pedido_detalle_id}"
+                }
+            
+            comentario_anterior = row[0]
+            
+            # Normalizar: convertir None a None explícitamente, y strings vacíos a None
+            comentario_anterior_str = comentario_anterior if comentario_anterior else None
+            nuevo_comentario_str = nuevo_comentario.strip() if nuevo_comentario and nuevo_comentario.strip() else None
+            
+            # 2. Actualizar el comentario en la base de datos con campos de auditoría
+            set_clauses = ["comentario = ?", "updated_at = GETDATE()"]
+            values = [nuevo_comentario_str]
+            
+            if modificado_por:
+                set_clauses.append("modificado_por = ?")
+                values.append(modificado_por)
+            
+            values.append(pedido_detalle_id)
+            
+            cursor.execute(f"""
+                UPDATE pedido_detalle
+                SET {', '.join(set_clauses)}
+                WHERE pedido_detalle_id = ?
+            """, values)
+            
+            rows_affected = cursor.rowcount
+            self.conn.commit()
+            
+            if rows_affected > 0:
+                logger.info(f"✅ Comentario actualizado para pedido_detalle {pedido_detalle_id}")
+                logger.info(f"   - Comentario anterior: {comentario_anterior_str}")
+                logger.info(f"   - Comentario nuevo: {nuevo_comentario_str}")
+                
+                return {
+                    "success": True,
+                    "pedido_detalle_id": pedido_detalle_id,
+                    "comentario_anterior": comentario_anterior_str,
+                    "comentario_nuevo": nuevo_comentario_str,
+                    "mensaje": "Comentario actualizado correctamente"
+                }
+            else:
+                return {
+                    "success": False,
+                    "pedido_detalle_id": pedido_detalle_id,
+                    "comentario_anterior": comentario_anterior_str,
+                    "comentario_nuevo": nuevo_comentario_str,
+                    "mensaje": "No se pudo actualizar el comentario (0 filas afectadas)"
+                }
+                
+        except Exception as e:
+            self.conn.rollback()
+            logger.error(f"❌ Error al actualizar comentario de pedido_detalle: {e}", exc_info=True)
             raise
         finally:
             cursor.close()

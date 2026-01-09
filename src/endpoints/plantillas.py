@@ -14,7 +14,10 @@ from src.exceptions import BusinessException
 from src.models import (
     RespuestaProveedorRequest,
     FormularioProveedorResponse,
-    RespuestaProveedorResponse
+    RespuestaProveedorResponse,
+    ActualizarCostoRequest,
+    ActualizarTotalRequest,
+    ActualizarComentarioRequest
 )
 
 logger = logging.getLogger(__name__)
@@ -1304,6 +1307,290 @@ def register_plantillas_endpoints(app: FastAPI):
                 detail={
                     "error": "internal_error",
                     "message": f"Error interno al crear orden de compra: {str(e)}"
+                }
+            )
+    
+    @app.patch("/api/pedidos/{numero_pedido}/detalle/{pedido_detalle_id}/costo", tags=["Pedidos - Edición"])
+    async def actualizar_costo_detalle(
+        numero_pedido: str = Path(..., description="Número del pedido"),
+        pedido_detalle_id: str = Path(..., description="UUID del detalle del pedido"),
+        request_body: ActualizarCostoRequest = Body(..., description="Datos del costo a actualizar"),
+        user: Dict = Depends(verify_jwt_token),
+        _: None = Depends(require_permission('mba3-consultas.proceso.execute'))
+    ):
+        """
+        Actualiza el costo unitario de una línea de detalle del pedido.
+        
+        **Funcionalidad:**
+        - Permite edición inline del costo unitario desde la UI
+        - Actualiza directamente en la tabla pedido_detalle
+        - Recalcula totales automáticamente
+        
+        **Validaciones:**
+        - ✅ El detalle debe existir
+        - ✅ El nuevo costo debe ser un número válido ≥ 0
+        - ✅ Solo usuarios con permiso 'mba3-consultas.proceso.execute' pueden actualizar
+        
+        **Request:**
+        ```
+        PATCH /api/pedidos/176120/detalle/550e8400-e29b-41d4-a716-446655440000/costo
+        {
+            "costo_doc_sin_iva": 25.50
+        }
+        ```
+        
+        **Response:**
+        ```json
+        {
+            "status": "success",
+            "message": "Costo actualizado correctamente",
+            "pedido_detalle_id": "550e8400-e29b-41d4-a716-446655440000",
+            "costo_anterior": 20.00,
+            "costo_nuevo": 25.50,
+            "total_actualizado": 510.00
+        }
+        ```
+        """
+        cursor = None
+        try:
+            # Importar aquí para evitar circular imports
+            from src.database.connection import get_db_connection_context
+            from src.database.repositories.pedido_repository import PedidoRepository
+            
+            # Extraer el costo del request body
+            nuevo_costo = request_body.costo_doc_sin_iva
+            
+            # Obtener usuario que realiza la modificación
+            user_id = get_user_id(user)
+            
+            # Conectar a BD
+            with get_db_connection_context() as conn:
+                repo = PedidoRepository(conn)
+                
+                # Actualizar costo con información de auditoría
+                resultado = repo.update_costo_detalle(pedido_detalle_id, nuevo_costo, modificado_por=user_id)
+            
+            if resultado["success"]:
+                logger.info(f"✅ Costo actualizado para detalle {pedido_detalle_id} por usuario {user.get('username', 'UNKNOWN')}")
+                return JSONResponse(
+                    status_code=status.HTTP_200_OK,
+                    content={
+                        "status": "success",
+                        "message": resultado["mensaje"],
+                        "pedido_detalle_id": resultado["pedido_detalle_id"],
+                        "costo_anterior": resultado["costo_anterior"],
+                        "costo_nuevo": resultado["costo_nuevo"]
+                    }
+                )
+            else:
+                logger.warning(f"⚠️ {resultado['mensaje']}")
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail={
+                        "error": "detalle_not_found",
+                        "message": resultado["mensaje"]
+                    }
+                )
+                
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"❌ Error al actualizar costo: {e}", exc_info=True)
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail={
+                    "error": "internal_error",
+                    "message": f"Error interno al actualizar costo: {str(e)}"
+                }
+            )
+    
+    @app.patch("/api/pedidos/{numero_pedido}/detalle/{pedido_detalle_id}/total", tags=["Pedidos - Edición"])
+    async def actualizar_total_detalle(
+        numero_pedido: str = Path(..., description="Número del pedido"),
+        pedido_detalle_id: str = Path(..., description="UUID del detalle del pedido"),
+        request_body: ActualizarTotalRequest = Body(..., description="Datos del total a actualizar"),
+        user: Dict = Depends(verify_jwt_token),
+        _: None = Depends(require_permission('mba3-consultas.proceso.execute'))
+    ):
+        """
+        Actualiza el total de una línea de detalle del pedido y recalcula el costo unitario.
+        
+        **Funcionalidad:**
+        - Permite edición inline del total desde la UI
+        - Actualiza directamente en la tabla pedido_detalle
+        - Recalcula el costo unitario automáticamente (total / cantidad)
+        
+        **Validaciones:**
+        - ✅ El detalle debe existir
+        - ✅ El nuevo total debe ser un número válido ≥ 0
+        - ✅ Solo usuarios con permiso 'mba3-consultas.proceso.execute' pueden actualizar
+        
+        **Request:**
+        ```
+        PATCH /api/pedidos/176120/detalle/550e8400-e29b-41d4-a716-446655440000/total
+        {
+            "total": 510.00
+        }
+        ```
+        
+        **Response:**
+        ```json
+        {
+            "status": "success",
+            "message": "Total actualizado correctamente. Nuevo costo unitario: 25.50",
+            "pedido_detalle_id": "550e8400-e29b-41d4-a716-446655440000",
+            "total_anterior": 500.00,
+            "total_nuevo": 510.00,
+            "costo_actualizado": 25.50
+        }
+        ```
+        """
+        cursor = None
+        try:
+            # Importar aquí para evitar circular imports
+            from src.database.connection import get_db_connection_context
+            from src.database.repositories.pedido_repository import PedidoRepository
+            
+            # Extraer el total del request body
+            nuevo_total = request_body.total
+            
+            # Obtener usuario que realiza la modificación
+            user_id = get_user_id(user)
+            
+            # Conectar a BD
+            with get_db_connection_context() as conn:
+                repo = PedidoRepository(conn)
+                
+                # Actualizar total con información de auditoría
+                resultado = repo.update_total_detalle(pedido_detalle_id, nuevo_total, modificado_por=user_id)
+            
+            if resultado["success"]:
+                logger.info(f"✅ Total actualizado para detalle {pedido_detalle_id} por usuario {user.get('username', 'UNKNOWN')}")
+                return JSONResponse(
+                    status_code=status.HTTP_200_OK,
+                    content={
+                        "status": "success",
+                        "message": resultado["mensaje"],
+                        "pedido_detalle_id": resultado["pedido_detalle_id"],
+                        "total_anterior": resultado["total_anterior"],
+                        "total_nuevo": resultado["total_nuevo"],
+                        "costo_actualizado": resultado["costo_actualizado"]
+                    }
+                )
+            else:
+                logger.warning(f"⚠️ {resultado['mensaje']}")
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail={
+                        "error": "detalle_not_found",
+                        "message": resultado["mensaje"]
+                    }
+                )
+                
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"❌ Error al actualizar total: {e}", exc_info=True)
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail={
+                    "error": "internal_error",
+                    "message": f"Error interno al actualizar total: {str(e)}"
+                }
+            )
+    
+    @app.patch("/api/pedidos/{numero_pedido}/detalle/{pedido_detalle_id}/comentario", tags=["Pedidos - Edición"])
+    async def actualizar_comentario_detalle(
+        numero_pedido: str = Path(..., description="Número del pedido"),
+        pedido_detalle_id: str = Path(..., description="UUID del detalle del pedido"),
+        request_body: ActualizarComentarioRequest = Body(..., description="Datos del comentario a actualizar"),
+        user: Dict = Depends(verify_jwt_token),
+        _: None = Depends(require_permission('mba3-consultas.proceso.execute'))
+    ):
+        """
+        Actualiza el comentario de una línea de detalle del pedido.
+        
+        **Funcionalidad:**
+        - Permite edición inline del comentario desde la UI
+        - Actualiza directamente en la tabla pedido_detalle
+        - Permite limpiar el comentario enviando null o string vacío
+        
+        **Validaciones:**
+        - ✅ El detalle debe existir
+        - ✅ El comentario puede ser null o string (máximo 2000 caracteres)
+        - ✅ Solo usuarios con permiso 'mba3-consultas.proceso.execute' pueden actualizar
+        
+        **Request:**
+        ```
+        PATCH /api/pedidos/176120/detalle/550e8400-e29b-41d4-a716-446655440000/comentario
+        {
+            "comentario": "Producto con descuento especial"
+        }
+        ```
+        
+        **Response:**
+        ```json
+        {
+            "status": "success",
+            "message": "Comentario actualizado correctamente",
+            "pedido_detalle_id": "550e8400-e29b-41d4-a716-446655440000",
+            "comentario_anterior": null,
+            "comentario_nuevo": "Producto con descuento especial"
+        }
+        ```
+        """
+        cursor = None
+        try:
+            # Importar aquí para evitar circular imports
+            from src.database.connection import get_db_connection_context
+            from src.database.repositories.pedido_repository import PedidoRepository
+            
+            # Extraer el comentario del request body
+            nuevo_comentario = request_body.comentario
+            
+            # Obtener usuario que realiza la modificación
+            user_id = get_user_id(user)
+            
+            # Conectar a BD
+            with get_db_connection_context() as conn:
+                repo = PedidoRepository(conn)
+                
+                # Actualizar comentario con información de auditoría
+                resultado = repo.update_comentario_detalle(pedido_detalle_id, nuevo_comentario, modificado_por=user_id)
+            
+            if resultado["success"]:
+                logger.info(f"✅ Comentario actualizado para detalle {pedido_detalle_id} por usuario {user.get('username', 'UNKNOWN')}")
+                return JSONResponse(
+                    status_code=status.HTTP_200_OK,
+                    content={
+                        "status": "success",
+                        "message": resultado["mensaje"],
+                        "pedido_detalle_id": resultado["pedido_detalle_id"],
+                        "comentario_anterior": resultado["comentario_anterior"],
+                        "comentario_nuevo": resultado["comentario_nuevo"],
+                        "costo_nuevo": None,  # No aplica para comentario
+                        "total_actualizado": None  # No aplica para comentario
+                    }
+                )
+            else:
+                logger.warning(f"⚠️ {resultado['mensaje']}")
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail={
+                        "error": "detalle_not_found",
+                        "message": resultado["mensaje"]
+                    }
+                )
+                
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"❌ Error al actualizar comentario: {e}", exc_info=True)
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail={
+                    "error": "internal_error",
+                    "message": f"Error interno al actualizar comentario: {str(e)}"
                 }
             )
     
