@@ -11,6 +11,7 @@ from datetime import datetime
 from ..connection import get_db_connection_context
 from ..repositories.pedido_repository import PedidoRepository
 from ..repositories.pedido_respuesta_repository import PedidoRespuestaRepository
+from ..repositories.pedido_confirmacion_rayo_repository import PedidoConfirmacionRayoRepository
 from .pedido_proveedor_service import PedidoProveedorService
 
 logger = logging.getLogger(__name__)
@@ -354,20 +355,18 @@ class PedidoProveedorWebService:
             
             logger.debug(f"Pedido {pedido_id} encontrado con {len(pedido.get('detalles', []))} detalles")
             
-            # Verificar que no exista ya una respuesta activa
+            # Verificar si ya existe una respuesta activa
             respuesta_repo = PedidoRespuestaRepository(conn)
             respuesta_existente = respuesta_repo.obtener_respuesta_activa(pedido_id)
             
+            respuesta_id = None
+            ya_existia_respuesta = False
+            
             if respuesta_existente:
-                # Si ya existe una respuesta, retornar su ID
-                logger.info(f"Ya existe respuesta para pedido {pedido_id}, retornando existente")
-                return {
-                    "status": "success",
-                    "message": "Ya existe una respuesta del proveedor para este pedido",
-                    "respuesta_id": respuesta_existente["cabecera"]["respuesta_id"],
-                    "pedido_id": pedido_id,
-                    "ya_existia": True
-                }
+                # Si ya existe una respuesta, usar la existente
+                respuesta_id = respuesta_existente["cabecera"]["respuesta_id"]
+                ya_existia_respuesta = True
+                logger.info(f"Ya existe respuesta {respuesta_id} para pedido {pedido_id}, se usará para la confirmación")
             
             # Validar que el pedido tenga detalles
             detalles = pedido.get("detalles", [])
@@ -462,49 +461,277 @@ class PedidoProveedorWebService:
                 logger.error(f"Error en validación de respuesta: {e}", exc_info=True)
                 raise ValueError(f"Error al validar respuesta: {str(e)}")
             
-            # Crear respuesta
-            respuesta_id = respuesta_repo.crear_respuesta_proveedor(
-                pedido_id=pedido_id,
-                usuario_id=usuario_id,
-                observaciones_generales=observaciones_generales
-            )
+            # Crear respuesta solo si no existe
+            if not respuesta_id:
+                respuesta_id = respuesta_repo.crear_respuesta_proveedor(
+                    pedido_id=pedido_id,
+                    usuario_id=usuario_id,
+                    observaciones_generales=observaciones_generales
+                )
+            else:
+                # Actualizar observaciones si cambió
+                cursor = conn.cursor()
+                try:
+                    cursor.execute("""
+                        UPDATE pedido_respuesta_proveedor
+                        SET observaciones_generales = ?,
+                            updated_at = GETDATE()
+                        WHERE respuesta_id = ?
+                    """, (observaciones_generales, respuesta_id))
+                    conn.commit()
+                except Exception as e:
+                    conn.rollback()
+                    logger.error(f"Error al actualizar observaciones de respuesta: {e}")
+                    raise
+                finally:
+                    cursor.close()
             
-            # Actualizar estado a PENDIENTE_REVISION (listo para procesar)
-            cursor = conn.cursor()
+            # Actualizar estado a PENDIENTE_REVISION (listo para procesar) solo si no existía
+            if not ya_existia_respuesta:
+                cursor = conn.cursor()
+                try:
+                    cursor.execute("""
+                        UPDATE pedido_respuesta_proveedor
+                        SET estado = 'PENDIENTE_REVISION',
+                            observaciones_generales = ?,
+                            updated_at = GETDATE()
+                        WHERE respuesta_id = ?
+                    """, (observaciones_generales, respuesta_id))
+                    conn.commit()
+                except Exception as e:
+                    conn.rollback()
+                    logger.error(f"Error al actualizar estado de respuesta: {e}")
+                    raise
+                finally:
+                    cursor.close()
+            
+            # Guardar detalles (solo si no existía respuesta, o si se quiere actualizar)
+            # Por ahora, solo actualizamos si no existía
+            if not ya_existia_respuesta:
+                resultado_guardado = respuesta_repo.guardar_respuesta_detalles(
+                    respuesta_id=respuesta_id,
+                    respuestas_cantidades=respuestas_cantidades,
+                    respuestas_precios=respuestas_precios
+                )
+            else:
+                # Si ya existía respuesta, no actualizamos los detalles
+                resultado_guardado = {
+                    "cantidades_guardadas": 0,
+                    "precios_guardados": 0
+                }
+                logger.info(f"Respuesta ya existía, no se actualizan detalles de respuesta (solo se registrará confirmación si hay cambios)")
+            
+            # Actualizar estado del pedido solo si no estaba ya en ese estado
+            estado_actual = pedido["cabecera"].get("estado")
+            if estado_actual != "RESPUESTA_PROVEEDOR_CARGADA":
+                repo.update_estado(pedido_id, "RESPUESTA_PROVEEDOR_CARGADA")
+            
+            # ✅ REGISTRAR CONFIRMACIÓN DE EL RAYO
+            # Obtener valores actuales desde la BD para registrar el historial completo
+            confirmacion_repo = PedidoConfirmacionRayoRepository(conn)
+            
+            hay_cambios = False
+            confirmaciones_previas = []
+            
             try:
+                # Obtener valores actuales directamente desde la BD
+                cursor = conn.cursor()
                 cursor.execute("""
-                    UPDATE pedido_respuesta_proveedor
-                    SET estado = 'PENDIENTE_REVISION',
-                        observaciones_generales = ?,
-                        updated_at = GETDATE()
-                    WHERE respuesta_id = ?
-                """, (observaciones_generales, respuesta_id))
-                conn.commit()
-            except Exception as e:
-                conn.rollback()
-                logger.error(f"Error al actualizar estado de respuesta: {e}")
-                raise
-            finally:
+                    SELECT 
+                        pedido_detalle_id,
+                        codigo_interno,
+                        costo_doc_sin_iva,
+                        total,
+                        comentario,
+                        ISNULL(costo_modificado_manual, 0) AS costo_modificado_manual,
+                        ISNULL(total_modificado_manual, 0) AS total_modificado_manual,
+                        ISNULL(comentario_modificado_manual, 0) AS comentario_modificado_manual
+                    FROM pedido_detalle
+                    WHERE pedido_id = ?
+                """, (pedido_id,))
+                
+                detalles_bd = {}
+                for row in cursor.fetchall():
+                    detalles_bd[row[0]] = {
+                        "pedido_detalle_id": str(row[0]),
+                        "codigo_interno": row[1],
+                        "costo_doc_sin_iva": float(row[2]) if row[2] is not None else None,
+                        "total": float(row[3]) if row[3] is not None else None,
+                        "comentario": row[4],
+                        "costo_modificado_manual": bool(row[5]),
+                        "total_modificado_manual": bool(row[6]),
+                        "comentario_modificado_manual": bool(row[7])
+                    }
+                
                 cursor.close()
+                
+                # Buscar confirmación previa para obtener valores anteriores y validar si hay cambios
+                confirmaciones_previas = confirmacion_repo.obtener_confirmaciones_por_pedido(pedido_id, limit=1)
+                
+                # Crear mapa de valores anteriores desde la última confirmación
+                valores_anteriores = {}
+                if confirmaciones_previas:
+                    ultima_confirmacion = confirmacion_repo.obtener_confirmacion(confirmaciones_previas[0]["confirmacion_id"])
+                    if ultima_confirmacion and ultima_confirmacion.get("detalles"):
+                        for detalle_conf in ultima_confirmacion["detalles"]:
+                            pedido_detalle_id = detalle_conf["pedido_detalle_id"]
+                            valores_anteriores[pedido_detalle_id] = {
+                                "costo": detalle_conf.get("costo_nuevo"),  # El valor anterior confirmado
+                                "total": detalle_conf.get("total_nuevo"),
+                                "comentario": detalle_conf.get("comentario_nuevo")
+                            }
+                
+                # Verificar si hay cambios comparando valores actuales con la última confirmación
+                detalles_con_cambios = {}
+                for pedido_detalle_id, detalle_bd in detalles_bd.items():
+                    # Solo verificar si hay algún campo modificado manualmente
+                    if not (detalle_bd["costo_modificado_manual"] or 
+                           detalle_bd["total_modificado_manual"] or 
+                           detalle_bd["comentario_modificado_manual"]):
+                        continue
+                    
+                    valores_ant = valores_anteriores.get(pedido_detalle_id, {})
+                    
+                    # Comparar valores actuales con los de la última confirmación
+                    costo_actual = detalle_bd["costo_doc_sin_iva"]
+                    total_actual = detalle_bd["total"]
+                    comentario_actual = detalle_bd["comentario"] or ""
+                    
+                    costo_anterior_conf = valores_ant.get("costo")
+                    total_anterior_conf = valores_ant.get("total")
+                    comentario_anterior_conf = valores_ant.get("comentario") or ""
+                    
+                    # Verificar si hay cambios
+                    # Para costo y total: comparar valores numéricos con tolerancia
+                    if costo_anterior_conf is None and costo_actual is None:
+                        cambio_costo = False
+                    elif costo_anterior_conf is None or costo_actual is None:
+                        cambio_costo = True
+                    else:
+                        cambio_costo = abs(float(costo_anterior_conf) - float(costo_actual)) > 0.01
+                    
+                    if total_anterior_conf is None and total_actual is None:
+                        cambio_total = False
+                    elif total_anterior_conf is None or total_actual is None:
+                        cambio_total = True
+                    else:
+                        cambio_total = abs(float(total_anterior_conf) - float(total_actual)) > 0.01
+                    
+                    cambio_comentario = comentario_actual != comentario_anterior_conf
+                    
+                    if cambio_costo or cambio_total or cambio_comentario:
+                        hay_cambios = True
+                        detalles_con_cambios[pedido_detalle_id] = {
+                            "detalle_bd": detalle_bd,
+                            "valores_anteriores": valores_ant,
+                            "cambio_costo": cambio_costo,
+                            "cambio_total": cambio_total,
+                            "cambio_comentario": cambio_comentario
+                        }
+                
+                # Solo crear confirmación si hay cambios o si no existe confirmación previa
+                if hay_cambios or not confirmaciones_previas:
+                    # Crear registro de confirmación
+                    confirmacion_id = confirmacion_repo.crear_confirmacion(
+                        pedido_id=pedido_id,
+                        respuesta_id=respuesta_id,
+                        usuario_id=usuario_id or "SISTEMA",
+                        observaciones_generales=observaciones_generales
+                    )
+                    
+                    # Contar detalles modificados
+                    detalles_modificados_count = 0
+                    resumen_cambios = {
+                        "cambios_costo": 0,
+                        "cambios_total": 0,
+                        "cambios_comentario": 0,
+                        "detalles": []
+                    }
+                    
+                    # Agregar detalles de confirmación
+                    for pedido_detalle_id, info_cambio in detalles_con_cambios.items():
+                        detalle_bd = info_cambio["detalle_bd"]
+                        valores_ant = info_cambio["valores_anteriores"]
+                        
+                        detalles_modificados_count += 1
+                        
+                        # Obtener valores anteriores
+                        costo_anterior = valores_ant.get("costo")
+                        total_anterior = valores_ant.get("total")
+                        comentario_anterior = valores_ant.get("comentario")
+                        
+                        # Si no hay valores anteriores de confirmación previa, usar valores actuales
+                        # (indica que esta es la primera confirmación)
+                        if costo_anterior is None:
+                            costo_anterior = detalle_bd["costo_doc_sin_iva"]
+                        if total_anterior is None:
+                            total_anterior = detalle_bd["total"]
+                        if comentario_anterior is None:
+                            comentario_anterior = detalle_bd["comentario"]
+                        
+                        # Agregar detalle de confirmación
+                        confirmacion_repo.agregar_detalle_confirmacion(
+                            confirmacion_id=confirmacion_id,
+                            pedido_detalle_id=pedido_detalle_id,
+                            costo_anterior=costo_anterior,
+                            costo_nuevo=detalle_bd["costo_doc_sin_iva"],
+                            total_anterior=total_anterior,
+                            total_nuevo=detalle_bd["total"],
+                            comentario_anterior=comentario_anterior,
+                            comentario_nuevo=detalle_bd["comentario"],
+                            codigo_producto=detalle_bd["codigo_interno"]
+                        )
+                        
+                        # Actualizar resumen
+                        if info_cambio["cambio_costo"]:
+                            resumen_cambios["cambios_costo"] += 1
+                        if info_cambio["cambio_total"]:
+                            resumen_cambios["cambios_total"] += 1
+                        if info_cambio["cambio_comentario"]:
+                            resumen_cambios["cambios_comentario"] += 1
+                        
+                        resumen_cambios["detalles"].append({
+                            "pedido_detalle_id": pedido_detalle_id,
+                            "codigo_producto": detalle_bd["codigo_interno"],
+                            "cambio_costo": info_cambio["cambio_costo"],
+                            "cambio_total": info_cambio["cambio_total"],
+                            "cambio_comentario": info_cambio["cambio_comentario"]
+                        })
+                    
+                    # Actualizar resumen de confirmación
+                    confirmacion_repo.actualizar_resumen_confirmacion(
+                        confirmacion_id=confirmacion_id,
+                        total_detalles_modificados=detalles_modificados_count,
+                        resumen_cambios=resumen_cambios
+                    )
+                    
+                    logger.info(f"✅ Confirmación de EL RAYO registrada: {confirmacion_id} ({detalles_modificados_count} detalles modificados)")
+                else:
+                    logger.info(f"ℹ️ No se registró nueva confirmación: no hay cambios desde la última confirmación")
+                
+            except Exception as e:
+                # No fallar si no se puede registrar la confirmación, solo loggear
+                logger.error(f"⚠️ Error al registrar confirmación de EL RAYO (no crítico): {e}", exc_info=True)
+                hay_cambios = False  # En caso de error, asumir que no hay cambios
             
-            # Guardar detalles
-            resultado_guardado = respuesta_repo.guardar_respuesta_detalles(
-                respuesta_id=respuesta_id,
-                respuestas_cantidades=respuestas_cantidades,
-                respuestas_precios=respuestas_precios
-            )
-            
-            # Actualizar estado del pedido
-            repo.update_estado(pedido_id, "RESPUESTA_PROVEEDOR_CARGADA")
+            # Determinar mensaje según si existía respuesta y si se registró confirmación
+            if ya_existia_respuesta:
+                if hay_cambios or not confirmaciones_previas:
+                    message = "Confirmación registrada exitosamente (respuesta ya existía)"
+                else:
+                    message = "No se registró nueva confirmación: no hay cambios desde la última confirmación"
+            else:
+                message = "Respuesta del proveedor creada automáticamente desde el pedido"
             
             return {
                 "status": "success",
-                "message": "Respuesta del proveedor creada automáticamente desde el pedido",
+                "message": message,
                 "respuesta_id": respuesta_id,
                 "validacion": validacion,
                 "cantidades_guardadas": resultado_guardado["cantidades_guardadas"],
                 "precios_guardados": resultado_guardado["precios_guardados"],
                 "pedido_id": pedido_id,
                 "estado_guardado": "PENDIENTE_REVISION",
-                "ya_existia": False
+                "ya_existia": ya_existia_respuesta,
+                "confirmacion_registrada": hay_cambios or not confirmaciones_previas
             }

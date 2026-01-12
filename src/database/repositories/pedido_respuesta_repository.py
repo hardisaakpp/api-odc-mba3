@@ -210,28 +210,53 @@ class PedidoRespuestaRepository:
                 "updated_at": row[9].isoformat() if row[9] else None,
             }
             
-            # Obtener detalles de respuesta
-            cursor.execute("""
-                SELECT 
-                    r.id,
-                    r.pedido_detalle_id,
-                    r.cantidad_solicitada_total,
-                    r.cantidad_confirmada_total,
-                    r.costo_doc_sin_iva_original,
-                    r.costo_doc_sin_iva_ajustado,
-                    r.descuento_1_original,
-                    r.descuento_1_ajustado,
-                    r.observaciones,
-                    pd.codigo_interno,
-                    pd.descripcion_sap
-                FROM pedido_respuesta_proveedor_detalle r
-                INNER JOIN pedido_detalle pd ON r.pedido_detalle_id = pd.pedido_detalle_id
-                WHERE r.respuesta_id = ?
-            """, (respuesta_id,))
+            # Obtener detalles de respuesta con campos de modificación manual
+            # Nota: Los campos costo_modificado_manual y total_modificado_manual pueden no existir en BD antigua
+            try:
+                cursor.execute("""
+                    SELECT 
+                        r.id,
+                        r.pedido_detalle_id,
+                        r.cantidad_solicitada_total,
+                        r.cantidad_confirmada_total,
+                        r.costo_doc_sin_iva_original,
+                        r.costo_doc_sin_iva_ajustado,
+                        r.descuento_1_original,
+                        r.descuento_1_ajustado,
+                        r.observaciones,
+                        pd.codigo_interno,
+                        pd.descripcion_sap,
+                        ISNULL(pd.costo_modificado_manual, 0) AS costo_modificado_manual,
+                        ISNULL(pd.total_modificado_manual, 0) AS total_modificado_manual
+                    FROM pedido_respuesta_proveedor_detalle r
+                    INNER JOIN pedido_detalle pd ON r.pedido_detalle_id = pd.pedido_detalle_id
+                    WHERE r.respuesta_id = ?
+                """, (respuesta_id,))
+                tiene_campos_modificados = True
+            except Exception:
+                # Si los campos no existen, usar consulta sin ellos
+                cursor.execute("""
+                    SELECT 
+                        r.id,
+                        r.pedido_detalle_id,
+                        r.cantidad_solicitada_total,
+                        r.cantidad_confirmada_total,
+                        r.costo_doc_sin_iva_original,
+                        r.costo_doc_sin_iva_ajustado,
+                        r.descuento_1_original,
+                        r.descuento_1_ajustado,
+                        r.observaciones,
+                        pd.codigo_interno,
+                        pd.descripcion_sap
+                    FROM pedido_respuesta_proveedor_detalle r
+                    INNER JOIN pedido_detalle pd ON r.pedido_detalle_id = pd.pedido_detalle_id
+                    WHERE r.respuesta_id = ?
+                """, (respuesta_id,))
+                tiene_campos_modificados = False
             
             detalles = []
             for det_row in cursor.fetchall():
-                detalles.append({
+                detalle_dict = {
                     "id": str(det_row[0]),
                     "pedido_detalle_id": str(det_row[1]),
                     "codigo_producto": det_row[9],
@@ -243,7 +268,18 @@ class PedidoRespuestaRepository:
                     "descuento_1_original": float(det_row[6]) if det_row[6] else None,
                     "descuento_1_ajustado": float(det_row[7]) if det_row[7] else None,
                     "observaciones": det_row[8],
-                })
+                }
+                
+                # Agregar campos de modificación manual si existen
+                if tiene_campos_modificados and len(det_row) > 11:
+                    detalle_dict["costo_modificado_manual"] = bool(det_row[11])
+                    detalle_dict["total_modificado_manual"] = bool(det_row[12])
+                else:
+                    # Si los campos no existen en BD antigua, devolver False por defecto
+                    detalle_dict["costo_modificado_manual"] = False
+                    detalle_dict["total_modificado_manual"] = False
+                
+                detalles.append(detalle_dict)
             
             return {
                 "cabecera": cabecera,

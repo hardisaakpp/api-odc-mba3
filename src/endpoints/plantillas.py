@@ -33,7 +33,10 @@ from src.models import (
     ResumenConfirmacion,
     GuardarModificacionesColumnasRequest,
     GuardarModificacionesColumnasResponse,
-    ObtenerModificacionesColumnasResponse
+    ObtenerModificacionesColumnasResponse,
+    ConfirmacionRayoListResponse,
+    ConfirmacionRayoDetailResponse,
+    ConfirmacionRayoItem
 )
 
 logger = logging.getLogger(__name__)
@@ -2088,6 +2091,180 @@ def register_plantillas_endpoints(app: FastAPI):
             )
     
     # ============================================================================
+    # ENDPOINTS: Historial de Confirmaciones de EL RAYO
+    # ============================================================================
+    
+    @app.get("/api/pedidos/{pedido_id}/confirmaciones-rayo",
+             response_model=ConfirmacionRayoListResponse,
+             tags=["Pedidos - Confirmaciones"])
+    async def obtener_confirmaciones_rayo(
+        pedido_id: str = Path(..., description="UUID del pedido"),
+        limit: Optional[int] = Query(None, ge=1, le=100, description="Número máximo de confirmaciones a retornar (opcional)"),
+        user: Dict = Depends(verify_jwt_token),
+        _: None = Depends(require_permission('mba3-consultas.facturas.view'))
+    ):
+        """
+        Obtiene el historial de confirmaciones realizadas por EL RAYO para un pedido.
+        
+        **Funcionalidad:**
+        - Muestra todas las confirmaciones realizadas por EL RAYO
+        - Incluye valores anteriores y nuevos para cada confirmación
+        - Permite ver qué cambios se realizaron en cada confirmación
+        - Ordenado por fecha descendente (más reciente primero)
+        
+        **Query Parameters:**
+        - `limit` (int, opcional): Número máximo de confirmaciones a retornar. Por defecto retorna todas.
+        
+        **Response:**
+        ```json
+        {
+            "pedido_id": "...",
+            "numero_pedido": "P-12.48 - 12 - 2025",
+            "total_confirmaciones": 2,
+            "confirmaciones": [
+                {
+                    "confirmacion_id": "...",
+                    "pedido_id": "...",
+                    "respuesta_id": "...",
+                    "confirmado_por": "usuario@example.com",
+                    "fecha_confirmacion": "2026-01-15T10:30:00",
+                    "total_detalles_modificados": 3,
+                    "detalles": [...]
+                }
+            ]
+        }
+        ```
+        """
+        try:
+            from src.database.connection import get_db_connection_context
+            from src.database.repositories.pedido_confirmacion_rayo_repository import PedidoConfirmacionRayoRepository
+            from src.database.repositories.pedido_repository import PedidoRepository
+            
+            with get_db_connection_context() as conn:
+                # Verificar que el pedido existe
+                repo_pedido = PedidoRepository(conn)
+                pedido = repo_pedido.get_pedido_completo(pedido_id)
+                
+                if not pedido:
+                    raise HTTPException(status_code=404, detail=f"Pedido no encontrado: {pedido_id}")
+                
+                # Obtener confirmaciones
+                repo_confirmacion = PedidoConfirmacionRayoRepository(conn)
+                confirmaciones_data = repo_confirmacion.obtener_confirmaciones_por_pedido(
+                    pedido_id=pedido_id,
+                    limit=limit
+                )
+                
+                # Construir respuesta con detalles
+                confirmaciones = []
+                for conf_data in confirmaciones_data:
+                    # Obtener detalles de cada confirmación
+                    confirmacion_completa = repo_confirmacion.obtener_confirmacion(conf_data["confirmacion_id"])
+                    if confirmacion_completa:
+                        confirmaciones.append(ConfirmacionRayoItem(**confirmacion_completa))
+                
+                return ConfirmacionRayoListResponse(
+                    pedido_id=pedido_id,
+                    numero_pedido=pedido["cabecera"].get("numero_pedido"),
+                    total_confirmaciones=len(confirmaciones),
+                    confirmaciones=confirmaciones
+                )
+                
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"❌ Error al obtener confirmaciones de EL RAYO: {e}", exc_info=True)
+            raise HTTPException(
+                status_code=500,
+                detail=f"Error interno al obtener confirmaciones: {str(e)}"
+            )
+    
+    @app.get("/api/pedidos/{pedido_id}/confirmaciones-rayo/{confirmacion_id}",
+             response_model=ConfirmacionRayoDetailResponse,
+             tags=["Pedidos - Confirmaciones"])
+    async def obtener_detalle_confirmacion_rayo(
+        pedido_id: str = Path(..., description="UUID del pedido"),
+        confirmacion_id: str = Path(..., description="UUID de la confirmación"),
+        user: Dict = Depends(verify_jwt_token),
+        _: None = Depends(require_permission('mba3-consultas.facturas.view'))
+    ):
+        """
+        Obtiene el detalle completo de una confirmación específica de EL RAYO.
+        
+        **Funcionalidad:**
+        - Muestra todos los detalles de cambios realizados en una confirmación específica
+        - Incluye valores anteriores y nuevos para cada campo modificado
+        - Permite ver exactamente qué se cambió en cada detalle del pedido
+        
+        **Response:**
+        ```json
+        {
+            "confirmacion": {
+                "confirmacion_id": "...",
+                "pedido_id": "...",
+                "respuesta_id": "...",
+                "confirmado_por": "usuario@example.com",
+                "fecha_confirmacion": "2026-01-15T10:30:00",
+                "total_detalles_modificados": 3,
+                "detalles": [
+                    {
+                        "confirmacion_detalle_id": "...",
+                        "pedido_detalle_id": "...",
+                        "codigo_producto": "R225.1012.BCO",
+                        "costo_anterior": 25.50,
+                        "costo_nuevo": 26.00,
+                        "total_anterior": 510,
+                        "total_nuevo": 520,
+                        "cambio_costo": true,
+                        "cambio_total": true,
+                        "cambio_comentario": false
+                    }
+                ]
+            }
+        }
+        ```
+        """
+        try:
+            from src.database.connection import get_db_connection_context
+            from src.database.repositories.pedido_confirmacion_rayo_repository import PedidoConfirmacionRayoRepository
+            from src.database.repositories.pedido_repository import PedidoRepository
+            
+            with get_db_connection_context() as conn:
+                # Verificar que el pedido existe
+                repo_pedido = PedidoRepository(conn)
+                pedido = repo_pedido.get_pedido_completo(pedido_id)
+                
+                if not pedido:
+                    raise HTTPException(status_code=404, detail=f"Pedido no encontrado: {pedido_id}")
+                
+                # Obtener confirmación
+                repo_confirmacion = PedidoConfirmacionRayoRepository(conn)
+                confirmacion_data = repo_confirmacion.obtener_confirmacion(confirmacion_id)
+                
+                if not confirmacion_data:
+                    raise HTTPException(status_code=404, detail=f"Confirmación no encontrada: {confirmacion_id}")
+                
+                # Verificar que la confirmación pertenece al pedido
+                if confirmacion_data["pedido_id"] != pedido_id:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"La confirmación {confirmacion_id} no pertenece al pedido {pedido_id}"
+                    )
+                
+                return ConfirmacionRayoDetailResponse(
+                    confirmacion=ConfirmacionRayoItem(**confirmacion_data)
+                )
+                
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"❌ Error al obtener detalle de confirmación: {e}", exc_info=True)
+            raise HTTPException(
+                status_code=500,
+                detail=f"Error interno al obtener detalle de confirmación: {str(e)}"
+            )
+    
+    # ============================================================================
     # ENDPOINTS FASE 4: Ajuste y Redistribución (MABEL TRADING)
     # ============================================================================
     
@@ -2478,6 +2655,73 @@ def register_plantillas_endpoints(app: FastAPI):
                 estado_nuevo = "REDISTRIBUIDO"
                 
                 logger.info(f"✅ Redistribución confirmada para pedido {pedido_id} por usuario {user_id}")
+                
+                # NUEVO: Procesar pedido con SAP (similar a MIGRAR pero para pedidos)
+                logger.info("=" * 70)
+                logger.info("🔄 PROCESANDO: Consultando SAP y procesando productos del pedido...")
+                logger.info("=" * 70)
+                
+                try:
+                    from src.database.services.pedido_sap_service import procesar_pedido_con_sap
+                    from src.database.services.homologacion_service import HomologacionService
+                    from src.utils.email_notifier import send_homologacion_notification
+                    
+                    homologacion_service = HomologacionService()
+                    
+                    # Procesar pedido con SAP
+                    resultado_sap = procesar_pedido_con_sap(
+                        pedido_id=pedido_id,
+                        usuario_id=user_id,
+                        homologacion_service=homologacion_service,
+                        continue_on_error=True
+                    )
+                    
+                    logger.info(f"✅ Procesamiento SAP completado: {resultado_sap.get('productos_procesados', 0)} productos procesados")
+                    
+                    # Verificar productos no homologados y notificar
+                    if resultado_sap.get("productos_no_homologados", 0) > 0:
+                        logger.info("🔍 Verificando productos no homologados...")
+                        
+                        try:
+                            from src.database.repositories.homologacion_repository import HomologacionRepository
+                            
+                            # Obtener TODOS los productos no homologados con estadísticas
+                            todos_productos = homologacion_service.get_todos_productos_no_homologados()
+                            productos_no_homologados = todos_productos.get("productos", [])
+                            estadisticas = todos_productos.get("estadisticas", {})
+                            
+                            if productos_no_homologados and len(productos_no_homologados) > 0:
+                                logger.info(f"⚠️ Se detectaron {len(productos_no_homologados)} productos no homologados")
+                                
+                                # Crear repository para filtrar productos ya notificados
+                                repository = HomologacionRepository(conn)
+                                
+                                # Enviar notificación FILTRANDO productos ya notificados
+                                email_enviado = send_homologacion_notification(
+                                    productos_no_homologados=productos_no_homologados,
+                                    estadisticas=estadisticas,
+                                    fecha_ejecucion=datetime.now(),
+                                    filtrar_ya_notificados=True,  # Filtrar ya notificados
+                                    homologacion_repository=repository
+                                )
+                                
+                                if email_enviado:
+                                    logger.info("✅ Notificación de homologación enviada (solo productos nuevos)")
+                                else:
+                                    logger.info("⏭️ No se envió notificación (todos ya fueron notificados)")
+                            else:
+                                logger.info("✅ No hay productos no homologados nuevos para notificar")
+                                
+                        except Exception as homolog_error:
+                            logger.warning(f"⚠️ Error al verificar homologaciones: {homolog_error}")
+                            # No afectar la respuesta principal
+                    
+                except Exception as sap_error:
+                    logger.error(f"❌ Error al procesar pedido con SAP: {sap_error}", exc_info=True)
+                    # No afectar la confirmación de redistribución, solo loguear el error
+                    logger.warning("⚠️ La redistribución fue confirmada pero el procesamiento SAP falló")
+                
+                logger.info("=" * 70)
                 
                 return ConfirmarRedistribucionResponse(
                     pedido_id=pedido_id,
@@ -2923,10 +3167,41 @@ def register_plantillas_endpoints(app: FastAPI):
                 
                 # Parsear JSON
                 ajustes_list = json.loads(ajustes_json)
-                ajustes_detalle = [AjusteDetalle(**ajuste) for ajuste in ajustes_list]
+                
+                # Sincronizar costos y totales con los valores actuales del pedido
+                detalles_pedido_map = {
+                    detalle.get("codigo_interno"): detalle 
+                    for detalle in pedido_data.get("detalles", [])
+                }
+                
+                ajustes_detalle_sincronizados = []
+                for ajuste_dict in ajustes_list:
+                    codigo_producto = ajuste_dict.get("codigo_producto")
+                    detalle_pedido = detalles_pedido_map.get(codigo_producto)
+                    
+                    if detalle_pedido:
+                        # Sincronizar costo unitario con el valor actual del pedido
+                        costo_actual = detalle_pedido.get("costo_doc_sin_iva")
+                        if costo_actual is not None:
+                            ajuste_dict["costo_original"] = costo_actual
+                            ajuste_dict["costo_ajustado"] = costo_actual
+                        
+                        # Sincronizar total (cantidad confirmada) con el valor actual del pedido
+                        total_actual = detalle_pedido.get("total")
+                        if total_actual is not None:
+                            try:
+                                cantidad_confirmada_actual = int(float(total_actual))
+                                ajuste_dict["cantidad_confirmada"] = cantidad_confirmada_actual
+                                # Si cantidad_ajustada es mayor que confirmada, mantenerla, sino usar confirmada
+                                if ajuste_dict.get("cantidad_ajustada", 0) > cantidad_confirmada_actual:
+                                    ajuste_dict["cantidad_ajustada"] = cantidad_confirmada_actual
+                            except (ValueError, TypeError):
+                                pass
+                    
+                    ajustes_detalle_sincronizados.append(AjusteDetalle(**ajuste_dict))
                 
                 return BorradorResponse(
-                    ajustes_detalle=ajustes_detalle,
+                    ajustes_detalle=ajustes_detalle_sincronizados,
                     fecha_guardado=fecha_guardado
                 )
                 
@@ -2939,6 +3214,169 @@ def register_plantillas_endpoints(app: FastAPI):
                 detail={
                     "error": "internal_error",
                     "message": f"Error interno al obtener borrador: {str(e)}"
+                }
+            )
+    
+    @app.get("/api/pedidos/{numero_pedido}/redistribucion/inicial",
+             response_model=BorradorResponse,
+             tags=["Pedidos - Redistribución"])
+    async def obtener_datos_iniciales_redistribucion(
+        numero_pedido: str = Path(..., description="Número del pedido"),
+        user: Dict = Depends(verify_jwt_token),
+        _: None = Depends(require_permission('mba3-consultas.facturas.view'))
+    ):
+        """
+        Obtiene los datos iniciales para la redistribución sincronizados con el pedido actualizado.
+        
+        **Funcionalidad:**
+        - Genera los datos iniciales de redistribución basándose en el pedido actualizado
+        - Sincroniza costos unitarios y totales con los valores actuales del pedido (EL RAYO)
+        - Obtiene cantidades confirmadas desde la respuesta del proveedor
+        - Usa los costos y totales actualizados del pedido (no valores antiguos)
+        - Incluye información de campos modificados manualmente para resaltado visual
+        
+        **Response:**
+        ```json
+        {
+            "status": "success",
+            "ajustes_detalle": [
+                {
+                    "codigo_producto": "R225.1012.BCO",
+                    "descripcion": "Producto ejemplo",
+                    "cantidad_solicitada": 100,
+                    "cantidad_confirmada": 80,
+                    "cantidad_ajustada": 80,
+                    "distribucion_tiendas": [...],
+                    "costo_original": 25.50,  // ⭐ Sincronizado con pedido actualizado
+                    "costo_ajustado": 25.50,  // ⭐ Sincronizado con pedido actualizado
+                    "cambio_precio": false,
+                    "pedido_detalle_id": "uuid-123",  // ⭐ Para identificar la fila
+                    "costo_modificado_manual": true,   // ⭐ Indica si el costo fue modificado
+                    "total_modificado_manual": true    // ⭐ Indica si el total fue modificado
+                }
+            ],
+            "fecha_guardado": "2025-01-15T10:30:00Z"
+        }
+        ```
+        """
+        try:
+            from src.database.connection import get_db_connection_context
+            from src.database.repositories.pedido_repository import PedidoRepository
+            
+            with get_db_connection_context() as conn:
+                repo_pedido = PedidoRepository(conn)
+                
+                # Obtener pedido por número
+                pedido_data = repo_pedido.get_pedido_completo_por_numero(numero_pedido)
+                
+                if not pedido_data:
+                    raise HTTPException(
+                        status_code=status.HTTP_404_NOT_FOUND,
+                        detail={
+                            "error": "pedido_not_found",
+                            "message": f"No se encontró el pedido con número: {numero_pedido}"
+                        }
+                    )
+                
+                pedido_id = pedido_data["cabecera"]["pedido_id"]
+                
+                # Obtener cantidades confirmadas desde la respuesta del proveedor
+                cursor = conn.cursor()
+                cursor.execute("""
+                    SELECT TOP 1
+                        rpd.pedido_detalle_id,
+                        rpd.cantidad_solicitada_total,
+                        rpd.cantidad_confirmada_total
+                    FROM pedido_respuesta_proveedor_detalle rpd
+                    INNER JOIN pedido_respuesta_proveedor rp ON rpd.respuesta_id = rp.respuesta_id
+                    WHERE rp.pedido_id = ?
+                    ORDER BY rp.version DESC, rp.fecha_respuesta DESC
+                """, (pedido_id,))
+                
+                respuestas_map = {}
+                for row in cursor.fetchall():
+                    respuestas_map[str(row[0])] = {
+                        "cantidad_solicitada_total": row[1],
+                        "cantidad_confirmada_total": row[2]
+                    }
+                
+                # Generar ajustes_detalle sincronizados con el pedido actualizado
+                ajustes_detalle = []
+                for detalle in pedido_data.get("detalles", []):
+                    pedido_detalle_id = detalle.get("pedido_detalle_id")
+                    codigo_producto = detalle.get("codigo_interno")
+                    
+                    if not codigo_producto:
+                        continue
+                    
+                    # Obtener respuesta del proveedor para este producto
+                    respuesta = respuestas_map.get(pedido_detalle_id, {})
+                    cantidad_solicitada = respuesta.get("cantidad_solicitada_total", 0)
+                    cantidad_confirmada = respuesta.get("cantidad_confirmada_total", 0)
+                    
+                    # Si no hay respuesta del proveedor, usar valores del pedido
+                    if cantidad_solicitada == 0:
+                        cantidad_solicitada = sum(t.get("cantidad", 0) for t in detalle.get("tiendas", []))
+                    
+                    if cantidad_confirmada == 0:
+                        # Usar el campo "total" del detalle como cantidad confirmada (EL RAYO)
+                        total_value = detalle.get("total")
+                        if total_value is not None:
+                            try:
+                                cantidad_confirmada = int(float(total_value))
+                            except (ValueError, TypeError):
+                                cantidad_confirmada = cantidad_solicitada
+                        else:
+                            cantidad_confirmada = cantidad_solicitada
+                    
+                    # Obtener costos actualizados del pedido (EL RAYO)
+                    costo_actual = detalle.get("costo_doc_sin_iva")
+                    
+                    # Preparar distribuciones de tienda
+                    distribucion_tiendas = []
+                    for tienda in detalle.get("tiendas", []):
+                        distribucion_tiendas.append({
+                            "tienda_codigo": tienda.get("codigo", ""),
+                            "tienda_nombre": tienda.get("nombre", ""),
+                            "cantidad": 0  # Inicialmente en 0, se debe distribuir
+                        })
+                    
+                    # Obtener flags de modificación manual del detalle
+                    costo_modificado = detalle.get("costo_modificado_manual", False)
+                    total_modificado = detalle.get("total_modificado_manual", False)
+                    
+                    # Crear ajuste detalle sincronizado
+                    ajuste = AjusteDetalle(
+                        codigo_producto=codigo_producto,
+                        descripcion=detalle.get("descripcion_sap", ""),
+                        cantidad_solicitada=cantidad_solicitada,
+                        cantidad_confirmada=cantidad_confirmada,
+                        cantidad_ajustada=cantidad_confirmada,  # Inicialmente igual a confirmada
+                        distribucion_tiendas=distribucion_tiendas,
+                        costo_original=costo_actual,  # ⭐ Sincronizado con pedido actualizado
+                        costo_ajustado=costo_actual,  # ⭐ Sincronizado con pedido actualizado
+                        cambio_precio=False,
+                        pedido_detalle_id=pedido_detalle_id,  # ⭐ Para identificar la fila en el frontend
+                        costo_modificado_manual=costo_modificado,  # ⭐ Flag de modificación de costo
+                        total_modificado_manual=total_modificado  # ⭐ Flag de modificación de total
+                    )
+                    
+                    ajustes_detalle.append(ajuste)
+                
+                return BorradorResponse(
+                    ajustes_detalle=ajustes_detalle,
+                    fecha_guardado=datetime.now()
+                )
+                
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"❌ Error al obtener datos iniciales de redistribución: {e}", exc_info=True)
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail={
+                    "error": "internal_error",
+                    "message": f"Error interno al obtener datos iniciales: {str(e)}"
                 }
             )
     
@@ -3033,6 +3471,7 @@ def register_plantillas_endpoints(app: FastAPI):
                 
                 # Convertir AjusteDetalle a estructura interna
                 # Necesitamos mapear codigo_producto -> pedido_detalle_id y tienda_codigo -> tienda_id
+                # IMPORTANTE: Sincronizar costos y totales con los valores actuales del pedido
                 productos_redistribucion = []
                 
                 for ajuste in request_body.ajustes_detalle:
@@ -3051,6 +3490,22 @@ def register_plantillas_endpoints(app: FastAPI):
                                 "message": f"No se encontró el producto con código: {ajuste.codigo_producto}"
                             }
                         )
+                    
+                    # Sincronizar costos con los valores actuales del pedido
+                    costo_actual = detalle_pedido.get("costo_doc_sin_iva")
+                    if costo_actual is not None:
+                        # Usar el costo actual del pedido, no el del request
+                        ajuste.costo_original = costo_actual
+                        ajuste.costo_ajustado = costo_actual
+                    
+                    # Sincronizar cantidad confirmada con el total actual del pedido (si existe)
+                    total_actual = detalle_pedido.get("total")
+                    if total_actual is not None:
+                        try:
+                            cantidad_confirmada_actual = int(float(total_actual))
+                            ajuste.cantidad_confirmada = cantidad_confirmada_actual
+                        except (ValueError, TypeError):
+                            pass
                     
                     # Convertir distribuciones de tienda
                     distribuciones = []

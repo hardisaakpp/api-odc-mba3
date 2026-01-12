@@ -910,6 +910,9 @@ class AjusteDetalle(BaseModel):
     costo_original: Optional[float] = Field(None, ge=0, description="Costo unitario original")
     costo_ajustado: Optional[float] = Field(None, ge=0, description="Costo unitario ajustado")
     cambio_precio: bool = Field(default=False, description="Indica si hubo cambio de precio")
+    pedido_detalle_id: Optional[str] = Field(None, description="ID del detalle del pedido (para resaltado de filas)")
+    costo_modificado_manual: Optional[bool] = Field(default=False, description="Indica si el costo fue modificado manualmente")
+    total_modificado_manual: Optional[bool] = Field(default=False, description="Indica si el total fue modificado manualmente")
     
     class Config:
         json_schema_extra = {
@@ -969,6 +972,62 @@ class ResumenConfirmacion(BaseModel):
     total_costo_ajustado: Optional[float] = None
     diferencia_cantidad: int = Field(..., description="cantidad_ajustada - cantidad_confirmada")
     diferencia_costo: Optional[float] = Field(None, description="costo_ajustado - costo_original")
+
+
+# ============================================================================
+# Modelos para Historial de Confirmaciones de EL RAYO
+# ============================================================================
+
+class ConfirmacionRayoDetalleItem(BaseModel):
+    """Modelo para un detalle de confirmación de EL RAYO."""
+    
+    confirmacion_detalle_id: str = Field(..., description="UUID del detalle de confirmación")
+    pedido_detalle_id: str = Field(..., description="UUID del detalle del pedido")
+    codigo_producto: Optional[str] = Field(None, description="Código del producto")
+    
+    # Valores anteriores
+    costo_anterior: Optional[float] = None
+    total_anterior: Optional[float] = None
+    comentario_anterior: Optional[str] = None
+    
+    # Valores nuevos (confirmados)
+    costo_nuevo: Optional[float] = None
+    total_nuevo: Optional[float] = None
+    comentario_nuevo: Optional[str] = None
+    
+    # Flags de cambios
+    cambio_costo: bool = False
+    cambio_total: bool = False
+    cambio_comentario: bool = False
+
+
+class ConfirmacionRayoItem(BaseModel):
+    """Modelo para una confirmación de EL RAYO."""
+    
+    confirmacion_id: str = Field(..., description="UUID de la confirmación")
+    pedido_id: str = Field(..., description="UUID del pedido")
+    respuesta_id: Optional[str] = Field(None, description="UUID de la respuesta del proveedor")
+    confirmado_por: str = Field(..., description="User ID de EL RAYO")
+    fecha_confirmacion: str = Field(..., description="Fecha y hora de confirmación (ISO8601)")
+    total_detalles_modificados: int = Field(..., ge=0, description="Número total de detalles modificados")
+    detalles_modificados: Optional[Dict[str, Any]] = Field(None, description="Resumen JSON de cambios")
+    observaciones_generales: Optional[str] = None
+    detalles: List[ConfirmacionRayoDetalleItem] = Field(default_factory=list, description="Detalles de cambios")
+
+
+class ConfirmacionRayoListResponse(BaseModel):
+    """Modelo para la respuesta de obtener historial de confirmaciones."""
+    
+    pedido_id: str = Field(..., description="UUID del pedido")
+    numero_pedido: Optional[str] = Field(None, description="Número del pedido")
+    total_confirmaciones: int = Field(..., ge=0, description="Total de confirmaciones")
+    confirmaciones: List[ConfirmacionRayoItem] = Field(default_factory=list, description="Lista de confirmaciones")
+
+
+class ConfirmacionRayoDetailResponse(BaseModel):
+    """Modelo para la respuesta de obtener detalle de una confirmación específica."""
+    
+    confirmacion: ConfirmacionRayoItem = Field(..., description="Detalle completo de la confirmación")
 
 
 class ConfirmarRedistribucionResponseFrontend(BaseModel):
