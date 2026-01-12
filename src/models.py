@@ -610,6 +610,71 @@ class ActualizarComentarioRequest(BaseModel):
         }
 
 
+class ColumnaModificadaItem(BaseModel):
+    """Modelo para un item de modificación de columna."""
+    
+    pedido_detalle_id: str = Field(..., description="UUID del detalle del pedido")
+    columna_key: str = Field(..., description="Clave de la columna modificada (costo_doc_sin_iva, total, comentario)")
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "pedido_detalle_id": "550e8400-e29b-41d4-a716-446655440000",
+                "columna_key": "costo_doc_sin_iva"
+            }
+        }
+
+
+class GuardarModificacionesColumnasRequest(BaseModel):
+    """Modelo para el request de guardar modificaciones de columnas."""
+    
+    numero_pedido: str = Field(..., description="Número del pedido")
+    modificaciones: List[ColumnaModificadaItem] = Field(..., description="Lista de modificaciones de columnas")
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "numero_pedido": "P-12.48 - 12 - 2025",
+                "modificaciones": [
+                    {
+                        "pedido_detalle_id": "550e8400-e29b-41d4-a716-446655440000",
+                        "columna_key": "costo_doc_sin_iva"
+                    },
+                    {
+                        "pedido_detalle_id": "550e8400-e29b-41d4-a716-446655440001",
+                        "columna_key": "total"
+                    }
+                ]
+            }
+        }
+
+
+class GuardarModificacionesColumnasResponse(BaseModel):
+    """Modelo para la respuesta de guardar modificaciones de columnas."""
+    
+    status: str = Field(default="success", description="Estado de la operación")
+    message: str = Field(..., description="Mensaje descriptivo")
+    numero_pedido: str = Field(..., description="Número del pedido")
+    modificaciones_guardadas: int = Field(..., description="Número de modificaciones guardadas")
+
+
+class ModificacionColumnaItem(BaseModel):
+    """Modelo para un item de modificación obtenido."""
+    
+    pedido_detalle_id: str = Field(..., description="UUID del detalle del pedido")
+    columna_key: str = Field(..., description="Clave de la columna modificada")
+    modificado_por: Optional[str] = Field(None, description="Usuario que realizó la modificación")
+    fecha_modificacion: str = Field(..., description="Fecha de modificación (ISO 8601)")
+
+
+class ObtenerModificacionesColumnasResponse(BaseModel):
+    """Modelo para la respuesta de obtener modificaciones de columnas."""
+    
+    status: str = Field(default="success", description="Estado de la operación")
+    numero_pedido: str = Field(..., description="Número del pedido")
+    modificaciones: List[ModificacionColumnaItem] = Field(default_factory=list, description="Lista de modificaciones")
+
+
 class NotificarConfirmacionRequest(BaseModel):
     """Modelo para el request de notificar confirmación de pedido."""
     

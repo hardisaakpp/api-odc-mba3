@@ -1405,5 +1405,216 @@ class PedidoRepository:
             raise
         finally:
             cursor.close()
+    
+    def guardar_modificaciones_columnas(
+        self,
+        numero_pedido: str,
+        modificaciones: List[Dict[str, str]],
+        modificado_por: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Guarda o actualiza modificaciones de columnas para un pedido.
+        
+        Args:
+            numero_pedido: Número del pedido
+            modificaciones: Lista de diccionarios con formato:
+                [
+                    {"pedido_detalle_id": "uuid", "columna_key": "costo_doc_sin_iva"},
+                    ...
+                ]
+            modificado_por: ID del usuario que realiza la modificación (opcional)
+        
+        Returns:
+            Dict con formato:
+            {
+                "success": bool,
+                "numero_pedido": str,
+                "modificaciones_guardadas": int,
+                "mensaje": str
+            }
+        """
+        cursor = self.conn.cursor()
+        
+        try:
+            # Validar que el pedido existe y obtener su pedido_id
+            cursor.execute("""
+                SELECT pedido_id
+                FROM pedido
+                WHERE numero_pedido = ?
+            """, (numero_pedido,))
+            
+            row = cursor.fetchone()
+            if not row:
+                return {
+                    "success": False,
+                    "numero_pedido": numero_pedido,
+                    "modificaciones_guardadas": 0,
+                    "mensaje": f"No se encontró el pedido con número: {numero_pedido}"
+                }
+            
+            pedido_id = str(row[0])
+            
+            # Validar que las columnas son válidas
+            columnas_validas = {'costo_doc_sin_iva', 'total', 'comentario'}
+            modificaciones_count = 0
+            errores = []
+            
+            for mod in modificaciones:
+                pedido_detalle_id = mod.get('pedido_detalle_id')
+                columna_key = mod.get('columna_key')
+                
+                if not pedido_detalle_id or not columna_key:
+                    errores.append(f"Modificación inválida: {mod}")
+                    continue
+                
+                if columna_key not in columnas_validas:
+                    errores.append(f"Columna inválida '{columna_key}' para detalle {pedido_detalle_id}")
+                    continue
+                
+                # Verificar que el detalle pertenece al pedido
+                cursor.execute("""
+                    SELECT pedido_detalle_id
+                    FROM pedido_detalle
+                    WHERE pedido_detalle_id = ?
+                    AND pedido_id = ?
+                """, (pedido_detalle_id, pedido_id))
+                
+                detalle_row = cursor.fetchone()
+                if not detalle_row:
+                    errores.append(f"Detalle {pedido_detalle_id} no pertenece al pedido {numero_pedido}")
+                    continue
+                
+                # Usar MERGE (UPSERT) para insertar o actualizar
+                # Si ya existe una modificación para este detalle+columna, la actualizamos
+                # Si no existe, la creamos
+                cursor.execute("""
+                    MERGE pedido_detalle_modificacion_columna AS target
+                    USING (SELECT ? AS pedido_detalle_id, ? AS columna_key, ? AS modificado_por) AS source
+                    ON target.pedido_detalle_id = source.pedido_detalle_id 
+                    AND target.columna_key = source.columna_key
+                    WHEN MATCHED THEN
+                        UPDATE SET 
+                            modificado_por = source.modificado_por,
+                            fecha_modificacion = GETDATE()
+                    WHEN NOT MATCHED THEN
+                        INSERT (pedido_detalle_id, columna_key, modificado_por, fecha_modificacion)
+                        VALUES (source.pedido_detalle_id, source.columna_key, source.modificado_por, GETDATE());
+                """, (pedido_detalle_id, columna_key, modificado_por))
+                
+                modificaciones_count += 1
+            
+            self.conn.commit()
+            
+            mensaje = f"Se guardaron {modificaciones_count} modificaciones correctamente"
+            if errores:
+                mensaje += f". Errores: {len(errores)}"
+                logger.warning(f"⚠️ Errores al guardar modificaciones: {errores}")
+            
+            logger.info(f"✅ Guardadas {modificaciones_count} modificaciones para pedido {numero_pedido}")
+            
+            return {
+                "success": True,
+                "numero_pedido": numero_pedido,
+                "modificaciones_guardadas": modificaciones_count,
+                "mensaje": mensaje,
+                "errores": errores if errores else None
+            }
+            
+        except Exception as e:
+            self.conn.rollback()
+            logger.error(f"❌ Error al guardar modificaciones de columnas: {e}", exc_info=True)
+            raise
+        finally:
+            cursor.close()
+    
+    def obtener_modificaciones_columnas(
+        self,
+        numero_pedido: str
+    ) -> Dict[str, Any]:
+        """
+        Obtiene las modificaciones de columnas para un pedido.
+        
+        Args:
+            numero_pedido: Número del pedido
+        
+        Returns:
+            Dict con formato:
+            {
+                "success": bool,
+                "numero_pedido": str,
+                "modificaciones": [
+                    {
+                        "pedido_detalle_id": "uuid",
+                        "columna_key": "costo_doc_sin_iva",
+                        "modificado_por": "usuario@ejemplo.com",
+                        "fecha_modificacion": "2025-01-15T10:30:00Z"
+                    },
+                    ...
+                ],
+                "mensaje": str
+            }
+        """
+        cursor = self.conn.cursor()
+        
+        try:
+            # Validar que el pedido existe y obtener su pedido_id
+            cursor.execute("""
+                SELECT pedido_id
+                FROM pedido
+                WHERE numero_pedido = ?
+            """, (numero_pedido,))
+            
+            row = cursor.fetchone()
+            if not row:
+                return {
+                    "success": False,
+                    "numero_pedido": numero_pedido,
+                    "modificaciones": [],
+                    "mensaje": f"No se encontró el pedido con número: {numero_pedido}"
+                }
+            
+            pedido_id = str(row[0])
+            
+            # Obtener modificaciones usando JOIN para filtrar por pedido
+            cursor.execute("""
+                SELECT 
+                    m.pedido_detalle_id,
+                    m.columna_key,
+                    m.modificado_por,
+                    m.fecha_modificacion
+                FROM pedido_detalle_modificacion_columna m
+                INNER JOIN pedido_detalle d ON m.pedido_detalle_id = d.pedido_detalle_id
+                WHERE d.pedido_id = ?
+                ORDER BY m.fecha_modificacion DESC
+            """, (pedido_id,))
+            
+            rows = cursor.fetchall()
+            modificaciones = []
+            
+            for row in rows:
+                fecha_mod = row[3]
+                fecha_mod_iso = fecha_mod.isoformat() if fecha_mod else None
+                
+                modificaciones.append({
+                    "pedido_detalle_id": str(row[0]),
+                    "columna_key": row[1],
+                    "modificado_por": row[2] if row[2] else None,
+                    "fecha_modificacion": fecha_mod_iso
+                })
+            
+            logger.info(f"✅ Obtenidas {len(modificaciones)} modificaciones para pedido {numero_pedido}")
+            
+            return {
+                "success": True,
+                "numero_pedido": numero_pedido,
+                "modificaciones": modificaciones,
+                "mensaje": f"Se encontraron {len(modificaciones)} modificaciones"
+            }
+            
+        except Exception as e:
+            logger.error(f"❌ Error al obtener modificaciones de columnas: {e}", exc_info=True)
+            raise
+        finally:
+            cursor.close()
 
 

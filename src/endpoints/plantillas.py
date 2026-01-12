@@ -30,7 +30,10 @@ from src.models import (
     GuardarBorradorResponse,
     BorradorResponse,
     AjusteDetalle,
-    ResumenConfirmacion
+    ResumenConfirmacion,
+    GuardarModificacionesColumnasRequest,
+    GuardarModificacionesColumnasResponse,
+    ObtenerModificacionesColumnasResponse
 )
 
 logger = logging.getLogger(__name__)
@@ -1471,6 +1474,223 @@ def register_plantillas_endpoints(app: FastAPI):
                 detail={
                     "error": "internal_error",
                     "message": f"Error interno al actualizar comentario: {str(e)}"
+                }
+            )
+    
+    @app.post("/api/pedidos/{numero_pedido}/modificaciones-columnas",
+              response_model=GuardarModificacionesColumnasResponse,
+              tags=["Pedidos - Modificaciones"])
+    async def guardar_modificaciones_columnas(
+            numero_pedido: str = Path(..., description="Número del pedido"),
+            request_body: GuardarModificacionesColumnasRequest = Body(..., description="Datos de las modificaciones"),
+            user: Dict = Depends(verify_jwt_token),
+            _: None = Depends(require_permission('mba3-consultas.proceso.execute'))
+    ):
+        """
+        Guarda o actualiza las modificaciones de columnas para un pedido.
+        
+        **Funcionalidad:**
+        - Almacena qué columnas (costo_doc_sin_iva, total, comentario) fueron modificadas manualmente
+        - Permite al frontend persistir el estado de resaltado de celdas modificadas
+        - Incluye información de auditoría (usuario, fecha)
+        
+        **Validaciones:**
+        - ✅ El pedido debe existir
+        - ✅ Los detalles deben pertenecer al pedido
+        - ✅ Solo columnas válidas: costo_doc_sin_iva, total, comentario
+        - ✅ Solo usuarios con permiso 'mba3-consultas.proceso.execute' pueden guardar
+        
+        **Request:**
+        ```json
+        {
+            "numero_pedido": "P-12.48 - 12 - 2025",
+            "modificaciones": [
+                {
+                    "pedido_detalle_id": "uuid-del-detalle",
+                    "columna_key": "costo_doc_sin_iva"
+                },
+                {
+                    "pedido_detalle_id": "uuid-del-detalle-2",
+                    "columna_key": "total"
+                }
+            ]
+        }
+        ```
+        
+        **Response:**
+        ```json
+        {
+            "status": "success",
+            "message": "Se guardaron 2 modificaciones correctamente",
+            "numero_pedido": "P-12.48 - 12 - 2025",
+            "modificaciones_guardadas": 2
+        }
+        ```
+        """
+        try:
+            # Importar aquí para evitar circular imports
+            from src.database.connection import get_db_connection_context
+            from src.database.repositories.pedido_repository import PedidoRepository
+            
+            # Validar que el numero_pedido coincida
+            if request_body.numero_pedido != numero_pedido:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail={
+                        "error": "numero_pedido_mismatch",
+                        "message": f"El número de pedido en la URL ({numero_pedido}) no coincide con el del body ({request_body.numero_pedido})"
+                    }
+                )
+            
+            # Convertir modificaciones a lista de diccionarios
+            modificaciones_list = [
+                {
+                    "pedido_detalle_id": mod.pedido_detalle_id,
+                    "columna_key": mod.columna_key
+                }
+                for mod in request_body.modificaciones
+            ]
+            
+            # Obtener usuario que realiza la modificación
+            user_id = get_user_id(user)
+            
+            # Conectar a BD
+            with get_db_connection_context() as conn:
+                repo = PedidoRepository(conn)
+                
+                # Guardar modificaciones
+                resultado = repo.guardar_modificaciones_columnas(
+                    numero_pedido=numero_pedido,
+                    modificaciones=modificaciones_list,
+                    modificado_por=user_id
+                )
+            
+            if resultado["success"]:
+                logger.info(f"✅ Modificaciones guardadas para pedido {numero_pedido} por usuario {user.get('username', 'UNKNOWN')}")
+                return GuardarModificacionesColumnasResponse(
+                    status="success",
+                    message=resultado["mensaje"],
+                    numero_pedido=numero_pedido,
+                    modificaciones_guardadas=resultado["modificaciones_guardadas"]
+                )
+            else:
+                logger.warning(f"⚠️ {resultado['mensaje']}")
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail={
+                        "error": "pedido_not_found",
+                        "message": resultado["mensaje"]
+                    }
+                )
+                
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"❌ Error al guardar modificaciones de columnas: {e}", exc_info=True)
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail={
+                    "error": "internal_error",
+                    "message": f"Error interno al guardar modificaciones: {str(e)}"
+                }
+            )
+    
+    @app.get("/api/pedidos/{numero_pedido}/modificaciones-columnas",
+             response_model=ObtenerModificacionesColumnasResponse,
+             tags=["Pedidos - Modificaciones"])
+    async def obtener_modificaciones_columnas(
+            numero_pedido: str = Path(..., description="Número del pedido"),
+            user: Dict = Depends(verify_jwt_token),
+            _: None = Depends(require_permission('mba3-consultas.facturas.view'))
+    ):
+        """
+        Obtiene las modificaciones de columnas para un pedido.
+        
+        **Funcionalidad:**
+        - Retorna qué columnas fueron modificadas manualmente para cada detalle
+        - Incluye información de auditoría (usuario, fecha)
+        - Permite al frontend restaurar el estado de resaltado
+        
+        **Validaciones:**
+        - ✅ El pedido debe existir
+        - ✅ Solo usuarios con permiso 'mba3-consultas.facturas.view' pueden obtener
+        
+        **Response exitosa:**
+        ```json
+        {
+            "status": "success",
+            "numero_pedido": "P-12.48 - 12 - 2025",
+            "modificaciones": [
+                {
+                    "pedido_detalle_id": "uuid-del-detalle",
+                    "columna_key": "costo_doc_sin_iva",
+                    "modificado_por": "usuario@ejemplo.com",
+                    "fecha_modificacion": "2025-01-15T10:30:00Z"
+                }
+            ]
+        }
+        ```
+        
+        **Response sin modificaciones:**
+        ```json
+        {
+            "status": "success",
+            "numero_pedido": "P-12.48 - 12 - 2025",
+            "modificaciones": []
+        }
+        ```
+        """
+        try:
+            # Importar aquí para evitar circular imports
+            from src.database.connection import get_db_connection_context
+            from src.database.repositories.pedido_repository import PedidoRepository
+            
+            # Conectar a BD
+            with get_db_connection_context() as conn:
+                repo = PedidoRepository(conn)
+                
+                # Obtener modificaciones
+                resultado = repo.obtener_modificaciones_columnas(numero_pedido=numero_pedido)
+            
+            if not resultado["success"]:
+                logger.warning(f"⚠️ {resultado['mensaje']}")
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail={
+                        "error": "pedido_not_found",
+                        "message": resultado["mensaje"]
+                    }
+                )
+            
+            # Convertir modificaciones a objetos ModificacionColumnaItem
+            from src.models import ModificacionColumnaItem
+            
+            modificaciones_items = [
+                ModificacionColumnaItem(
+                    pedido_detalle_id=mod["pedido_detalle_id"],
+                    columna_key=mod["columna_key"],
+                    modificado_por=mod["modificado_por"],
+                    fecha_modificacion=mod["fecha_modificacion"]
+                )
+                for mod in resultado["modificaciones"]
+            ]
+            
+            logger.info(f"✅ Modificaciones obtenidas para pedido {numero_pedido} por usuario {user.get('username', 'UNKNOWN')}")
+            return ObtenerModificacionesColumnasResponse(
+                status="success",
+                numero_pedido=numero_pedido,
+                modificaciones=modificaciones_items
+            )
+                
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"❌ Error al obtener modificaciones de columnas: {e}", exc_info=True)
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail={
+                    "error": "internal_error",
+                    "message": f"Error interno al obtener modificaciones: {str(e)}"
                 }
             )
     
