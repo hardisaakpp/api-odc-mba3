@@ -131,10 +131,10 @@ class DistribucionConfirmadaRepository:
                     "costo_unitario_ajustado": costo_unitario_ajustado,
                     "subtotal_original": subtotal_original,
                     "subtotal_ajustado": subtotal_ajustado,
-                    "version": row[13],
-                    "estado": row[14],
-                    "fecha_creacion": row[15].isoformat() if row[15] else None,
-                    "fecha_modificacion": row[16].isoformat() if row[16] else None
+                    "version": row[12],
+                    "estado": row[13],
+                    "fecha_creacion": row[14].isoformat() if row[14] else None,
+                    "fecha_modificacion": row[15].isoformat() if row[15] else None
                 })
             
             # Calcular totales por producto

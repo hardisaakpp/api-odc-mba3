@@ -36,7 +36,10 @@ from src.models import (
     ObtenerModificacionesColumnasResponse,
     ConfirmacionRayoListResponse,
     ConfirmacionRayoDetailResponse,
-    ConfirmacionRayoItem
+    ConfirmacionRayoItem,
+    ProcesamientoSAPResponse,
+    ProductoSAPProcesamientoItem,
+    EstadisticasProcesamientoSAP
 )
 
 logger = logging.getLogger(__name__)
@@ -1070,11 +1073,36 @@ def register_plantillas_endpoints(app: FastAPI):
             Reporte en el formato solicitado
         """
         try:
+            import re
             from src.database.services.pedido_ajuste_service import PedidoAjusteService
+            from src.database.connection import get_db_connection_context
+            from src.database.repositories.pedido_repository import PedidoRepository
+            
+            # Detectar si es UUID o numero_pedido
+            uuid_pattern = re.compile(r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$')
+            es_uuid = uuid_pattern.match(pedido_id.strip()) is not None
+            
+            # Convertir numero_pedido a pedido_id (UUID) si es necesario
+            if es_uuid:
+                pedido_id_real = pedido_id
+            else:
+                # Obtener pedido_id desde numero_pedido
+                with get_db_connection_context() as conn:
+                    repo_pedido = PedidoRepository(conn)
+                    pedido_data = repo_pedido.get_pedido_completo_por_numero(pedido_id)
+                    if not pedido_data:
+                        raise HTTPException(
+                            status_code=status.HTTP_404_NOT_FOUND,
+                            detail={
+                                "error": "pedido_not_found",
+                                "message": f"No se encontró el pedido: {pedido_id}"
+                            }
+                        )
+                    pedido_id_real = pedido_data["cabecera"]["pedido_id"]
             
             service = PedidoAjusteService()
             reporte = service.generar_reporte_diferencias(
-                pedido_id=pedido_id,
+                pedido_id=pedido_id_real,
                 formato=formato
             )
             
@@ -2787,30 +2815,46 @@ def register_plantillas_endpoints(app: FastAPI):
         ```
         """
         try:
+            import re
             from src.database.connection import get_db_connection_context
             from src.database.repositories.distribucion_confirmada_repository import DistribucionConfirmadaRepository
             from src.database.repositories.pedido_repository import PedidoRepository
+            
+            # Detectar si es UUID o numero_pedido
+            uuid_pattern = re.compile(r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$')
+            es_uuid = uuid_pattern.match(pedido_id.strip()) is not None
             
             with get_db_connection_context() as conn:
                 repo_dist = DistribucionConfirmadaRepository(conn)
                 repo_pedido = PedidoRepository(conn)
                 
-                # Obtener datos del pedido
-                pedido_data = repo_pedido.get_pedido_completo(pedido_id)
+                # Obtener datos del pedido (detectar si es UUID o numero_pedido)
+                if es_uuid:
+                    logger.info(f"🔍 Detectado UUID: {pedido_id}, usando get_pedido_completo")
+                    pedido_data = repo_pedido.get_pedido_completo(pedido_id)
+                    pedido_id_real = pedido_id
+                else:
+                    logger.info(f"🔍 Detectado numero_pedido: {pedido_id}, usando get_pedido_completo_por_numero")
+                    pedido_data = repo_pedido.get_pedido_completo_por_numero(pedido_id)
+                    if pedido_data:
+                        pedido_id_real = pedido_data["cabecera"]["pedido_id"]
+                    else:
+                        pedido_id_real = None
+                
                 if not pedido_data:
                     raise HTTPException(
                         status_code=status.HTTP_404_NOT_FOUND,
                         detail={
                             "error": "pedido_not_found",
-                            "message": f"No se encontró el pedido con ID: {pedido_id}"
+                            "message": f"No se encontró el pedido: {pedido_id}"
                         }
                     )
                 
-                # Calcular diferencias
-                diferencias = repo_dist.calcular_diferencias(pedido_id, version)
+                # Calcular diferencias usando el pedido_id real (UUID)
+                diferencias = repo_dist.calcular_diferencias(pedido_id_real, version)
                 
                 return ReporteDiferenciasResponse(
-                    pedido_id=pedido_id,
+                    pedido_id=pedido_id_real,
                     numero_pedido=pedido_data["cabecera"]["numero_pedido"],
                     version=diferencias["version"],
                     fecha_generacion=datetime.now(),
@@ -3627,6 +3671,73 @@ def register_plantillas_endpoints(app: FastAPI):
                 
                 logger.info(f"✅ Redistribución confirmada para pedido {numero_pedido} por usuario {user_id}")
                 
+                # NUEVO: Procesar pedido con SAP (similar a MIGRAR pero para pedidos)
+                logger.info("=" * 70)
+                logger.info("🔄 PROCESANDO: Consultando SAP y procesando productos del pedido...")
+                logger.info("=" * 70)
+                
+                try:
+                    from src.database.services.pedido_sap_service import procesar_pedido_con_sap
+                    from src.database.services.homologacion_service import HomologacionService
+                    from src.utils.email_notifier import send_homologacion_notification
+                    
+                    homologacion_service = HomologacionService()
+                    
+                    # Procesar pedido con SAP
+                    resultado_sap = procesar_pedido_con_sap(
+                        pedido_id=pedido_id,
+                        usuario_id=user_id,
+                        homologacion_service=homologacion_service,
+                        continue_on_error=True
+                    )
+                    
+                    logger.info(f"✅ Procesamiento SAP completado: {resultado_sap.get('productos_procesados', 0)} productos procesados")
+                    
+                    # Verificar productos no homologados y notificar
+                    if resultado_sap.get("productos_no_homologados", 0) > 0:
+                        logger.info("🔍 Verificando productos no homologados...")
+                        
+                        try:
+                            from src.database.repositories.homologacion_repository import HomologacionRepository
+                            
+                            # Obtener TODOS los productos no homologados con estadísticas
+                            todos_productos = homologacion_service.get_todos_productos_no_homologados()
+                            productos_no_homologados = todos_productos.get("productos", [])
+                            estadisticas = todos_productos.get("estadisticas", {})
+                            
+                            if productos_no_homologados and len(productos_no_homologados) > 0:
+                                logger.info(f"⚠️ Se detectaron {len(productos_no_homologados)} productos no homologados")
+                                
+                                # Crear repository para filtrar productos ya notificados
+                                repository = HomologacionRepository(conn)
+                                
+                                # Enviar notificación FILTRANDO productos ya notificados
+                                email_enviado = send_homologacion_notification(
+                                    productos_no_homologados=productos_no_homologados,
+                                    estadisticas=estadisticas,
+                                    fecha_ejecucion=datetime.now(),
+                                    filtrar_ya_notificados=True,
+                                    homologacion_repository=repository
+                                )
+                                
+                                if email_enviado:
+                                    logger.info("✅ Notificación de homologación enviada (solo productos nuevos)")
+                                else:
+                                    logger.info("⏭️ No se envió notificación (todos ya fueron notificados)")
+                            else:
+                                logger.info("✅ No hay productos no homologados nuevos para notificar")
+                                
+                        except Exception as homolog_error:
+                            logger.warning(f"⚠️ Error al verificar homologaciones: {homolog_error}")
+                            # No afectar la respuesta principal
+                    
+                except Exception as sap_error:
+                    logger.error(f"❌ Error al procesar pedido con SAP: {sap_error}", exc_info=True)
+                    # No afectar la confirmación de redistribución, solo loguear el error
+                    logger.warning("⚠️ La redistribución fue confirmada pero el procesamiento SAP falló")
+                
+                logger.info("=" * 70)
+                
                 return ConfirmarRedistribucionResponseFrontend(
                     pedido_id=pedido_id,
                     numero_pedido=numero_pedido,
@@ -3648,4 +3759,214 @@ def register_plantillas_endpoints(app: FastAPI):
                     "message": f"Error interno al confirmar redistribución: {str(e)}"
                 }
             )
+    
+    @app.get("/api/pedidos/{pedido_id}/procesamiento-sap",
+             response_model=ProcesamientoSAPResponse,
+             tags=["Pedidos - SAP"])
+    async def obtener_procesamiento_sap(
+        pedido_id: str = Path(..., description="UUID del pedido"),
+        user: Dict = Depends(verify_jwt_token),
+        _: None = Depends(require_permission('mba3-consultas.facturas.view'))
+    ):
+        """
+        Obtiene información de procesamiento SAP de un pedido.
+        
+        **Funcionalidad:**
+        - Obtiene todos los productos procesados con SAP
+        - Muestra conversiones de cantidades y precios
+        - Identifica productos no homologados
+        - Proporciona estadísticas del procesamiento
+        
+        **Response:**
+        ```json
+        {
+            "status": "success",
+            "pedido_id": "...",
+            "numero_pedido": "P-12.55 - 12 - 2025",
+            "productos": [
+                {
+                    "procesamiento_detalle_id": "...",
+                    "pedido_detalle_id": "...",
+                    "codigo_interno": "R225.1012.BCO",
+                    "descripcion_producto": "Producto Ejemplo - Descripción completa",
+                    "item_code_sap": "R225.1012.BCO",
+                    "pack_sap": "X3",
+                    "unidad_conversion": 12.0,
+                    "unidad_sap": "X3",
+                    "cantidad_original": 100.0,
+                    "cantidad_sap": 8.33,
+                    "precio_unitario_original": 25.50,
+                    "precio_unitario_sap": 306.0,
+                    "total_linea_original": 2550.0,
+                    "total_linea_sap": 2550.0,
+                    "producto_homologado": true,
+                    "tipo_problema": null,
+                    "item_code_sap_encontrado": null,
+                    "mensaje_error": null,
+                    "fecha_procesamiento": "2026-01-12T14:43:06",
+                    "procesado_por": "..."
+                }
+            ],
+            "estadisticas": {
+                "total_productos": 30,
+                "productos_homologados": 28,
+                "productos_no_homologados": 2,
+                "productos_con_error": 0,
+                "total_cantidad_original": 3000.0,
+                "total_cantidad_sap": 250.0,
+                "total_precio_original": 76500.0,
+                "total_precio_sap": 76500.0
+            },
+            "fecha_procesamiento": "2026-01-12T14:43:06"
+        }
+        ```
+        
+        Returns:
+            JSON con información completa del procesamiento SAP del pedido
+        """
+        try:
+            import re
+            from src.database.connection import get_db_connection_context
+            from src.database.repositories.pedido_repository import PedidoRepository
+            from src.database.repositories.pedido_sap_procesamiento_repository import PedidoSAPProcesamientoRepository
+            
+            # Detectar si es UUID (formato: 8-4-4-4-12 caracteres hexadecimales)
+            uuid_pattern = re.compile(r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$')
+            es_uuid = uuid_pattern.match(pedido_id.strip()) is not None
+            
+            with get_db_connection_context() as conn:
+                pedido_repo = PedidoRepository(conn)
+                sap_proc_repo = PedidoSAPProcesamientoRepository(conn)
+                
+                # Obtener información básica del pedido (detectar si es UUID o número)
+                if es_uuid:
+                    logger.info(f"🔍 Detectado UUID: {pedido_id}, usando get_pedido_completo")
+                    pedido_data = pedido_repo.get_pedido_completo(pedido_id)
+                    if pedido_data:
+                        pedido_id_real = pedido_data["cabecera"]["pedido_id"]
+                    else:
+                        pedido_id_real = None
+                else:
+                    logger.info(f"🔍 Detectado numero_pedido: {pedido_id}, usando get_pedido_completo_por_numero")
+                    pedido_data = pedido_repo.get_pedido_completo_por_numero(pedido_id)
+                    if pedido_data:
+                        pedido_id_real = pedido_data["cabecera"]["pedido_id"]
+                    else:
+                        pedido_id_real = None
+                
+                if not pedido_data:
+                    raise HTTPException(
+                        status_code=status.HTTP_404_NOT_FOUND,
+                        detail={
+                            "error": "pedido_not_found",
+                            "message": f"No se encontró el pedido con {'ID' if es_uuid else 'número'}: {pedido_id}"
+                        }
+                    )
+                
+                numero_pedido = pedido_data["cabecera"].get("numero_pedido")
+                
+                # Obtener procesamientos SAP (usar UUID real)
+                procesamientos = sap_proc_repo.get_procesamientos_por_pedido(pedido_id_real)
+                
+                # Convertir a modelos
+                productos = []
+                total_productos = len(procesamientos)
+                productos_homologados = 0
+                productos_no_homologados = 0
+                productos_con_error = 0
+                total_cantidad_original = 0.0
+                total_cantidad_sap = 0.0
+                total_precio_original = 0.0
+                total_precio_sap = 0.0
+                fecha_procesamiento_max = None
+                
+                for proc in procesamientos:
+                    # Convertir fecha si existe
+                    fecha_proc = None
+                    if proc.get("fecha_procesamiento"):
+                        if isinstance(proc["fecha_procesamiento"], str):
+                            try:
+                                fecha_proc = datetime.fromisoformat(proc["fecha_procesamiento"].replace('Z', '+00:00'))
+                            except:
+                                fecha_proc = None
+                        elif isinstance(proc["fecha_procesamiento"], datetime):
+                            fecha_proc = proc["fecha_procesamiento"]
+                    
+                    if fecha_proc and (fecha_procesamiento_max is None or fecha_proc > fecha_procesamiento_max):
+                        fecha_procesamiento_max = fecha_proc
+                    
+                    # Contar estadísticas
+                    if proc.get("producto_homologado", True):
+                        productos_homologados += 1
+                    else:
+                        productos_no_homologados += 1
+                    
+                    if proc.get("tipo_problema") == "error" or proc.get("mensaje_error"):
+                        productos_con_error += 1
+                    
+                    # Sumar totales
+                    if proc.get("cantidad_original"):
+                        total_cantidad_original += float(proc["cantidad_original"])
+                    if proc.get("cantidad_sap"):
+                        total_cantidad_sap += float(proc["cantidad_sap"])
+                    if proc.get("total_linea_original"):
+                        total_precio_original += float(proc["total_linea_original"])
+                    if proc.get("total_linea_sap"):
+                        total_precio_sap += float(proc["total_linea_sap"])
+                    
+                    productos.append(ProductoSAPProcesamientoItem(
+                        procesamiento_detalle_id=proc["procesamiento_detalle_id"],
+                        pedido_detalle_id=proc["pedido_detalle_id"],
+                        codigo_interno=proc["codigo_interno"],
+                        descripcion_producto=proc.get("descripcion_producto"),
+                        item_code_sap=proc.get("item_code_sap"),
+                        pack_sap=proc.get("pack_sap"),
+                        unidad_conversion=proc.get("unidad_conversion"),
+                        unidad_sap=proc.get("unidad_sap"),
+                        cantidad_original=proc.get("cantidad_original"),
+                        cantidad_sap=proc.get("cantidad_sap"),
+                        precio_unitario_original=proc.get("precio_unitario_original"),
+                        precio_unitario_sap=proc.get("precio_unitario_sap"),
+                        total_linea_original=proc.get("total_linea_original"),
+                        total_linea_sap=proc.get("total_linea_sap"),
+                        producto_homologado=proc.get("producto_homologado", True),
+                        tipo_problema=proc.get("tipo_problema"),
+                        item_code_sap_encontrado=proc.get("item_code_sap_encontrado"),
+                        mensaje_error=proc.get("mensaje_error"),
+                        fecha_procesamiento=fecha_proc,
+                        procesado_por=proc.get("procesado_por")
+                    ))
+                
+                estadisticas = EstadisticasProcesamientoSAP(
+                    total_productos=total_productos,
+                    productos_homologados=productos_homologados,
+                    productos_no_homologados=productos_no_homologados,
+                    productos_con_error=productos_con_error,
+                    total_cantidad_original=total_cantidad_original if total_cantidad_original > 0 else None,
+                    total_cantidad_sap=total_cantidad_sap if total_cantidad_sap > 0 else None,
+                    total_precio_original=total_precio_original if total_precio_original > 0 else None,
+                    total_precio_sap=total_precio_sap if total_precio_sap > 0 else None
+                )
+                
+                return ProcesamientoSAPResponse(
+                    status="success",
+                    pedido_id=pedido_id_real,
+                    numero_pedido=numero_pedido,
+                    productos=productos,
+                    estadisticas=estadisticas,
+                    fecha_procesamiento=fecha_procesamiento_max
+                )
+                
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"❌ Error al obtener procesamiento SAP: {e}", exc_info=True)
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail={
+                    "error": "internal_error",
+                    "message": f"Error interno al obtener procesamiento SAP: {str(e)}"
+                }
+            )
+
 

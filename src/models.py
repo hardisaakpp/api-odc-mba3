@@ -1087,3 +1087,52 @@ class BorradorResponse(BaseModel):
     ajustes_detalle: List[AjusteDetalle] = Field(..., description="Lista de ajustes guardados")
     fecha_guardado: datetime = Field(..., description="Fecha en que se guardó el borrador")
 
+
+class ProductoSAPProcesamientoItem(BaseModel):
+    """Modelo para un producto procesado con SAP."""
+    
+    procesamiento_detalle_id: str = Field(..., description="UUID del procesamiento")
+    pedido_detalle_id: str = Field(..., description="UUID del detalle del pedido")
+    codigo_interno: str = Field(..., description="Código interno del producto")
+    descripcion_producto: Optional[str] = Field(None, description="Descripción del producto")
+    item_code_sap: Optional[str] = Field(None, description="ItemCode de SAP")
+    pack_sap: Optional[str] = Field(None, description="Pack SAP (X1, X2, X3, etc.)")
+    unidad_conversion: Optional[float] = Field(None, description="Factor de conversión")
+    unidad_sap: Optional[str] = Field(None, description="Unidad SAP")
+    cantidad_original: Optional[float] = Field(None, description="Cantidad en unidades originales")
+    cantidad_sap: Optional[float] = Field(None, description="Cantidad convertida a unidades SAP")
+    precio_unitario_original: Optional[float] = Field(None, description="Precio por unidad original")
+    precio_unitario_sap: Optional[float] = Field(None, description="Precio por unidad SAP")
+    total_linea_original: Optional[float] = Field(None, description="Total en unidades originales")
+    total_linea_sap: Optional[float] = Field(None, description="Total en unidades SAP")
+    producto_homologado: bool = Field(default=True, description="Si el producto está homologado")
+    tipo_problema: Optional[str] = Field(None, description="Tipo de problema: 'no_existe', 'mismatch', 'error'")
+    item_code_sap_encontrado: Optional[str] = Field(None, description="ItemCode encontrado en SAP (para mismatch)")
+    mensaje_error: Optional[str] = Field(None, description="Mensaje de error si hubo problema")
+    fecha_procesamiento: Optional[datetime] = Field(None, description="Fecha de procesamiento")
+    procesado_por: Optional[str] = Field(None, description="Usuario que procesó")
+
+
+class EstadisticasProcesamientoSAP(BaseModel):
+    """Estadísticas del procesamiento SAP."""
+    
+    total_productos: int = Field(..., ge=0, description="Total de productos procesados")
+    productos_homologados: int = Field(..., ge=0, description="Productos homologados correctamente")
+    productos_no_homologados: int = Field(..., ge=0, description="Productos no homologados")
+    productos_con_error: int = Field(..., ge=0, description="Productos con error de procesamiento")
+    total_cantidad_original: Optional[float] = Field(None, description="Suma total de cantidades originales")
+    total_cantidad_sap: Optional[float] = Field(None, description="Suma total de cantidades SAP")
+    total_precio_original: Optional[float] = Field(None, description="Suma total de precios originales")
+    total_precio_sap: Optional[float] = Field(None, description="Suma total de precios SAP")
+
+
+class ProcesamientoSAPResponse(BaseModel):
+    """Modelo para respuesta de procesamiento SAP de un pedido."""
+    
+    status: str = Field(default="success")
+    pedido_id: str = Field(..., description="UUID del pedido")
+    numero_pedido: Optional[str] = Field(None, description="Número del pedido")
+    productos: List[ProductoSAPProcesamientoItem] = Field(default_factory=list, description="Lista de productos procesados")
+    estadisticas: EstadisticasProcesamientoSAP = Field(..., description="Estadísticas del procesamiento")
+    fecha_procesamiento: Optional[datetime] = Field(None, description="Fecha del último procesamiento")
+

@@ -61,10 +61,13 @@ class PedidoSAPProcesamientoRepository:
         """
         cursor = self.conn.cursor()
         try:
+            # ✅ CORRECCIÓN: Usar OUTPUT INSERTED para obtener el GUID generado
+            # ✅ CORRECCIÓN: Nombre correcto de la tabla: pedido_sap_procesamiento_detalle
             cursor.execute("""
-                INSERT INTO pedido_sap_procesamiento (
+                INSERT INTO pedido_sap_procesamiento_detalle (
                     pedido_id,
                     pedido_detalle_id,
+                    descripcion_producto,
                     item_code_sap,
                     pack_sap,
                     unidad_conversion,
@@ -81,10 +84,12 @@ class PedidoSAPProcesamientoRepository:
                     mensaje_error,
                     procesado_por
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                OUTPUT INSERTED.procesamiento_detalle_id
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 datos.get("pedido_id"),
                 datos.get("pedido_detalle_id"),
+                datos.get("descripcion_producto"),
                 datos.get("item_code_sap"),
                 datos.get("pack_sap"),
                 datos.get("unidad_conversion"),
@@ -102,13 +107,15 @@ class PedidoSAPProcesamientoRepository:
                 datos.get("procesado_por")
             ))
             
-            # Obtener el ID generado
-            cursor.execute("SELECT @@IDENTITY")
+            # Obtener el ID generado desde OUTPUT INSERTED
             row = cursor.fetchone()
-            procesamiento_detalle_id = str(row[0]) if row else None
+            procesamiento_detalle_id = str(row[0]) if row and row[0] else None
+            
+            if not procesamiento_detalle_id:
+                raise ValueError("No se pudo obtener el ID del procesamiento insertado")
             
             self.conn.commit()
-            logger.debug(f"✅ Procesamiento SAP detalle insertado: {procesamiento_detalle_id}")
+            logger.info(f"✅ Procesamiento SAP detalle insertado: {procesamiento_detalle_id}")
             return procesamiento_detalle_id
             
         except Exception as e:
@@ -134,6 +141,7 @@ class PedidoSAPProcesamientoRepository:
             cursor.execute("""
                 UPDATE pedido_sap_procesamiento_detalle
                 SET
+                    descripcion_producto = ?,
                     item_code_sap = ?,
                     pack_sap = ?,
                     unidad_conversion = ?,
@@ -152,6 +160,7 @@ class PedidoSAPProcesamientoRepository:
                     procesado_por = ?
                 WHERE procesamiento_detalle_id = ?
             """, (
+                datos.get("descripcion_producto"),
                 datos.get("item_code_sap"),
                 datos.get("pack_sap"),
                 datos.get("unidad_conversion"),
@@ -165,9 +174,9 @@ class PedidoSAPProcesamientoRepository:
                 datos.get("producto_homologado", True),
                 datos.get("tipo_problema"),
                 datos.get("item_code_sap_encontrado"),
-                    datos.get("mensaje_error"),
-                    datos.get("procesado_por"),
-                    procesamiento_detalle_id
+                datos.get("mensaje_error"),
+                datos.get("procesado_por"),
+                procesamiento_detalle_id
             ))
             
             rows_affected = cursor.rowcount
@@ -230,6 +239,7 @@ class PedidoSAPProcesamientoRepository:
                     ps.pedido_id,
                     ps.pedido_detalle_id,
                     pd.codigo_interno,
+                    ps.descripcion_producto,
                     ps.item_code_sap,
                     ps.pack_sap,
                     ps.unidad_conversion,
@@ -259,22 +269,23 @@ class PedidoSAPProcesamientoRepository:
                     "pedido_id": str(row[1]),
                     "pedido_detalle_id": str(row[2]),
                     "codigo_interno": row[3],
-                    "item_code_sap": row[4],
-                    "pack_sap": row[5],
-                    "unidad_conversion": float(row[6]) if row[6] else None,
-                    "unidad_sap": row[7],
-                    "cantidad_original": float(row[8]) if row[8] else None,
-                    "cantidad_sap": float(row[9]) if row[9] else None,
-                    "precio_unitario_original": float(row[10]) if row[10] else None,
-                    "precio_unitario_sap": float(row[11]) if row[11] else None,
-                    "total_linea_original": float(row[12]) if row[12] else None,
-                    "total_linea_sap": float(row[13]) if row[13] else None,
-                    "producto_homologado": bool(row[14]) if row[14] is not None else True,
-                    "tipo_problema": row[15],
-                    "item_code_sap_encontrado": row[16],
-                    "mensaje_error": row[17],
-                    "fecha_procesamiento": row[18],
-                    "procesado_por": row[19]
+                    "descripcion_producto": row[4],
+                    "item_code_sap": row[5],
+                    "pack_sap": row[6],
+                    "unidad_conversion": float(row[7]) if row[7] else None,
+                    "unidad_sap": row[8],
+                    "cantidad_original": float(row[9]) if row[9] else None,
+                    "cantidad_sap": float(row[10]) if row[10] else None,
+                    "precio_unitario_original": float(row[11]) if row[11] else None,
+                    "precio_unitario_sap": float(row[12]) if row[12] else None,
+                    "total_linea_original": float(row[13]) if row[13] else None,
+                    "total_linea_sap": float(row[14]) if row[14] else None,
+                    "producto_homologado": bool(row[15]) if row[15] is not None else True,
+                    "tipo_problema": row[16],
+                    "item_code_sap_encontrado": row[17],
+                    "mensaje_error": row[18],
+                    "fecha_procesamiento": row[19],
+                    "procesado_por": row[20]
                 })
             
             return resultados

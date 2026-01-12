@@ -32,6 +32,9 @@ BEGIN
         pedido_id UNIQUEIDENTIFIER NOT NULL,
         pedido_detalle_id UNIQUEIDENTIFIER NOT NULL,
         
+        -- Información del producto
+        descripcion_producto NVARCHAR(255) NULL,        -- Descripción del producto (desde pedido_detalle.descripcion_sap)
+        
         -- Información SAP consultada
         item_code_sap NVARCHAR(50) NULL,              -- ItemCode de SAP
         pack_sap NVARCHAR(10) NULL,                   -- Pack SAP (X1, X2, X3, etc.)
@@ -67,7 +70,7 @@ BEGIN
         CONSTRAINT FK_pedido_sap_procesamiento_detalle_pedido_detalle 
             FOREIGN KEY (pedido_detalle_id) 
             REFERENCES pedido_detalle(pedido_detalle_id) 
-            ON DELETE CASCADE,
+            ON DELETE NO ACTION,
         
         -- Un solo procesamiento por producto (puede reprocesarse con UPDATE)
         CONSTRAINT UQ_pedido_sap_procesamiento_detalle_pedido_detalle 
@@ -96,6 +99,35 @@ END
 ELSE
 BEGIN
     PRINT '⚠️ La tabla pedido_sap_procesamiento_detalle ya existe.';
+END
+GO
+
+-- ============================================================================
+-- Agregar columna descripcion_producto si no existe (para tablas existentes)
+-- ============================================================================
+IF EXISTS (
+    SELECT * 
+    FROM sys.objects 
+    WHERE object_id = OBJECT_ID(N'[dbo].[pedido_sap_procesamiento_detalle]') 
+    AND type in (N'U')
+)
+BEGIN
+    IF NOT EXISTS (
+        SELECT * 
+        FROM sys.columns 
+        WHERE object_id = OBJECT_ID(N'[dbo].[pedido_sap_procesamiento_detalle]') 
+        AND name = 'descripcion_producto'
+    )
+    BEGIN
+        ALTER TABLE [dbo].[pedido_sap_procesamiento_detalle]
+        ADD descripcion_producto NVARCHAR(255) NULL;
+        
+        PRINT '✅ Columna descripcion_producto agregada exitosamente.';
+    END
+    ELSE
+    BEGIN
+        PRINT '⚠️ La columna descripcion_producto ya existe.';
+    END
 END
 GO
 

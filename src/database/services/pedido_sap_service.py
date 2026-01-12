@@ -101,6 +101,7 @@ def procesar_pedido_con_sap(
                 try:
                     pedido_detalle_id = detalle.get("pedido_detalle_id")
                     codigo_interno = detalle.get("codigo_interno")
+                    descripcion_producto = detalle.get("descripcion_sap")  # Descripción del producto
                     
                     if not codigo_interno:
                         logger.warning(f"⚠️ Producto {idx} sin código interno, omitiendo...")
@@ -217,20 +218,20 @@ def procesar_pedido_con_sap(
                         unidad_conversion = sap_info.get("unidad_conversion")
                         unidad_sap = sap_info.get("pack_sap")
                         
-                        # Convertir cantidad
+                        # Convertir cantidad (igual que despacho_detalle: docenas × unidad_conversion = packs)
                         if unidad_conversion and unidad_conversion > 0:
-                            cantidad_sap = float(cantidad_total) / float(unidad_conversion)
+                            cantidad_sap = float(cantidad_total) * float(unidad_conversion)
                             logger.info(
-                                f"   ✅ Conversión: {cantidad_total} docenas → {cantidad_sap:.2f} packs "
+                                f"   ✅ Conversión: {cantidad_total} docenas × {unidad_conversion} = {cantidad_sap:.2f} packs "
                                 f"({unidad_sap})"
                             )
                         else:
                             cantidad_sap = float(cantidad_total)
                             logger.warning(f"   ⚠️ Sin conversión disponible, usando cantidad original")
                         
-                        # Convertir precio (precio por unidad SAP)
+                        # Convertir precio (igual que despacho_detalle: precio_unitario_original / unidad_conversion)
                         if unidad_conversion and unidad_conversion > 0:
-                            precio_unitario_sap = float(precio_unitario_original) * float(unidad_conversion)
+                            precio_unitario_sap = float(precio_unitario_original) / float(unidad_conversion)
                         else:
                             precio_unitario_sap = float(precio_unitario_original)
                         
@@ -240,12 +241,14 @@ def procesar_pedido_con_sap(
                         # Sin información SAP, usar valores originales
                         cantidad_sap = float(cantidad_total)
                         precio_unitario_sap = float(precio_unitario_original)
-                        total_linea_sap = total_linea_original
+                        # Calcular total_linea_sap siempre (no copiar de total_linea_original)
+                        total_linea_sap = cantidad_sap * precio_unitario_sap
                     
                     # Preparar datos para guardar
                     datos_procesamiento = {
                         "pedido_id": pedido_id,
                         "pedido_detalle_id": pedido_detalle_id,
+                        "descripcion_producto": descripcion_producto,  # Descripción del producto
                         "item_code_sap": item_code_sap,
                         "pack_sap": pack_sap,
                         "unidad_conversion": unidad_conversion,

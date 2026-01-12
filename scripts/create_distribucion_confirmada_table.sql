@@ -41,10 +41,13 @@ BEGIN
         fecha_modificacion DATETIME NULL,
         
         -- Foreign Keys
+        -- NOTA: FK a pedido con NO ACTION para evitar ciclos de cascada
+        -- Si se elimina pedido, primero se eliminan pedido_detalle (cascada),
+        -- y luego se eliminan distribucion_confirmada (cascada desde pedido_detalle)
         CONSTRAINT FK_distribucion_confirmada_pedido 
             FOREIGN KEY (pedido_id) 
             REFERENCES pedido(pedido_id) 
-            ON DELETE CASCADE,
+            ON DELETE NO ACTION,
         
         CONSTRAINT FK_distribucion_confirmada_pedido_detalle 
             FOREIGN KEY (pedido_detalle_id) 
