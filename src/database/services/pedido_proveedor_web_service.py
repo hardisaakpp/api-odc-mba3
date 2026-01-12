@@ -322,3 +322,189 @@ class PedidoProveedorWebService:
                 "pedido_id": pedido_id,
                 "estado_guardado": estado_respuesta
             }
+    
+    def crear_respuesta_desde_pedido(
+        self,
+        pedido_id: str,
+        usuario_id: Optional[str] = None,
+        observaciones_generales: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Crea automáticamente una respuesta del proveedor desde los detalles del pedido.
+        
+        Este método se usa cuando EL RAYO ha editado directamente los campos del pedido
+        (total y costo_doc_sin_iva) y necesita generar la respuesta automáticamente.
+        
+        Args:
+            pedido_id: UUID del pedido
+            usuario_id: User ID del usuario (opcional, para auditoría)
+            observaciones_generales: Observaciones generales (opcional)
+            
+        Returns:
+            Dict con resultado del procesamiento incluyendo respuesta_id
+        """
+        with get_db_connection_context() as conn:
+            # Obtener pedido completo
+            repo = PedidoRepository(conn)
+            pedido = repo.get_pedido_completo(pedido_id)
+            
+            if not pedido:
+                logger.error(f"Pedido {pedido_id} no encontrado")
+                raise ValueError(f"Pedido no encontrado: {pedido_id}")
+            
+            logger.debug(f"Pedido {pedido_id} encontrado con {len(pedido.get('detalles', []))} detalles")
+            
+            # Verificar que no exista ya una respuesta activa
+            respuesta_repo = PedidoRespuestaRepository(conn)
+            respuesta_existente = respuesta_repo.obtener_respuesta_activa(pedido_id)
+            
+            if respuesta_existente:
+                # Si ya existe una respuesta, retornar su ID
+                logger.info(f"Ya existe respuesta para pedido {pedido_id}, retornando existente")
+                return {
+                    "status": "success",
+                    "message": "Ya existe una respuesta del proveedor para este pedido",
+                    "respuesta_id": respuesta_existente["cabecera"]["respuesta_id"],
+                    "pedido_id": pedido_id,
+                    "ya_existia": True
+                }
+            
+            # Validar que el pedido tenga detalles
+            detalles = pedido.get("detalles", [])
+            if not detalles or len(detalles) == 0:
+                logger.error(f"Pedido {pedido_id} no tiene detalles")
+                raise ValueError(f"El pedido {pedido_id} no tiene detalles")
+            
+            logger.debug(f"Procesando {len(detalles)} detalles del pedido {pedido_id}")
+            
+            # Convertir detalles del pedido a formato de respuesta
+            respuestas_cantidades = []
+            respuestas_precios = []
+            
+            for detalle in pedido["detalles"]:
+                pedido_detalle_id = detalle.get("pedido_detalle_id")
+                codigo_producto = detalle.get("codigo_interno")
+                
+                # Validar campos requeridos
+                if not pedido_detalle_id:
+                    logger.warning(f"Detalle sin pedido_detalle_id, omitiendo")
+                    continue
+                
+                if not codigo_producto:
+                    logger.warning(f"Detalle {pedido_detalle_id} sin codigo_interno, usando 'SIN_CODIGO'")
+                    codigo_producto = "SIN_CODIGO"
+                
+                # Validar que tenga tiendas
+                tiendas = detalle.get("tiendas", [])
+                if not tiendas:
+                    logger.warning(f"Detalle {pedido_detalle_id} sin tiendas, omitiendo")
+                    continue
+                
+                # Obtener cantidad solicitada total (suma de todas las tiendas)
+                cantidad_solicitada_total = sum(t.get("cantidad", 0) for t in tiendas)
+                
+                # Obtener cantidad confirmada desde el campo "total" del detalle
+                # NOTA: En el frontend, cuando EL RAYO edita, el campo "total" se usa para la cantidad confirmada
+                # Si no existe "total" o es None, usar la cantidad solicitada
+                total_value = detalle.get("total")
+                if total_value is not None:
+                    # Convertir a entero (puede venir como float desde la BD)
+                    try:
+                        cantidad_confirmada_total = int(float(total_value))
+                    except (ValueError, TypeError):
+                        cantidad_confirmada_total = cantidad_solicitada_total
+                else:
+                    cantidad_confirmada_total = cantidad_solicitada_total
+                
+                # Obtener costos originales y ajustados
+                costo_original = detalle.get("costo_doc_sin_iva")
+                costo_ajustado = detalle.get("costo_doc_sin_iva")  # El costo ajustado es el mismo que el original si no se modificó
+                
+                descuento_original = detalle.get("descuento_1")
+                descuento_ajustado = detalle.get("descuento_1")
+                
+                # Agregar a respuestas de cantidades
+                respuestas_cantidades.append({
+                    "pedido_detalle_id": pedido_detalle_id,
+                    "codigo_producto": codigo_producto,
+                    "cantidad_solicitada_total": cantidad_solicitada_total,
+                    "cantidad_confirmada_total": cantidad_confirmada_total,
+                    "observaciones": None
+                })
+                
+                # Agregar a respuestas de precios si hay costos
+                if costo_original is not None:
+                    respuestas_precios.append({
+                        "pedido_detalle_id": pedido_detalle_id,
+                        "codigo_producto": codigo_producto,
+                        "costo_doc_sin_iva_original": costo_original,
+                        "costo_doc_sin_iva_ajustado": costo_ajustado,
+                        "descuento_1_original": descuento_original,
+                        "descuento_1_ajustado": descuento_ajustado,
+                        "observaciones_precio": None
+                    })
+            
+            # Validar que haya al menos una respuesta
+            if not respuestas_cantidades:
+                logger.error(f"No se pudo crear ninguna respuesta para pedido {pedido_id}: el pedido no tiene detalles válidos")
+                raise ValueError(f"No se pudo crear ninguna respuesta: el pedido no tiene detalles válidos")
+            
+            logger.debug(f"Se crearon {len(respuestas_cantidades)} respuestas de cantidades y {len(respuestas_precios)} respuestas de precios")
+            
+            # Validar usando el servicio existente
+            try:
+                validacion = self.proveedor_service.validar_respuesta_proveedor(
+                    pedido=pedido,
+                    respuestas_cantidades=respuestas_cantidades,
+                    respuestas_precios=respuestas_precios
+                )
+            except Exception as e:
+                logger.error(f"Error en validación de respuesta: {e}", exc_info=True)
+                raise ValueError(f"Error al validar respuesta: {str(e)}")
+            
+            # Crear respuesta
+            respuesta_id = respuesta_repo.crear_respuesta_proveedor(
+                pedido_id=pedido_id,
+                usuario_id=usuario_id,
+                observaciones_generales=observaciones_generales
+            )
+            
+            # Actualizar estado a PENDIENTE_REVISION (listo para procesar)
+            cursor = conn.cursor()
+            try:
+                cursor.execute("""
+                    UPDATE pedido_respuesta_proveedor
+                    SET estado = 'PENDIENTE_REVISION',
+                        observaciones_generales = ?,
+                        updated_at = GETDATE()
+                    WHERE respuesta_id = ?
+                """, (observaciones_generales, respuesta_id))
+                conn.commit()
+            except Exception as e:
+                conn.rollback()
+                logger.error(f"Error al actualizar estado de respuesta: {e}")
+                raise
+            finally:
+                cursor.close()
+            
+            # Guardar detalles
+            resultado_guardado = respuesta_repo.guardar_respuesta_detalles(
+                respuesta_id=respuesta_id,
+                respuestas_cantidades=respuestas_cantidades,
+                respuestas_precios=respuestas_precios
+            )
+            
+            # Actualizar estado del pedido
+            repo.update_estado(pedido_id, "RESPUESTA_PROVEEDOR_CARGADA")
+            
+            return {
+                "status": "success",
+                "message": "Respuesta del proveedor creada automáticamente desde el pedido",
+                "respuesta_id": respuesta_id,
+                "validacion": validacion,
+                "cantidades_guardadas": resultado_guardado["cantidades_guardadas"],
+                "precios_guardados": resultado_guardado["precios_guardados"],
+                "pedido_id": pedido_id,
+                "estado_guardado": "PENDIENTE_REVISION",
+                "ya_existia": False
+            }

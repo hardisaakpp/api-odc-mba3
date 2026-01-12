@@ -7,6 +7,7 @@ Define los esquemas de request y response para los endpoints.
 from __future__ import annotations
 
 from typing import Optional, Dict, Any, List, Union
+from datetime import datetime
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 
@@ -625,4 +626,340 @@ class NotificarConfirmacionRequest(BaseModel):
                 "url_confirmacion": "https://tu-dominio.com/mba3-consultas/pedidos/P-12.48%20-%2012%20-%202025?modo=confirmacion&usuario=mabel-trading"
             }
         }
+
+
+# ============================================================================
+# Modelos para FASE 4: Ajuste y Redistribución (MABEL TRADING)
+# ============================================================================
+
+class DistribucionTiendaItem(BaseModel):
+    """Modelo para un item de redistribución por tienda."""
+    
+    tienda_id: str = Field(..., description="UUID de la tienda")
+    cantidad_asignada: int = Field(..., ge=0, description="Cantidad asignada a esta tienda (debe ser >= 0)")
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "tienda_id": "123e4567-e89b-12d3-a456-426614174000",
+                "cantidad_asignada": 50
+            }
+        }
+
+
+class RedistribucionProductoItem(BaseModel):
+    """Modelo para redistribución de un producto específico."""
+    
+    pedido_detalle_id: str = Field(..., description="UUID del detalle del pedido (producto)")
+    distribuciones: List[DistribucionTiendaItem] = Field(..., min_items=1, description="Lista de distribuciones por tienda")
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "pedido_detalle_id": "123e4567-e89b-12d3-a456-426614174001",
+                "distribuciones": [
+                    {"tienda_id": "123e4567-e89b-12d3-a456-426614174000", "cantidad_asignada": 50},
+                    {"tienda_id": "123e4567-e89b-12d3-a456-426614174002", "cantidad_asignada": 30}
+                ]
+            }
+        }
+
+
+class RedistribuirPedidoRequest(BaseModel):
+    """Modelo para el request de redistribuir un pedido."""
+    
+    productos: List[RedistribucionProductoItem] = Field(..., min_items=1, description="Lista de productos con sus redistribuciones")
+    observaciones: Optional[str] = Field(None, max_length=1000, description="Observaciones generales de la redistribución")
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "productos": [
+                    {
+                        "pedido_detalle_id": "123e4567-e89b-12d3-a456-426614174001",
+                        "distribuciones": [
+                            {"tienda_id": "123e4567-e89b-12d3-a456-426614174000", "cantidad_asignada": 50},
+                            {"tienda_id": "123e4567-e89b-12d3-a456-426614174002", "cantidad_asignada": 30}
+                        ]
+                    }
+                ],
+                "observaciones": "Ajuste por disponibilidad de stock"
+            }
+        }
+
+
+class DistribucionConfirmadaItem(BaseModel):
+    """Modelo para un item de distribución confirmada."""
+    
+    id: str = Field(..., description="UUID de la distribución confirmada")
+    pedido_detalle_id: str = Field(..., description="UUID del detalle del pedido")
+    tienda_id: str = Field(..., description="UUID de la tienda")
+    tienda_codigo: Optional[str] = Field(None, description="Código de la tienda")
+    tienda_nombre: Optional[str] = Field(None, description="Nombre de la tienda")
+    cantidad_solicitada: int = Field(..., ge=0)
+    cantidad_confirmada: int = Field(..., ge=0)
+    cantidad_asignada: int = Field(..., ge=0)
+    costo_unitario_original: Optional[float] = None
+    costo_unitario_ajustado: Optional[float] = None
+    subtotal_original: Optional[float] = None
+    subtotal_ajustado: Optional[float] = None
+    version: int = Field(..., ge=1)
+    estado: str = Field(..., description="Estado de la distribución")
+    fecha_creacion: Optional[datetime] = None
+    fecha_modificacion: Optional[datetime] = None
+
+
+class DistribucionProductoResponse(BaseModel):
+    """Modelo para la distribución de un producto."""
+    
+    pedido_detalle_id: str = Field(..., description="UUID del detalle del pedido")
+    codigo_interno: Optional[str] = None
+    descripcion_sap: Optional[str] = None
+    cantidad_solicitada_total: int = Field(..., ge=0)
+    cantidad_confirmada_total: int = Field(..., ge=0)
+    cantidad_asignada_total: int = Field(..., ge=0)
+    distribuciones: List[DistribucionConfirmadaItem] = Field(default_factory=list)
+
+
+class DistribucionPedidoResponse(BaseModel):
+    """Modelo para la respuesta de obtener distribución de un pedido."""
+    
+    pedido_id: str = Field(..., description="UUID del pedido")
+    numero_pedido: str = Field(..., description="Número del pedido")
+    version_actual: int = Field(..., ge=1, description="Versión actual de la redistribución")
+    estado_pedido: Optional[str] = None
+    productos: List[DistribucionProductoResponse] = Field(default_factory=list)
+
+
+class DiferenciaProductoItem(BaseModel):
+    """Modelo para diferencia de un producto."""
+    
+    pedido_detalle_id: str = Field(..., description="UUID del detalle del pedido")
+    codigo_interno: Optional[str] = None
+    descripcion_sap: Optional[str] = None
+    cantidad_solicitada: int = Field(..., ge=0)
+    cantidad_confirmada: int = Field(..., ge=0)
+    cantidad_asignada: int = Field(..., ge=0)
+    diferencia_cantidad: int = Field(..., description="cantidad_asignada - cantidad_confirmada (puede ser negativa)")
+    costo_unitario_original: Optional[float] = None
+    costo_unitario_ajustado: Optional[float] = None
+    subtotal_original: Optional[float] = None
+    subtotal_ajustado: Optional[float] = None
+    diferencia_costo: Optional[float] = Field(None, description="subtotal_ajustado - subtotal_original")
+
+
+class DiferenciaTiendaItem(BaseModel):
+    """Modelo para diferencia por tienda."""
+    
+    tienda_id: str = Field(..., description="UUID de la tienda")
+    tienda_codigo: Optional[str] = None
+    tienda_nombre: Optional[str] = None
+    cantidad_solicitada: int = Field(..., ge=0)
+    cantidad_confirmada: int = Field(..., ge=0)
+    cantidad_asignada: int = Field(..., ge=0)
+    diferencia_cantidad: int = Field(..., description="cantidad_asignada - cantidad_confirmada")
+
+
+class ReporteDiferenciasResponse(BaseModel):
+    """Modelo para el reporte de diferencias."""
+    
+    pedido_id: str = Field(..., description="UUID del pedido")
+    numero_pedido: str = Field(..., description="Número del pedido")
+    version: int = Field(..., ge=1)
+    fecha_generacion: datetime = Field(default_factory=datetime.now)
+    
+    # Resumen total
+    total_productos: int = Field(..., ge=0)
+    total_cantidad_solicitada: int = Field(..., ge=0)
+    total_cantidad_confirmada: int = Field(..., ge=0)
+    total_cantidad_asignada: int = Field(..., ge=0)
+    total_diferencia_cantidad: int = Field(..., description="Total diferencia de cantidad")
+    total_costo_original: Optional[float] = None
+    total_costo_ajustado: Optional[float] = None
+    total_diferencia_costo: Optional[float] = Field(None, description="Total diferencia de costo")
+    
+    # Detalle por producto
+    diferencias_productos: List[DiferenciaProductoItem] = Field(default_factory=list)
+    
+    # Detalle por tienda
+    diferencias_tiendas: List[DiferenciaTiendaItem] = Field(default_factory=list)
+
+
+class ConfirmarRedistribucionRequest(BaseModel):
+    """Modelo para confirmar una redistribución."""
+    
+    version: Optional[int] = Field(None, ge=1, description="Versión a confirmar (si no se especifica, se confirma la última)")
+    observaciones: Optional[str] = Field(None, max_length=1000, description="Observaciones de la confirmación")
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "version": 1,
+                "observaciones": "Redistribución validada y confirmada"
+            }
+        }
+
+
+class ConfirmarRedistribucionResponse(BaseModel):
+    """Modelo para la respuesta de confirmar redistribución."""
+    
+    pedido_id: str = Field(..., description="UUID del pedido")
+    numero_pedido: str = Field(..., description="Número del pedido")
+    version_confirmada: int = Field(..., ge=1)
+    estado_anterior: str
+    estado_nuevo: str
+    fecha_confirmacion: datetime = Field(default_factory=datetime.now)
+    mensaje: str = Field(..., description="Mensaje de confirmación")
+
+
+# ============================================================================
+# Modelos compatibles con Frontend (AjusteDetalle)
+# ============================================================================
+
+class DistribucionTiendaFrontend(BaseModel):
+    """Modelo para distribución por tienda (compatible con frontend)."""
+    
+    tienda_codigo: str = Field(..., description="Código de la tienda")
+    tienda_nombre: Optional[str] = Field(None, description="Nombre de la tienda")
+    cantidad: int = Field(..., ge=0, description="Cantidad asignada a esta tienda")
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "tienda_codigo": "T001",
+                "tienda_nombre": "Tienda Principal",
+                "cantidad": 50
+            }
+        }
+
+
+class AjusteDetalle(BaseModel):
+    """Modelo para ajuste de un producto (compatible con frontend AjusteDetalle)."""
+    
+    codigo_producto: str = Field(..., description="Código del producto")
+    descripcion: str = Field(..., description="Descripción del producto")
+    cantidad_solicitada: int = Field(..., ge=0, description="Cantidad solicitada original")
+    cantidad_confirmada: int = Field(..., ge=0, description="Cantidad confirmada por el proveedor")
+    cantidad_ajustada: int = Field(..., ge=0, description="Cantidad ajustada/redistribuida")
+    distribucion_tiendas: List[DistribucionTiendaFrontend] = Field(..., min_items=1, description="Distribución por tienda")
+    costo_original: Optional[float] = Field(None, ge=0, description="Costo unitario original")
+    costo_ajustado: Optional[float] = Field(None, ge=0, description="Costo unitario ajustado")
+    cambio_precio: bool = Field(default=False, description="Indica si hubo cambio de precio")
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "codigo_producto": "R225.1012.BCO",
+                "descripcion": "Producto ejemplo",
+                "cantidad_solicitada": 100,
+                "cantidad_confirmada": 80,
+                "cantidad_ajustada": 75,
+                "distribucion_tiendas": [
+                    {"tienda_codigo": "T001", "tienda_nombre": "Tienda 1", "cantidad": 50},
+                    {"tienda_codigo": "T002", "tienda_nombre": "Tienda 2", "cantidad": 25}
+                ],
+                "costo_original": 25.50,
+                "costo_ajustado": 25.50,
+                "cambio_precio": False
+            }
+        }
+
+
+class RedistribucionConfirmarRequest(BaseModel):
+    """Modelo para confirmar redistribución (compatible con frontend)."""
+    
+    ajustes_detalle: List[AjusteDetalle] = Field(..., min_items=1, description="Lista de ajustes por producto")
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "ajustes_detalle": [
+                    {
+                        "codigo_producto": "R225.1012.BCO",
+                        "descripcion": "Producto ejemplo",
+                        "cantidad_solicitada": 100,
+                        "cantidad_confirmada": 80,
+                        "cantidad_ajustada": 75,
+                        "distribucion_tiendas": [
+                            {"tienda_codigo": "T001", "tienda_nombre": "Tienda 1", "cantidad": 50},
+                            {"tienda_codigo": "T002", "tienda_nombre": "Tienda 2", "cantidad": 25}
+                        ],
+                        "costo_original": 25.50,
+                        "costo_ajustado": 25.50,
+                        "cambio_precio": False
+                    }
+                ]
+            }
+        }
+
+
+class ResumenConfirmacion(BaseModel):
+    """Modelo para resumen de confirmación."""
+    
+    total_productos: int = Field(..., ge=0)
+    total_cantidad_solicitada: int = Field(..., ge=0)
+    total_cantidad_confirmada: int = Field(..., ge=0)
+    total_cantidad_ajustada: int = Field(..., ge=0)
+    total_costo_original: Optional[float] = None
+    total_costo_ajustado: Optional[float] = None
+    diferencia_cantidad: int = Field(..., description="cantidad_ajustada - cantidad_confirmada")
+    diferencia_costo: Optional[float] = Field(None, description="costo_ajustado - costo_original")
+
+
+class ConfirmarRedistribucionResponseFrontend(BaseModel):
+    """Modelo para respuesta de confirmar redistribución (compatible con frontend)."""
+    
+    status: str = Field(default="success")
+    message: str = Field(..., description="Mensaje de confirmación")
+    pedido_id: str = Field(..., description="UUID del pedido")
+    numero_pedido: str = Field(..., description="Número del pedido")
+    redistribucion_id: Optional[str] = Field(None, description="ID de la redistribución (si aplica)")
+    fecha_confirmacion: datetime = Field(default_factory=datetime.now)
+    resumen: ResumenConfirmacion
+    ajustes_aplicados: int = Field(..., ge=0, description="Cantidad de productos ajustados")
+
+
+class GuardarBorradorRequest(BaseModel):
+    """Modelo para guardar borrador de redistribución."""
+    
+    ajustes_detalle: List[AjusteDetalle] = Field(..., min_items=1, description="Lista de ajustes por producto")
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "ajustes_detalle": [
+                    {
+                        "codigo_producto": "R225.1012.BCO",
+                        "descripcion": "Producto ejemplo",
+                        "cantidad_solicitada": 100,
+                        "cantidad_confirmada": 80,
+                        "cantidad_ajustada": 75,
+                        "distribucion_tiendas": [
+                            {"tienda_codigo": "T001", "tienda_nombre": "Tienda 1", "cantidad": 50}
+                        ],
+                        "costo_original": 25.50,
+                        "costo_ajustado": 25.50,
+                        "cambio_precio": False
+                    }
+                ]
+            }
+        }
+
+
+class GuardarBorradorResponse(BaseModel):
+    """Modelo para respuesta de guardar borrador."""
+    
+    status: str = Field(default="success")
+    message: str = Field(..., description="Mensaje de confirmación")
+    pedido_id: str = Field(..., description="UUID del pedido")
+    numero_pedido: str = Field(..., description="Número del pedido")
+    fecha_guardado: datetime = Field(default_factory=datetime.now)
+
+
+class BorradorResponse(BaseModel):
+    """Modelo para obtener borrador guardado."""
+    
+    status: str = Field(default="success")
+    ajustes_detalle: List[AjusteDetalle] = Field(..., description="Lista de ajustes guardados")
+    fecha_guardado: datetime = Field(..., description="Fecha en que se guardó el borrador")
 

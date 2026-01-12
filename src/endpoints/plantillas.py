@@ -18,7 +18,19 @@ from src.models import (
     ActualizarCostoRequest,
     ActualizarTotalRequest,
     ActualizarComentarioRequest,
-    NotificarConfirmacionRequest
+    NotificarConfirmacionRequest,
+    RedistribuirPedidoRequest,
+    DistribucionPedidoResponse,
+    ConfirmarRedistribucionRequest,
+    ConfirmarRedistribucionResponse,
+    ReporteDiferenciasResponse,
+    RedistribucionConfirmarRequest,
+    ConfirmarRedistribucionResponseFrontend,
+    GuardarBorradorRequest,
+    GuardarBorradorResponse,
+    BorradorResponse,
+    AjusteDetalle,
+    ResumenConfirmacion
 )
 
 logger = logging.getLogger(__name__)
@@ -1032,139 +1044,6 @@ def register_plantillas_endpoints(app: FastAPI):
                 detail=f"Error interno al procesar respuesta: {str(e)}"
             )
     
-    @app.get("/api/pedidos/{pedido_id}/respuesta-proveedor", tags=["Pedidos - Proveedor"])
-    async def obtener_respuesta_proveedor(
-        pedido_id: str = Path(..., description="UUID del pedido"),
-        user: Dict = Depends(verify_jwt_token),
-        _: None = Depends(require_permission('mba3-consultas.facturas.view'))
-    ):
-        """
-        Obtiene la respuesta más reciente del proveedor para un pedido (si existe).
-        
-        **Respuesta exitosa:**
-        ```json
-        {
-            "cabecera": {
-                "respuesta_id": "...",
-                "version": 1,
-                "estado": "PENDIENTE_REVISION",
-                "fecha_respuesta": "2025-01-21T10:00:00",
-                "creado_por": "...",
-                "observaciones_generales": "..."
-            },
-            "detalles": [
-                {
-                    "codigo_producto": "R225.1012.BCO",
-                    "cantidad_solicitada_total": 100,
-                    "cantidad_confirmada_total": 80,
-                    "costo_doc_sin_iva_original": 100.50,
-                    "costo_doc_sin_iva_ajustado": 95.00,
-                    "observaciones": "Stock limitado"
-                }
-            ]
-        }
-        ```
-        
-        Returns:
-            JSON con respuesta del proveedor o 404 si no existe
-        """
-        try:
-            from src.database.connection import get_db_connection_context
-            from src.database.repositories.pedido_respuesta_repository import PedidoRespuestaRepository
-            
-            with get_db_connection_context() as conn:
-                repo = PedidoRespuestaRepository(conn)
-                respuesta = repo.obtener_respuesta_activa(pedido_id)
-                
-                if not respuesta:
-                    raise HTTPException(
-                        status_code=404,
-                        detail=f"No existe respuesta del proveedor para este pedido"
-                    )
-                
-                return JSONResponse(status_code=200, content=respuesta)
-            
-        except HTTPException:
-            raise
-        except Exception as e:
-            logger.error(f"❌ Error al obtener respuesta del proveedor: {e}", exc_info=True)
-            raise HTTPException(
-                status_code=500,
-                detail=f"Error interno: {str(e)}"
-            )
-    
-    @app.post("/api/pedidos/{pedido_id}/procesar-confirmacion", tags=["Pedidos - Ajuste"])
-    async def procesar_confirmacion_proveedor(
-        pedido_id: str = Path(..., description="UUID del pedido"),
-        forzar_redistribucion: bool = Query(False, description="Forzar redistribución proporcional"),
-        user: Dict = Depends(verify_jwt_token),
-        _: None = Depends(require_permission('mba3-consultas.proceso.execute'))
-    ):
-        """
-        Procesa la confirmación del proveedor y ajusta el pedido.
-        
-        **Acciones realizadas:**
-        1. ✅ Ajusta cantidades por tienda para coincidir con total confirmado
-        2. ✅ Recalcula costos si hubo cambios de precio
-        3. ✅ Actualiza estado del pedido a CONFIRMADO_PROVEEDOR
-        4. ✅ Genera reporte de diferencias
-        
-        **Estrategia de redistribución:**
-        - Si el proveedor especificó distribución por tienda, se usa esa
-        - Si no, se redistribuye proporcionalmente según cantidades originales
-        - Si `forzar_redistribucion=True`, siempre redistribuye proporcionalmente
-        
-        **Idempotencia:**
-        - Si la respuesta ya fue procesada, retorna 409 Conflict (no error técnico)
-        - El frontend debe tratar esto como mensaje informativo
-        
-        Returns:
-            JSON con resultado del procesamiento y reporte de diferencias
-        """
-        try:
-            from src.database.services.pedido_ajuste_service import PedidoAjusteService
-            
-            service = PedidoAjusteService()
-            resultado = service.procesar_confirmacion_proveedor(
-                pedido_id=pedido_id,
-                usuario_id=user.get("sub") or user.get("id") or user.get("username", "unknown"),
-                forzar_redistribucion=forzar_redistribucion
-            )
-            
-            return resultado
-            
-        except ValueError as e:
-            error_msg = str(e)
-            
-            # ✅ CORRECCIÓN PUNTO 4: Detectar conflictos de idempotencia
-            if "ya fue procesada" in error_msg.lower() or "no está en estado" in error_msg.lower():
-                raise HTTPException(
-                    status_code=status.HTTP_409_CONFLICT,
-                    detail={
-                        "error": "conflict",
-                        "message": error_msg,
-                        "type": "idempotency_check"
-                    }
-                )
-            
-            # Otros errores de validación
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail={
-                    "error": "validation_error",
-                    "message": error_msg
-                }
-            )
-            
-        except Exception as e:
-            logger.error(f"❌ Error al procesar confirmación: {e}", exc_info=True)
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail={
-                    "error": "internal_error",
-                    "message": "Error interno al procesar confirmación del proveedor"
-                }
-            )
 
     @app.get("/api/pedidos/{pedido_id}/reporte-diferencias", tags=["Pedidos - Reportes"])
     async def obtener_reporte_diferencias(
@@ -1894,5 +1773,1204 @@ def register_plantillas_endpoints(app: FastAPI):
             raise HTTPException(
                 status_code=500,
                 detail=f"Error interno al procesar respuesta: {str(e)}"
+            )
+    
+    @app.post("/api/pedidos/{pedido_id}/crear-respuesta-desde-pedido",
+              response_model=RespuestaProveedorResponse,
+              tags=["Pedidos - Proveedor"])
+    async def crear_respuesta_desde_pedido(
+            pedido_id: str = Path(..., description="UUID del pedido"),
+            user: Dict = Depends(verify_jwt_token),
+            _: None = Depends(require_permission('mba3-consultas.proceso.execute'))
+        ):
+        """
+        Guarda los cambios realizados por EL RAYO y crea la respuesta del proveedor.
+        
+        **FASE 3: Confirmación por EL RAYO**
+        
+        Este endpoint se usa cuando EL RAYO ha editado directamente los campos del pedido
+        (costo_doc_sin_iva, total, comentario) y hace clic en "Confirmar".
+        
+        **Características:**
+        - ✅ Guarda los cambios realizados por EL RAYO (costo, total, comentario)
+        - ✅ Crea respuesta automáticamente desde los cambios en pedido.detalles
+        - ✅ Usa el campo `total` como cantidad confirmada
+        - ✅ Usa el campo `costo_doc_sin_iva` como costo ajustado (sin recalcular)
+        - ✅ Valida la respuesta antes de guardarla
+        - ✅ Actualiza el estado del pedido a RESPUESTA_PROVEEDOR_CARGADA
+        - ❌ NO procesa la confirmación automáticamente
+        - ❌ NO ajusta cantidades por tienda
+        - ❌ NO recalcula costos
+        - ❌ NO genera reporte de diferencias
+        
+        **Flujo:**
+        1. EL RAYO edita `costo_doc_sin_iva`, `total` y/o `comentario` en la tabla
+        2. Al hacer clic en "Confirmar", se llama a este endpoint
+        3. Se guardan los cambios en la base de datos
+        4. Se crea la respuesta automáticamente desde los cambios guardados
+        5. El estado del pedido se actualiza a RESPUESTA_PROVEEDOR_CARGADA
+        6. El frontend navega a la interfaz de redistribución (Fase 4)
+        
+        **Próximo paso (Fase 4):**
+        MABEL TRADING debe redistribuir manualmente las cantidades por tienda
+        desde el total confirmado. Los costos unitarios permanecen como los guardó EL RAYO.
+        
+        **Response:**
+        ```json
+        {
+            "status": "success",
+            "message": "Cambios guardados y respuesta creada exitosamente",
+            "respuesta_id": "...",
+            "pedido_id": "...",
+            "validacion": {...},
+            "cantidades_guardadas": 10,
+            "precios_guardados": 5,
+            "estado_guardado": "PENDIENTE_REVISION"
+        }
+        ```
+        
+        Returns:
+            JSON con resultado del guardado y creación de respuesta
+        """
+        try:
+            from src.database.services.pedido_proveedor_web_service import PedidoProveedorWebService
+            
+            usuario_id = get_user_id(user)
+            
+            # Observaciones generales opcionales (por ahora None, se puede agregar body después si es necesario)
+            observaciones_generales = None
+            
+            logger.info(f"Guardando cambios y creando respuesta para pedido {pedido_id} (usuario: {usuario_id})")
+            
+            # Crear respuesta desde pedido (esto guarda los cambios y crea la respuesta)
+            web_service = PedidoProveedorWebService()
+            resultado = web_service.crear_respuesta_desde_pedido(
+                pedido_id=pedido_id,
+                usuario_id=usuario_id,
+                observaciones_generales=observaciones_generales
+            )
+            
+            # El resultado ya incluye toda la información necesaria
+            # No se procesa confirmación, no se ajustan cantidades, no se recalculan costos
+            logger.info(f"✅ Cambios guardados y respuesta creada para pedido {pedido_id}. Estado: RESPUESTA_PROVEEDOR_CARGADA")
+            
+            return JSONResponse(status_code=200, content=resultado)
+            
+        except ValueError as e:
+            error_msg = str(e)
+            logger.error(f"❌ Error de validación al guardar cambios: {e}")
+            raise HTTPException(status_code=400, detail=error_msg)
+        except Exception as e:
+            logger.error(f"❌ Error al guardar cambios del pedido: {e}", exc_info=True)
+            raise HTTPException(
+                status_code=500,
+                detail=f"Error interno al guardar cambios del pedido: {str(e)}"
+            )
+    
+    # ============================================================================
+    # ENDPOINTS FASE 4: Ajuste y Redistribución (MABEL TRADING)
+    # ============================================================================
+    
+    @app.get("/api/pedidos/{pedido_id}/distribucion", 
+             response_model=DistribucionPedidoResponse,
+             tags=["Pedidos - Redistribución"])
+    async def obtener_distribucion(
+        pedido_id: str = Path(..., description="UUID del pedido"),
+        version: Optional[int] = Query(None, ge=1, description="Versión específica (si no se especifica, obtiene la última)"),
+        user: Dict = Depends(verify_jwt_token),
+        _: None = Depends(require_permission('mba3-consultas.facturas.view'))
+    ):
+        """
+        Obtiene la distribución confirmada de un pedido.
+        
+        **Funcionalidad:**
+        - Obtiene la redistribución realizada por MABEL TRADING
+        - Incluye cantidades solicitadas, confirmadas y asignadas
+        - Muestra costos originales y ajustados
+        - Permite especificar una versión específica o obtener la última
+        
+        **Query Parameters:**
+        - `version` (int, opcional): Versión específica a obtener. Si no se especifica, obtiene la última versión.
+        
+        **Response:**
+        ```json
+        {
+            "pedido_id": "...",
+            "numero_pedido": "P-12.48 - 12 - 2025",
+            "version_actual": 1,
+            "estado_pedido": "EN_AJUSTE_MABEL",
+            "productos": [
+                {
+                    "pedido_detalle_id": "...",
+                    "codigo_interno": "R225.1012.BCO",
+                    "descripcion_sap": "...",
+                    "cantidad_solicitada_total": 100,
+                    "cantidad_confirmada_total": 80,
+                    "cantidad_asignada_total": 75,
+                    "distribuciones": [...]
+                }
+            ]
+        }
+        ```
+        """
+        try:
+            from src.database.connection import get_db_connection_context
+            from src.database.repositories.distribucion_confirmada_repository import DistribucionConfirmadaRepository
+            from src.database.repositories.pedido_repository import PedidoRepository
+            
+            with get_db_connection_context() as conn:
+                repo_dist = DistribucionConfirmadaRepository(conn)
+                repo_pedido = PedidoRepository(conn)
+                
+                # Obtener distribución
+                distribucion_data = repo_dist.get_distribucion_completa(pedido_id, version)
+                
+                # Obtener datos del pedido para completar información
+                pedido_data = repo_pedido.get_pedido_completo(pedido_id)
+                
+                if not pedido_data:
+                    raise HTTPException(
+                        status_code=status.HTTP_404_NOT_FOUND,
+                        detail={
+                            "error": "pedido_not_found",
+                            "message": f"No se encontró el pedido con ID: {pedido_id}"
+                        }
+                    )
+                
+                # Enriquecer productos con información del pedido
+                productos_enriquecidos = []
+                for producto_dist in distribucion_data["productos"]:
+                    pedido_detalle_id = producto_dist["pedido_detalle_id"]
+                    
+                    # Buscar detalle en el pedido
+                    detalle_pedido = next(
+                        (d for d in pedido_data["detalles"] if d["pedido_detalle_id"] == pedido_detalle_id),
+                        None
+                    )
+                    
+                    if detalle_pedido:
+                        productos_enriquecidos.append({
+                            "pedido_detalle_id": pedido_detalle_id,
+                            "codigo_interno": detalle_pedido.get("codigo_interno"),
+                            "descripcion_sap": detalle_pedido.get("descripcion_sap"),
+                            "cantidad_solicitada_total": producto_dist["cantidad_solicitada_total"],
+                            "cantidad_confirmada_total": producto_dist["cantidad_confirmada_total"],
+                            "cantidad_asignada_total": producto_dist["cantidad_asignada_total"],
+                            "distribuciones": producto_dist["distribuciones"]
+                        })
+                    else:
+                        productos_enriquecidos.append(producto_dist)
+                
+                return DistribucionPedidoResponse(
+                    pedido_id=pedido_id,
+                    numero_pedido=pedido_data["cabecera"]["numero_pedido"],
+                    version_actual=distribucion_data["version_actual"],
+                    estado_pedido=pedido_data["cabecera"].get("estado"),
+                    productos=productos_enriquecidos
+                )
+                
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"❌ Error al obtener distribución: {e}", exc_info=True)
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail={
+                    "error": "internal_error",
+                    "message": f"Error interno al obtener distribución: {str(e)}"
+                }
+            )
+    
+    @app.post("/api/pedidos/{pedido_id}/redistribuir", tags=["Pedidos - Redistribución"])
+    async def redistribuir_pedido(
+        pedido_id: str = Path(..., description="UUID del pedido"),
+        request_body: RedistribuirPedidoRequest = Body(..., description="Datos de la redistribución"),
+        user: Dict = Depends(verify_jwt_token),
+        _: None = Depends(require_permission('mba3-consultas.proceso.execute'))
+    ):
+        """
+        Crea una nueva redistribución para un pedido (OBLIGATORIO - Fase 4).
+        
+        **FASE 4: Redistribución por MABEL TRADING (OBLIGATORIA)**
+        
+        Este endpoint es OBLIGATORIO después de que EL RAYO confirma los cambios (Fase 3).
+        MABEL TRADING debe redistribuir manualmente las cantidades por tienda desde el total confirmado.
+        
+        **Funcionalidad:**
+        - Crea una nueva versión de redistribución
+        - Valida reglas de negocio estrictas
+        - Permite a MABEL TRADING redistribuir manualmente desde el total confirmado
+        - Los costos unitarios NO se recalculan (permanecen como los guardó EL RAYO)
+        - Versiona automáticamente la redistribución
+        
+        **Características importantes:**
+        - ✅ Los costos unitarios permanecen tal como los guardó EL RAYO
+        - ❌ NO se recalculan costos
+        - ❌ NO se genera reporte de diferencias
+        - ✅ La redistribución es OBLIGATORIA (no opcional)
+        
+        **Validaciones:**
+        - No valores negativos
+        - La suma por producto ≤ cantidad confirmada
+        - Todas las tiendas pertenecen al pedido
+        - No duplicados de tienda por producto
+        - El pedido debe tener respuesta del proveedor
+        - Estado del pedido debe permitir redistribución (RESPUESTA_PROVEEDOR_CARGADA, CONFIRMADO_PROVEEDOR, EN_AJUSTE_MABEL)
+        
+        **Request:**
+        ```json
+        {
+            "productos": [
+                {
+                    "pedido_detalle_id": "...",
+                    "distribuciones": [
+                        {"tienda_id": "...", "cantidad_asignada": 50},
+                        {"tienda_id": "...", "cantidad_asignada": 30}
+                    ]
+                }
+            ],
+            "observaciones": "Ajuste por disponibilidad de stock"
+        }
+        ```
+        
+        **Response:**
+        ```json
+        {
+            "status": "success",
+            "message": "Redistribución creada exitosamente (versión 1)",
+            "data": {
+                "pedido_id": "...",
+                "version": 1,
+                "distribuciones_insertadas": 2
+            }
+        }
+        ```
+        """
+        try:
+            from src.database.connection import get_db_connection_context
+            from src.database.repositories.distribucion_confirmada_repository import DistribucionConfirmadaRepository
+            from src.database.repositories.pedido_repository import PedidoRepository
+            from src.database.services.redistribucion_validator import RedistribucionValidator
+            
+            user_id = get_user_id(user)
+            
+            with get_db_connection_context() as conn:
+                repo_dist = DistribucionConfirmadaRepository(conn)
+                repo_pedido = PedidoRepository(conn)
+                
+                # Obtener datos completos del pedido
+                pedido_data = repo_pedido.get_pedido_completo(pedido_id)
+                
+                if not pedido_data:
+                    raise HTTPException(
+                        status_code=status.HTTP_404_NOT_FOUND,
+                        detail={
+                            "error": "pedido_not_found",
+                            "message": f"No se encontró el pedido con ID: {pedido_id}"
+                        }
+                    )
+                
+                # Obtener respuestas del proveedor
+                cursor = conn.cursor()
+                cursor.execute("""
+                    SELECT 
+                        rpd.pedido_detalle_id,
+                        rpd.cantidad_solicitada_total,
+                        rpd.cantidad_confirmada_total
+                    FROM pedido_respuesta_proveedor_detalle rpd
+                    INNER JOIN pedido_respuesta_proveedor rp ON rpd.respuesta_id = rp.respuesta_id
+                    WHERE rp.pedido_id = ?
+                    ORDER BY rp.version DESC, rp.fecha_respuesta DESC
+                """, (pedido_id,))
+                
+                respuestas_proveedor = {}
+                for row in cursor.fetchall():
+                    respuestas_proveedor[str(row[0])] = {
+                        "cantidad_solicitada_total": row[1],
+                        "cantidad_confirmada_total": row[2]
+                    }
+                
+                # Preparar datos para validación
+                productos_redistribucion = []
+                for producto in request_body.productos:
+                    productos_redistribucion.append({
+                        "pedido_detalle_id": producto.pedido_detalle_id,
+                        "distribuciones": [
+                            {
+                                "tienda_id": d.tienda_id,
+                                "cantidad_asignada": d.cantidad_asignada
+                            }
+                            for d in producto.distribuciones
+                        ]
+                    })
+                
+                # Validar redistribución
+                validator = RedistribucionValidator()
+                es_valido, errores = validator.validar_redistribucion(
+                    pedido_data,
+                    productos_redistribucion,
+                    respuestas_proveedor
+                )
+                
+                if not es_valido:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail={
+                            "error": "validation_error",
+                            "message": "La redistribución no cumple con las reglas de negocio",
+                            "errores": errores
+                        }
+                    )
+                
+                # Crear redistribución
+                resultado = repo_dist.crear_redistribucion(
+                    pedido_id=pedido_id,
+                    productos_redistribucion=productos_redistribucion,
+                    usuario=user_id
+                )
+                
+                # Actualizar estado del pedido
+                repo_pedido.update_estado(pedido_id, "EN_AJUSTE_MABEL")
+                
+                logger.info(f"✅ Redistribución creada para pedido {pedido_id} por usuario {user_id}")
+                
+                return JSONResponse(
+                    status_code=status.HTTP_200_OK,
+                    content={
+                        "status": "success",
+                        "message": resultado["mensaje"],
+                        "data": {
+                            "pedido_id": resultado["pedido_id"],
+                            "version": resultado["version"],
+                            "distribuciones_insertadas": resultado["distribuciones_insertadas"]
+                        }
+                    }
+                )
+                
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"❌ Error al redistribuir pedido: {e}", exc_info=True)
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail={
+                    "error": "internal_error",
+                    "message": f"Error interno al redistribuir pedido: {str(e)}"
+                }
+            )
+    
+    @app.post("/api/pedidos/{pedido_id}/confirmar-redistribucion",
+             response_model=ConfirmarRedistribucionResponse,
+             tags=["Pedidos - Redistribución"])
+    async def confirmar_redistribucion(
+        pedido_id: str = Path(..., description="UUID del pedido"),
+        request_body: ConfirmarRedistribucionRequest = Body(..., description="Datos de confirmación"),
+        user: Dict = Depends(verify_jwt_token),
+        _: None = Depends(require_permission('mba3-consultas.proceso.execute'))
+    ):
+        """
+        Confirma una redistribución, cambiando su estado a 'CONFIRMADO'.
+        
+        **Funcionalidad:**
+        - Cambia el estado de todas las distribuciones a 'CONFIRMADO'
+        - Actualiza el estado del pedido a 'REDISTRIBUIDO' (endpoint interno)
+        - Registra auditoría de la confirmación
+        
+        **Request:**
+        ```json
+        {
+            "version": 1,
+            "observaciones": "Redistribución validada y confirmada"
+        }
+        ```
+        
+        **Response:**
+        ```json
+        {
+            "pedido_id": "...",
+            "numero_pedido": "P-12.48 - 12 - 2025",
+            "version_confirmada": 1,
+            "estado_anterior": "EN_AJUSTE_MABEL",
+            "estado_nuevo": "REDISTRIBUIDO",
+            "fecha_confirmacion": "2025-01-15T10:30:00Z",
+            "mensaje": "Redistribución versión 1 confirmada exitosamente"
+        }
+        ```
+        """
+        try:
+            from src.database.connection import get_db_connection_context
+            from src.database.repositories.distribucion_confirmada_repository import DistribucionConfirmadaRepository
+            from src.database.repositories.pedido_repository import PedidoRepository
+            from src.database.services.redistribucion_validator import RedistribucionValidator
+            
+            user_id = get_user_id(user)
+            
+            with get_db_connection_context() as conn:
+                repo_dist = DistribucionConfirmadaRepository(conn)
+                repo_pedido = PedidoRepository(conn)
+                
+                # Obtener estado actual del pedido
+                pedido_data = repo_pedido.get_pedido_completo(pedido_id)
+                if not pedido_data:
+                    raise HTTPException(
+                        status_code=status.HTTP_404_NOT_FOUND,
+                        detail={
+                            "error": "pedido_not_found",
+                            "message": f"No se encontró el pedido con ID: {pedido_id}"
+                        }
+                    )
+                
+                estado_anterior = pedido_data["cabecera"].get("estado", "PENDIENTE")
+                
+                # Obtener distribución para validar
+                distribucion_data = repo_dist.get_distribucion_completa(
+                    pedido_id, 
+                    request_body.version
+                )
+                
+                # Validar confirmación
+                validator = RedistribucionValidator()
+                es_valido, errores = validator.validar_confirmacion_redistribucion(
+                    pedido_id,
+                    request_body.version or distribucion_data["version_actual"],
+                    distribucion_data
+                )
+                
+                if not es_valido:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail={
+                            "error": "validation_error",
+                            "message": "La redistribución no puede ser confirmada",
+                            "errores": errores
+                        }
+                    )
+                
+                # Confirmar redistribución
+                resultado = repo_dist.confirmar_redistribucion(
+                    pedido_id=pedido_id,
+                    version=request_body.version,
+                    usuario=user_id
+                )
+                
+                # Actualizar estado del pedido a 'REDISTRIBUIDO' (endpoint interno)
+                repo_pedido.update_estado(pedido_id, "REDISTRIBUIDO")
+                estado_nuevo = "REDISTRIBUIDO"
+                
+                logger.info(f"✅ Redistribución confirmada para pedido {pedido_id} por usuario {user_id}")
+                
+                return ConfirmarRedistribucionResponse(
+                    pedido_id=pedido_id,
+                    numero_pedido=pedido_data["cabecera"]["numero_pedido"],
+                    version_confirmada=resultado["version_confirmada"],
+                    estado_anterior=estado_anterior,
+                    estado_nuevo=estado_nuevo,
+                    fecha_confirmacion=datetime.now(),
+                    mensaje=resultado["mensaje"]
+                )
+                
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"❌ Error al confirmar redistribución: {e}", exc_info=True)
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail={
+                    "error": "internal_error",
+                    "message": f"Error interno al confirmar redistribución: {str(e)}"
+                }
+            )
+    
+    @app.get("/api/pedidos/{pedido_id}/reporte-diferencias",
+             response_model=ReporteDiferenciasResponse,
+             tags=["Pedidos - Redistribución"])
+    async def obtener_reporte_diferencias(
+        pedido_id: str = Path(..., description="UUID del pedido"),
+        version: Optional[int] = Query(None, ge=1, description="Versión específica (si no se especifica, analiza la última)"),
+        user: Dict = Depends(verify_jwt_token),
+        _: None = Depends(require_permission('mba3-consultas.facturas.view'))
+    ):
+        """
+        Obtiene el reporte de diferencias de una redistribución.
+        
+        **Funcionalidad:**
+        - Calcula diferencias entre cantidades solicitadas, confirmadas y asignadas
+        - Muestra diferencias por producto y por tienda
+        - Calcula diferencias de costos
+        - Genera totales consolidados
+        
+        **Query Parameters:**
+        - `version` (int, opcional): Versión específica a analizar. Si no se especifica, analiza la última versión.
+        
+        **Response:**
+        ```json
+        {
+            "pedido_id": "...",
+            "numero_pedido": "P-12.48 - 12 - 2025",
+            "version": 1,
+            "fecha_generacion": "2025-01-15T10:30:00Z",
+            "total_productos": 5,
+            "total_cantidad_solicitada": 500,
+            "total_cantidad_confirmada": 400,
+            "total_cantidad_asignada": 380,
+            "total_diferencia_cantidad": -20,
+            "total_costo_original": 10000.00,
+            "total_costo_ajustado": 9500.00,
+            "total_diferencia_costo": -500.00,
+            "diferencias_productos": [...],
+            "diferencias_tiendas": [...]
+        }
+        ```
+        """
+        try:
+            from src.database.connection import get_db_connection_context
+            from src.database.repositories.distribucion_confirmada_repository import DistribucionConfirmadaRepository
+            from src.database.repositories.pedido_repository import PedidoRepository
+            
+            with get_db_connection_context() as conn:
+                repo_dist = DistribucionConfirmadaRepository(conn)
+                repo_pedido = PedidoRepository(conn)
+                
+                # Obtener datos del pedido
+                pedido_data = repo_pedido.get_pedido_completo(pedido_id)
+                if not pedido_data:
+                    raise HTTPException(
+                        status_code=status.HTTP_404_NOT_FOUND,
+                        detail={
+                            "error": "pedido_not_found",
+                            "message": f"No se encontró el pedido con ID: {pedido_id}"
+                        }
+                    )
+                
+                # Calcular diferencias
+                diferencias = repo_dist.calcular_diferencias(pedido_id, version)
+                
+                return ReporteDiferenciasResponse(
+                    pedido_id=pedido_id,
+                    numero_pedido=pedido_data["cabecera"]["numero_pedido"],
+                    version=diferencias["version"],
+                    fecha_generacion=datetime.now(),
+                    total_productos=diferencias["total_productos"],
+                    total_cantidad_solicitada=diferencias["total_cantidad_solicitada"],
+                    total_cantidad_confirmada=diferencias["total_cantidad_confirmada"],
+                    total_cantidad_asignada=diferencias["total_cantidad_asignada"],
+                    total_diferencia_cantidad=diferencias["total_diferencia_cantidad"],
+                    total_costo_original=diferencias["total_costo_original"],
+                    total_costo_ajustado=diferencias["total_costo_ajustado"],
+                    total_diferencia_costo=diferencias["total_diferencia_costo"],
+                    diferencias_productos=diferencias["diferencias_productos"],
+                    diferencias_tiendas=diferencias["diferencias_tiendas"]
+                )
+                
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"❌ Error al obtener reporte de diferencias: {e}", exc_info=True)
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail={
+                    "error": "internal_error",
+                    "message": f"Error interno al obtener reporte de diferencias: {str(e)}"
+                }
+            )
+    
+    @app.get("/api/pedidos/{pedido_id}/reporte-diferencias/excel", tags=["Pedidos - Redistribución"])
+    async def exportar_reporte_diferencias_excel(
+        pedido_id: str = Path(..., description="UUID del pedido"),
+        version: Optional[int] = Query(None, ge=1, description="Versión específica (si no se especifica, analiza la última)"),
+        user: Dict = Depends(verify_jwt_token),
+        _: None = Depends(require_permission('mba3-consultas.facturas.view'))
+    ):
+        """
+        Exporta el reporte de diferencias a Excel.
+        
+        **Funcionalidad:**
+        - Genera un archivo Excel con el reporte completo de diferencias
+        - Incluye hojas para diferencias por producto y por tienda
+        - Incluye resumen con totales
+        
+        **Query Parameters:**
+        - `version` (int, opcional): Versión específica a analizar. Si no se especifica, analiza la última versión.
+        
+        **Response:**
+        - Archivo Excel descargable (.xlsx)
+        """
+        try:
+            from src.database.connection import get_db_connection_context
+            from src.database.repositories.distribucion_confirmada_repository import DistribucionConfirmadaRepository
+            from src.database.repositories.pedido_repository import PedidoRepository
+            import pandas as pd
+            from io import BytesIO
+            from fastapi.responses import StreamingResponse
+            
+            with get_db_connection_context() as conn:
+                repo_dist = DistribucionConfirmadaRepository(conn)
+                repo_pedido = PedidoRepository(conn)
+                
+                # Obtener datos del pedido
+                pedido_data = repo_pedido.get_pedido_completo(pedido_id)
+                if not pedido_data:
+                    raise HTTPException(
+                        status_code=status.HTTP_404_NOT_FOUND,
+                        detail={
+                            "error": "pedido_not_found",
+                            "message": f"No se encontró el pedido con ID: {pedido_id}"
+                        }
+                    )
+                
+                # Calcular diferencias
+                diferencias = repo_dist.calcular_diferencias(pedido_id, version)
+                
+                # Crear Excel
+                output = BytesIO()
+                with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                    # Hoja 1: Resumen
+                    resumen_data = {
+                        "Concepto": [
+                            "Total Productos",
+                            "Total Cantidad Solicitada",
+                            "Total Cantidad Confirmada",
+                            "Total Cantidad Asignada",
+                            "Total Diferencia Cantidad",
+                            "Total Costo Original",
+                            "Total Costo Ajustado",
+                            "Total Diferencia Costo"
+                        ],
+                        "Valor": [
+                            diferencias["total_productos"],
+                            diferencias["total_cantidad_solicitada"],
+                            diferencias["total_cantidad_confirmada"],
+                            diferencias["total_cantidad_asignada"],
+                            diferencias["total_diferencia_cantidad"],
+                            diferencias["total_costo_original"] or 0,
+                            diferencias["total_costo_ajustado"] or 0,
+                            diferencias["total_diferencia_costo"] or 0
+                        ]
+                    }
+                    pd.DataFrame(resumen_data).to_excel(writer, sheet_name="Resumen", index=False)
+                    
+                    # Hoja 2: Diferencias por Producto
+                    if diferencias["diferencias_productos"]:
+                        df_productos = pd.DataFrame(diferencias["diferencias_productos"])
+                        df_productos.to_excel(writer, sheet_name="Diferencias por Producto", index=False)
+                    
+                    # Hoja 3: Diferencias por Tienda
+                    if diferencias["diferencias_tiendas"]:
+                        df_tiendas = pd.DataFrame(diferencias["diferencias_tiendas"])
+                        df_tiendas.to_excel(writer, sheet_name="Diferencias por Tienda", index=False)
+                
+                output.seek(0)
+                
+                numero_pedido = pedido_data["cabecera"]["numero_pedido"]
+                filename = f"reporte_diferencias_{numero_pedido.replace(' ', '_')}_v{diferencias['version']}.xlsx"
+                
+                return StreamingResponse(
+                    BytesIO(output.read()),
+                    media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    headers={"Content-Disposition": f"attachment; filename={filename}"}
+                )
+                
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"❌ Error al exportar reporte de diferencias: {e}", exc_info=True)
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail={
+                    "error": "internal_error",
+                    "message": f"Error interno al exportar reporte: {str(e)}"
+                }
+            )
+    
+    # ============================================================================
+    # ENDPOINTS FASE 4: Compatibles con Frontend (usando numero_pedido y AjusteDetalle)
+    # ============================================================================
+    
+    @app.post("/api/pedidos/{numero_pedido}/redistribucion/borrador",
+             response_model=GuardarBorradorResponse,
+             tags=["Pedidos - Redistribución"])
+    async def guardar_borrador_redistribucion(
+        numero_pedido: str = Path(..., description="Número del pedido"),
+        request_body: GuardarBorradorRequest = Body(..., description="Datos del borrador de redistribución"),
+        user: Dict = Depends(verify_jwt_token),
+        _: None = Depends(require_permission('mba3-consultas.proceso.execute'))
+    ):
+        """
+        Guarda un borrador de redistribución.
+        
+        **Funcionalidad:**
+        - Guarda la redistribución como borrador (no la confirma)
+        - Permite recuperar el borrador más tarde
+        - No cambia el estado del pedido
+        
+        **Request:**
+        ```json
+        {
+            "ajustes_detalle": [
+                {
+                    "codigo_producto": "R225.1012.BCO",
+                    "descripcion": "Producto ejemplo",
+                    "cantidad_solicitada": 100,
+                    "cantidad_confirmada": 80,
+                    "cantidad_ajustada": 75,
+                    "distribucion_tiendas": [
+                        {"tienda_codigo": "T001", "tienda_nombre": "Tienda 1", "cantidad": 50},
+                        {"tienda_codigo": "T002", "tienda_nombre": "Tienda 2", "cantidad": 25}
+                    ],
+                    "costo_original": 25.50,
+                    "costo_ajustado": 25.50,
+                    "cambio_precio": false
+                }
+            ]
+        }
+        ```
+        
+        **Response:**
+        ```json
+        {
+            "status": "success",
+            "message": "Borrador guardado exitosamente",
+            "pedido_id": "...",
+            "numero_pedido": "P-12.48 - 12 - 2025",
+            "fecha_guardado": "2025-01-15T10:30:00Z"
+        }
+        ```
+        """
+        try:
+            from src.database.connection import get_db_connection_context
+            from src.database.repositories.pedido_repository import PedidoRepository
+            import json
+            
+            user_id = get_user_id(user)
+            
+            with get_db_connection_context() as conn:
+                repo_pedido = PedidoRepository(conn)
+                
+                # Obtener pedido por número
+                pedido_data = repo_pedido.get_pedido_completo_por_numero(numero_pedido)
+                
+                if not pedido_data:
+                    raise HTTPException(
+                        status_code=status.HTTP_404_NOT_FOUND,
+                        detail={
+                            "error": "pedido_not_found",
+                            "message": f"No se encontró el pedido con número: {numero_pedido}"
+                        }
+                    )
+                
+                pedido_id = pedido_data["cabecera"]["pedido_id"]
+                
+                # Guardar borrador en una tabla temporal o en JSON
+                # Por ahora, guardamos en una tabla de borradores (crear si no existe)
+                cursor = conn.cursor()
+                
+                # Verificar si existe tabla de borradores
+                cursor.execute("""
+                    SELECT COUNT(*) 
+                    FROM INFORMATION_SCHEMA.TABLES 
+                    WHERE TABLE_NAME = 'redistribucion_borrador'
+                """)
+                existe_tabla = cursor.fetchone()[0] > 0
+                
+                if not existe_tabla:
+                    # Crear tabla de borradores
+                    cursor.execute("""
+                        CREATE TABLE redistribucion_borrador (
+                            id UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
+                            pedido_id UNIQUEIDENTIFIER NOT NULL,
+                            numero_pedido NVARCHAR(50) NOT NULL,
+                            ajustes_detalle NVARCHAR(MAX) NOT NULL,
+                            creado_por NVARCHAR(450) NULL,
+                            fecha_guardado DATETIME DEFAULT GETDATE(),
+                            CONSTRAINT FK_borrador_pedido 
+                                FOREIGN KEY (pedido_id) 
+                                REFERENCES pedido(pedido_id) 
+                                ON DELETE CASCADE
+                        )
+                    """)
+                    cursor.execute("""
+                        CREATE INDEX idx_borrador_pedido_id ON redistribucion_borrador(pedido_id)
+                    """)
+                    cursor.execute("""
+                        CREATE INDEX idx_borrador_numero_pedido ON redistribucion_borrador(numero_pedido)
+                    """)
+                
+                # Guardar o actualizar borrador
+                ajustes_json = json.dumps([ajuste.dict() for ajuste in request_body.ajustes_detalle])
+                
+                cursor.execute("""
+                    IF EXISTS (SELECT 1 FROM redistribucion_borrador WHERE pedido_id = ?)
+                        UPDATE redistribucion_borrador
+                        SET ajustes_detalle = ?,
+                            fecha_guardado = GETDATE(),
+                            creado_por = ?
+                        WHERE pedido_id = ?
+                    ELSE
+                        INSERT INTO redistribucion_borrador (pedido_id, numero_pedido, ajustes_detalle, creado_por)
+                        VALUES (?, ?, ?, ?)
+                """, (pedido_id, ajustes_json, user_id, pedido_id, pedido_id, numero_pedido, ajustes_json, user_id))
+                
+                conn.commit()
+                
+                logger.info(f"✅ Borrador guardado para pedido {numero_pedido} por usuario {user_id}")
+                
+                return GuardarBorradorResponse(
+                    pedido_id=pedido_id,
+                    numero_pedido=numero_pedido,
+                    fecha_guardado=datetime.now(),
+                    message="Borrador guardado exitosamente"
+                )
+                
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"❌ Error al guardar borrador: {e}", exc_info=True)
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail={
+                    "error": "internal_error",
+                    "message": f"Error interno al guardar borrador: {str(e)}"
+                }
+            )
+    
+    @app.get("/api/pedidos/{numero_pedido}/redistribucion/borrador",
+             response_model=BorradorResponse,
+             tags=["Pedidos - Redistribución"])
+    async def obtener_borrador_redistribucion(
+        numero_pedido: str = Path(..., description="Número del pedido"),
+        user: Dict = Depends(verify_jwt_token),
+        _: None = Depends(require_permission('mba3-consultas.facturas.view'))
+    ):
+        """
+        Obtiene el borrador de redistribución guardado.
+        
+        **Funcionalidad:**
+        - Recupera el borrador guardado previamente
+        - Permite continuar editando desde donde se dejó
+        
+        **Response:**
+        ```json
+        {
+            "status": "success",
+            "ajustes_detalle": [...],
+            "fecha_guardado": "2025-01-15T10:30:00Z"
+        }
+        ```
+        """
+        try:
+            from src.database.connection import get_db_connection_context
+            from src.database.repositories.pedido_repository import PedidoRepository
+            import json
+            
+            with get_db_connection_context() as conn:
+                repo_pedido = PedidoRepository(conn)
+                
+                # Obtener pedido por número
+                pedido_data = repo_pedido.get_pedido_completo_por_numero(numero_pedido)
+                
+                if not pedido_data:
+                    raise HTTPException(
+                        status_code=status.HTTP_404_NOT_FOUND,
+                        detail={
+                            "error": "pedido_not_found",
+                            "message": f"No se encontró el pedido con número: {numero_pedido}"
+                        }
+                    )
+                
+                pedido_id = pedido_data["cabecera"]["pedido_id"]
+                
+                # Obtener borrador
+                cursor = conn.cursor()
+                cursor.execute("""
+                    SELECT ajustes_detalle, fecha_guardado
+                    FROM redistribucion_borrador
+                    WHERE pedido_id = ?
+                """, (pedido_id,))
+                
+                row = cursor.fetchone()
+                
+                if not row:
+                    raise HTTPException(
+                        status_code=status.HTTP_404_NOT_FOUND,
+                        detail={
+                            "error": "borrador_not_found",
+                            "message": "No se encontró un borrador guardado para este pedido"
+                        }
+                    )
+                
+                ajustes_json = row[0]
+                fecha_guardado = row[1]
+                
+                # Parsear JSON
+                ajustes_list = json.loads(ajustes_json)
+                ajustes_detalle = [AjusteDetalle(**ajuste) for ajuste in ajustes_list]
+                
+                return BorradorResponse(
+                    ajustes_detalle=ajustes_detalle,
+                    fecha_guardado=fecha_guardado
+                )
+                
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"❌ Error al obtener borrador: {e}", exc_info=True)
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail={
+                    "error": "internal_error",
+                    "message": f"Error interno al obtener borrador: {str(e)}"
+                }
+            )
+    
+    @app.post("/api/pedidos/{numero_pedido}/redistribucion/confirmar",
+             response_model=ConfirmarRedistribucionResponseFrontend,
+             tags=["Pedidos - Redistribución"])
+    async def confirmar_redistribucion_frontend(
+        numero_pedido: str = Path(..., description="Número del pedido"),
+        request_body: RedistribucionConfirmarRequest = Body(..., description="Datos de confirmación de redistribución"),
+        user: Dict = Depends(verify_jwt_token),
+        _: None = Depends(require_permission('mba3-consultas.proceso.execute'))
+    ):
+        """
+        Confirma una redistribución (compatible con frontend).
+        
+        **Funcionalidad:**
+        - Confirma la redistribución usando la estructura AjusteDetalle del frontend
+        - Convierte automáticamente códigos de tienda a UUIDs
+        - Calcula resumen de confirmación
+        - Actualiza estado del pedido a 'PEDIDO_CONFIRMADO' cuando se confirma desde el frontend
+        
+        **Request:**
+        ```json
+        {
+            "ajustes_detalle": [
+                {
+                    "codigo_producto": "R225.1012.BCO",
+                    "descripcion": "Producto ejemplo",
+                    "cantidad_solicitada": 100,
+                    "cantidad_confirmada": 80,
+                    "cantidad_ajustada": 75,
+                    "distribucion_tiendas": [
+                        {"tienda_codigo": "T001", "tienda_nombre": "Tienda 1", "cantidad": 50},
+                        {"tienda_codigo": "T002", "tienda_nombre": "Tienda 2", "cantidad": 25}
+                    ],
+                    "costo_original": 25.50,
+                    "costo_ajustado": 25.50,
+                    "cambio_precio": false
+                }
+            ]
+        }
+        ```
+        
+        **Response:**
+        ```json
+        {
+            "status": "success",
+            "message": "Redistribución confirmada exitosamente",
+            "pedido_id": "...",
+            "numero_pedido": "P-12.48 - 12 - 2025",
+            "redistribucion_id": "...",
+            "fecha_confirmacion": "2025-01-15T10:30:00Z",
+            "resumen": {
+                "total_productos": 1,
+                "total_cantidad_solicitada": 100,
+                "total_cantidad_confirmada": 80,
+                "total_cantidad_ajustada": 75,
+                "total_costo_original": 2550.00,
+                "total_costo_ajustado": 1912.50,
+                "diferencia_cantidad": -5,
+                "diferencia_costo": -637.50
+            },
+            "ajustes_aplicados": 1
+        }
+        ```
+        """
+        try:
+            from src.database.connection import get_db_connection_context
+            from src.database.repositories.pedido_repository import PedidoRepository
+            from src.database.repositories.distribucion_confirmada_repository import DistribucionConfirmadaRepository
+            from src.database.services.redistribucion_validator import RedistribucionValidator
+            
+            user_id = get_user_id(user)
+            
+            with get_db_connection_context() as conn:
+                repo_pedido = PedidoRepository(conn)
+                repo_dist = DistribucionConfirmadaRepository(conn)
+                
+                # Obtener pedido por número
+                pedido_data = repo_pedido.get_pedido_completo_por_numero(numero_pedido)
+                
+                if not pedido_data:
+                    raise HTTPException(
+                        status_code=status.HTTP_404_NOT_FOUND,
+                        detail={
+                            "error": "pedido_not_found",
+                            "message": f"No se encontró el pedido con número: {numero_pedido}"
+                        }
+                    )
+                
+                pedido_id = pedido_data["cabecera"]["pedido_id"]
+                
+                # Convertir AjusteDetalle a estructura interna
+                # Necesitamos mapear codigo_producto -> pedido_detalle_id y tienda_codigo -> tienda_id
+                productos_redistribucion = []
+                
+                for ajuste in request_body.ajustes_detalle:
+                    # Buscar pedido_detalle_id por codigo_producto
+                    detalle_pedido = next(
+                        (d for d in pedido_data["detalles"] 
+                         if d.get("codigo_interno") == ajuste.codigo_producto),
+                        None
+                    )
+                    
+                    if not detalle_pedido:
+                        raise HTTPException(
+                            status_code=status.HTTP_400_BAD_REQUEST,
+                            detail={
+                                "error": "producto_not_found",
+                                "message": f"No se encontró el producto con código: {ajuste.codigo_producto}"
+                            }
+                        )
+                    
+                    # Convertir distribuciones de tienda
+                    distribuciones = []
+                    for dist_tienda in ajuste.distribucion_tiendas:
+                        # Buscar tienda_id por codigo
+                        cursor = conn.cursor()
+                        cursor.execute("""
+                            SELECT tienda_id FROM tienda WHERE codigo = ?
+                        """, (dist_tienda.tienda_codigo,))
+                        row = cursor.fetchone()
+                        
+                        if not row:
+                            raise HTTPException(
+                                status_code=status.HTTP_400_BAD_REQUEST,
+                                detail={
+                                    "error": "tienda_not_found",
+                                    "message": f"No se encontró la tienda con código: {dist_tienda.tienda_codigo}"
+                                }
+                            )
+                        
+                        distribuciones.append({
+                            "tienda_id": str(row[0]),
+                            "cantidad_asignada": dist_tienda.cantidad
+                        })
+                    
+                    productos_redistribucion.append({
+                        "pedido_detalle_id": detalle_pedido["pedido_detalle_id"],
+                        "distribuciones": distribuciones
+                    })
+                
+                # Obtener respuestas del proveedor para validación
+                cursor = conn.cursor()
+                cursor.execute("""
+                    SELECT 
+                        rpd.pedido_detalle_id,
+                        rpd.cantidad_solicitada_total,
+                        rpd.cantidad_confirmada_total
+                    FROM pedido_respuesta_proveedor_detalle rpd
+                    INNER JOIN pedido_respuesta_proveedor rp ON rpd.respuesta_id = rp.respuesta_id
+                    WHERE rp.pedido_id = ?
+                    ORDER BY rp.version DESC, rp.fecha_respuesta DESC
+                """, (pedido_id,))
+                
+                respuestas_proveedor = {}
+                for row in cursor.fetchall():
+                    respuestas_proveedor[str(row[0])] = {
+                        "cantidad_solicitada_total": row[1],
+                        "cantidad_confirmada_total": row[2]
+                    }
+                
+                # Validar redistribución
+                validator = RedistribucionValidator()
+                es_valido, errores = validator.validar_redistribucion(
+                    pedido_data,
+                    productos_redistribucion,
+                    respuestas_proveedor
+                )
+                
+                if not es_valido:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail={
+                            "error": "validation_error",
+                            "message": "La redistribución no cumple con las reglas de negocio",
+                            "errores": errores
+                        }
+                    )
+                
+                # Crear redistribución
+                resultado = repo_dist.crear_redistribucion(
+                    pedido_id=pedido_id,
+                    productos_redistribucion=productos_redistribucion,
+                    usuario=user_id
+                )
+                
+                # Confirmar redistribución
+                resultado_confirmacion = repo_dist.confirmar_redistribucion(
+                    pedido_id=pedido_id,
+                    version=resultado["version"],
+                    usuario=user_id
+                )
+                
+                # Actualizar estado del pedido a "PEDIDO_CONFIRMADO" (específico para confirmación desde frontend)
+                repo_pedido.update_estado(pedido_id, "PEDIDO_CONFIRMADO")
+                
+                # Calcular resumen
+                total_productos = len(request_body.ajustes_detalle)
+                total_cantidad_solicitada = sum(a.cantidad_solicitada for a in request_body.ajustes_detalle)
+                total_cantidad_confirmada = sum(a.cantidad_confirmada for a in request_body.ajustes_detalle)
+                total_cantidad_ajustada = sum(a.cantidad_ajustada for a in request_body.ajustes_detalle)
+                diferencia_cantidad = total_cantidad_ajustada - total_cantidad_confirmada
+                
+                total_costo_original = sum(
+                    (a.cantidad_solicitada * (a.costo_original or 0)) 
+                    for a in request_body.ajustes_detalle
+                ) or None
+                
+                total_costo_ajustado = sum(
+                    (a.cantidad_ajustada * (a.costo_ajustado or 0)) 
+                    for a in request_body.ajustes_detalle
+                ) or None
+                
+                diferencia_costo = (
+                    total_costo_ajustado - total_costo_original 
+                    if total_costo_ajustado is not None and total_costo_original is not None 
+                    else None
+                )
+                
+                resumen = ResumenConfirmacion(
+                    total_productos=total_productos,
+                    total_cantidad_solicitada=total_cantidad_solicitada,
+                    total_cantidad_confirmada=total_cantidad_confirmada,
+                    total_cantidad_ajustada=total_cantidad_ajustada,
+                    total_costo_original=total_costo_original,
+                    total_costo_ajustado=total_costo_ajustado,
+                    diferencia_cantidad=diferencia_cantidad,
+                    diferencia_costo=diferencia_costo
+                )
+                
+                logger.info(f"✅ Redistribución confirmada para pedido {numero_pedido} por usuario {user_id}")
+                
+                return ConfirmarRedistribucionResponseFrontend(
+                    pedido_id=pedido_id,
+                    numero_pedido=numero_pedido,
+                    redistribucion_id=str(resultado["version"]),  # Usar version como ID
+                    fecha_confirmacion=datetime.now(),
+                    resumen=resumen,
+                    ajustes_aplicados=total_productos,
+                    message="Redistribución confirmada exitosamente"
+                )
+                
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"❌ Error al confirmar redistribución: {e}", exc_info=True)
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail={
+                    "error": "internal_error",
+                    "message": f"Error interno al confirmar redistribución: {str(e)}"
+                }
             )
 

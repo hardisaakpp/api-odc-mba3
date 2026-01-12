@@ -479,32 +479,52 @@ class PedidoRepository:
                 }
             
             # Obtener detalles con sus distribuciones
-            # Nota: comentario puede no existir en BD antigua, se maneja con try/except
+            # Nota: comentario y campos de modificación manual pueden no existir en BD antigua, se maneja con try/except
             try:
                 cursor.execute("""
                     SELECT 
                         pd.pedido_detalle_id,
                         pd.codigo_interno, pd.descripcion_sap, pd.marca, pd.codigo_barras,
                         pd.pack, pd.costo_doc_sin_iva, pd.descuento_1, pd.pvp,
-                        pd.subtotal, pd.total, pd.bodega, pd.comentario
+                        pd.subtotal, pd.total, pd.bodega, pd.comentario,
+                        ISNULL(pd.costo_modificado_manual, 0) AS costo_modificado_manual,
+                        ISNULL(pd.total_modificado_manual, 0) AS total_modificado_manual,
+                        ISNULL(pd.comentario_modificado_manual, 0) AS comentario_modificado_manual
                     FROM pedido_detalle pd
                     WHERE pd.pedido_id = ?
                     ORDER BY pd.created_at
                 """, (pedido_id,))
                 tiene_comentario = True
-            except Exception:
-                # Si el campo comentario no existe, usar consulta sin él
-                cursor.execute("""
-                    SELECT 
-                        pd.pedido_detalle_id,
-                        pd.codigo_interno, pd.descripcion_sap, pd.marca, pd.codigo_barras,
-                        pd.pack, pd.costo_doc_sin_iva, pd.descuento_1, pd.pvp,
-                        pd.subtotal, pd.total, pd.bodega
-                    FROM pedido_detalle pd
-                    WHERE pd.pedido_id = ?
-                    ORDER BY pd.created_at
-                """, (pedido_id,))
-                tiene_comentario = False
+                tiene_campos_modificados = True
+            except Exception as e:
+                # Si algún campo no existe, intentar sin ellos
+                try:
+                    cursor.execute("""
+                        SELECT 
+                            pd.pedido_detalle_id,
+                            pd.codigo_interno, pd.descripcion_sap, pd.marca, pd.codigo_barras,
+                            pd.pack, pd.costo_doc_sin_iva, pd.descuento_1, pd.pvp,
+                            pd.subtotal, pd.total, pd.bodega, pd.comentario
+                        FROM pedido_detalle pd
+                        WHERE pd.pedido_id = ?
+                        ORDER BY pd.created_at
+                    """, (pedido_id,))
+                    tiene_comentario = True
+                    tiene_campos_modificados = False
+                except Exception:
+                    # Si el campo comentario no existe, usar consulta sin él
+                    cursor.execute("""
+                        SELECT 
+                            pd.pedido_detalle_id,
+                            pd.codigo_interno, pd.descripcion_sap, pd.marca, pd.codigo_barras,
+                            pd.pack, pd.costo_doc_sin_iva, pd.descuento_1, pd.pvp,
+                            pd.subtotal, pd.total, pd.bodega
+                        FROM pedido_detalle pd
+                        WHERE pd.pedido_id = ?
+                        ORDER BY pd.created_at
+                    """, (pedido_id,))
+                    tiene_comentario = False
+                    tiene_campos_modificados = False
             
             detalles = []
             for row in cursor.fetchall():
@@ -550,6 +570,17 @@ class PedidoRepository:
                     detalle_dict["comentario"] = row[12] if row[12] else None
                 else:
                     detalle_dict["comentario"] = None
+                
+                # Agregar campos de modificación manual si existen en la consulta
+                if tiene_campos_modificados and len(row) > 15:
+                    detalle_dict["costo_modificado_manual"] = bool(row[13])
+                    detalle_dict["total_modificado_manual"] = bool(row[14])
+                    detalle_dict["comentario_modificado_manual"] = bool(row[15])
+                else:
+                    # Si los campos no existen en BD antigua, devolver False por defecto
+                    detalle_dict["costo_modificado_manual"] = False
+                    detalle_dict["total_modificado_manual"] = False
+                    detalle_dict["comentario_modificado_manual"] = False
                 
                 detalles.append(detalle_dict)
             
@@ -653,32 +684,52 @@ class PedidoRepository:
                 }
             
             # Obtener detalles con sus distribuciones (usando pedido_id obtenido)
-            # Nota: comentario puede no existir en BD antigua, se maneja con try/except
+            # Nota: comentario y campos de modificación manual pueden no existir en BD antigua, se maneja con try/except
             try:
                 cursor.execute("""
                     SELECT 
                         pd.pedido_detalle_id,
                         pd.codigo_interno, pd.descripcion_sap, pd.marca, pd.codigo_barras,
                         pd.pack, pd.costo_doc_sin_iva, pd.descuento_1, pd.pvp,
-                        pd.subtotal, pd.total, pd.bodega, pd.comentario
+                        pd.subtotal, pd.total, pd.bodega, pd.comentario,
+                        ISNULL(pd.costo_modificado_manual, 0) AS costo_modificado_manual,
+                        ISNULL(pd.total_modificado_manual, 0) AS total_modificado_manual,
+                        ISNULL(pd.comentario_modificado_manual, 0) AS comentario_modificado_manual
                     FROM pedido_detalle pd
                     WHERE pd.pedido_id = ?
                     ORDER BY pd.created_at
                 """, (pedido_id,))
                 tiene_comentario = True
-            except Exception:
-                # Si el campo comentario no existe, usar consulta sin él
-                cursor.execute("""
-                    SELECT 
-                        pd.pedido_detalle_id,
-                        pd.codigo_interno, pd.descripcion_sap, pd.marca, pd.codigo_barras,
-                        pd.pack, pd.costo_doc_sin_iva, pd.descuento_1, pd.pvp,
-                        pd.subtotal, pd.total, pd.bodega
-                    FROM pedido_detalle pd
-                    WHERE pd.pedido_id = ?
-                    ORDER BY pd.created_at
-                """, (pedido_id,))
-                tiene_comentario = False
+                tiene_campos_modificados = True
+            except Exception as e:
+                # Si algún campo no existe, intentar sin ellos
+                try:
+                    cursor.execute("""
+                        SELECT 
+                            pd.pedido_detalle_id,
+                            pd.codigo_interno, pd.descripcion_sap, pd.marca, pd.codigo_barras,
+                            pd.pack, pd.costo_doc_sin_iva, pd.descuento_1, pd.pvp,
+                            pd.subtotal, pd.total, pd.bodega, pd.comentario
+                        FROM pedido_detalle pd
+                        WHERE pd.pedido_id = ?
+                        ORDER BY pd.created_at
+                    """, (pedido_id,))
+                    tiene_comentario = True
+                    tiene_campos_modificados = False
+                except Exception:
+                    # Si el campo comentario no existe, usar consulta sin él
+                    cursor.execute("""
+                        SELECT 
+                            pd.pedido_detalle_id,
+                            pd.codigo_interno, pd.descripcion_sap, pd.marca, pd.codigo_barras,
+                            pd.pack, pd.costo_doc_sin_iva, pd.descuento_1, pd.pvp,
+                            pd.subtotal, pd.total, pd.bodega
+                        FROM pedido_detalle pd
+                        WHERE pd.pedido_id = ?
+                        ORDER BY pd.created_at
+                    """, (pedido_id,))
+                    tiene_comentario = False
+                    tiene_campos_modificados = False
             
             detalles = []
             for row in cursor.fetchall():
@@ -728,6 +779,17 @@ class PedidoRepository:
                         detalle_dict["comentario"] = None
                 else:
                     detalle_dict["comentario"] = None
+                
+                # Agregar campos de modificación manual si existen en la consulta
+                if tiene_campos_modificados and len(row) > 15:
+                    detalle_dict["costo_modificado_manual"] = bool(row[13])
+                    detalle_dict["total_modificado_manual"] = bool(row[14])
+                    detalle_dict["comentario_modificado_manual"] = bool(row[15])
+                else:
+                    # Si los campos no existen en BD antigua, devolver False por defecto
+                    detalle_dict["costo_modificado_manual"] = False
+                    detalle_dict["total_modificado_manual"] = False
+                    detalle_dict["comentario_modificado_manual"] = False
                 
                 detalles.append(detalle_dict)
             
@@ -846,8 +908,12 @@ class PedidoRepository:
             # Convertir valores Decimal a float para serialización JSON
             costo_anterior_float = float(costo_anterior) if costo_anterior is not None else None
             
-            # 2. Actualizar el costo con campos de auditoría
-            set_clauses = ["costo_doc_sin_iva = ?", "updated_at = GETDATE()"]
+            # 2. Actualizar el costo con campos de auditoría y marcar como modificado manualmente
+            set_clauses = [
+                "costo_doc_sin_iva = ?",
+                "updated_at = GETDATE()",
+                "costo_modificado_manual = 1"  # Marcar que fue modificado manualmente
+            ]
             values = [nuevo_costo]
             
             if modificado_por:
@@ -958,7 +1024,8 @@ class PedidoRepository:
             # NOTA: El costo y subtotal NO se modifican, solo el total
             set_clauses = [
                 "total = ?",
-                "updated_at = GETDATE()"
+                "updated_at = GETDATE()",
+                "total_modificado_manual = 1"  # Marcar que fue modificado manualmente
             ]
             values = [nuevo_total]
             
@@ -1061,7 +1128,15 @@ class PedidoRepository:
             nuevo_comentario_str = nuevo_comentario.strip() if nuevo_comentario and nuevo_comentario.strip() else None
             
             # 2. Actualizar el comentario en la base de datos con campos de auditoría
+            # Marcar como modificado manualmente solo si el comentario no es None o vacío
             set_clauses = ["comentario = ?", "updated_at = GETDATE()"]
+            if nuevo_comentario_str:
+                set_clauses.append("comentario_modificado_manual = 1")  # Marcar que fue modificado manualmente
+            else:
+                # Si se limpia el comentario, mantener el flag como está (no resetearlo)
+                # Esto permite rastrear que alguna vez fue modificado
+                pass
+            
             values = [nuevo_comentario_str]
             
             if modificado_por:

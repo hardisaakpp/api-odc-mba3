@@ -140,7 +140,7 @@ class PedidoRespuestaRepository:
                         costo_doc_sin_iva_original, costo_doc_sin_iva_ajustado,
                         descuento_1_original, descuento_1_ajustado,
                         observaciones, created_at, updated_at
-                    ) VALUES (NEWID(), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, GETDATE(), GETDATE())
+                    ) VALUES (NEWID(), ?, ?, ?, ?, ?, ?, ?, ?, ?, GETDATE(), GETDATE())
                 """, (
                     respuesta_id, pedido_detalle_id,
                     cantidad_solicitada_total, cantidad_confirmada_total,
