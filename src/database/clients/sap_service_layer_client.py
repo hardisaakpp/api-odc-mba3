@@ -520,7 +520,132 @@ class SAPServiceLayerClient:
                 "success": False,
                 "error": f"Error inesperado: {str(e)}"
             }
-            logger.error(f"❌ Error inesperado al crear Purchase Order: {e}", exc_info=True)
+    
+    def create_stock_transfer(self, stock_transfer_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """
+        Crea una solicitud de transferencia de stock (Stock Transfer Order) en SAP.
+        
+        Args:
+            stock_transfer_data: Diccionario con los datos de la solicitud de transferencia en formato SAP
+            
+        Returns:
+            Diccionario con la respuesta de SAP incluyendo el DocEntry y DocNum, o None si falla
+            
+        Ejemplo de stock_transfer_data:
+        {
+            "DocDate": "2025-01-21",
+            "FromWarehouse": "WH01",
+            "ToWarehouse": "WH02",
+            "Comments": "Transferencia desde OC 12345",
+            "StockTransferLines": [
+                {
+                    "ItemCode": "5-0012.9",
+                    "Quantity": 100.0,
+                    "FromWarehouse": "WH01",
+                    "ToWarehouse": "WH02"
+                }
+            ]
+        }
+        """
+        if not self.enabled:
+            logger.debug("⏭️ Creación de Stock Transfer deshabilitada")
+            return None
+        
+        if not self._ensure_session():
+            logger.error("❌ No se pudo establecer sesión con SAP Service Layer")
+            return None
+        
+        try:
+            url = f"{self.base_url}/StockTransfers"
+            headers = {
+                "Content-Type": "application/json",
+                "Cookie": f"B1SESSION={self.session_id}"
+            }
+            
+            logger.info(f"📤 Enviando Stock Transfer Order a SAP Service Layer...")
+            logger.debug(f"   URL: {url}")
+            logger.debug(f"   Datos: {stock_transfer_data}")
+            
+            # Usar sesión existente si está disponible, sino usar fallback
+            if self.working_session:
+                response = self.working_session.post(
+                    url,
+                    json=stock_transfer_data,
+                    headers=headers,
+                    timeout=self.timeout
+                )
+            else:
+                # Usar sistema de fallback TLS
+                response, _ = self._try_request_with_fallback(
+                    "POST",
+                    url,
+                    json=stock_transfer_data,
+                    headers=headers
+                )
+                
+                if response is None:
+                    logger.error("❌ No se pudo establecer conexión con SAP Service Layer")
+                    return {
+                        "success": False,
+                        "error": "No se pudo establecer conexión con SAP Service Layer"
+                    }
+            
+            if response.status_code in [200, 201]:
+                result = response.json()
+                doc_entry = result.get("DocEntry")
+                doc_num = result.get("DocNum")
+                logger.info(f"✅ Stock Transfer Order creada exitosamente en SAP: DocEntry={doc_entry}, DocNum={doc_num}")
+                return {
+                    "success": True,
+                    "doc_entry": doc_entry,
+                    "doc_num": doc_num,
+                    "data": result
+                }
+            else:
+                # Procesar error de SAP
+                error_msg = f"Error al crear Stock Transfer Order: {response.status_code}"
+                error_code = None
+                error_details = None
+                
+                try:
+                    error_body = response.json()
+                    error_detail = error_body.get("error", {})
+                    
+                    # Extraer mensaje de error de SAP
+                    if isinstance(error_detail.get("message"), dict):
+                        error_msg = error_detail.get("message", {}).get("value", error_msg)
+                    elif isinstance(error_detail.get("message"), str):
+                        error_msg = error_detail.get("message", error_msg)
+                    
+                    # Extraer código de error de SAP
+                    error_code = error_detail.get("code", "")
+                    
+                    # Guardar detalles completos del error para debugging
+                    error_details = error_body
+                    
+                    logger.error(f"❌ {error_msg} (Código: {error_code})")
+                except Exception as e:
+                    # Si no se puede parsear JSON, usar texto de respuesta
+                    error_msg = f"{error_msg} - {response.text[:500]}"
+                    logger.error(f"❌ {error_msg}")
+                    logger.debug(f"Error al parsear respuesta de error: {e}")
+                
+                return {
+                    "success": False,
+                    "error": error_msg,
+                    "error_code": error_code,
+                    "status_code": response.status_code,
+                    "sap_error_details": error_details
+                }
+                
+        except requests.exceptions.RequestException as e:
+            logger.error(f"❌ Error de conexión al crear Stock Transfer Order: {e}")
+            return {
+                "success": False,
+                "error": f"Error de conexión: {str(e)}"
+            }
+        except Exception as e:
+            logger.error(f"❌ Error inesperado al crear Stock Transfer Order: {e}", exc_info=True)
             return {
                 "success": False,
                 "error": f"Error inesperado: {str(e)}"

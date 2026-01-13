@@ -452,6 +452,107 @@ def register_plantillas_endpoints(app: FastAPI):
                 detail=f"Error interno al obtener último pedido: {str(e)}"
             )
     
+    @app.get("/api/pedidos", tags=["Pedidos"])
+    async def listar_pedidos(
+        estado: Optional[str] = Query(None, description="Filtrar por estado del pedido"),
+        fecha_desde: Optional[str] = Query(None, description="Filtrar desde fecha (YYYY-MM-DD)"),
+        fecha_hasta: Optional[str] = Query(None, description="Filtrar hasta fecha (YYYY-MM-DD)"),
+        proveedor_nombre: Optional[str] = Query(None, description="Buscar por nombre de proveedor (parcial)"),
+        numero_pedido: Optional[str] = Query(None, description="Buscar por número de pedido (parcial)"),
+        creado_por: Optional[str] = Query(None, description="Filtrar por usuario que creó el pedido"),
+        limit: Optional[int] = Query(50, description="Límite de registros por página"),
+        offset: Optional[int] = Query(0, description="Offset para paginación"),
+        user: Dict = Depends(verify_jwt_token),
+        _: None = Depends(require_permission('mba3-consultas.facturas.view'))
+    ):
+        """
+        Lista pedidos con filtros y paginación.
+        
+        **HU-02 y HU-07: Visualizar estado de pedidos con filtros**
+        
+        Este endpoint permite a los usuarios de Mabel Trading y El Rayo visualizar
+        los pedidos con múltiples filtros y seguimiento del estado.
+        
+        **Query Parameters:**
+        - `estado` (string, opcional) - Filtrar por estado (ej: "PENDIENTE_CONFIRMACION_PROVEEDOR", "CONFIRMADO_PROVEEDOR")
+        - `fecha_desde` (string, opcional) - Filtrar desde fecha (YYYY-MM-DD)
+        - `fecha_hasta` (string, opcional) - Filtrar hasta fecha (YYYY-MM-DD)
+        - `proveedor_nombre` (string, opcional) - Búsqueda parcial por nombre de proveedor
+        - `numero_pedido` (string, opcional) - Búsqueda parcial por número de pedido
+        - `creado_por` (string, opcional) - Filtrar por usuario que creó el pedido
+        - `limit` (int, default: 50) - Límite de registros por página
+        - `offset` (int, default: 0) - Offset para paginación
+        
+        **Ejemplo:**
+        ```
+        GET /api/pedidos?estado=PENDIENTE_CONFIRMACION_PROVEEDOR&limit=20&offset=0
+        GET /api/pedidos?fecha_desde=2025-01-01&fecha_hasta=2025-01-31&proveedor_nombre=RAYO
+        ```
+        
+        **Respuesta:**
+        ```json
+        {
+            "status": "success",
+            "data": [
+                {
+                    "pedido_id": "...",
+                    "numero_pedido": "P-12.48 - 12 - 2025",
+                    "fecha_pedido": "2025-01-21",
+                    "proveedor_nombre": "TEXTILES EL RAYO S.A.",
+                    "estado": "PENDIENTE_CONFIRMACION_PROVEEDOR",
+                    ...
+                }
+            ],
+            "metadata": {
+                "total": 150,
+                "limit": 50,
+                "offset": 0,
+                "has_more": true
+            }
+        }
+        ```
+        
+        Returns:
+            JSON con lista de pedidos y metadata de paginación
+        """
+        try:
+            from src.database.connection import get_db_connection_context
+            from src.database.repositories.pedido_repository import PedidoRepository
+            
+            with get_db_connection_context() as conn:
+                repo = PedidoRepository(conn)
+                resultado = repo.get_pedidos_con_filtros(
+                    estado=estado,
+                    fecha_desde=fecha_desde,
+                    fecha_hasta=fecha_hasta,
+                    proveedor_nombre=proveedor_nombre,
+                    numero_pedido=numero_pedido,
+                    creado_por=creado_por,
+                    limit=limit,
+                    offset=offset
+                )
+                
+                return JSONResponse(
+                    status_code=200,
+                    content={
+                        "status": "success",
+                        "data": resultado["data"],
+                        "metadata": {
+                            "total": resultado["total"],
+                            "limit": resultado["limit"],
+                            "offset": resultado["offset"],
+                            "has_more": resultado["has_more"]
+                        }
+                    }
+                )
+                
+        except Exception as e:
+            logger.error(f"❌ Error al listar pedidos: {e}", exc_info=True)
+            raise HTTPException(
+                status_code=500,
+                detail=f"Error interno al listar pedidos: {str(e)}"
+            )
+    
     @app.get("/api/plantillas/{identificador}", tags=["Plantillas"])
     async def get_pedido(
         identificador: str = Path(..., description="Número de pedido (ej: 'P-12.48 - 12 - 2025') o UUID del pedido (para compatibilidad)"),
@@ -1138,9 +1239,9 @@ def register_plantillas_endpoints(app: FastAPI):
                 }
             )
     
-    @app.post("/api/pedidos/{pedido_id}/crear-orden-compra", tags=["Pedidos - ODC"])
+    @app.post("/api/pedidos/{identificador}/crear-orden-compra", tags=["Pedidos - ODC"])
     async def crear_orden_compra_desde_pedido(
-        pedido_id: str = Path(..., description="UUID del pedido"),
+        identificador: str = Path(..., description="UUID del pedido o número de pedido (ej: 'P-12.55 - 12 - 2025')"),
         user: Dict = Depends(verify_jwt_token),
         _: None = Depends(require_permission('mba3-consultas.proceso.execute'))
     ):
@@ -1149,13 +1250,20 @@ def register_plantillas_endpoints(app: FastAPI):
         
         **FASE 5: Generación de ODC desde cantidades confirmadas**
         
+        **Path Parameters:**
+        - `identificador` (string, requerido) - Puede ser:
+          - Número de pedido (business key, ej: 'P-12.55 - 12 - 2025') ⭐ RECOMENDADO
+          - UUID del pedido (ej: 'AEDEC52D-D007-416F-8A09-9F0D31282EEE') ⚠️ Compatibilidad
+        
         **Flujo:**
-        1. Valida que el pedido tenga respuesta aprobada
-        2. Obtiene cantidades confirmadas (cantidad_confirmada_total > 0)
-        3. Convierte unidades (docenas → packs SAP)
-        4. Obtiene SKU SAP desde homologación/cache
-        5. Crea OC con pedido_id asociado
-        6. Estado inicial: PENDIENTE (lista para enviar a SAP)
+        1. Detecta si el identificador es UUID o numero_pedido
+        2. Obtiene el pedido completo (por UUID o por número)
+        3. Valida que el pedido existe y está en estado válido (CONFIRMADO_PROVEEDOR, PEDIDO_CONFIRMADO o PROCESADO_SAP)
+        4. Obtiene productos procesados desde pedido_sap_procesamiento_detalle (ya convertidos)
+        5. Filtra solo productos homologados y con cantidad > 0
+        6. Mapea directamente a orden_compra_cabecera/detalle (sin conversiones adicionales)
+        7. Crea OC con pedido_id asociado
+        8. Estado inicial: PENDIENTE (lista para enviar a SAP)
         
         **Diferencia con /procesar-oc:**
         - Este endpoint es para **PEDIDOS confirmados** (flujo nuevo)
@@ -1163,10 +1271,10 @@ def register_plantillas_endpoints(app: FastAPI):
         
         **Validaciones:**
         - ✅ Pedido debe existir
-        - ✅ Debe tener respuesta del proveedor en estado APROBADA
-        - ✅ Debe haber productos con cantidad_confirmada_total > 0
-        - ✅ Todos los productos deben tener SKU SAP homologado
-        - ✅ Todos los productos deben tener unidad de conversión
+        - ✅ Pedido debe estar en estado CONFIRMADO_PROVEEDOR, PEDIDO_CONFIRMADO o PROCESADO_SAP
+        - ✅ Debe haber productos procesados en pedido_sap_procesamiento_detalle
+        - ✅ Solo productos homologados (producto_homologado = 1)
+        - ✅ Solo productos con cantidad_sap > 0
         
         **Respuesta exitosa:**
         ```json
@@ -1190,13 +1298,50 @@ def register_plantillas_endpoints(app: FastAPI):
             JSON con resultado de la creación de la OC
         """
         try:
+            import re
             from src.database.services.pedido_oc_service import PedidoOCService
+            from src.database.connection import get_db_connection_context
+            from src.database.repositories.pedido_repository import PedidoRepository
             
             user_id = user.get("sub") or user.get("user_id")
             
+            # Detectar si es UUID o numero_pedido
+            uuid_pattern = re.compile(r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$')
+            es_uuid = uuid_pattern.match(identificador.strip()) is not None
+            
+            # Obtener pedido_id real
+            with get_db_connection_context() as conn:
+                pedido_repo = PedidoRepository(conn)
+                
+                if es_uuid:
+                    logger.info(f"🔍 Detectado UUID: {identificador}")
+                    pedido = pedido_repo.get_pedido_completo(identificador)
+                    if not pedido:
+                        raise HTTPException(
+                            status_code=status.HTTP_404_NOT_FOUND,
+                            detail={
+                                "error": "pedido_not_found",
+                                "message": f"Pedido no encontrado con UUID: {identificador}"
+                            }
+                        )
+                    pedido_id_real = identificador
+                else:
+                    logger.info(f"🔍 Detectado numero_pedido: {identificador}")
+                    pedido = pedido_repo.get_pedido_completo_por_numero(identificador)
+                    if not pedido:
+                        raise HTTPException(
+                            status_code=status.HTTP_404_NOT_FOUND,
+                            detail={
+                                "error": "pedido_not_found",
+                                "message": f"Pedido no encontrado con número: {identificador}"
+                            }
+                        )
+                    pedido_id_real = pedido["cabecera"]["pedido_id"]
+            
+            # Crear OC usando el pedido_id real
             service = PedidoOCService()
             resultado = service.crear_oc_desde_pedido_confirmado(
-                pedido_id=pedido_id,
+                pedido_id=pedido_id_real,
                 usuario_id=user_id
             )
             
@@ -1206,6 +1351,8 @@ def register_plantillas_endpoints(app: FastAPI):
                 **resultado
             }
             
+        except HTTPException:
+            raise
         except ValueError as e:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -2705,6 +2852,12 @@ def register_plantillas_endpoints(app: FastAPI):
                     )
                     
                     logger.info(f"✅ Procesamiento SAP completado: {resultado_sap.get('productos_procesados', 0)} productos procesados")
+                    
+                    # Actualizar estado a PEDIDO_CONFIRMADO si el procesamiento fue exitoso
+                    if resultado_sap.get("status") in ["success", "partial"]:
+                        repo_pedido.update_estado(pedido_id, "PEDIDO_CONFIRMADO")
+                        estado_nuevo = "PEDIDO_CONFIRMADO"
+                        logger.info(f"✅ Estado del pedido {pedido_id} actualizado a PEDIDO_CONFIRMADO")
                     
                     # Verificar productos no homologados y notificar
                     if resultado_sap.get("productos_no_homologados", 0) > 0:

@@ -1312,6 +1312,154 @@ class PedidoRepository:
         finally:
             cursor.close()
     
+    def get_pedidos_con_filtros(
+        self,
+        estado: Optional[str] = None,
+        fecha_desde: Optional[str] = None,
+        fecha_hasta: Optional[str] = None,
+        proveedor_nombre: Optional[str] = None,
+        numero_pedido: Optional[str] = None,
+        creado_por: Optional[str] = None,
+        limit: Optional[int] = None,
+        offset: Optional[int] = None
+    ) -> Dict[str, Any]:
+        """
+        Obtiene pedidos con filtros y paginación.
+        
+        Args:
+            estado: Estado del pedido (ej: "PENDIENTE_CONFIRMACION_PROVEEDOR")
+            fecha_desde: Fecha desde (YYYY-MM-DD)
+            fecha_hasta: Fecha hasta (YYYY-MM-DD)
+            proveedor_nombre: Nombre del proveedor (búsqueda parcial)
+            numero_pedido: Número de pedido (búsqueda exacta o parcial)
+            creado_por: Usuario que creó el pedido
+            limit: Límite de registros
+            offset: Offset para paginación
+        
+        Returns:
+            Dict con lista de pedidos y metadata:
+            {
+                "data": [...],
+                "total": 150,
+                "limit": 50,
+                "offset": 0,
+                "has_more": true
+            }
+        """
+        cursor = self.conn.cursor()
+        
+        try:
+            # Verificar si existe columna estado
+            cursor.execute("""
+                SELECT COUNT(*) 
+                FROM INFORMATION_SCHEMA.COLUMNS 
+                WHERE TABLE_NAME = 'pedido' 
+                AND COLUMN_NAME = 'estado'
+            """)
+            row = cursor.fetchone()
+            tiene_estado = (row[0] if row else 0) > 0
+            
+            # Construir WHERE conditions
+            where_conditions = []
+            params = []
+            
+            if tiene_estado and estado:
+                where_conditions.append("p.estado = ?")
+                params.append(estado)
+            
+            if fecha_desde:
+                where_conditions.append("CAST(p.fecha_pedido AS DATE) >= CAST(? AS DATE)")
+                params.append(fecha_desde)
+            
+            if fecha_hasta:
+                where_conditions.append("CAST(p.fecha_pedido AS DATE) <= CAST(? AS DATE)")
+                params.append(fecha_hasta)
+            
+            if proveedor_nombre:
+                where_conditions.append("p.proveedor_nombre LIKE ?")
+                params.append(f"%{proveedor_nombre}%")
+            
+            if numero_pedido:
+                where_conditions.append("p.numero_pedido LIKE ?")
+                params.append(f"%{numero_pedido}%")
+            
+            if creado_por:
+                where_conditions.append("p.creado_por = ?")
+                params.append(creado_por)
+            
+            where_clause = " AND ".join(where_conditions) if where_conditions else "1=1"
+            
+            # Query para obtener total
+            count_query = f"SELECT COUNT(*) FROM pedido p WHERE {where_clause}"
+            cursor.execute(count_query, params)
+            total = cursor.fetchone()[0]
+            
+            # Query para obtener datos con paginación
+            select_fields = """
+                p.pedido_id, p.numero_pedido, p.fecha_pedido, p.fecha_entrega,
+                p.forma_pago, p.odc, p.proveedor_nombre, p.comprador_nombre,
+                p.comprador_codigo, p.origen_traslado, p.serie, p.archivo_nombre,
+                p.creado_por, p.creado_en
+            """
+            
+            if tiene_estado:
+                select_fields += ", p.estado"
+            
+            data_query = f"""
+                SELECT {select_fields}
+                FROM pedido p
+                WHERE {where_clause}
+                ORDER BY p.creado_en DESC
+            """
+            
+            if limit is not None:
+                data_query += f" OFFSET {offset or 0} ROWS FETCH NEXT {limit} ROWS ONLY"
+            
+            cursor.execute(data_query, params)
+            
+            pedidos = []
+            for row in cursor.fetchall():
+                idx = 0
+                pedido = {
+                    "pedido_id": str(row[idx]),
+                    "numero_pedido": row[idx + 1],
+                    "fecha_pedido": row[idx + 2].isoformat() if row[idx + 2] else None,
+                    "fecha_entrega": row[idx + 3],
+                    "forma_pago": row[idx + 4],
+                    "odc": row[idx + 5],
+                    "proveedor_nombre": row[idx + 6],
+                    "comprador_nombre": row[idx + 7],
+                    "comprador_codigo": row[idx + 8],
+                    "origen_traslado": row[idx + 9],
+                    "serie": row[idx + 10],
+                    "archivo_nombre": row[idx + 11],
+                    "creado_por": row[idx + 12],
+                    "creado_en": row[idx + 13].isoformat() if row[idx + 13] else None,
+                }
+                
+                if tiene_estado:
+                    pedido["estado"] = row[idx + 14]
+                else:
+                    pedido["estado"] = None
+                
+                pedidos.append(pedido)
+            
+            has_more = (offset or 0) + len(pedidos) < total if limit else False
+            
+            return {
+                "data": pedidos,
+                "total": total,
+                "limit": limit,
+                "offset": offset or 0,
+                "has_more": has_more
+            }
+            
+        except Exception as e:
+            logger.error(f"❌ Error al obtener pedidos con filtros: {e}", exc_info=True)
+            raise
+        finally:
+            cursor.close()
+    
     def get_ultimo_pedido(self, usuario_id: str) -> Optional[Dict[str, Any]]:
         """
         Obtiene el último pedido cargado por un usuario específico.

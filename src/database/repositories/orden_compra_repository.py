@@ -269,6 +269,27 @@ class OrdenCompraRepository:
         finally:
             cursor.close()
     
+    def find_by_pedido_id(self, pedido_id: str) -> Optional[str]:
+        """
+        Busca una orden de compra por pedido_id.
+        
+        Args:
+            pedido_id: UUID del pedido
+            
+        Returns:
+            oc_id si existe, None si no existe
+        """
+        cursor = self.conn.cursor()
+        try:
+            cursor.execute(
+                "SELECT oc_id FROM orden_compra_cabecera WHERE pedido_id = ?",
+                (pedido_id,)
+            )
+            result = cursor.fetchone()
+            return str(result[0]) if result else None
+        finally:
+            cursor.close()
+    
     def find_by_referencia_despacho(self, referencia_despacho: str) -> Optional[Dict[str, Any]]:
         """
         Busca una orden de compra por referencia_despacho (número de factura).

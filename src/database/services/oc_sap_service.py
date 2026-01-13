@@ -292,8 +292,38 @@ class OCSAPService:
                     # NO fallar el proceso si el email falla
                     logger.warning(f"⚠️ Error al enviar email de ODC (no crítico): {e}")
                 
-                # 8. Evaluar y cerrar pedido si corresponde
+                # 8. Crear Solicitudes de Transferencia (HU-04: Requerimiento de alta prioridad)
                 pedido_id = oc_cabecera.get("pedido_id")
+                if pedido_id:
+                    try:
+                        from .stock_transfer_service import StockTransferService
+                        
+                        stock_transfer_service = StockTransferService()
+                        resultado_transferencias = stock_transfer_service.crear_solicitudes_transferencia_desde_pedido(
+                            pedido_id=pedido_id,
+                            oc_doc_num=doc_num,
+                            bodega_origen=None,  # Usará origen_traslado del pedido
+                            usuario_id=None
+                        )
+                        
+                        if resultado_transferencias.get("success"):
+                            logger.info(
+                                f"✅ {resultado_transferencias['transferencias_creadas']}/{resultado_transferencias['total_tiendas']} "
+                                f"Solicitud(es) de Transferencia creada(s) para pedido {pedido_id}"
+                            )
+                            result["solicitudes_transferencia"] = resultado_transferencias
+                        else:
+                            logger.warning(
+                                f"⚠️ No se pudieron crear Solicitudes de Transferencia para pedido {pedido_id}: "
+                                f"{resultado_transferencias.get('error', 'Error desconocido')}"
+                            )
+                            result["solicitudes_transferencia"] = resultado_transferencias
+                    except Exception as e:
+                        # NO fallar el proceso si las solicitudes de transferencia fallan
+                        logger.warning(f"⚠️ Error al crear Solicitudes de Transferencia (no crítico): {e}")
+                        result["solicitudes_transferencia_error"] = str(e)
+                
+                # 9. Evaluar y cerrar pedido si corresponde
                 if pedido_id:
                     try:
                         from ..repositories.pedido_repository import PedidoRepository
