@@ -59,6 +59,7 @@ class OrdenCompraRepository:
         # Diccionario de mapeo hardcodeado (fallback)
         MAPEO_EMPRESA_PROVEEDOR = {
             "TRAYO": "P1790389219001",
+            "TEXTILES EL RAYO S.A.": "P1790389219001",
             # Agregar más mapeos aquí si es necesario en el futuro
         }
         
