@@ -25,7 +25,19 @@ def guardar_pedido_v1_0(
             except Exception:
                 pass
 
-            pedido_id = repository.insert_cabecera(cabecera)
+            try:
+                pedido_id = repository.insert_cabecera(cabecera)
+            except ValueError as e:
+                # Detectar específicamente el error de número de pedido duplicado
+                error_msg = str(e)
+                if "número de pedido" in error_msg.lower() and "ya existe" in error_msg.lower():
+                    logger.warning(f"⚠️ Intento de crear pedido con número duplicado: {error_msg}")
+                    resultado["status"] = "error"
+                    resultado["errores"].append(error_msg)
+                    resultado["error_tipo"] = "numero_pedido_duplicado"
+                    return False
+                # Otros ValueError se propagan
+                raise
             resultado["pedido_id"] = pedido_id
             logger.info(f"✅ Cabecera guardada: {pedido_id}")
 

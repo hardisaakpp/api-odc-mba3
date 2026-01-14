@@ -38,18 +38,34 @@ class RedistribucionValidator:
         """
         errores = []
         
-        # Validación 1: No valores negativos
+        # Validación 1: No valores negativos y deben ser enteros
         for producto in productos_redistribucion:
             pedido_detalle_id = producto["pedido_detalle_id"]
             for distribucion in producto["distribuciones"]:
                 cantidad_asignada = distribucion["cantidad_asignada"]
+                
+                # Validar que no sea negativo
                 if cantidad_asignada < 0:
                     errores.append(
                         f"Producto {pedido_detalle_id}: cantidad_asignada no puede ser negativa "
                         f"(tienda {distribucion['tienda_id']}: {cantidad_asignada})"
                     )
+                
+                # Validar que sea un número entero (no decimal)
+                if isinstance(cantidad_asignada, float) and cantidad_asignada % 1 != 0:
+                    errores.append(
+                        f"Producto {pedido_detalle_id}: cantidad_asignada debe ser un número entero "
+                        f"(tienda {distribucion['tienda_id']}: {cantidad_asignada})"
+                    )
+                
+                # Validar rango razonable (máximo 1,000,000 unidades por tienda)
+                if cantidad_asignada > 1000000:
+                    errores.append(
+                        f"Producto {pedido_detalle_id}: cantidad_asignada excede el límite máximo "
+                        f"(tienda {distribucion['tienda_id']}: {cantidad_asignada}). Máximo permitido: 1,000,000"
+                    )
         
-        # Validación 2: La suma por producto <= cantidad confirmada
+        # Validación 2: La suma por producto <= cantidad confirmada y debe ser entero
         for producto in productos_redistribucion:
             pedido_detalle_id = producto["pedido_detalle_id"]
             cantidad_asignada_total = sum(
@@ -59,10 +75,27 @@ class RedistribucionValidator:
             respuesta = respuestas_proveedor.get(pedido_detalle_id, {})
             cantidad_confirmada_total = respuesta.get("cantidad_confirmada_total", 0)
             
+            # Validar que la suma total sea un entero
+            if isinstance(cantidad_asignada_total, float) and cantidad_asignada_total % 1 != 0:
+                errores.append(
+                    f"Producto {pedido_detalle_id}: La suma total de cantidades asignadas debe ser un número entero "
+                    f"(suma actual: {cantidad_asignada_total})"
+                )
+            
+            # Validar que no exceda la cantidad confirmada
             if cantidad_asignada_total > cantidad_confirmada_total:
+                diferencia = cantidad_asignada_total - cantidad_confirmada_total
                 errores.append(
                     f"Producto {pedido_detalle_id}: La suma de cantidades asignadas ({cantidad_asignada_total}) "
-                    f"excede la cantidad confirmada por el proveedor ({cantidad_confirmada_total})"
+                    f"excede la cantidad confirmada por el proveedor ({cantidad_confirmada_total}) "
+                    f"por {diferencia} unidades"
+                )
+            
+            # Validar que la cantidad confirmada sea válida
+            if cantidad_confirmada_total < 0:
+                errores.append(
+                    f"Producto {pedido_detalle_id}: La cantidad confirmada no puede ser negativa "
+                    f"({cantidad_confirmada_total})"
                 )
         
         # Validación 3: Todas las tiendas pertenecen al pedido
@@ -95,12 +128,21 @@ class RedistribucionValidator:
                         f"Producto {pedido_detalle_id}: Tienda {tienda_id} no pertenece al pedido"
                     )
         
-        # Validación 4: No duplicados de tienda por producto
+        # Validación 4: No duplicados de tienda por producto y validar formato de tienda_id
         for producto in productos_redistribucion:
             pedido_detalle_id = producto["pedido_detalle_id"]
             tiendas_vistas = set()
             for distribucion in producto["distribuciones"]:
                 tienda_id = distribucion["tienda_id"]
+                
+                # Validar formato de tienda_id (debe ser UUID válido o string no vacío)
+                if not tienda_id or not isinstance(tienda_id, str) or len(tienda_id.strip()) == 0:
+                    errores.append(
+                        f"Producto {pedido_detalle_id}: Tienda ID inválido o vacío en la redistribución"
+                    )
+                    continue
+                
+                # Validar duplicados
                 if tienda_id in tiendas_vistas:
                     errores.append(
                         f"Producto {pedido_detalle_id}: Tienda {tienda_id} duplicada en la redistribución"

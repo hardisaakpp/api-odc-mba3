@@ -160,7 +160,12 @@ class PedidoRepository:
         except pyodbc.IntegrityError as e:
             self.conn.rollback()
             if "UQ_pedido_numero_pedido" in str(e):
-                raise ValueError(f"Ya existe un pedido con número: {datos_cabecera.get('numero_pedido')}")
+                numero_pedido = datos_cabecera.get('numero_pedido')
+                raise ValueError(
+                    f"El número de pedido '{numero_pedido}' ya existe en el sistema. "
+                    f"No es posible cargar un pedido con un número de pedido duplicado. "
+                    f"Por favor, verifica el número de pedido e intenta con un número diferente."
+                )
             raise
         except Exception as e:
             self.conn.rollback()

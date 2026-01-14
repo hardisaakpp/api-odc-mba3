@@ -390,7 +390,19 @@ class PedidoService:
                 repository = PedidoRepository(conn)
                 
                 # Insertar cabecera
-                pedido_id = repository.insert_cabecera(cabecera)
+                try:
+                    pedido_id = repository.insert_cabecera(cabecera)
+                except ValueError as e:
+                    # Detectar específicamente el error de número de pedido duplicado
+                    error_msg = str(e)
+                    if "número de pedido" in error_msg.lower() and "ya existe" in error_msg.lower():
+                        logger.warning(f"⚠️ Intento de crear pedido con número duplicado: {error_msg}")
+                        resultado["status"] = "error"
+                        resultado["errores"].append(error_msg)
+                        resultado["error_tipo"] = "numero_pedido_duplicado"
+                        return resultado
+                    # Otros ValueError se propagan
+                    raise
                 resultado["pedido_id"] = pedido_id
                 
                 # Procesar cada artículo con sus distribuciones
@@ -1239,6 +1251,20 @@ class PedidoService:
             logger.info(f"✅ Pedido manual creado: {resultado['pedido_id']} - {cabecera.get('numero_pedido')}")
             return resultado
             
+        except ValueError as e:
+            # Detectar específicamente el error de número de pedido duplicado
+            error_msg = str(e)
+            if "número de pedido" in error_msg.lower() and "ya existe" in error_msg.lower():
+                logger.warning(f"⚠️ Intento de crear pedido con número duplicado: {error_msg}")
+                resultado["status"] = "error"
+                resultado["errores"].append(error_msg)
+                resultado["error_tipo"] = "numero_pedido_duplicado"
+                return resultado
+            # Otros ValueError se propagan como error genérico
+            logger.error(f"❌ Error de validación al crear pedido manual: {e}", exc_info=True)
+            resultado["status"] = "error"
+            resultado["errores"].append(str(e))
+            return resultado
         except Exception as e:
             logger.error(f"❌ Error al crear pedido manual: {e}", exc_info=True)
             resultado["status"] = "error"
@@ -1321,7 +1347,19 @@ class PedidoService:
         # ✅ FILTRAR productos no validados en SAP (si se validó SAP)
         with get_db_connection_context() as conn:
             repository = PedidoRepository(conn)
-            pedido_id = repository.insert_cabecera(cabecera)
+            try:
+                pedido_id = repository.insert_cabecera(cabecera)
+            except ValueError as e:
+                # Detectar específicamente el error de número de pedido duplicado
+                error_msg = str(e)
+                if "número de pedido" in error_msg.lower() and "ya existe" in error_msg.lower():
+                    logger.warning(f"⚠️ Intento de crear pedido con número duplicado: {error_msg}")
+                    resultado["status"] = "error"
+                    resultado["errores"].append(error_msg)
+                    resultado["error_tipo"] = "numero_pedido_duplicado"
+                    return
+                # Otros ValueError se propagan
+                raise
             resultado["pedido_id"] = pedido_id
             
             # Crear conjunto de códigos válidos en SAP (si se validó)

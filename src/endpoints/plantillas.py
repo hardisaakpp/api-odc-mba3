@@ -1136,7 +1136,11 @@ def register_plantillas_endpoints(app: FastAPI):
             if resultado["status"] == "validation_error":
                 status_code = 400
             elif resultado["status"] == "error":
-                status_code = 500
+                # Errores de número de pedido duplicado son errores del cliente (400), no del servidor (500)
+                if resultado.get("error_tipo") == "numero_pedido_duplicado":
+                    status_code = 400
+                else:
+                    status_code = 500
             
             return JSONResponse(
                 status_code=status_code,
@@ -1554,6 +1558,44 @@ def register_plantillas_endpoints(app: FastAPI):
             # Extraer el costo del request body
             nuevo_costo = request_body.costo_doc_sin_iva
             
+            # ⭐ VALIDACIÓN MEJORADA: Validar rango y formato del costo
+            if nuevo_costo is None:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail={
+                        "error": "validation_error",
+                        "message": "El costo no puede ser null"
+                    }
+                )
+            
+            if not isinstance(nuevo_costo, (int, float)):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail={
+                        "error": "validation_error",
+                        "message": "El costo debe ser un número válido"
+                    }
+                )
+            
+            if nuevo_costo < 0:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail={
+                        "error": "validation_error",
+                        "message": "El costo no puede ser negativo"
+                    }
+                )
+            
+            # Validar rango razonable (máximo 1,000,000 por unidad)
+            if nuevo_costo > 1000000:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail={
+                        "error": "validation_error",
+                        "message": f"El costo ({nuevo_costo}) excede el límite máximo permitido (1,000,000)"
+                    }
+                )
+            
             # Obtener usuario que realiza la modificación
             user_id = get_user_id(user)
             
@@ -1649,6 +1691,57 @@ def register_plantillas_endpoints(app: FastAPI):
             # Extraer el total del request body
             nuevo_total = request_body.total
             
+            # ⭐ VALIDACIÓN MEJORADA: Validar que sea entero, rango y formato
+            if nuevo_total is None:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail={
+                        "error": "validation_error",
+                        "message": "El total no puede ser null"
+                    }
+                )
+            
+            if not isinstance(nuevo_total, (int, float)):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail={
+                        "error": "validation_error",
+                        "message": "El total debe ser un número válido"
+                    }
+                )
+            
+            # Validar que sea un número entero (no decimal)
+            if isinstance(nuevo_total, float) and nuevo_total % 1 != 0:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail={
+                        "error": "validation_error",
+                        "message": "El total debe ser un número entero (sin decimales)"
+                    }
+                )
+            
+            # Convertir a entero si es float con decimales cero
+            nuevo_total = int(nuevo_total)
+            
+            if nuevo_total < 0:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail={
+                        "error": "validation_error",
+                        "message": "El total no puede ser negativo"
+                    }
+                )
+            
+            # Validar rango razonable (máximo 10,000,000 unidades)
+            if nuevo_total > 10000000:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail={
+                        "error": "validation_error",
+                        "message": f"El total ({nuevo_total}) excede el límite máximo permitido (10,000,000)"
+                    }
+                )
+            
             # Obtener usuario que realiza la modificación
             user_id = get_user_id(user)
             
@@ -1742,6 +1835,32 @@ def register_plantillas_endpoints(app: FastAPI):
             
             # Extraer el comentario del request body
             nuevo_comentario = request_body.comentario
+            
+            # ⭐ VALIDACIÓN MEJORADA: Validar formato y longitud del comentario
+            if nuevo_comentario is not None:
+                if not isinstance(nuevo_comentario, str):
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail={
+                            "error": "validation_error",
+                            "message": "El comentario debe ser una cadena de texto"
+                        }
+                    )
+                
+                # Validar longitud máxima (2000 caracteres)
+                if len(nuevo_comentario) > 2000:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail={
+                            "error": "validation_error",
+                            "message": f"El comentario excede la longitud máxima permitida (2000 caracteres). "
+                                     f"Longitud actual: {len(nuevo_comentario)}"
+                        }
+                    )
+                
+                # Normalizar: convertir string vacío a None
+                if nuevo_comentario.strip() == "":
+                    nuevo_comentario = None
             
             # Obtener usuario que realiza la modificación
             user_id = get_user_id(user)
