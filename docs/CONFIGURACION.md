@@ -90,7 +90,9 @@ EMAIL_FROM_NAME=INTEGRACIÓN SAP
 
 # Destinatarios segmentados por tipo de usuario
 # Usuario Principal: Operaciones/Despachos (recibe notificaciones de NUEVOS DESPACHOS)
-EMAIL_TO_OPERACIONES=operaciones@mabeltrading.com.ec
+# ⚠️ PRUEBAS: Usar cortiz@mabeltrading.com.ec
+# 📝 PRODUCCIÓN: Cambiar a operaciones@mabeltrading.com.ec o el correo correspondiente de El Rayo
+EMAIL_TO_OPERACIONES=cortiz@mabeltrading.com.ec
 
 # Usuario Homologaciones: Productos no homologados (recibe notificaciones de SKUs faltantes)
 EMAIL_TO_HOMOLOGACIONES=homologaciones@mabeltrading.com.ec,supervisor@mabeltrading.com.ec

@@ -212,6 +212,71 @@ class PedidoProveedorService:
             output.seek(0)
             return output.read()
     
+    def exportar_pedido_plano_mba(self, pedido_id: str, formato: str = "csv") -> bytes:
+        """
+        Exporta un pedido en formato plano (CSV o TXT) para subir en MBA.
+        
+        ⚠️ NOTA: Este es un formato temporal. Cuando se proporcione el formato real de MBA,
+        este método debe ser actualizado para generar el formato exacto requerido.
+        
+        Formato temporal (CSV):
+        - Separador: coma (,)
+        - Encoding: UTF-8 con BOM para Excel
+        - Columnas: Código Producto, Descripción, Cantidad Total, Costo Unitario, Marca
+        
+        Args:
+            pedido_id: UUID del pedido
+            formato: Formato de salida ("csv" o "txt"). Por defecto "csv"
+            
+        Returns:
+            Bytes del archivo plano
+        """
+        with get_db_connection_context() as conn:
+            repo = PedidoRepository(conn)
+            pedido = repo.get_pedido_completo(pedido_id)
+            
+            if not pedido:
+                raise ValueError(f"Pedido no encontrado: {pedido_id}")
+            
+            cabecera = pedido["cabecera"]
+            
+            # ⚠️ FORMATO TEMPORAL - Ajustar cuando se proporcione el formato real de MBA
+            # Por ahora generamos un CSV simple con los datos principales
+            lines = []
+            
+            # Encabezado (opcional - comentar si MBA no requiere encabezado)
+            if formato.lower() == "csv":
+                lines.append("CODIGO_PRODUCTO,DESCRIPCION,CANTIDAD_TOTAL,COSTO_UNITARIO,MARCA")
+            
+            # Datos de cada producto
+            for detalle in pedido["detalles"]:
+                total_cantidad = sum(t["cantidad"] for t in detalle["tiendas"])
+                codigo = detalle.get("codigo_interno", "").strip()
+                descripcion = detalle.get("descripcion_sap", "").strip().replace(",", " ")  # Evitar comas en CSV
+                marca = detalle.get("marca", "").strip().replace(",", " ")
+                costo_unitario = detalle.get("costo_doc_sin_iva") or 0
+                
+                if formato.lower() == "csv":
+                    # Formato CSV: valores separados por coma
+                    line = f"{codigo},{descripcion},{total_cantidad},{costo_unitario},{marca}"
+                else:
+                    # Formato TXT: valores separados por pipe o tab
+                    line = f"{codigo}|{descripcion}|{total_cantidad}|{costo_unitario}|{marca}"
+                
+                lines.append(line)
+            
+            # Unir todas las líneas
+            content = "\n".join(lines)
+            
+            # Convertir a bytes con encoding UTF-8
+            # Agregar BOM para Excel si es CSV
+            if formato.lower() == "csv":
+                content_bytes = ("\ufeff" + content).encode("utf-8-sig")
+            else:
+                content_bytes = content.encode("utf-8")
+            
+            return content_bytes
+    
     def importar_respuesta_proveedor(
         self,
         pedido_id: str,

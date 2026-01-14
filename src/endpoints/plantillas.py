@@ -1206,6 +1206,101 @@ def register_plantillas_endpoints(app: FastAPI):
                 detail=f"Error interno al exportar pedido: {str(e)}"
             )
     
+    @app.get("/api/pedidos/{pedido_id}/exportar-plano-mba", tags=["Pedidos - El Rayo"])
+    async def exportar_pedido_plano_mba(
+        pedido_id: str = Path(..., description="UUID del pedido o número de pedido"),
+        formato: str = Query("csv", description="Formato de salida: 'csv' o 'txt'"),
+        user: Dict = Depends(verify_jwt_token),
+        _: None = Depends(require_permission('mba3-consultas.facturas.view'))
+    ):
+        """
+        Exporta un pedido en formato plano (CSV o TXT) para subir en MBA.
+        
+        **HU-08**: Permite a usuarios de El Rayo descargar el pedido en archivo plano
+        para subirlo en el sistema MBA.
+        
+        ⚠️ **NOTA IMPORTANTE**: Este es un formato temporal. Cuando se proporcione 
+        el formato exacto requerido por MBA, este endpoint debe ser actualizado.
+        
+        **Formato temporal:**
+        - CSV: Separado por comas, con encabezado
+        - TXT: Separado por pipes (|), sin encabezado
+        
+        **Columnas incluidas:**
+        - Código Producto
+        - Descripción
+        - Cantidad Total
+        - Costo Unitario
+        - Marca
+        
+        Returns:
+            Archivo plano descargable (CSV o TXT)
+        """
+        try:
+            from src.database.services.pedido_proveedor_service import PedidoProveedorService
+            from src.database.repositories.pedido_repository import PedidoRepository
+            from src.database.connection import get_db_connection_context
+            from fastapi.responses import Response
+            import uuid
+            
+            if formato.lower() not in ["csv", "txt"]:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Formato no válido. Use 'csv' o 'txt'"
+                )
+            
+            # Determinar si es UUID o numero_pedido
+            with get_db_connection_context() as conn:
+                repo = PedidoRepository(conn)
+                
+                # Intentar determinar si es UUID o numero_pedido
+                try:
+                    # Si es un UUID válido, intentar obtener por pedido_id
+                    uuid.UUID(pedido_id)
+                    pedido = repo.get_pedido_completo(pedido_id)
+                    if not pedido:
+                        raise ValueError(f"Pedido no encontrado: {pedido_id}")
+                    pedido_id_real = pedido_id
+                    numero_pedido = pedido["cabecera"].get("numero_pedido", pedido_id[:8])
+                except (ValueError, TypeError):
+                    # No es UUID, intentar obtener por numero_pedido
+                    pedido = repo.get_pedido_completo_por_numero(pedido_id)
+                    if not pedido:
+                        raise ValueError(f"Pedido no encontrado: {pedido_id}")
+                    pedido_id_real = pedido["cabecera"]["pedido_id"]
+                    numero_pedido = pedido_id  # El parámetro ya es el numero_pedido
+            
+            service = PedidoProveedorService()
+            file_bytes = service.exportar_pedido_plano_mba(pedido_id_real, formato)
+            
+            # Determinar media type y extensión
+            if formato.lower() == "csv":
+                media_type = "text/csv; charset=utf-8"
+                extension = "csv"
+            else:
+                media_type = "text/plain; charset=utf-8"
+                extension = "txt"
+            
+            # Limpiar número de pedido para nombre de archivo
+            numero_pedido_limpio = numero_pedido.replace(" ", "_").replace("-", "_").replace("/", "_")
+            
+            return Response(
+                content=file_bytes,
+                media_type=media_type,
+                headers={
+                    "Content-Disposition": f'attachment; filename="pedido_mba_{numero_pedido_limpio}_{datetime.now().strftime("%Y%m%d")}.{extension}"'
+                }
+            )
+            
+        except ValueError as e:
+            raise HTTPException(status_code=404, detail=str(e))
+        except Exception as e:
+            logger.error(f"❌ Error al exportar pedido plano para MBA: {e}", exc_info=True)
+            raise HTTPException(
+                status_code=500,
+                detail=f"Error interno al exportar pedido: {str(e)}"
+            )
+    
     @app.post("/api/pedidos/{pedido_id}/cargar-respuesta-proveedor", tags=["Pedidos - Proveedor"])
     async def cargar_respuesta_proveedor(
         pedido_id: str = Path(..., description="UUID del pedido"),

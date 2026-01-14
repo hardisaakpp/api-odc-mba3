@@ -23,7 +23,16 @@ from src.models import (
 logger = logging.getLogger(__name__)
 
 # Validar tableId permitidos
-VALID_TABLE_IDS = ["despachos", "ordenes-compra", "historial-ordenes", "remisiones", "productos-pedido"]
+VALID_TABLE_IDS = [
+    "despachos", 
+    "ordenes-compra", 
+    "historial-ordenes", 
+    "remisiones", 
+    "productos-pedido",
+    "redistribucion-tiendas",
+    "productos-procesados",
+    "excel-grid-redistribucion"
+]
 
 # Exportar función principal para el linter
 __all__ = ["register_user_preferences_endpoints"]
@@ -490,6 +499,7 @@ def register_user_preferences_endpoints(app: FastAPI):
         # Logging para diagnóstico
         logger.info(f"🔍 POST /api/users/preferences/{table_id}: Iniciado")
         logger.debug(f"   User object keys: {list(user.keys()) if user else 'None'}")
+        logger.debug(f"   Request body type: {type(request_body)}")
         logger.debug(f"   Request body: {request_body}")
         
         # Usar función helper para obtener user_id con fallback a username
@@ -500,15 +510,51 @@ def register_user_preferences_endpoints(app: FastAPI):
             logger.error(f"❌ Error al obtener user_id: {e.detail}")
             raise
         
-        # Validar datos
-        prefs = request_body.preferences
-        logger.debug(f"   Preferences recibidas: visibleColumns={prefs.visibleColumns}, columnOrder={prefs.columnOrder}")
-        
-        if not prefs.visibleColumns or not prefs.columnOrder:
-            logger.warning(f"⚠️ Intento de guardar preferencias sin visibleColumns o columnOrder")
+        # Validar datos - verificar que request_body y preferences existan
+        if not request_body:
+            logger.error(f"❌ Request body es None o vacío")
             raise HTTPException(
                 status_code=400,
-                detail="visibleColumns y columnOrder son requeridos y no pueden estar vacíos"
+                detail="Request body es requerido"
+            )
+        
+        if not hasattr(request_body, 'preferences') or request_body.preferences is None:
+            logger.error(f"❌ Request body no contiene 'preferences'")
+            raise HTTPException(
+                status_code=400,
+                detail="El campo 'preferences' es requerido en el request body"
+            )
+        
+        prefs = request_body.preferences
+        logger.debug(f"   Preferences recibidas: visibleColumns={prefs.visibleColumns if prefs else None}, columnOrder={prefs.columnOrder if prefs else None}")
+        
+        # Validar que visibleColumns y columnOrder existan y no estén vacíos
+        if not hasattr(prefs, 'visibleColumns') or prefs.visibleColumns is None:
+            logger.warning(f"⚠️ visibleColumns es None o no existe")
+            raise HTTPException(
+                status_code=400,
+                detail="visibleColumns es requerido y no puede ser None"
+            )
+        
+        if not hasattr(prefs, 'columnOrder') or prefs.columnOrder is None:
+            logger.warning(f"⚠️ columnOrder es None o no existe")
+            raise HTTPException(
+                status_code=400,
+                detail="columnOrder es requerido y no puede ser None"
+            )
+        
+        if not isinstance(prefs.visibleColumns, list):
+            logger.warning(f"⚠️ visibleColumns no es una lista: {type(prefs.visibleColumns)}")
+            raise HTTPException(
+                status_code=400,
+                detail=f"visibleColumns debe ser una lista, recibido: {type(prefs.visibleColumns).__name__}"
+            )
+        
+        if not isinstance(prefs.columnOrder, list):
+            logger.warning(f"⚠️ columnOrder no es una lista: {type(prefs.columnOrder)}")
+            raise HTTPException(
+                status_code=400,
+                detail=f"columnOrder debe ser una lista, recibido: {type(prefs.columnOrder).__name__}"
             )
         
         if len(prefs.visibleColumns) == 0:
@@ -516,6 +562,13 @@ def register_user_preferences_endpoints(app: FastAPI):
             raise HTTPException(
                 status_code=400,
                 detail="Debe haber al menos una columna visible"
+            )
+        
+        if len(prefs.columnOrder) == 0:
+            logger.warning(f"⚠️ Intento de guardar preferencias con columnOrder vacío")
+            raise HTTPException(
+                status_code=400,
+                detail="Debe haber al menos una columna en columnOrder"
             )
         
         conn = None
