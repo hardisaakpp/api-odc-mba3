@@ -1213,6 +1213,81 @@ class PedidoService:
                         "todos_validos": validacion_sap.get("todos_validos", False)
                     }
                 
+                # ✅ VALIDACIÓN CONTRA SAP: Validar códigos de tienda contra SAP antes de crear el pedido
+                if codigos_tiendas:
+                    logger.info(f"🔍 Validando {len(codigos_tiendas)} códigos de tienda contra SAP antes de crear pedido")
+                    validacion_tiendas_sap = self.sap_validator_helper.validar_tiendas_sap(
+                        codigos_tiendas=codigos_tiendas,
+                        resultado=resultado,
+                        sap_obligatorio=True  # Obligatorio: no permitir crear pedido con tiendas inválidas
+                    )
+                    
+                    # Si hay tiendas inválidas y es obligatorio, no continuar
+                    if not validacion_tiendas_sap.get("todas_validas", False):
+                        resultado["status"] = "validation_error"
+                        logger.warning(f"⚠️ Validación SAP de tiendas falló: no se puede crear el pedido con tiendas inválidas")
+                        return resultado
+                    
+                    # Agregar información de validación SAP de tiendas al resultado
+                    resultado["validacion"]["tiendas_sap"] = {
+                        "validas": validacion_tiendas_sap.get("validas", []),
+                        "no_encontradas": validacion_tiendas_sap.get("no_encontradas", []),
+                        "errores": validacion_tiendas_sap.get("errores", []),
+                        "todas_validas": validacion_tiendas_sap.get("todas_validas", False)
+                    }
+                
+                # ✅ VALIDACIÓN CONTRA SAP: Validar códigos de bodega contra SAP antes de crear el pedido
+                # Extraer códigos de bodegas de los artículos y de origen_traslado
+                codigos_bodegas_set = set()
+                
+                # Bodegas de artículos
+                for det in detalles_con_tiendas:
+                    bodega = det.get("detalle", {}).get("bodega")
+                    if bodega and bodega.strip():
+                        codigos_bodegas_set.add(bodega.strip())
+                
+                # Origen de traslado (si es una bodega)
+                origen_traslado = cabecera.get("origen_traslado")
+                if origen_traslado and origen_traslado.strip():
+                    codigos_bodegas_set.add(origen_traslado.strip())
+                
+                codigos_bodegas = list(codigos_bodegas_set)
+                
+                if codigos_bodegas:
+                    logger.info(f"🔍 Validando {len(codigos_bodegas)} códigos de bodega contra SAP antes de crear pedido")
+                    validacion_bodegas = validator.validar_bodegas_existen_en_sap(
+                        codigos_bodegas=codigos_bodegas,
+                        sap_obligatorio=True  # Obligatorio: no permitir crear pedido con bodegas inválidas
+                    )
+                    
+                    # Si hay bodegas inválidas y es obligatorio, no continuar
+                    if not validacion_bodegas.get("todas_validas", False):
+                        no_encontradas = validacion_bodegas.get("no_encontradas", [])
+                        errores = validacion_bodegas.get("errores", [])
+                        
+                        mensaje_error = "No se puede crear el pedido: existen bodegas no válidas en SAP."
+                        if no_encontradas:
+                            mensaje_error += f" Bodegas no encontradas en SAP OWHS: {', '.join(no_encontradas[:5])}"
+                            if len(no_encontradas) > 5:
+                                mensaje_error += f" y {len(no_encontradas) - 5} más"
+                        if errores:
+                            mensaje_error += f" Errores al consultar SAP: {', '.join(errores[:3])}"
+                            if len(errores) > 3:
+                                mensaje_error += f" y {len(errores) - 3} más"
+                        
+                        resultado["status"] = "validation_error"
+                        resultado["errores"].append(mensaje_error)
+                        logger.warning(f"⚠️ Validación SAP de bodegas falló: {mensaje_error}")
+                        return resultado
+                    
+                    # Agregar información de validación SAP de bodegas al resultado
+                    resultado["validacion"]["bodegas_sap"] = {
+                        "validas": validacion_bodegas.get("validas", []),
+                        "no_encontradas": validacion_bodegas.get("no_encontradas", []),
+                        "errores": validacion_bodegas.get("errores", []),
+                        "todas_validas": validacion_bodegas.get("todas_validas", False)
+                    }
+                
                 if validar_productos and codigos_productos:
                     validacion_productos = validator.validar_productos_existen(codigos_productos, conn)
                     resultado["validacion"]["productos"] = validacion_productos
