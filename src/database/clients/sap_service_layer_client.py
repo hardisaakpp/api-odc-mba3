@@ -539,10 +539,9 @@ class SAPServiceLayerClient:
             "Comments": "Transferencia desde OC 12345",
             "StockTransferLines": [
                 {
+                    "LineNum": 0,
                     "ItemCode": "5-0012.9",
-                    "Quantity": 100.0,
-                    "FromWarehouse": "WH01",
-                    "ToWarehouse": "WH02"
+                    "Quantity": 100.0
                 }
             ]
         }

@@ -57,10 +57,9 @@ class SAPStockTransferMapper:
                 "Comments": "Transferencia desde OC 12345 - Pedido P-12.48",
                 "StockTransferLines": [
                     {
+                        "LineNum": 0,
                         "ItemCode": "5-0012.9",
-                        "Quantity": 120.0,
-                        "FromWarehouse": "01",
-                        "ToWarehouse": "02"
+                        "Quantity": 120.0
                     }
                 ]
             }
@@ -118,9 +117,7 @@ class SAPStockTransferMapper:
                 line = {
                     "LineNum": idx,
                     "ItemCode": item_code,
-                    "Quantity": float(cantidad),
-                    "FromWarehouse": bodega_origen,
-                    "ToWarehouse": bodega_destino
+                    "Quantity": float(cantidad)
                 }
                 
                 stock_transfer_lines.append(line)
