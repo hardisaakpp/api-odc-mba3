@@ -193,42 +193,88 @@ class PedidoRepository:
                 raise ValueError("No se pudo generar UUID para pedido_detalle_id")
             pedido_detalle_id = str(uuid_result[0])
             
-            sql = """
-            INSERT INTO pedido_detalle (
-                pedido_detalle_id,
-                pedido_id,
-                codigo_interno,
-                descripcion_sap,
-                marca,
-                codigo_barras,
-                pack,
-                costo_doc_sin_iva,
-                descuento_1,
-                pvp,
-                subtotal,
-                total,
-                bodega,
-                created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, GETDATE())
-            """
+            # Verificar si existe la columna comentario antes de incluirla en el INSERT
+            cursor.execute("""
+                SELECT COUNT(*) 
+                FROM INFORMATION_SCHEMA.COLUMNS 
+                WHERE TABLE_NAME = 'pedido_detalle' 
+                AND COLUMN_NAME = 'comentario'
+            """)
+            tiene_comentario = cursor.fetchone()[0] > 0
             
-            # NOTA: subtotal y total se guardan tal cual vienen del Excel (o NULL)
-            # NO se recalculan ni se validan
-            values = (
-                pedido_detalle_id,
-                pedido_id,
-                datos_detalle.get("codigo_interno"),
-                datos_detalle.get("descripcion_sap"),
-                datos_detalle.get("marca"),
-                datos_detalle.get("codigo_barras"),
-                datos_detalle.get("pack"),
-                datos_detalle.get("costo_doc_sin_iva"),
-                datos_detalle.get("descuento_1"),
-                datos_detalle.get("pvp"),
-                datos_detalle.get("subtotal"),  # Calculado al guardar
-                datos_detalle.get("total"),     # Tal cual viene del Excel
-                datos_detalle.get("bodega"),    # Bodega/almacén del producto
-            )
+            if tiene_comentario:
+                sql = """
+                INSERT INTO pedido_detalle (
+                    pedido_detalle_id,
+                    pedido_id,
+                    codigo_interno,
+                    descripcion_sap,
+                    marca,
+                    codigo_barras,
+                    pack,
+                    costo_doc_sin_iva,
+                    descuento_1,
+                    pvp,
+                    subtotal,
+                    total,
+                    bodega,
+                    comentario,
+                    created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, GETDATE())
+                """
+                
+                values = (
+                    pedido_detalle_id,
+                    pedido_id,
+                    datos_detalle.get("codigo_interno"),
+                    datos_detalle.get("descripcion_sap"),
+                    datos_detalle.get("marca"),
+                    datos_detalle.get("codigo_barras"),
+                    datos_detalle.get("pack"),
+                    datos_detalle.get("costo_doc_sin_iva"),
+                    datos_detalle.get("descuento_1"),
+                    datos_detalle.get("pvp"),
+                    datos_detalle.get("subtotal"),  # Calculado al guardar
+                    datos_detalle.get("total"),     # Tal cual viene del Excel
+                    datos_detalle.get("bodega"),    # Bodega/almacén del producto
+                    datos_detalle.get("comentario"),  # Comentario del artículo
+                )
+            else:
+                # Si no existe la columna comentario, usar el INSERT sin ella (compatibilidad con BD antiguas)
+                sql = """
+                INSERT INTO pedido_detalle (
+                    pedido_detalle_id,
+                    pedido_id,
+                    codigo_interno,
+                    descripcion_sap,
+                    marca,
+                    codigo_barras,
+                    pack,
+                    costo_doc_sin_iva,
+                    descuento_1,
+                    pvp,
+                    subtotal,
+                    total,
+                    bodega,
+                    created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, GETDATE())
+                """
+                
+                values = (
+                    pedido_detalle_id,
+                    pedido_id,
+                    datos_detalle.get("codigo_interno"),
+                    datos_detalle.get("descripcion_sap"),
+                    datos_detalle.get("marca"),
+                    datos_detalle.get("codigo_barras"),
+                    datos_detalle.get("pack"),
+                    datos_detalle.get("costo_doc_sin_iva"),
+                    datos_detalle.get("descuento_1"),
+                    datos_detalle.get("pvp"),
+                    datos_detalle.get("subtotal"),  # Calculado al guardar
+                    datos_detalle.get("total"),     # Tal cual viene del Excel
+                    datos_detalle.get("bodega"),    # Bodega/almacén del producto
+                )
             
             cursor.execute(sql, values)
             self.conn.commit()
@@ -851,6 +897,172 @@ class PedidoRepository:
         except Exception as e:
             self.conn.rollback()
             logger.error(f"❌ Error al actualizar estado del pedido: {e}", exc_info=True)
+            raise
+        finally:
+            cursor.close()
+    
+    def update_cabecera(self, pedido_id: str, datos_cabecera: Dict[str, Any]) -> bool:
+        """
+        Actualiza la cabecera de un pedido.
+        
+        Si algún campo en datos_cabecera es None, se preserva el valor existente.
+        No se puede modificar: pedido_id, numero_pedido (business key), creado_por, creado_en.
+        
+        Args:
+            pedido_id: UUID del pedido
+            datos_cabecera: Diccionario con datos actualizados (sin pedido_id)
+            
+        Returns:
+            True si se actualizó correctamente, False si no existe el pedido
+            
+        Raises:
+            Exception: Si falla la actualización
+        """
+        cursor = self.conn.cursor()
+        
+        try:
+            # Verificar si existe columna estado
+            cursor.execute("""
+                SELECT COUNT(*) 
+                FROM INFORMATION_SCHEMA.COLUMNS 
+                WHERE TABLE_NAME = 'pedido' 
+                AND COLUMN_NAME = 'estado'
+            """)
+            row = cursor.fetchone()
+            tiene_estado = (row[0] if row else 0) > 0
+            
+            # Obtener valores existentes
+            if tiene_estado:
+                cursor.execute("""
+                    SELECT 
+                        pedido_id, numero_pedido, fecha_pedido, fecha_entrega,
+                        forma_pago, odc, proveedor_nombre, comprador_nombre,
+                        comprador_codigo, origen_traslado, serie, archivo_nombre,
+                        creado_por, estado
+                    FROM pedido
+                    WHERE pedido_id = ?
+                """, (pedido_id,))
+            else:
+                cursor.execute("""
+                    SELECT 
+                        pedido_id, numero_pedido, fecha_pedido, fecha_entrega,
+                        forma_pago, odc, proveedor_nombre, comprador_nombre,
+                        comprador_codigo, origen_traslado, serie, archivo_nombre,
+                        creado_por
+                    FROM pedido
+                    WHERE pedido_id = ?
+                """, (pedido_id,))
+            
+            row = cursor.fetchone()
+            if not row:
+                logger.warning(f"⚠️ No se encontró pedido para actualizar: {pedido_id}")
+                return False
+            
+            # Construir diccionario con valores existentes
+            existing = {
+                "fecha_pedido": row[2].isoformat() if row[2] else None,
+                "fecha_entrega": row[3],
+                "forma_pago": row[4],
+                "odc": row[5],
+                "proveedor_nombre": row[6],
+                "comprador_nombre": row[7],
+                "comprador_codigo": row[8],
+                "origen_traslado": row[9],
+                "serie": row[10],
+                "archivo_nombre": row[11],
+            }
+            if tiene_estado:
+                existing["estado"] = row[13]
+            
+            # Fusionar datos: usar nuevo valor si existe y no es None, sino usar existente
+            merged = {}
+            for key in existing.keys():
+                new_value = datos_cabecera.get(key)
+                if new_value is not None:
+                    merged[key] = new_value
+                else:
+                    merged[key] = existing[key]
+            
+            # Normalizar fechas
+            from datetime import date
+            if "fecha_pedido" in merged and merged["fecha_pedido"] is not None:
+                fp = merged["fecha_pedido"]
+                if isinstance(fp, date):
+                    merged["fecha_pedido"] = fp.isoformat()
+                elif isinstance(fp, str):
+                    # Ya es string ISO, mantenerlo
+                    pass
+            
+            # SQL para actualizar
+            if tiene_estado:
+                sql = """
+                UPDATE pedido SET
+                    fecha_pedido = ?,
+                    fecha_entrega = ?,
+                    forma_pago = ?,
+                    odc = ?,
+                    proveedor_nombre = ?,
+                    comprador_nombre = ?,
+                    comprador_codigo = ?,
+                    origen_traslado = ?,
+                    serie = ?,
+                    estado = ?
+                WHERE pedido_id = ?
+                """
+                values = (
+                    merged.get("fecha_pedido"),
+                    merged.get("fecha_entrega"),
+                    merged.get("forma_pago"),
+                    merged.get("odc"),
+                    merged.get("proveedor_nombre"),
+                    merged.get("comprador_nombre"),
+                    merged.get("comprador_codigo"),
+                    merged.get("origen_traslado"),
+                    merged.get("serie"),
+                    merged.get("estado"),
+                    pedido_id,
+                )
+            else:
+                sql = """
+                UPDATE pedido SET
+                    fecha_pedido = ?,
+                    fecha_entrega = ?,
+                    forma_pago = ?,
+                    odc = ?,
+                    proveedor_nombre = ?,
+                    comprador_nombre = ?,
+                    comprador_codigo = ?,
+                    origen_traslado = ?,
+                    serie = ?
+                WHERE pedido_id = ?
+                """
+                values = (
+                    merged.get("fecha_pedido"),
+                    merged.get("fecha_entrega"),
+                    merged.get("forma_pago"),
+                    merged.get("odc"),
+                    merged.get("proveedor_nombre"),
+                    merged.get("comprador_nombre"),
+                    merged.get("comprador_codigo"),
+                    merged.get("origen_traslado"),
+                    merged.get("serie"),
+                    pedido_id,
+                )
+            
+            cursor.execute(sql, values)
+            rows_affected = cursor.rowcount
+            self.conn.commit()
+            
+            if rows_affected > 0:
+                logger.debug(f"✅ Pedido cabecera actualizada: {pedido_id}")
+                return True
+            else:
+                logger.warning(f"⚠️ No se encontró pedido para actualizar: {pedido_id}")
+                return False
+                
+        except Exception as e:
+            self.conn.rollback()
+            logger.error(f"❌ Error al actualizar cabecera del pedido: {e}", exc_info=True)
             raise
         finally:
             cursor.close()

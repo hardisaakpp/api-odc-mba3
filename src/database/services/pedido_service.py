@@ -33,6 +33,8 @@ from .pedido_format_detector import PedidoFormatDetector
 from .pedido_sap_validator_helper import PedidoSAPValidatorHelper
 from .pedido_formato_processor import PedidoFormatoProcessor
 from .pedido_formato_v1_processor import PedidoFormatoV1Processor
+from ..clients.sap_client import SAPClient
+from src.config import ENABLE_SAP_QUERIES
 
 logger = logging.getLogger(__name__)
 
@@ -139,6 +141,100 @@ class PedidoService:
             filename=filename,
             usuario_id=usuario_id
         )
+    
+    def _enriquecer_detalles_con_sap(
+        self,
+        detalles_con_tiendas: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        """
+        Enriquece los detalles del pedido con información de SAP (ItemName y U_IXX_PACK).
+        
+        Este método consulta SAP para obtener:
+        - ItemName → descripcion_sap (solo si está vacío)
+        - U_IXX_PACK → pack (solo si está vacío)
+        
+        Args:
+            detalles_con_tiendas: Lista de detalles con estructura:
+                [{
+                    "detalle": {
+                        "codigo_interno": str,
+                        "descripcion_sap": Optional[str],
+                        "pack": Optional[str],
+                        ...
+                    },
+                    "distribuciones": [...]
+                }, ...]
+        
+        Returns:
+            Lista de detalles enriquecidos con información de SAP
+        """
+        if not ENABLE_SAP_QUERIES:
+            logger.debug("⏭️ Consultas SAP deshabilitadas, omitiendo enriquecimiento")
+            return detalles_con_tiendas
+        
+        # Extraer códigos de productos únicos que necesitan enriquecimiento
+        codigos_a_consultar = []
+        codigos_por_detalle = {}  # Mapeo: codigo_interno -> índices de detalles que lo usan
+        
+        for idx, detalle_data in enumerate(detalles_con_tiendas):
+            detalle = detalle_data.get("detalle", {})
+            codigo_interno = detalle.get("codigo_interno")
+            
+            if not codigo_interno:
+                continue
+            
+            # Solo consultar si falta descripcion_sap o pack
+            necesita_descripcion = not detalle.get("descripcion_sap")
+            necesita_pack = not detalle.get("pack")
+            
+            if necesita_descripcion or necesita_pack:
+                codigo_normalized = codigo_interno.strip().upper()
+                if codigo_normalized not in codigos_por_detalle:
+                    codigos_a_consultar.append(codigo_normalized)
+                    codigos_por_detalle[codigo_normalized] = []
+                codigos_por_detalle[codigo_normalized].append(idx)
+        
+        if not codigos_a_consultar:
+            logger.debug("✅ Todos los detalles ya tienen descripcion_sap y pack, omitiendo consulta SAP")
+            return detalles_con_tiendas
+        
+        logger.info(f"🔍 Consultando SAP para enriquecer {len(codigos_a_consultar)} productos únicos")
+        
+        # Consultar SAP en batch
+        sap_client = SAPClient()
+        productos_sap = sap_client.get_productos_info_batch(codigos_a_consultar)
+        
+        # Enriquecer detalles con información de SAP
+        detalles_enriquecidos = detalles_con_tiendas.copy()
+        productos_enriquecidos = 0
+        
+        for codigo_normalized, indices in codigos_por_detalle.items():
+            sap_info = productos_sap.get(codigo_normalized)
+            
+            if not sap_info:
+                logger.debug(f"⚠️ No se encontró información SAP para {codigo_normalized}")
+                continue
+            
+            item_name = sap_info.get("ItemName")
+            pack_sap = sap_info.get("U_IXX_PACK")
+            
+            # Enriquecer cada detalle que usa este código
+            for idx in indices:
+                detalle = detalles_enriquecidos[idx]["detalle"]
+                
+                # Solo rellenar si está vacío (no sobrescribir valores existentes)
+                if item_name and not detalle.get("descripcion_sap"):
+                    detalle["descripcion_sap"] = item_name
+                    productos_enriquecidos += 1
+                    logger.debug(f"✅ Enriquecido descripcion_sap para {codigo_normalized}: {item_name[:50]}")
+                
+                if pack_sap and not detalle.get("pack"):
+                    detalle["pack"] = pack_sap
+                    productos_enriquecidos += 1
+                    logger.debug(f"✅ Enriquecido pack para {codigo_normalized}: {pack_sap}")
+        
+        logger.info(f"✅ Enriquecidos {productos_enriquecidos} campos desde SAP")
+        return detalles_enriquecidos
     
     def procesar_archivo_excel(
         self,
@@ -863,6 +959,9 @@ class PedidoService:
                 detalles_con_tiendas = self.parser.extraer_detalle_con_tiendas(df_raw)
                 es_formato_simple = False
             
+            # ✅ Enriquecer detalles con información de SAP (ItemName y U_IXX_PACK)
+            detalles_con_tiendas = self._enriquecer_detalles_con_sap(detalles_con_tiendas)
+            
             cabecera["estado"] = "PENDIENTE_CONFIRMACION_PROVEEDOR"
             
             if not detalles_con_tiendas:
@@ -948,6 +1047,200 @@ class PedidoService:
             
         except Exception as e:
             logger.error(f"❌ Error al validar y crear lote: {e}", exc_info=True)
+            resultado["status"] = "error"
+            resultado["errores"].append(str(e))
+            return resultado
+    
+    def crear_pedido_manual(
+        self,
+        datos_pedido: Dict[str, Any],
+        usuario_id: Optional[str] = None,
+        validar_productos: bool = True,
+        validar_tiendas: bool = True
+    ) -> Dict[str, Any]:
+        """
+        Crea un pedido manualmente desde datos JSON (HU-01 - Carga por Pantalla).
+        
+        Este método permite crear pedidos directamente desde la interfaz web
+        sin necesidad de subir un archivo Excel.
+        
+        Args:
+            datos_pedido: Diccionario con datos del pedido (del request JSON)
+            usuario_id: ID del usuario que crea el pedido
+            validar_productos: Si True, valida que productos existan
+            validar_tiendas: Si True, valida que tiendas existan y estén activas
+            
+        Returns:
+            Dict con resultado completo incluyendo validaciones y consolidación
+        """
+        if not ENABLE_SQL_SERVER_STORAGE:
+            return {"status": "error", "message": "SQL Server storage está deshabilitado"}
+        
+        resultado = {
+            "status": "success",
+            "pedido_id": None,
+            "estado": None,
+            "validacion": {
+                "productos": {"validos": [], "no_encontrados": [], "todos_validos": False},
+                "tiendas": {"validas": [], "no_encontradas": [], "inactivas": [], "todas_validas": False},
+                "cantidades": {}
+            },
+            "consolidacion": {"total_productos": 0, "cantidad_total": 0},
+            "articulos_cargados": 0,
+            "distribuciones_cargadas": 0,
+            "errores": []
+        }
+        
+        try:
+            # Preparar cabecera
+            cabecera = {
+                "numero_pedido": datos_pedido.get("numero_pedido"),
+                "fecha_pedido": datos_pedido.get("fecha_pedido"),
+                "fecha_entrega": datos_pedido.get("fecha_entrega"),
+                "forma_pago": datos_pedido.get("forma_pago"),
+                "odc": datos_pedido.get("odc"),
+                "proveedor_nombre": datos_pedido.get("proveedor_nombre"),
+                "comprador_nombre": datos_pedido.get("comprador_nombre"),
+                "comprador_codigo": datos_pedido.get("comprador_codigo"),
+                "origen_traslado": datos_pedido.get("origen_traslado"),
+                "serie": datos_pedido.get("serie"),
+                "archivo_nombre": "CREACION_MANUAL",
+                "creado_por": usuario_id,
+                "estado": "PENDIENTE_CONFIRMACION_PROVEEDOR"
+            }
+            
+            # Convertir artículos a formato interno
+            articulos = datos_pedido.get("articulos", [])
+            if not articulos:
+                resultado["status"] = "error"
+                resultado["errores"].append("No se encontraron artículos")
+                return resultado
+            
+            detalles_con_tiendas = []
+            for articulo in articulos:
+                # Mapear TODOS los campos del artículo, incluyendo campos opcionales
+                # Esto asegura que cualquier campo enviado desde el frontend se guarde en la BD
+                # Usar .get() con valor por defecto None para campos opcionales
+                detalle = {
+                    "codigo_interno": articulo.get("codigo_interno"),
+                    "descripcion_sap": articulo.get("descripcion_sap"),
+                    "marca": articulo.get("marca"),
+                    "codigo_barras": articulo.get("codigo_barras"),
+                    "pack": articulo.get("pack"),
+                    "costo_doc_sin_iva": articulo.get("costo_doc_sin_iva"),
+                    "descuento_1": articulo.get("descuento_1"),
+                    "pvp": articulo.get("pvp"),
+                    "subtotal": articulo.get("subtotal"),
+                    "total": articulo.get("total"),
+                    "bodega": articulo.get("bodega"),  # Campo bodega si existe en el request
+                    "comentario": articulo.get("comentario")  # Campo comentario si existe en el request
+                }
+                
+                # Log para debugging: ver qué campos se están mapeando
+                logger.debug(f"📦 Mapeando artículo: codigo_interno={detalle['codigo_interno']}, "
+                           f"descripcion_sap={detalle.get('descripcion_sap')}, "
+                           f"marca={detalle.get('marca')}, "
+                           f"costo_doc_sin_iva={detalle.get('costo_doc_sin_iva')}, "
+                           f"pvp={detalle.get('pvp')}, "
+                           f"bodega={detalle.get('bodega')}, "
+                           f"comentario={detalle.get('comentario')}")
+                
+                distribuciones = []
+                for dist in articulo.get("distribuciones", []):
+                    distribuciones.append({
+                        "tienda_codigo": dist.get("tienda_codigo"),
+                        "tienda_nombre": dist.get("tienda_nombre"),
+                        "cantidad": dist.get("cantidad")
+                    })
+                
+                detalles_con_tiendas.append({
+                    "detalle": detalle,
+                    "distribuciones": distribuciones
+                })
+            
+            # ✅ Enriquecer detalles con información de SAP (ItemName y U_IXX_PACK)
+            detalles_con_tiendas = self._enriquecer_detalles_con_sap(detalles_con_tiendas)
+            
+            # Validar productos y tiendas
+            with get_db_connection_context() as conn:
+                validator = PedidoValidator()
+                
+                codigos_productos = list(set([
+                    det.get("detalle", {}).get("codigo_interno")
+                    for det in detalles_con_tiendas
+                    if det.get("detalle", {}).get("codigo_interno")
+                ]))
+                codigos_tiendas = list(set([
+                    dist.get("tienda_codigo")
+                    for det in detalles_con_tiendas
+                    for dist in det.get("distribuciones", [])
+                    if dist.get("tienda_codigo")
+                ]))
+                
+                if validar_productos and codigos_productos:
+                    validacion_productos = validator.validar_productos_existen(codigos_productos, conn)
+                    resultado["validacion"]["productos"] = validacion_productos
+                    if not validacion_productos["todos_validos"]:
+                        resultado["errores"].append(f"Productos no encontrados: {', '.join(validacion_productos['no_encontrados'])}")
+                
+                if validar_tiendas and codigos_tiendas:
+                    validacion_tiendas = validator.validar_tiendas_existen(codigos_tiendas, conn)
+                    resultado["validacion"]["tiendas"] = validacion_tiendas
+                    if not validacion_tiendas["todas_validas"]:
+                        if validacion_tiendas["no_encontradas"]:
+                            resultado["errores"].append(f"Tiendas no encontradas: {', '.join(validacion_tiendas['no_encontradas'])}")
+                        if validacion_tiendas["inactivas"]:
+                            resultado["errores"].append(f"Tiendas inactivas: {', '.join(validacion_tiendas['inactivas'])}")
+                
+                validacion_cantidades = validator.validar_pedido_completo(cabecera, detalles_con_tiendas, es_formato_simple=False)
+                resultado["validacion"]["cantidades"] = {
+                    "valid": validacion_cantidades["valid"],
+                    "errors": validacion_cantidades["errors"],
+                    "warnings": validacion_cantidades["warnings"],
+                    "total_issues": validacion_cantidades["total_issues"]
+                }
+                
+                if not validacion_cantidades["valid"]:
+                    resultado["status"] = "validation_error"
+                    return resultado
+                
+                consolidacion = self.consolidator.consolidar_pedido_por_producto(detalles_con_tiendas)
+                resultado["consolidacion"] = consolidacion["resumen"]
+                
+                repository = PedidoRepository(conn)
+                pedido_id = repository.insert_cabecera(cabecera)
+                resultado["pedido_id"] = pedido_id
+                resultado["estado"] = "PENDIENTE_CONFIRMACION_PROVEEDOR"
+                
+                for detalle_data in detalles_con_tiendas:
+                    try:
+                        pedido_detalle_id = repository.insert_detalle(pedido_id, detalle_data["detalle"])
+                        resultado["articulos_cargados"] += 1
+                        if detalle_data.get("distribuciones"):
+                            distribuciones = []
+                            for dist in detalle_data["distribuciones"]:
+                                tienda_codigo = dist.get("tienda_codigo")
+                                cantidad = dist.get("cantidad")
+                                if tienda_codigo and cantidad and cantidad > 0:
+                                    tienda_id = repository.get_or_create_tienda(
+                                        codigo=tienda_codigo,
+                                        nombre=dist.get("tienda_nombre")
+                                    )
+                                    distribuciones.append({
+                                        "tienda_id": tienda_id,
+                                        "cantidad": int(cantidad)
+                                    })
+                            if distribuciones:
+                                resultado["distribuciones_cargadas"] += repository.insert_detalle_tiendas(pedido_detalle_id, distribuciones)
+                    except Exception as e:
+                        logger.warning(f"⚠️ Error procesando artículo: {e}")
+                        resultado["errores"].append(str(e))
+            
+            logger.info(f"✅ Pedido manual creado: {resultado['pedido_id']} - {cabecera.get('numero_pedido')}")
+            return resultado
+            
+        except Exception as e:
+            logger.error(f"❌ Error al crear pedido manual: {e}", exc_info=True)
             resultado["status"] = "error"
             resultado["errores"].append(str(e))
             return resultado

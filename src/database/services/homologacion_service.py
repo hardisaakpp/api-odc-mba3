@@ -359,6 +359,105 @@ class HomologacionService:
                 except:
                     pass
     
+    def create_homologacion_sku(
+        self,
+        data: Dict[str, Any],
+        modificado_por: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Crea una nueva homologación SKU.
+        
+        Args:
+            data: Datos de la homologación
+            modificado_por: Usuario que crea la homologación
+            
+        Returns:
+            Diccionario con status y resultado
+        """
+        conn = None
+        try:
+            conn = get_db_connection()
+            repository = HomologacionRepository(conn)
+            
+            # Validar datos requeridos
+            if not data.get('sku_mba3'):
+                return {
+                    "status": "error",
+                    "message": "sku_mba3 es requerido",
+                    "error_code": "VALIDATION_ERROR"
+                }
+            
+            # Validar datos numéricos
+            if 'precio_unitario_mba3' in data and data['precio_unitario_mba3'] is not None:
+                if data['precio_unitario_mba3'] < 0:
+                    return {
+                        "status": "error",
+                        "message": "El precio unitario MBA3 debe ser mayor o igual a 0",
+                        "error_code": "VALIDATION_ERROR"
+                    }
+            
+            if 'precio_unitario_sap' in data and data['precio_unitario_sap'] is not None:
+                if data['precio_unitario_sap'] < 0:
+                    return {
+                        "status": "error",
+                        "message": "El precio unitario SAP debe ser mayor o igual a 0",
+                        "error_code": "VALIDATION_ERROR"
+                    }
+            
+            if 'cantidad_docena_mba3' in data and data['cantidad_docena_mba3'] is not None:
+                if data['cantidad_docena_mba3'] < 0:
+                    return {
+                        "status": "error",
+                        "message": "La cantidad docena MBA3 debe ser mayor o igual a 0",
+                        "error_code": "VALIDATION_ERROR"
+                    }
+            
+            if 'cantidad_pack_sap' in data and data['cantidad_pack_sap'] is not None:
+                if data['cantidad_pack_sap'] < 0:
+                    return {
+                        "status": "error",
+                        "message": "La cantidad pack SAP debe ser mayor o igual a 0",
+                        "error_code": "VALIDATION_ERROR"
+                    }
+            
+            if 'estado' in data:
+                if data['estado'] not in ['PENDIENTE', 'HOMOLOGADO', 'ERROR']:
+                    return {
+                        "status": "error",
+                        "message": "Estado inválido. Debe ser PENDIENTE, HOMOLOGADO o ERROR",
+                        "error_code": "VALIDATION_ERROR"
+                    }
+            
+            # Crear
+            homologacion_creada = repository.create_homologacion_sku(data, modificado_por)
+            
+            if homologacion_creada:
+                return {
+                    "status": "success",
+                    "data": homologacion_creada,
+                    "message": "Homologación creada correctamente"
+                }
+            else:
+                return {
+                    "status": "error",
+                    "message": "Error al crear homologación",
+                    "error_code": "INTERNAL_ERROR"
+                }
+            
+        except Exception as e:
+            logger.error(f"❌ Error al crear homologación: {e}", exc_info=True)
+            return {
+                "status": "error",
+                "message": str(e),
+                "error_code": "INTERNAL_ERROR"
+            }
+        finally:
+            if conn:
+                try:
+                    conn.close()
+                except:
+                    pass
+    
     def update_homologacion_sku(
         self,
         homologacion_id: str,

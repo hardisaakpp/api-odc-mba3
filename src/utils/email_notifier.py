@@ -1042,3 +1042,230 @@ def send_oc_to_supplier(
         logger.error(f"❌ Error al enviar email de ODC al proveedor: {e}", exc_info=True)
         return False
 
+
+def send_oc_ready_for_dispatch_notification(
+    oc_cabecera: Dict[str, Any],
+    doc_num: Optional[int] = None,
+    doc_entry: Optional[int] = None,
+    solicitudes_transferencia: Optional[Dict[str, Any]] = None,
+    pedido_numero: Optional[str] = None,
+    fecha_ejecucion: Optional[datetime] = None
+) -> bool:
+    """
+    Envía notificación a El Rayo indicando que la OC y Solicitudes de Transferencia
+    han sido generadas en SAP y pueden proceder con despacho y facturación.
+    
+    HU-04: Alertar al personal de El Rayo para proceder con el despacho y facturación
+    
+    DESTINATARIO: EMAIL_TO_OPERACIONES (Operaciones/Despachos)
+    
+    Args:
+        oc_cabecera: Datos de cabecera de la orden de compra
+        doc_num: Número de documento SAP (DocNum) de la OC
+        doc_entry: Entry de documento SAP (DocEntry) de la OC
+        solicitudes_transferencia: Resultado de creación de solicitudes de transferencia (opcional)
+        pedido_numero: Número de pedido relacionado (opcional)
+        fecha_ejecucion: Fecha y hora de la ejecución (por defecto ahora)
+    
+    Returns:
+        True si el email se envió correctamente, False en caso contrario
+    """
+    if not ENABLE_EMAIL_NOTIFICATIONS:
+        logger.debug("⏭️ Notificaciones por email deshabilitadas")
+        return False
+    
+    if not fecha_ejecucion:
+        fecha_ejecucion = datetime.now()
+    
+    try:
+        # Usar EMAIL_TO_OPERACIONES (Operaciones/Despachos) para notificar a El Rayo
+        recipients = EMAIL_TO_OPERACIONES if isinstance(EMAIL_TO_OPERACIONES, list) else [EMAIL_TO_OPERACIONES] if EMAIL_TO_OPERACIONES else []
+        
+        if not recipients:
+            logger.warning("⚠️ No hay destinatarios configurados para notificación de despacho")
+            return False
+        
+        # Extraer información de la OC
+        oc_id = oc_cabecera.get("oc_id", "N/A")
+        proveedor = oc_cabecera.get("proveedor", "N/A")
+        numero_oc_sap = doc_num or oc_cabecera.get("numero_oc_sap", "N/A")
+        referencia = oc_cabecera.get("referencia_despacho", "N/A")
+        
+        # Información de Solicitudes de Transferencia
+        transferencias_info = ""
+        transferencias_tabla = ""
+        total_transferencias = 0
+        transferencias_exitosas = 0
+        transferencias_fallidas = 0
+        
+        if solicitudes_transferencia:
+            total_transferencias = solicitudes_transferencia.get("total_tiendas", 0)
+            transferencias_exitosas = solicitudes_transferencia.get("transferencias_creadas", 0)
+            transferencias_fallidas = solicitudes_transferencia.get("transferencias_errores", 0)
+            resultados = solicitudes_transferencia.get("resultados", [])
+            
+            # Construir tabla de transferencias
+            if resultados:
+                for resultado in resultados:
+                    tienda_codigo = resultado.get("tienda_codigo", "N/A")
+                    success = resultado.get("success", False)
+                    doc_num_transf = resultado.get("doc_num", "N/A")
+                    error = resultado.get("error")
+                    
+                    estado = "✅ Creada" if success else "❌ Error"
+                    doc_info = f"DocNum: {doc_num_transf}" if success else f"Error: {error or 'Desconocido'}"
+                    
+                    transferencias_tabla += f"""
+                    <tr>
+                        <td>{tienda_codigo}</td>
+                        <td>{estado}</td>
+                        <td>{doc_info}</td>
+                    </tr>
+                    """
+        
+        # Crear mensaje
+        msg = MIMEMultipart()
+        msg['From'] = EMAIL_FROM
+        msg['To'] = ", ".join(recipients)
+        msg['Subject'] = f"✅ OC y Solicitudes de Transferencia Generadas - Listo para Despacho #{numero_oc_sap}"
+        
+        # Crear cuerpo del mensaje HTML
+        body_html = f"""
+        <html>
+        <head>
+            <style>
+                body {{ font-family: Arial, sans-serif; }}
+                .container {{ max-width: 800px; margin: 0 auto; padding: 20px; }}
+                .header {{ background-color: #2196F3; color: white; padding: 15px; text-align: center; }}
+                .content {{ background-color: #f9f9f9; padding: 20px; }}
+                .info-box {{ background-color: white; padding: 15px; margin: 10px 0; border-left: 4px solid #2196F3; }}
+                .success-box {{ background-color: #e8f5e9; padding: 15px; margin: 10px 0; border-left: 4px solid #4CAF50; }}
+                .table-container {{ overflow-x: auto; margin: 20px 0; }}
+                table {{ width: 100%; border-collapse: collapse; background-color: white; }}
+                th {{ background-color: #2196F3; color: white; padding: 10px; text-align: left; }}
+                td {{ padding: 8px; border-bottom: 1px solid #ddd; }}
+                tr:hover {{ background-color: #f5f5f5; }}
+                .footer {{ text-align: center; color: #666; font-size: 12px; margin-top: 20px; }}
+                .action-box {{ background-color: #fff3cd; padding: 15px; margin: 20px 0; border-left: 4px solid #ffc107; }}
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <div class="header">
+                    <h2>✅ OC y Solicitudes de Transferencia Generadas</h2>
+                </div>
+                <div class="content">
+                    <p>Se ha generado exitosamente la Orden de Compra y las Solicitudes de Transferencia en SAP.</p>
+                    <p><strong>Pueden proceder con el despacho y facturación.</strong></p>
+                    
+                    <div class="info-box">
+                        <h3>📋 Información de la Orden de Compra</h3>
+                        <ul>
+                            <li><strong>Número OC SAP:</strong> {numero_oc_sap}</li>
+                            <li><strong>DocEntry:</strong> {doc_entry or 'N/A'}</li>
+                            <li><strong>Proveedor:</strong> {proveedor}</li>
+                            <li><strong>Referencia:</strong> {referencia}</li>
+                            {f'<li><strong>Número de Pedido:</strong> {pedido_numero}</li>' if pedido_numero else ''}
+                        </ul>
+                    </div>
+                    
+                    {f'''
+                    <div class="success-box">
+                        <h3>📦 Solicitudes de Transferencia Generadas</h3>
+                        <p><strong>Total:</strong> {transferencias_exitosas}/{total_transferencias} creadas exitosamente</p>
+                        {f'<p style="color: #f44336;"><strong>⚠️ Errores:</strong> {transferencias_fallidas} solicitud(es) fallaron</p>' if transferencias_fallidas > 0 else ''}
+                    </div>
+                    
+                    {f'''
+                    <div class="table-container">
+                        <h3>📋 Detalle de Solicitudes de Transferencia</h3>
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Tienda</th>
+                                    <th>Estado</th>
+                                    <th>Información</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {transferencias_tabla}
+                            </tbody>
+                        </table>
+                    </div>
+                    ''' if transferencias_tabla else ''}
+                    ''' if solicitudes_transferencia else ''}
+                    
+                    <div class="action-box">
+                        <h3>🎯 Acción Requerida</h3>
+                        <p>La Orden de Compra y las Solicitudes de Transferencia han sido registradas exitosamente en SAP.</p>
+                        <p><strong>El personal de El Rayo puede proceder con:</strong></p>
+                        <ul>
+                            <li>✅ Despacho de mercancía</li>
+                            <li>✅ Facturación correspondiente</li>
+                        </ul>
+                    </div>
+                    
+                    <div class="footer">
+                        <p>Fecha y Hora: {fecha_ejecucion.strftime('%Y-%m-%d %H:%M:%S')}</p>
+                        <p>Este es un mensaje automático del sistema de integración SAP.</p>
+                    </div>
+                </div>
+            </div>
+        </body>
+        </html>
+        """
+        
+        # Versión texto plano
+        body_text = f"""
+Orden de Compra y Solicitudes de Transferencia Generadas
+
+Se ha generado exitosamente la Orden de Compra y las Solicitudes de Transferencia en SAP.
+Pueden proceder con el despacho y facturación.
+
+Información de la Orden de Compra:
+- Número OC SAP: {numero_oc_sap}
+- DocEntry: {doc_entry or 'N/A'}
+- Proveedor: {proveedor}
+- Referencia: {referencia}
+{f'- Número de Pedido: {pedido_numero}' if pedido_numero else ''}
+
+{f'''
+Solicitudes de Transferencia Generadas:
+- Total: {transferencias_exitosas}/{total_transferencias} creadas exitosamente
+{f'- Errores: {transferencias_fallidas} solicitud(es) fallaron' if transferencias_fallidas > 0 else ''}
+''' if solicitudes_transferencia else ''}
+
+Acción Requerida:
+La Orden de Compra y las Solicitudes de Transferencia han sido registradas exitosamente en SAP.
+El personal de El Rayo puede proceder con:
+- Despacho de mercancía
+- Facturación correspondiente
+
+Fecha y Hora: {fecha_ejecucion.strftime('%Y-%m-%d %H:%M:%S')}
+
+Este es un mensaje automático del sistema de integración SAP.
+        """
+        
+        # Agregar cuerpo al mensaje
+        msg.attach(MIMEText(body_text, 'plain'))
+        msg.attach(MIMEText(body_html, 'html'))
+        
+        # Enviar email
+        with smtplib.SMTP(EMAIL_SMTP_SERVER, EMAIL_SMTP_PORT) as server:
+            # Solo usar TLS si el puerto es 587 (no para puerto 25 - relay interno)
+            if EMAIL_SMTP_PORT == 587:
+                server.starttls()
+            
+            # Solo autenticar si hay password configurada (no para relay interno)
+            if EMAIL_SMTP_PASSWORD:
+                server.login(EMAIL_SMTP_USER, EMAIL_SMTP_PASSWORD)
+            
+            server.send_message(msg, to_addrs=recipients)
+        
+        logger.info(f"✅ Notificación de OC lista para despacho enviada a {', '.join(recipients)} (OC #{numero_oc_sap})")
+        return True
+        
+    except Exception as e:
+        logger.error(f"❌ Error al enviar notificación de OC lista para despacho: {e}", exc_info=True)
+        return False
+

@@ -323,6 +323,40 @@ class OCSAPService:
                         logger.warning(f"⚠️ Error al crear Solicitudes de Transferencia (no crítico): {e}")
                         result["solicitudes_transferencia_error"] = str(e)
                 
+                # 8.1. Notificar a El Rayo para proceder con despacho y facturación (HU-04)
+                try:
+                    from src.utils.email_notifier import send_oc_ready_for_dispatch_notification
+                    from ..repositories.pedido_repository import PedidoRepository
+                    
+                    # Obtener número de pedido si está disponible
+                    pedido_numero = None
+                    if pedido_id:
+                        try:
+                            pedido_repo_temp = PedidoRepository(oc_repo.conn)
+                            pedido_data = pedido_repo_temp.get_pedido_completo(pedido_id)
+                            if pedido_data and pedido_data.get("cabecera"):
+                                pedido_numero = pedido_data["cabecera"].get("numero_pedido")
+                        except Exception:
+                            pass  # No crítico si falla
+                    
+                    # Obtener resultado de transferencias para incluir en la notificación
+                    resultado_transferencias_notif = result.get("solicitudes_transferencia")
+                    
+                    email_enviado = send_oc_ready_for_dispatch_notification(
+                        oc_cabecera=oc_cabecera,
+                        doc_num=doc_num,
+                        doc_entry=doc_entry,
+                        solicitudes_transferencia=resultado_transferencias_notif,
+                        pedido_numero=pedido_numero
+                    )
+                    if email_enviado:
+                        logger.info(f"📧 Notificación de OC lista para despacho enviada a El Rayo (OC #{doc_num})")
+                    else:
+                        logger.warning(f"⚠️ No se pudo enviar notificación a El Rayo (no crítico)")
+                except Exception as e:
+                    # NO fallar el proceso si la notificación falla
+                    logger.warning(f"⚠️ Error al enviar notificación a El Rayo (no crítico): {e}")
+                
                 # 9. Evaluar y cerrar pedido si corresponde
                 if pedido_id:
                     try:

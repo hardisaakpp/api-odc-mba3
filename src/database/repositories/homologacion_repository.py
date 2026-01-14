@@ -177,6 +177,23 @@ class HomologacionRepository:
         """
         return self._sku.get_homologacion_by_id(homologacion_id)
     
+    def create_homologacion_sku(
+        self,
+        data: Dict[str, Any],
+        modificado_por: Optional[str] = None
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Crea una nueva homologación SKU.
+        
+        Args:
+            data: Diccionario con datos de la homologación
+            modificado_por: Usuario que crea la homologación
+            
+        Returns:
+            Diccionario con la homologación creada o None si hubo error
+        """
+        return self._sku.create_homologacion_sku(data, modificado_por)
+    
     def update_homologacion_sku(
         self, 
         homologacion_id: str, 

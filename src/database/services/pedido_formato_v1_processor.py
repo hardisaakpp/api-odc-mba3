@@ -9,13 +9,14 @@ from typing import Dict, Any, List, Optional
 from datetime import date
 import io
 
-from src.config import ENABLE_SQL_SERVER_STORAGE
+from src.config import ENABLE_SQL_SERVER_STORAGE, ENABLE_SAP_QUERIES
 from src.exceptions import BusinessException
 from .pedido_validator import PedidoValidator
 from .pedido_tiendas_handler import procesar_tiendas_y_validar_sap_v1_0
 from .pedido_detalle_handler import procesar_detalle_articulos_v1_0
 from .pedido_movimiento_handler import procesar_movimiento_y_coherencia_v1_0
 from .pedido_guardado_handler import guardar_pedido_v1_0
+from ..clients.sap_client import SAPClient
 
 logger = logging.getLogger(__name__)
 
@@ -146,6 +147,9 @@ class PedidoFormatoV1Processor:
                 )
                 if resultado.get("status") != "success":
                     return resultado
+            
+            # ✅ PASO 6.5: Enriquecer detalles con información de SAP (ItemName y U_IXX_PACK)
+            detalles_finales = self._enriquecer_detalles_con_sap(detalles_finales)
             
             # PASO 7: Guardar en base de datos
             if ENABLE_SQL_SERVER_STORAGE:
@@ -637,3 +641,97 @@ class PedidoFormatoV1Processor:
                     resultado["errores"].extend(issues_cantidades)
         except Exception as e:
             logger.warning(f"⚠️ Error en validación de cantidades: {e}")
+    
+    def _enriquecer_detalles_con_sap(
+        self,
+        detalles_finales: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        """
+        Enriquece los detalles del pedido con información de SAP (ItemName y U_IXX_PACK).
+        
+        Este método consulta SAP para obtener:
+        - ItemName → descripcion_sap (solo si está vacío)
+        - U_IXX_PACK → pack (solo si está vacío)
+        
+        Args:
+            detalles_finales: Lista de detalles con estructura:
+                [{
+                    "detalle": {
+                        "codigo_interno": str,
+                        "descripcion_sap": Optional[str],
+                        "pack": Optional[str],
+                        ...
+                    },
+                    "distribuciones": [...]
+                }, ...]
+        
+        Returns:
+            Lista de detalles enriquecidos con información de SAP
+        """
+        if not ENABLE_SAP_QUERIES:
+            logger.debug("⏭️ Consultas SAP deshabilitadas, omitiendo enriquecimiento")
+            return detalles_finales
+        
+        # Extraer códigos de productos únicos que necesitan enriquecimiento
+        codigos_a_consultar = []
+        codigos_por_detalle = {}  # Mapeo: codigo_interno -> índices de detalles que lo usan
+        
+        for idx, detalle_data in enumerate(detalles_finales):
+            detalle = detalle_data.get("detalle", {})
+            codigo_interno = detalle.get("codigo_interno")
+            
+            if not codigo_interno:
+                continue
+            
+            # Solo consultar si falta descripcion_sap o pack
+            necesita_descripcion = not detalle.get("descripcion_sap")
+            necesita_pack = not detalle.get("pack")
+            
+            if necesita_descripcion or necesita_pack:
+                codigo_normalized = codigo_interno.strip().upper()
+                if codigo_normalized not in codigos_por_detalle:
+                    codigos_a_consultar.append(codigo_normalized)
+                    codigos_por_detalle[codigo_normalized] = []
+                codigos_por_detalle[codigo_normalized].append(idx)
+        
+        if not codigos_a_consultar:
+            logger.debug("✅ Todos los detalles ya tienen descripcion_sap y pack, omitiendo consulta SAP")
+            return detalles_finales
+        
+        logger.info(f"🔍 Consultando SAP para enriquecer {len(codigos_a_consultar)} productos únicos")
+        
+        # Consultar SAP en batch
+        sap_client = SAPClient()
+        productos_sap = sap_client.get_productos_info_batch(codigos_a_consultar)
+        
+        # Enriquecer detalles con información de SAP
+        detalles_enriquecidos = detalles_finales.copy()
+        productos_enriquecidos = 0
+        
+        for codigo_normalized, indices in codigos_por_detalle.items():
+            sap_info = productos_sap.get(codigo_normalized)
+            
+            if not sap_info:
+                logger.debug(f"⚠️ No se encontró información SAP para {codigo_normalized}")
+                continue
+            
+            item_name = sap_info.get("ItemName")
+            pack_sap = sap_info.get("U_IXX_PACK")
+            
+            # Enriquecer cada detalle que usa este código
+            for idx in indices:
+                detalle = detalles_enriquecidos[idx]["detalle"]
+                
+                # Solo rellenar si está vacío (no sobrescribir valores existentes)
+                if item_name and not detalle.get("descripcion_sap"):
+                    detalle["descripcion_sap"] = item_name
+                    productos_enriquecidos += 1
+                    logger.debug(f"✅ Enriquecido descripcion_sap para {codigo_normalized}: {item_name[:50]}")
+                
+                if pack_sap and not detalle.get("pack"):
+                    detalle["pack"] = pack_sap
+                    productos_enriquecidos += 1
+                    logger.debug(f"✅ Enriquecido pack para {codigo_normalized}: {pack_sap}")
+        
+        logger.info(f"✅ Enriquecidos {productos_enriquecidos} campos desde SAP")
+        return detalles_enriquecidos

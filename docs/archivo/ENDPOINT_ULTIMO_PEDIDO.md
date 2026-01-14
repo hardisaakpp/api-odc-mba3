@@ -6,7 +6,7 @@ Nuevo endpoint que permite obtener automáticamente el último pedido cargado po
 
 ## 🎯 Objetivo
 
-Permitir que la página `/mba3-consultas/cargar-plantillas` muestre automáticamente el último Excel cargado por el usuario, sin necesidad de buscar manualmente por número de pedido.
+Permitir que la página `/mba3-consultas/cargar-plantillas` y el formulario de "Crear Pedido Manual" muestren automáticamente el último pedido cargado por el usuario (ya sea creado manualmente o cargado desde Excel), sin necesidad de buscar manualmente por número de pedido.
 
 ## 🔌 Endpoint
 
@@ -21,7 +21,7 @@ Permitir que la página `/mba3-consultas/cargar-plantillas` muestre automáticam
 
 ### Respuesta Exitosa (200)
 
-Mismo formato que `GET /api/plantillas/{identificador}`:
+**Formato:** Mismo formato exacto que `GET /api/plantillas/{identificador}` (directo, sin envolver):
 
 ```json
 {
@@ -29,7 +29,7 @@ Mismo formato que `GET /api/plantillas/{identificador}`:
         "pedido_id": "uuid-del-pedido",
         "numero_pedido": "P-12.48 - 12 - 2025",
         "fecha_pedido": "2025-01-21",
-        "archivo_nombre": "pedido.xlsx",
+        "archivo_nombre": "pedido.xlsx",  // o "CREACION_MANUAL" para pedidos manuales
         "creado_por": "user123",
         "creado_en": "2025-01-21T10:30:00",
         ...
@@ -45,12 +45,15 @@ Mismo formato que `GET /api/plantillas/{identificador}`:
 }
 ```
 
+**Nota importante:** La respuesta es **directa** (`{cabecera, detalles}`), NO está envuelta en `{status, data, mensaje}`. Esto permite que el frontend use el mismo código para procesar ambos endpoints.
+
 ### Respuesta Sin Pedidos (404)
+
+HTTP Status: `404 Not Found`
 
 ```json
 {
-    "status": "not_found",
-    "message": "No hay pedidos cargados para este usuario"
+    "detail": "No hay pedidos cargados para este usuario"
 }
 ```
 
@@ -69,6 +72,10 @@ Mismo formato que `GET /api/plantillas/{identificador}`:
    - Filtra por `creado_por = usuario_id`
    - Ordena por `creado_en DESC`
    - Retorna el más reciente o `None`
+   - **Funciona tanto para pedidos creados manualmente como para pedidos cargados desde Excel**
+   - Ambos tipos se almacenan en la misma tabla `pedido` y se identifican por el campo `archivo_nombre`:
+     - Pedidos manuales: `archivo_nombre = "CREACION_MANUAL"`
+     - Pedidos Excel: `archivo_nombre = nombre_del_archivo.xlsx`
 
 2. **Nuevo endpoint**: `GET /api/plantillas/ultimo`
    - Usa el mismo formato de respuesta que `GET /api/plantillas/{identificador}`
@@ -151,6 +158,8 @@ async function cargarUltimoPedido() {
 - [ ] Busco manualmente otro → no se sobrescribe
 - [ ] Refresco la página → vuelve a cargar último
 - [ ] Subo nuevo Excel → se muestra ese
+- [ ] Creo pedido manual → al recargar se muestra ese
+- [ ] Último pedido puede ser manual o Excel → funciona en ambos casos
 
 ## 🔄 Cambios Relacionados
 

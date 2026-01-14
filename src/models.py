@@ -351,6 +351,57 @@ class SkuHomologacion(BaseModel):
         }
 
 
+class HomologacionSkuCreateRequest(BaseModel):
+    """Modelo para crear una nueva homologación SKU."""
+    
+    # Datos de MBA3 (requeridos)
+    sku_mba3: str = Field(..., description="SKU desde MBA3 (requerido)")
+    nombre_producto_mba3: Optional[str] = Field(None, description="Nombre del producto desde MBA3")
+    precio_unitario_mba3: Optional[float] = Field(None, ge=0, description="Precio unitario desde MBA3 (>= 0)")
+    cantidad_docena_mba3: Optional[float] = Field(None, ge=0, description="Cantidad en docenas desde MBA3 (>= 0)")
+    total_linea_mba3: Optional[float] = Field(None, description="Total de la línea desde MBA3")
+    
+    # Datos de SAP (opcionales)
+    sku_sap: Optional[str] = Field(None, description="SKU en SAP")
+    nombre_producto_sap: Optional[str] = Field(None, description="Nombre del producto en SAP")
+    precio_unitario_sap: Optional[float] = Field(None, ge=0, description="Precio unitario en SAP (>= 0)")
+    cantidad_pack_sap: Optional[float] = Field(None, ge=0, description="Cantidad por pack en SAP (>= 0)")
+    unidad_sap: Optional[str] = Field(None, description="Unidad de medida en SAP")
+    subtotal_sap: Optional[float] = Field(None, description="Subtotal en SAP")
+    
+    # Estado (opcional, default PENDIENTE)
+    estado: Optional[str] = Field(None, description="Estado (PENDIENTE, HOMOLOGADO, ERROR)")
+    
+    # Relaciones (opcionales)
+    detalle_id: Optional[str] = Field(None, description="ID del detalle del despacho relacionado")
+    despacho_id: Optional[str] = Field(None, description="ID del despacho relacionado")
+    
+    @field_validator('estado')
+    @classmethod
+    def validate_estado(cls, v):
+        if v is not None and v not in ['PENDIENTE', 'HOMOLOGADO', 'ERROR']:
+            raise ValueError('Estado debe ser PENDIENTE, HOMOLOGADO o ERROR')
+        return v
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "sku_mba3": "SKU001",
+                "nombre_producto_mba3": "Producto Ejemplo MBA3",
+                "precio_unitario_mba3": 100.50,
+                "cantidad_docena_mba3": 12.0,
+                "total_linea_mba3": 1206.00,
+                "sku_sap": "SKU001-SAP",
+                "nombre_producto_sap": "Producto SAP",
+                "precio_unitario_sap": 100.00,
+                "cantidad_pack_sap": 10.0,
+                "unidad_sap": "UN",
+                "subtotal_sap": 1000.00,
+                "estado": "PENDIENTE"
+            }
+        }
+
+
 class HomologacionSkuUpdateRequest(BaseModel):
     """Modelo para actualizar una homologación SKU."""
     
@@ -587,12 +638,12 @@ class ActualizarCostoRequest(BaseModel):
 class ActualizarTotalRequest(BaseModel):
     """Modelo para el request de actualizar total de un detalle de pedido."""
     
-    total: float = Field(..., ge=0, description="Nuevo total del detalle (DECIMAL, debe ser >= 0)")
+    total: int = Field(..., ge=0, description="Nuevo total del detalle (ENTERO, debe ser >= 0, incluye 0)")
     
     class Config:
         json_schema_extra = {
             "example": {
-                "total": 510.00
+                "total": 510
             }
         }
 
@@ -1135,4 +1186,172 @@ class ProcesamientoSAPResponse(BaseModel):
     productos: List[ProductoSAPProcesamientoItem] = Field(default_factory=list, description="Lista de productos procesados")
     estadisticas: EstadisticasProcesamientoSAP = Field(..., description="Estadísticas del procesamiento")
     fecha_procesamiento: Optional[datetime] = Field(None, description="Fecha del último procesamiento")
+
+
+# ============================================================================
+# MODELOS PARA CREAR PEDIDO MANUAL (HU-01)
+# ============================================================================
+
+class DistribucionTiendaRequest(BaseModel):
+    """Modelo para distribución de un producto por tienda."""
+    
+    tienda_codigo: str = Field(..., description="Código de la tienda (ej: 'TRL-QSN', 'T001')")
+    tienda_nombre: Optional[str] = Field(None, description="Nombre de la tienda (opcional, se crea si no existe)")
+    cantidad: int = Field(..., ge=1, description="Cantidad a distribuir (debe ser >= 1)")
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "tienda_codigo": "TRL-QSN",
+                "tienda_nombre": "ROLAND QUITO SUR",
+                "cantidad": 10
+            }
+        }
+
+
+class ArticuloRequest(BaseModel):
+    """Modelo para un artículo del pedido."""
+    
+    codigo_interno: str = Field(..., description="Código del producto (SKU)")
+    descripcion_sap: Optional[str] = Field(None, description="Descripción del producto")
+    marca: Optional[str] = Field(None, description="Marca del producto")
+    codigo_barras: Optional[str] = Field(None, description="Código de barras")
+    pack: Optional[str] = Field(None, description="Tipo de empaque/pack")
+    costo_doc_sin_iva: Optional[float] = Field(None, ge=0, description="Costo sin IVA")
+    descuento_1: Optional[float] = Field(None, ge=0, le=100, description="Descuento porcentual")
+    pvp: Optional[float] = Field(None, ge=0, description="Precio de venta público")
+    subtotal: Optional[float] = Field(None, ge=0, description="Subtotal del artículo")
+    total: Optional[float] = Field(None, ge=0, description="Total del artículo")
+    bodega: Optional[int] = Field(None, description="Código de bodega/almacén")
+    comentario: Optional[str] = Field(None, description="Comentario o nota adicional del artículo")
+    cantidad_total: Optional[int] = Field(None, ge=0, description="Cantidad total del artículo (solo para validación, no se guarda en BD)")
+    distribuciones: List[DistribucionTiendaRequest] = Field(..., min_length=1, description="Lista de distribuciones por tienda")
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "codigo_interno": "R225.1012.BCO",
+                "descripcion_sap": "MEDIA TOBILLERA",
+                "marca": "ROLAND",
+                "costo_doc_sin_iva": 5.65,
+                "descuento_1": 0.2,
+                "pvp": 9.99,
+                "distribuciones": [
+                    {
+                        "tienda_codigo": "TRL-QSN",
+                        "tienda_nombre": "ROLAND QUITO SUR",
+                        "cantidad": 10
+                    },
+                    {
+                        "tienda_codigo": "TRL-SMA",
+                        "cantidad": 5
+                    }
+                ]
+            }
+        }
+
+
+class CrearPedidoRequest(BaseModel):
+    """Modelo para crear un pedido manualmente desde la pantalla web."""
+    
+    # Campos de cabecera
+    numero_pedido: str = Field(..., description="Número único del pedido")
+    fecha_pedido: Optional[str] = Field(None, description="Fecha del pedido (YYYY-MM-DD)")
+    fecha_entrega: Optional[str] = Field(None, description="Fecha de entrega (YYYY-MM-DD o 'INMEDIATO')")
+    forma_pago: Optional[str] = Field(None, description="Forma de pago")
+    odc: Optional[str] = Field(None, description="Orden de compra interna")
+    proveedor_nombre: Optional[str] = Field(None, description="Nombre del proveedor")
+    comprador_nombre: Optional[str] = Field(None, description="Nombre del comprador")
+    comprador_codigo: Optional[str] = Field(None, description="Código del comprador")
+    origen_traslado: Optional[str] = Field(None, description="Origen de traslado (bodega)")
+    serie: Optional[str] = Field(None, description="Serie del documento")
+    
+    # Artículos
+    articulos: List[ArticuloRequest] = Field(..., min_length=1, description="Lista de artículos del pedido")
+    
+    # Opciones de validación
+    validar_productos: bool = Field(True, description="Validar que productos existan en catálogo")
+    validar_tiendas: bool = Field(True, description="Validar que tiendas existan y estén activas")
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "numero_pedido": "P-12.48 - 12 - 2025",
+                "fecha_pedido": "2025-01-21",
+                "fecha_entrega": "INMEDIATO",
+                "forma_pago": "120 DIAS",
+                "proveedor_nombre": "TEXTILES EL RAYO S.A.",
+                "comprador_nombre": "VACA ANDREA",
+                "comprador_codigo": "801",
+                "origen_traslado": "RL-CD",
+                "articulos": [
+                    {
+                        "codigo_interno": "R225.1012.BCO",
+                        "descripcion_sap": "MEDIA TOBILLERA",
+                        "marca": "ROLAND",
+                        "costo_doc_sin_iva": 5.65,
+                        "pvp": 9.99,
+                        "distribuciones": [
+                            {"tienda_codigo": "TRL-QSN", "cantidad": 10},
+                            {"tienda_codigo": "TRL-SMA", "cantidad": 5}
+                        ]
+                    }
+                ]
+            }
+        }
+
+
+class CrearPedidoResponse(BaseModel):
+    """Modelo para respuesta de creación de pedido manual."""
+    
+    status: str = Field(..., description="Estado del procesamiento: 'success', 'validation_error', 'error'")
+    pedido_id: Optional[str] = Field(None, description="UUID del pedido creado")
+    estado: Optional[str] = Field(None, description="Estado del pedido")
+    validacion: Dict[str, Any] = Field(default_factory=dict, description="Resultados de validación")
+    consolidacion: Dict[str, Any] = Field(default_factory=dict, description="Resumen de consolidación")
+    articulos_cargados: int = Field(0, ge=0, description="Número de artículos cargados")
+    distribuciones_cargadas: int = Field(0, ge=0, description="Número de distribuciones cargadas")
+    errores: List[str] = Field(default_factory=list, description="Lista de errores encontrados")
+
+
+# ============================================================================
+# MODELOS PARA MODIFICAR PEDIDO (HU-03)
+# ============================================================================
+
+class ModificarPedidoCabeceraRequest(BaseModel):
+    """Modelo para modificar la cabecera de un pedido."""
+    
+    fecha_pedido: Optional[str] = Field(None, description="Fecha del pedido (YYYY-MM-DD)")
+    fecha_entrega: Optional[str] = Field(None, description="Fecha de entrega (YYYY-MM-DD o 'INMEDIATO')")
+    forma_pago: Optional[str] = Field(None, description="Forma de pago")
+    odc: Optional[str] = Field(None, description="Orden de compra interna")
+    proveedor_nombre: Optional[str] = Field(None, description="Nombre del proveedor")
+    comprador_nombre: Optional[str] = Field(None, description="Nombre del comprador")
+    comprador_codigo: Optional[str] = Field(None, description="Código del comprador")
+    origen_traslado: Optional[str] = Field(None, description="Origen de traslado (bodega)")
+    serie: Optional[str] = Field(None, description="Serie del documento")
+    estado: Optional[str] = Field(None, description="Estado del pedido")
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "fecha_pedido": "2025-01-22",
+                "fecha_entrega": "INMEDIATO",
+                "forma_pago": "120 DIAS",
+                "proveedor_nombre": "TEXTILES EL RAYO S.A.",
+                "comprador_nombre": "VACA ANDREA",
+                "comprador_codigo": "801",
+                "origen_traslado": "RL-CD",
+                "serie": "A"
+            }
+        }
+
+
+class ModificarPedidoCabeceraResponse(BaseModel):
+    """Modelo para respuesta de modificación de cabecera de pedido."""
+    
+    status: str = Field(default="success", description="Estado de la operación")
+    message: str = Field(..., description="Mensaje descriptivo")
+    pedido_id: str = Field(..., description="UUID del pedido modificado")
+    campos_modificados: List[str] = Field(default_factory=list, description="Lista de campos que fueron modificados")
 

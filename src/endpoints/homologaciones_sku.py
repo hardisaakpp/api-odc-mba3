@@ -13,6 +13,7 @@ from src.security.jwt_auth import verify_jwt_token
 from src.models import (
     HomologacionesSkuListResponse,
     HomologacionSkuResponse,
+    HomologacionSkuCreateRequest,
     HomologacionSkuUpdateRequest,
     HomologacionSkuBulkUpdateRequest,
     HomologacionSkuBulkUpdateResponse,
@@ -210,6 +211,94 @@ def register_homologaciones_sku_endpoints(app: FastAPI):
             raise HTTPException(
                 status_code=500,
                 detail=f"Error al obtener homologaciones: {str(e)}"
+            )
+    
+    @app.post("/api/homologaciones-sku",
+             tags=["Homologaciones SKU"])
+    async def create_homologacion_sku(
+        request_body: HomologacionSkuCreateRequest,
+        request: Request,
+        user: Dict = Depends(verify_jwt_token)
+    ):
+        """
+        Crea una nueva homologación SKU.
+        
+        **Headers requeridos:**
+        - `Authorization: Bearer {token}` - Token JWT válido
+        - `Content-Type: application/json`
+        
+        **Body (sku_mba3 es requerido, los demás campos son opcionales):**
+        ```json
+        {
+          "sku_mba3": "SKU001",
+          "nombre_producto_mba3": "Producto Ejemplo MBA3",
+          "precio_unitario_mba3": 100.50,
+          "cantidad_docena_mba3": 12.0,
+          "total_linea_mba3": 1206.00,
+          "sku_sap": "SKU001-SAP",
+          "nombre_producto_sap": "Producto SAP",
+          "precio_unitario_sap": 100.00,
+          "cantidad_pack_sap": 10.0,
+          "unidad_sap": "UN",
+          "subtotal_sap": 1000.00,
+          "estado": "PENDIENTE",
+          "detalle_id": "detalle-123",
+          "despacho_id": "despacho-456"
+        }
+        ```
+        
+        **Respuesta exitosa (201):**
+        ```json
+        {
+          "status": "success",
+          "data": {
+            "homologacion_id": "uuid-123",
+            // ... objeto completo creado
+          },
+          "message": "Homologación creada correctamente"
+        }
+        ```
+        
+        **Errores posibles:**
+        - 400: Error de validación
+        - 401: No autenticado
+        - 500: Error interno
+        """
+        try:
+            # Obtener usuario que crea la homologación
+            try:
+                modificado_por = get_user_id_or_username(user)
+            except HTTPException:
+                modificado_por = None  # Continuar sin usuario si falla
+            
+            # Convertir request a dict (excluyendo None)
+            data = request_body.dict(exclude_none=True)
+            
+            service = HomologacionService()
+            resultado = service.create_homologacion_sku(
+                data=data,
+                modificado_por=modificado_por
+            )
+            
+            if resultado.get('status') == 'error':
+                error_code = resultado.get('error_code')
+                if error_code == 'VALIDATION_ERROR':
+                    raise HTTPException(status_code=400, detail=resultado.get('message'))
+                else:
+                    raise HTTPException(status_code=500, detail=resultado.get('message'))
+            
+            return JSONResponse(
+                status_code=201,
+                content=resultado
+            )
+            
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"❌ Error al crear homologación: {e}", exc_info=True)
+            raise HTTPException(
+                status_code=500,
+                detail=f"Error al crear homologación: {str(e)}"
             )
     
     @app.put("/api/homologaciones-sku/{homologacion_id}",

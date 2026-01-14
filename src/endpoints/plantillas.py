@@ -18,6 +18,8 @@ from src.models import (
     ActualizarCostoRequest,
     ActualizarTotalRequest,
     ActualizarComentarioRequest,
+    ModificarPedidoCabeceraRequest,
+    ModificarPedidoCabeceraResponse,
     NotificarConfirmacionRequest,
     RedistribuirPedidoRequest,
     DistribucionPedidoResponse,
@@ -39,7 +41,9 @@ from src.models import (
     ConfirmacionRayoItem,
     ProcesamientoSAPResponse,
     ProductoSAPProcesamientoItem,
-    EstadisticasProcesamientoSAP
+    EstadisticasProcesamientoSAP,
+    CrearPedidoRequest,
+    CrearPedidoResponse
 )
 
 logger = logging.getLogger(__name__)
@@ -357,7 +361,9 @@ def register_plantillas_endpoints(app: FastAPI):
         **Características:**
         - ✅ Filtrado por usuario (cada usuario ve solo sus pedidos)
         - ✅ Devuelve el mismo formato que GET /api/plantillas/{identificador}
-        - ✅ Útil para mostrar automáticamente el último Excel en la página de cargar plantillas
+        - ✅ Funciona tanto para pedidos creados manualmente como para pedidos cargados desde Excel
+        - ✅ Ordena por fecha de creación (más reciente primero)
+        - ✅ Útil para mostrar automáticamente el último pedido en la página de cargar plantillas o crear pedido manual
         
         **Query Parameters:**
         - `incluir_respuesta` (bool, default: false): Si true, incluye respuesta del proveedor si existe
@@ -378,16 +384,16 @@ def register_plantillas_endpoints(app: FastAPI):
         ```
         
         **Respuesta si no hay pedidos:**
-        ```json
-        {
-            "status": "not_found",
-            "message": "No hay pedidos cargados para este usuario"
-        }
-        ```
+        - HTTP 404 con mensaje: "No hay pedidos cargados para este usuario"
+        
+        **Formato de respuesta:**
+        - ✅ **Mismo formato exacto** que `GET /api/plantillas/{identificador}`
+        - ✅ Devuelve directamente `{cabecera: {...}, detalles: [...]}` (sin envolver en `{status, data, etc}`)
+        - ✅ Esto permite que el frontend use el mismo código para procesar ambos endpoints
         
         Returns:
-            JSON con pedido completo (mismo formato que GET /api/plantillas/{identificador})
-            O 404 si el usuario no tiene pedidos
+            JSON con pedido completo en formato directo: `{cabecera: {...}, detalles: [...]}`
+            O HTTP 404 si el usuario no tiene pedidos
         """
         try:
             from src.database.connection import get_db_connection_context
@@ -404,15 +410,10 @@ def register_plantillas_endpoints(app: FastAPI):
                 ultimo_pedido = repo.get_ultimo_pedido(user_id)
                 
                 if not ultimo_pedido:
-                    # Retornar 200 OK con respuesta clara (no es un error, es un estado válido)
-                    return JSONResponse(
-                        status_code=200,
-                        content={
-                            "status": "success",
-                            "hay_datos": False,
-                            "data": None,
-                            "mensaje": "No hay pedidos cargados para este usuario"
-                        }
+                    # Retornar 404 cuando no hay pedidos (consistente con GET /api/plantillas/{identificador})
+                    raise HTTPException(
+                        status_code=404,
+                        detail="No hay pedidos cargados para este usuario"
                     )
                 
                 # Obtener pedido completo (mismo método que GET /api/plantillas/{identificador})
@@ -432,16 +433,9 @@ def register_plantillas_endpoints(app: FastAPI):
                     if respuesta:
                         pedido_completo["respuesta_proveedor"] = respuesta
                 
-                # Retornar con estructura consistente (200 OK, con hay_datos=True)
-                return JSONResponse(
-                    status_code=200,
-                    content={
-                        "status": "success",
-                        "hay_datos": True,
-                        "data": pedido_completo,
-                        "mensaje": "Último pedido recuperado exitosamente"
-                    }
-                )
+                # Retornar con el MISMO formato que GET /api/plantillas/{identificador}
+                # (directamente {cabecera, detalles}, sin envolver en {status, data, etc})
+                return JSONResponse(status_code=200, content=pedido_completo)
             
         except HTTPException:
             raise
@@ -1019,6 +1013,145 @@ def register_plantillas_endpoints(app: FastAPI):
                 detail=f"Error interno al procesar el archivo: {str(e)}"
             )
     
+    @app.post("/api/pedidos", 
+             response_model=CrearPedidoResponse,
+             tags=["Pedidos"])
+    async def crear_pedido_manual(
+        request_body: CrearPedidoRequest = Body(..., description="Datos del pedido a crear"),
+        user: Dict = Depends(verify_jwt_token),
+        _: None = Depends(require_permission('mba3-consultas.proceso.execute'))
+    ):
+        """
+        Crea un pedido manualmente desde la pantalla web (HU-01 - Carga por Pantalla).
+        
+        Este endpoint permite crear pedidos directamente desde la interfaz web
+        sin necesidad de subir un archivo Excel. Permite registrar los datos iniciales
+        del pedido, artículos, cantidades, precios, distribución a tiendas, estado y fechas.
+        
+        **Características:**
+        - ✅ Carga manual por pantalla (sin Excel)
+        - ✅ Registra datos iniciales del pedido
+        - ✅ Registra artículos con cantidades y precios
+        - ✅ Distribución a tiendas
+        - ✅ Estado y fechas
+        - ✅ Validación de productos y tiendas (opcional)
+        
+        **Proceso:**
+        1. Valida estructura de datos
+        2. Valida productos (opcional)
+        3. Valida tiendas (opcional)
+        4. Valida cantidades
+        5. Crea pedido con estado "PENDIENTE_CONFIRMACION_PROVEEDOR"
+        
+        **Request Body:**
+        ```json
+        {
+            "numero_pedido": "P-12.48 - 12 - 2025",
+            "fecha_pedido": "2025-01-21",
+            "fecha_entrega": "INMEDIATO",
+            "forma_pago": "120 DIAS",
+            "proveedor_nombre": "TEXTILES EL RAYO S.A.",
+            "comprador_nombre": "VACA ANDREA",
+            "comprador_codigo": "801",
+            "origen_traslado": "RL-CD",
+            "articulos": [
+                {
+                    "codigo_interno": "R225.1012.BCO",
+                    "descripcion_sap": "MEDIA TOBILLERA",
+                    "marca": "ROLAND",
+                    "costo_doc_sin_iva": 5.65,
+                    "pvp": 9.99,
+                    "distribuciones": [
+                        {"tienda_codigo": "TRL-QSN", "cantidad": 10},
+                        {"tienda_codigo": "TRL-SMA", "cantidad": 5}
+                    ]
+                }
+            ],
+            "validar_productos": true,
+            "validar_tiendas": true
+        }
+        ```
+        
+        **Response exitosa:**
+        ```json
+        {
+            "status": "success",
+            "pedido_id": "uuid-del-pedido",
+            "estado": "PENDIENTE_CONFIRMACION_PROVEEDOR",
+            "validacion": {
+                "productos": {"validos": [...], "no_encontrados": [], "todos_validos": true},
+                "tiendas": {"validas": [...], "no_encontradas": [], "inactivas": [], "todas_validas": true},
+                "cantidades": {"valid": true, "errors": 0, "warnings": 0}
+            },
+            "consolidacion": {"total_productos": 1, "cantidad_total": 15},
+            "articulos_cargados": 1,
+            "distribuciones_cargadas": 2,
+            "errores": []
+        }
+        ```
+        
+        **Response con errores:**
+        ```json
+        {
+            "status": "validation_error",
+            "pedido_id": null,
+            "validacion": {
+                "productos": {"no_encontrados": ["PROD999"]},
+                "tiendas": {"no_encontradas": ["T999"]}
+            },
+            "errores": [
+                "Productos no encontrados: PROD999",
+                "Tiendas no encontradas: T999"
+            ]
+        }
+        ```
+        
+        Returns:
+            JSON con resultado completo de creación del pedido
+        """
+        try:
+            from src.database.services.pedido_service import PedidoService
+            
+            service = PedidoService()
+            usuario_id = user.get("sub") or user.get("user_id")
+            
+            # Convertir request body a dict para el servicio
+            # Usar model_dump(exclude_none=False) para incluir todos los campos, incluso los None
+            datos_pedido = request_body.model_dump(exclude_none=False)
+            
+            # Log para debugging: ver qué campos se están recibiendo
+            logger.debug(f"📦 Datos recibidos para crear pedido manual: {datos_pedido}")
+            if datos_pedido.get("articulos"):
+                logger.debug(f"📦 Primer artículo recibido: {datos_pedido['articulos'][0]}")
+            
+            resultado = service.crear_pedido_manual(
+                datos_pedido=datos_pedido,
+                usuario_id=usuario_id,
+                validar_productos=datos_pedido.get("validar_productos", True),
+                validar_tiendas=datos_pedido.get("validar_tiendas", True)
+            )
+            
+            # Determinar código de estado HTTP
+            status_code = 200
+            if resultado["status"] == "validation_error":
+                status_code = 400
+            elif resultado["status"] == "error":
+                status_code = 500
+            
+            return JSONResponse(
+                status_code=status_code,
+                content=resultado
+            )
+            
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"❌ Error al crear pedido manual: {e}", exc_info=True)
+            raise HTTPException(
+                status_code=500,
+                detail=f"Error interno al crear el pedido: {str(e)}"
+            )
+    
     # ============================================================================
     # ENDPOINTS FASE 3: Interfaz para Proveedor
     # ============================================================================
@@ -1474,23 +1607,24 @@ def register_plantillas_endpoints(app: FastAPI):
         _: None = Depends(require_permission('mba3-consultas.proceso.execute'))
     ):
         """
-        Actualiza el total de una línea de detalle del pedido y recalcula el costo unitario.
+        Actualiza el total de una línea de detalle del pedido.
         
         **Funcionalidad:**
         - Permite edición inline del total desde la UI
         - Actualiza directamente en la tabla pedido_detalle
-        - Recalcula el costo unitario automáticamente (total / cantidad)
+        - El costo unitario NO se modifica (permanece independiente)
         
         **Validaciones:**
         - ✅ El detalle debe existir
-        - ✅ El nuevo total debe ser un número válido ≥ 0
+        - ✅ El nuevo total debe ser un número entero válido ≥ 0 (incluye 0)
+        - ✅ No se permiten decimales
         - ✅ Solo usuarios con permiso 'mba3-consultas.proceso.execute' pueden actualizar
         
         **Request:**
         ```
         PATCH /api/pedidos/176120/detalle/550e8400-e29b-41d4-a716-446655440000/total
         {
-            "total": 510.00
+            "total": 510
         }
         ```
         
@@ -1498,10 +1632,10 @@ def register_plantillas_endpoints(app: FastAPI):
         ```json
         {
             "status": "success",
-            "message": "Total actualizado correctamente. Nuevo costo unitario: 25.50",
+            "message": "Total actualizado correctamente",
             "pedido_detalle_id": "550e8400-e29b-41d4-a716-446655440000",
             "total_anterior": 500.00,
-            "total_nuevo": 510.00,
+            "total_nuevo": 510,
             "costo_actualizado": 25.50
         }
         ```
@@ -1652,6 +1786,127 @@ def register_plantillas_endpoints(app: FastAPI):
                 detail={
                     "error": "internal_error",
                     "message": f"Error interno al actualizar comentario: {str(e)}"
+                }
+            )
+    
+    @app.put("/api/pedidos/{pedido_id}",
+             response_model=ModificarPedidoCabeceraResponse,
+             tags=["Pedidos - Edición"])
+    async def modificar_pedido_cabecera(
+        pedido_id: str = Path(..., description="UUID del pedido"),
+        request_body: ModificarPedidoCabeceraRequest = Body(..., description="Datos de la cabecera a modificar"),
+        user: Dict = Depends(verify_jwt_token),
+        _: None = Depends(require_permission('mba3-consultas.proceso.execute'))
+    ):
+        """
+        Modifica la cabecera de un pedido (HU-03 - Modificación de pedidos).
+        
+        Este endpoint permite modificar los datos de la cabecera del pedido:
+        - Fechas (pedido, entrega)
+        - Información del proveedor
+        - Información del comprador
+        - Forma de pago
+        - Origen de traslado
+        - Serie
+        - Estado
+        
+        **Características:**
+        - ✅ Modificación parcial: Solo se actualizan los campos proporcionados
+        - ✅ Campos no proporcionados se mantienen sin cambios
+        - ✅ No se puede modificar: pedido_id, numero_pedido, creado_por, creado_en, archivo_nombre
+        - ✅ Registra usuarios y fechas de modificación
+        
+        **Request:**
+        ```json
+        {
+            "fecha_pedido": "2025-01-22",
+            "fecha_entrega": "INMEDIATO",
+            "forma_pago": "120 DIAS",
+            "proveedor_nombre": "TEXTILES EL RAYO S.A.",
+            "comprador_nombre": "VACA ANDREA",
+            "comprador_codigo": "801",
+            "origen_traslado": "RL-CD",
+            "serie": "A",
+            "estado": "PENDIENTE_CONFIRMACION_PROVEEDOR"
+        }
+        ```
+        
+        **Response exitosa:**
+        ```json
+        {
+            "status": "success",
+            "message": "Cabecera del pedido actualizada correctamente",
+            "pedido_id": "uuid-del-pedido",
+            "campos_modificados": ["fecha_pedido", "proveedor_nombre", "comprador_nombre"]
+        }
+        ```
+        
+        **Nota:** Para modificar detalles (artículos, precios) use los endpoints PATCH específicos.
+        Para modificar distribución a tiendas use el endpoint POST /api/pedidos/{pedido_id}/redistribuir.
+        
+        Returns:
+            JSON con resultado de la modificación
+        """
+        try:
+            from src.database.connection import get_db_connection_context
+            from src.database.repositories.pedido_repository import PedidoRepository
+            
+            # Convertir request body a dict
+            datos_cabecera = request_body.model_dump(exclude_unset=True)
+            
+            # Identificar campos que se van a modificar
+            campos_modificados = list(datos_cabecera.keys())
+            
+            # Obtener usuario
+            user_id = get_user_id(user)
+            
+            with get_db_connection_context() as conn:
+                repo = PedidoRepository(conn)
+                
+                # Verificar que el pedido existe
+                pedido_existente = repo.get_pedido_completo(pedido_id)
+                if not pedido_existente:
+                    raise HTTPException(
+                        status_code=status.HTTP_404_NOT_FOUND,
+                        detail={
+                            "error": "pedido_not_found",
+                            "message": f"No se encontró el pedido con ID: {pedido_id}"
+                        }
+                    )
+                
+                # Actualizar cabecera
+                resultado = repo.update_cabecera(pedido_id, datos_cabecera)
+                
+                if not resultado:
+                    raise HTTPException(
+                        status_code=status.HTTP_404_NOT_FOUND,
+                        detail={
+                            "error": "update_failed",
+                            "message": "No se pudo actualizar la cabecera del pedido"
+                        }
+                    )
+            
+            logger.info(f"✅ Cabecera del pedido {pedido_id} actualizada por usuario {user.get('username', 'UNKNOWN')}")
+            
+            return JSONResponse(
+                status_code=status.HTTP_200_OK,
+                content={
+                    "status": "success",
+                    "message": "Cabecera del pedido actualizada correctamente",
+                    "pedido_id": pedido_id,
+                    "campos_modificados": campos_modificados
+                }
+            )
+            
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"❌ Error al modificar cabecera del pedido: {e}", exc_info=True)
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail={
+                    "error": "internal_error",
+                    "message": f"Error interno al modificar cabecera del pedido: {str(e)}"
                 }
             )
     

@@ -234,6 +234,120 @@ class SkuRepository:
         finally:
             cursor.close()
     
+    def create_homologacion_sku(
+        self,
+        data: Dict[str, Any],
+        modificado_por: Optional[str] = None
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Crea una nueva homologación SKU.
+        
+        Args:
+            data: Diccionario con datos de la homologación
+            modificado_por: Usuario que crea la homologación
+            
+        Returns:
+            Diccionario con la homologación creada o None si hubo error
+        """
+        cursor = self.conn.cursor()
+        try:
+            # Validar que sku_mba3 esté presente
+            if not data.get('sku_mba3'):
+                raise ValueError("sku_mba3 es requerido")
+            
+            # Calcular flags
+            tiene_datos_sap = any([
+                data.get('sku_sap'),
+                data.get('nombre_producto_sap'),
+                data.get('precio_unitario_sap') is not None,
+                data.get('cantidad_pack_sap') is not None,
+                data.get('unidad_sap'),
+                data.get('subtotal_sap') is not None
+            ])
+            
+            # Calcular tiene_diferencias
+            tiene_diferencias = False
+            if tiene_datos_sap:
+                # Si hay SKU SAP y es diferente al MBA3
+                if data.get('sku_sap') and data.get('sku_mba3'):
+                    if data['sku_sap'].strip().upper() != data['sku_mba3'].strip().upper():
+                        tiene_diferencias = True
+                
+                # Si hay precios, comparar (tolerancia 0.01)
+                precio_mba3 = data.get('precio_unitario_mba3')
+                precio_sap = data.get('precio_unitario_sap')
+                if precio_mba3 is not None and precio_sap is not None:
+                    if abs(float(precio_mba3) - float(precio_sap)) > 0.01:
+                        tiene_diferencias = True
+            
+            # Estado por defecto
+            estado = data.get('estado', 'PENDIENTE')
+            if tiene_diferencias or not tiene_datos_sap:
+                estado = 'PENDIENTE'
+            
+            # Insertar nueva homologación y obtener el ID generado
+            cursor.execute("""
+                INSERT INTO sku_homologacion (
+                    sku_mba3,
+                    nombre_producto_mba3,
+                    precio_unitario_mba3,
+                    cantidad_docena_mba3,
+                    total_linea_mba3,
+                    sku_sap,
+                    nombre_producto_sap,
+                    precio_unitario_sap,
+                    cantidad_pack_sap,
+                    unidad_sap,
+                    subtotal_sap,
+                    tiene_datos_sap,
+                    tiene_diferencias,
+                    estado,
+                    detalle_id,
+                    despacho_id,
+                    modificado_por
+                ) OUTPUT INSERTED.homologacion_id
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                data.get('sku_mba3'),
+                data.get('nombre_producto_mba3'),
+                data.get('precio_unitario_mba3'),
+                data.get('cantidad_docena_mba3'),
+                data.get('total_linea_mba3'),
+                data.get('sku_sap'),
+                data.get('nombre_producto_sap'),
+                data.get('precio_unitario_sap'),
+                data.get('cantidad_pack_sap'),
+                data.get('unidad_sap'),
+                data.get('subtotal_sap'),
+                1 if tiene_datos_sap else 0,
+                1 if tiene_diferencias else 0,
+                estado,
+                data.get('detalle_id'),
+                data.get('despacho_id'),
+                modificado_por
+            ))
+            
+            # Obtener el ID generado
+            result = cursor.fetchone()
+            if not result:
+                self.conn.rollback()
+                raise ValueError("No se pudo obtener el ID de la homologación creada")
+            
+            homologacion_id = str(result[0])
+            self.conn.commit()
+            
+            # Obtener la homologación creada
+            homologacion_creada = self.get_homologacion_by_id(homologacion_id)
+            logger.info(f"✅ Homologación creada: {homologacion_id}")
+            return homologacion_creada
+            
+        except Exception as e:
+            self.conn.rollback()
+            logger.error(f"❌ Error al crear homologación: {e}", exc_info=True)
+            raise
+        finally:
+            cursor.close()
+    
     def update_homologacion_sku(
         self, 
         homologacion_id: str, 

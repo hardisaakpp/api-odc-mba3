@@ -48,7 +48,8 @@ else:
 from .email_notifier import (
     send_migration_notification,
     send_error_notification,
-    send_homologacion_notification
+    send_homologacion_notification,
+    send_oc_ready_for_dispatch_notification
 )
 
 __all__ = [
@@ -62,5 +63,6 @@ __all__ = [
     "validar_longitud_minima_codigo",
     "send_migration_notification",
     "send_error_notification",
-    "send_homologacion_notification"
+    "send_homologacion_notification",
+    "send_oc_ready_for_dispatch_notification"
 ]
