@@ -1189,6 +1189,30 @@ class PedidoService:
                     if dist.get("tienda_codigo")
                 ]))
                 
+                # ✅ VALIDACIÓN CONTRA SAP: Validar códigos de producto contra SAP antes de crear el pedido
+                if codigos_productos:
+                    logger.info(f"🔍 Validando {len(codigos_productos)} códigos de producto contra SAP antes de crear pedido")
+                    validacion_sap = self.sap_validator_helper.validar_productos_sap(
+                        codigos_productos=codigos_productos,
+                        resultado=resultado,
+                        usar_cache=True,
+                        sap_obligatorio=True  # Obligatorio: no permitir crear pedido con productos inválidos
+                    )
+                    
+                    # Si la validación SAP retorna None, significa que hay errores y no se debe continuar
+                    if validacion_sap is None:
+                        resultado["status"] = "validation_error"
+                        logger.warning(f"⚠️ Validación SAP falló: no se puede crear el pedido con productos inválidos")
+                        return resultado
+                    
+                    # Agregar información de validación SAP al resultado
+                    resultado["validacion"]["productos_sap"] = {
+                        "validos": validacion_sap.get("validos", []),
+                        "no_encontrados": validacion_sap.get("no_encontrados", []),
+                        "errores": validacion_sap.get("errores", []),
+                        "todos_validos": validacion_sap.get("todos_validos", False)
+                    }
+                
                 if validar_productos and codigos_productos:
                     validacion_productos = validator.validar_productos_existen(codigos_productos, conn)
                     resultado["validacion"]["productos"] = validacion_productos
@@ -1214,6 +1238,13 @@ class PedidoService:
                 
                 if not validacion_cantidades["valid"]:
                     resultado["status"] = "validation_error"
+                    return resultado
+                
+                # ✅ Verificar si hay errores de validación antes de crear el pedido
+                # Si hay errores (SAP, productos o tiendas), no crear el pedido
+                if resultado.get("errores") and len(resultado["errores"]) > 0:
+                    resultado["status"] = "validation_error"
+                    logger.warning(f"⚠️ Errores de validación detectados: {resultado['errores']}. No se creará el pedido.")
                     return resultado
                 
                 consolidacion = self.consolidator.consolidar_pedido_por_producto(detalles_con_tiendas)
