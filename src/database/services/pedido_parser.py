@@ -24,23 +24,26 @@ class PedidoParser:
     def parsear_excel_pedido(
         self,
         file_content: bytes,
-        hoja_cabecera: str = "CABECERA_PEDIDO",
-        hoja_detalle: str = "DETALLE_ARTICULO"
+        hoja_cabecera: str = "cabecera",
+        hoja_detalle: str = "detalle",
+        es_formato_nuevo_v1_0: bool = True
     ) -> Dict[str, Any]:
         """
-        Parsea un archivo Excel de pedido (FASE 1 - TAREA 2).
+        Parsea un archivo Excel de pedido en formato v1.0.
         
-        Formato esperado:
-        - Hoja 1: CABECERA_PEDIDO (formato clave-valor: Campo | Valor | Ejemplo)
-        - Hoja 2: DETALLE_ARTICULO (formato tabular con headers)
+        Formato esperado (Template_Pedido_Inicial_v1.0.xlsx):
+        - Hoja 1: "cabecera" (formato clave-valor: Campo | Valor | Ejemplo)
+        - Hoja 2: "detalle" (formato tabular con columnas A-J producto, K-M bodegas, N+ tiendas)
         
         Solo parsing técnico: lee, normaliza y valida estructura.
         NO aplica reglas de negocio, NO consolida duplicados.
+        NO calcula SUBTOTAL ni TOTAL - solo parsea los valores del Excel.
         
         Args:
             file_content: Contenido del archivo Excel en bytes
-            hoja_cabecera: Nombre de la hoja de cabecera (default: "CABECERA_PEDIDO")
-            hoja_detalle: Nombre de la hoja de detalle (default: "DETALLE_ARTICULO")
+            hoja_cabecera: Nombre de la hoja de cabecera (default: "cabecera")
+            hoja_detalle: Nombre de la hoja de detalle (default: "detalle")
+            es_formato_nuevo_v1_0: Si True, usa el nuevo formato v1.0 (default: True)
             
         Returns:
             Dict con estructura:
@@ -87,7 +90,7 @@ class PedidoParser:
                 resultado["resumen"]["filasInvalidas"] = 1
                 return resultado
             
-            # PASO 1: Leer y parsear CABECERA_PEDIDO
+            # PASO 1: Leer y parsear hoja "cabecera"
             resultado["cabecera"] = self._parsear_cabecera(excel_file, hoja_cabecera)
             
             # Validar que campos críticos estén presentes
@@ -101,8 +104,9 @@ class PedidoParser:
                     "mensaje": "No se encontró el campo 'CODIGO PEDIDO' en la cabecera. Campos encontrados: " + ", ".join(list(resultado["cabecera"].keys())[:5])
                 })
             
-            # PASO 2: Leer y parsear DETALLE_ARTICULO
-            detalle_resultado = self._parsear_detalle(excel_file, file_content, hoja_detalle)
+            # PASO 2: Leer y parsear hoja "detalle" (nuevo formato v1.0)
+            # Parsea columnas A-J (producto), K-M (bodegas), N+ (tiendas hasta última columna con información)
+            detalle_resultado = self._parsear_detalle_nuevo_formato_v1_0(excel_file, file_content, hoja_detalle)
             resultado["resumen"].update(detalle_resultado["resumen"])
             resultado["errores"].extend(detalle_resultado["errores"])
             resultado["data"] = detalle_resultado["data"]
@@ -141,16 +145,21 @@ class PedidoParser:
             "CODIGO PEDIDO": "numero_pedido",
             "CÓDIGO PEDIDO": "numero_pedido",
             "FECHA PEDIDO": "fecha_pedido",
+            "FECHA DE PEDIDO": "fecha_pedido",
             "FECHA ENTREGA": "fecha_entrega",
+            "FECHA DE ENTREGA": "fecha_entrega",
             "FORMA PAGO": "forma_pago",
             "FORMA DE PAGO": "forma_pago",
             "ODC": "odc",
             "NOMBRE PROVEEDOR": "proveedor_nombre",
+            "NOMBRE DE PROVEEDOR": "proveedor_nombre",
             "COMPRADOR NOMBRE": "comprador_nombre",
+            "COMPRADOR": "comprador_nombre",
             "COD COMPRADOR": "comprador_codigo",
             "CÓD COMPRADOR": "comprador_codigo",
             "CODIGO COMPRADOR": "comprador_codigo",
             "ORIGEN TRASLADO": "origen_traslado",
+            "ORIGEN DE TRASLADO": "origen_traslado",
             "SERIE": "serie"
         }
         
@@ -306,8 +315,16 @@ class PedidoParser:
         logger.info(f"   Campos: {list(cabecera.keys())}")
         return cabecera
     
-    def _parsear_detalle(self, excel_file: pd.ExcelFile, file_content: bytes, hoja_detalle: str) -> Dict[str, Any]:
-        """Parsea la hoja de detalle."""
+    def _parsear_detalle_nuevo_formato_v1_0(self, excel_file: pd.ExcelFile, file_content: bytes, hoja_detalle: str) -> Dict[str, Any]:
+        """
+        Parsea la hoja de detalle en el nuevo formato v1.0.
+        
+        Estructura esperada:
+        - Columnas A-J: Información del producto (CODIGO PRODUCTO, MARCA, CODIGO BARRAS, etc.)
+        - Columnas K-M: Bodegas centrales (RL-CD, OUT-CD, REG-CD) - NO incluidas en SUBTOTAL
+        - Columnas N+: Tiendas individuales - SÍ incluidas en SUBTOTAL
+        - TOTAL = SUBTOTAL + RL-CD + OUT-CD + REG-CD
+        """
         resultado = {
             "resumen": {
                 "filasLeidas": 0,
@@ -319,6 +336,7 @@ class PedidoParser:
         }
         
         try:
+            # Leer Excel sin header primero para identificar estructura
             df_detalle_raw = pd.read_excel(
                 excel_file, 
                 sheet_name=hoja_detalle, 
@@ -326,232 +344,329 @@ class PedidoParser:
                 keep_default_na=False,
                 engine='openpyxl'
             )
-        except Exception as e:
-            logger.warning(f"⚠️ Error al leer con openpyxl: {e}. Intentando con engine por defecto...")
-            df_detalle_raw = pd.read_excel(
-                excel_file, 
-                sheet_name=hoja_detalle, 
-                header=None, 
-                keep_default_na=False
-            )
-        
-        logger.info(f"📊 Excel leído sin header: {len(df_detalle_raw)} filas totales, {len(df_detalle_raw.columns)} columnas")
-        
-        # Verificar si hay filas que pandas considera vacías pero que tienen datos
-        if len(df_detalle_raw) <= 1:
-            logger.warning(f"⚠️ Solo se leyeron {len(df_detalle_raw)} fila(s). Verificando si hay más datos...")
-            try:
-                from openpyxl import load_workbook
-                wb = load_workbook(io.BytesIO(file_content), data_only=True)
-                if hoja_detalle in wb.sheetnames:
-                    ws = wb[hoja_detalle]
-                    max_row = ws.max_row
-                    if max_row > 1:
-                        logger.info(f"   🔄 Intentando leer con pandas usando nrows={max_row}...")
-                        df_check = pd.read_excel(
-                            io.BytesIO(file_content),
-                            sheet_name=hoja_detalle,
-                            header=None,
-                            keep_default_na=False,
-                            engine='openpyxl',
-                            nrows=max_row
-                        )
-                        if len(df_check) > len(df_detalle_raw):
-                            df_detalle_raw = df_check
-                wb.close()
-            except (ImportError, Exception) as e2:
-                logger.warning(f"   ⚠️ Error en verificación con openpyxl: {e2}")
-        
-        # Buscar la fila que contiene los headers
-        header_row_idx: Optional[int] = None
-        for idx, row in df_detalle_raw.iterrows():
-            row_values = [str(v).upper().strip() if v != "" and pd.notna(v) else "" for v in row.values]
-            row_str = " ".join(row_values)
-            if "CODIGOPRODUCTO" in row_str or "CODIGO PRODUCTO" in row_str:
-                header_row_idx = int(idx) if isinstance(idx, (int, float)) else 0
-                logger.info(f"✅ Fila de header encontrada en índice: {header_row_idx}")
-                break
-        
-        if header_row_idx is None:
-            header_row_idx = 0
-            logger.info(f"⚠️ No se encontró fila de header, usando fila 0 como header")
-        
-        # Leer con el header correcto
-        try:
-            df_detalle_direct = pd.read_excel(
+            
+            logger.info(f"📊 Excel nuevo formato v1.0: {len(df_detalle_raw)} filas, {len(df_detalle_raw.columns)} columnas")
+            
+            # Buscar la fila que contiene los headers
+            header_row_idx: Optional[int] = None
+            for idx, row in df_detalle_raw.iterrows():
+                row_values = [str(v).upper().strip() if v != "" and pd.notna(v) else "" for v in row.values]
+                row_str = " ".join(row_values)
+                # Buscar "CODIGO PRODUCTO" o "CODIGO PRODUCTO"
+                if "CODIGOPRODUCTO" in row_str or "CODIGO PRODUCTO" in row_str:
+                    header_row_idx = int(idx) if isinstance(idx, (int, float)) else 0
+                    logger.info(f"✅ Fila de header encontrada en índice: {header_row_idx}")
+                    break
+            
+            if header_row_idx is None:
+                header_row_idx = 0
+                logger.warning(f"⚠️ No se encontró fila de header, usando fila 0 como header")
+            
+            # Leer con el header correcto
+            df_detalle = pd.read_excel(
                 io.BytesIO(file_content), 
                 sheet_name=hoja_detalle, 
                 header=int(header_row_idx), 
                 keep_default_na=False,
                 engine='openpyxl'
             )
-            df_detalle = pd.read_excel(
-                excel_file, 
-                sheet_name=hoja_detalle, 
-                header=int(header_row_idx), 
-                keep_default_na=False
+            
+            # Normalizar nombres de columnas
+            df_detalle.columns = [str(col).strip() if pd.notna(col) else f"col_{i}" 
+                                 for i, col in enumerate(df_detalle.columns)]
+            
+            logger.info(f"📋 Columnas detectadas en nuevo formato: {list(df_detalle.columns)[:15]}...")
+            
+            # Identificar índices de columnas por posición
+            # Columna A = 0, B = 1, ..., K = 10, L = 11, M = 12, N = 13, etc.
+            
+            # Identificar columnas de información del producto (A-J = índices 0-9)
+            # Según especificación: A=CODIGO PRODUCTO, B=MARCA, C=CODIGO BARRAS, D=DESCRIPCION SAP,
+            # E=PACK, F=COSTO SIN IVA, G=DESCUENTO, H=PVP, I=TOTAL, J=SUBTOTAL
+            columnas_producto = {}
+            
+            # Mapeo de nombres de columnas esperados (flexible)
+            mapeo_columnas_producto = {
+                'codigo producto': ('codigoproducto', 'codigo producto', 'producto', 'sku', 'codigo'),
+                'marca': ('marca',),
+                'codigo barras': ('codigo de barras', 'codigo_barras', 'código de barras', 'codigo barras', 'ean'),
+                'descripcion sap': ('descripcion sap', 'descripción sap', 'descripcion', 'descripción'),
+                'pack': ('pack', 'unidad', 'unidad de empaque'),
+                'costo sin iva': ('costo sin iva', 'costo doc sin iva', 'costo', 'precio sin iva'),
+                'descuento': ('descuento', 'dscto', 'dscto 1', 'descuento 1'),
+                'pvp': ('pvp', 'precio venta publico', 'precio de venta'),
+                'total': ('total',),
+                'subtotal': ('subtotal',)
+            }
+            
+            for col_idx, col_name in enumerate(df_detalle.columns):
+                col_lower = str(col_name).lower().strip()
+                
+                # Buscar coincidencias con las columnas esperadas de producto
+                for campo_bd, posibles_nombres in mapeo_columnas_producto.items():
+                    if any(nombre in col_lower for nombre in posibles_nombres):
+                        if campo_bd not in columnas_producto:
+                            columnas_producto[campo_bd] = col_name
+                            logger.debug(f"   Columna producto '{campo_bd}' encontrada: '{col_name}' (índice {col_idx})")
+                            break
+            
+            # Verificar que CODIGO PRODUCTO existe (obligatorio)
+            if 'codigo producto' not in columnas_producto:
+                resultado["errores"].append({
+                    "fila": 0,
+                    "campo": "CODIGO PRODUCTO",
+                    "tipo": "ERROR",
+                    "mensaje": f"No se encontró columna 'CODIGO PRODUCTO' en hoja '{hoja_detalle}'"
+                })
+                return resultado
+            
+            col_producto = columnas_producto['codigo producto']
+            logger.info(f"✅ Columnas de producto detectadas: {list(columnas_producto.keys())}")
+            
+            # Identificar columnas de bodegas (K, L, M = índices 10, 11, 12)
+            # Buscar columnas RL-CD, OUT-CD, REG-CD
+            columnas_bodegas = {}
+            bodegas_esperadas = {
+                'RL-CD': 'BODEGA ROLAND',
+                'OUT-CD': 'BODEGA DESCUENTON', 
+                'REG-CD': 'BODEGA REGIONS'
+            }
+            
+            for col_idx, col_name in enumerate(df_detalle.columns):
+                col_upper = str(col_name).upper().strip()
+                # Buscar por código de bodega o nombre
+                if col_upper in bodegas_esperadas:
+                    columnas_bodegas[col_upper] = col_name
+                    logger.info(f"✅ Bodega encontrada: '{col_name}' (índice {col_idx})")
+                elif 'BODEGA' in col_upper:
+                    # Buscar por nombre de bodega
+                    for codigo, nombre in bodegas_esperadas.items():
+                        if nombre.upper() in col_upper or codigo in col_upper:
+                            columnas_bodegas[codigo] = col_name
+                            logger.info(f"✅ Bodega encontrada por nombre: '{col_name}' → {codigo}")
+                            break
+            
+            # Identificar columnas de tiendas (desde columna N = índice 13 en adelante)
+            # Las tiendas son todas las columnas que NO son:
+            # - Columnas A-J (producto): índices 0-9
+            # - Columnas K-M (bodegas): índices 10-12
+            columnas_tiendas = {}
+            
+            # Identificar índices de columnas de producto y bodegas para excluirlas
+            indices_columnas_producto = set()
+            for campo_bd, col_name in columnas_producto.items():
+                if col_name in df_detalle.columns:
+                    indices_columnas_producto.add(list(df_detalle.columns).index(col_name))
+            
+            indices_columnas_bodegas = set()
+            for bodega_codigo, col_name in columnas_bodegas.items():
+                if col_name in df_detalle.columns:
+                    indices_columnas_bodegas.add(list(df_detalle.columns).index(col_name))
+            
+            # Las tiendas empiezan desde índice 13 (columna N)
+            inicio_tiendas_idx = 13
+            
+            # Identificar última columna con información real (no vacía en todas las filas)
+            ultima_columna_idx = len(df_detalle.columns) - 1
+            # Verificar hacia atrás desde la última columna para encontrar la última con datos
+            for col_idx in range(len(df_detalle.columns) - 1, inicio_tiendas_idx - 1, -1):
+                col_name = df_detalle.columns[col_idx]
+                # Verificar si la columna tiene al menos un valor no vacío en alguna fila
+                if col_idx < len(df_detalle.columns):
+                    col_has_data = False
+                    for row_idx in range(min(10, len(df_detalle))):  # Revisar primeras 10 filas como muestra
+                        val = df_detalle.iloc[row_idx, col_idx]
+                        if val is not None and not pd.isna(val) and str(val).strip() != "":
+                            col_has_data = True
+                            break
+                    if col_has_data:
+                        ultima_columna_idx = col_idx
+                        break
+            
+            logger.info(f"📊 Rango de columnas: Producto (0-9), Bodegas (10-12), Tiendas (13-{ultima_columna_idx})")
+            
+            # Procesar columnas desde N hasta la última con información
+            for col_idx, col_name in enumerate(df_detalle.columns):
+                col_upper = str(col_name).upper().strip()
+                
+                # Si está en el rango de tiendas (desde índice 13) y no supera la última columna con datos
+                if col_idx >= inicio_tiendas_idx and col_idx <= ultima_columna_idx:
+                    # Verificar que no sea una columna de producto
+                    if col_idx in indices_columnas_producto:
+                        continue
+                    
+                    # Verificar que no sea una columna de bodega
+                    if col_idx in indices_columnas_bodegas:
+                        continue
+                    
+                    # Es una columna de tienda
+                    columnas_tiendas[col_name] = col_idx
+                    logger.debug(f"   Tienda detectada: '{col_name}' (índice {col_idx})")
+            
+            logger.info(f"📊 Columnas detectadas: {len(columnas_bodegas)} bodegas, {len(columnas_tiendas)} tiendas")
+            
+            # Eliminar filas vacías
+            df_detalle = df_detalle.dropna(how='all')
+            resultado["resumen"]["filasLeidas"] = len(df_detalle)
+            
+            # Procesar cada fila
+            for idx, row in df_detalle.iterrows():
+                idx_int = int(idx) if isinstance(idx, (int, float)) else 0
+                row_num = idx_int + header_row_idx + 2  # +2 porque idx empieza en 0 y header_row_idx es relativo
+                
+                codigo_producto_raw = row.get(col_producto)
+                codigo_producto = self._normalizar_codigo_producto(codigo_producto_raw)
+                
+                if not codigo_producto:
+                    resultado["resumen"]["filasInvalidas"] += 1
+                    resultado["errores"].append({
+                        "fila": row_num,
+                        "campo": "CODIGO PRODUCTO",
+                        "tipo": "ERROR",
+                        "mensaje": "CODIGO PRODUCTO es obligatorio y no puede estar vacío"
+                    })
+                    continue
+                
+                # Extraer información completa del producto (columnas A-J)
+                info_producto = {
+                    "codigo_interno": codigo_producto
+                }
+                
+                # Extraer cada campo de producto si existe la columna
+                if 'marca' in columnas_producto:
+                    marca_val = row.get(columnas_producto['marca'])
+                    info_producto["marca"] = str(marca_val).strip() if marca_val is not None and not pd.isna(marca_val) else None
+                
+                if 'codigo barras' in columnas_producto:
+                    codigo_barras_val = row.get(columnas_producto['codigo barras'])
+                    if codigo_barras_val is not None and not pd.isna(codigo_barras_val):
+                        # Convertir a string sin decimales si es numérico
+                        if isinstance(codigo_barras_val, float) and codigo_barras_val.is_integer():
+                            info_producto["codigo_barras"] = str(int(codigo_barras_val))
+                        else:
+                            info_producto["codigo_barras"] = str(codigo_barras_val).strip()
+                    else:
+                        info_producto["codigo_barras"] = None
+                
+                if 'descripcion sap' in columnas_producto:
+                    desc_sap_val = row.get(columnas_producto['descripcion sap'])
+                    info_producto["descripcion_sap"] = str(desc_sap_val).strip() if desc_sap_val is not None and not pd.isna(desc_sap_val) else None
+                
+                if 'pack' in columnas_producto:
+                    pack_val = row.get(columnas_producto['pack'])
+                    info_producto["pack"] = str(pack_val).strip() if pack_val is not None and not pd.isna(pack_val) else None
+                
+                if 'costo sin iva' in columnas_producto:
+                    costo_val = row.get(columnas_producto['costo sin iva'])
+                    if costo_val is not None and not pd.isna(costo_val):
+                        try:
+                            info_producto["costo_doc_sin_iva"] = float(str(costo_val).replace(",", "."))
+                        except (ValueError, TypeError):
+                            info_producto["costo_doc_sin_iva"] = None
+                    else:
+                        info_producto["costo_doc_sin_iva"] = None
+                
+                if 'descuento' in columnas_producto:
+                    descuento_val = row.get(columnas_producto['descuento'])
+                    if descuento_val is not None and not pd.isna(descuento_val):
+                        try:
+                            info_producto["descuento_1"] = float(str(descuento_val).replace(",", "."))
+                        except (ValueError, TypeError):
+                            info_producto["descuento_1"] = None
+                    else:
+                        info_producto["descuento_1"] = None
+                
+                if 'pvp' in columnas_producto:
+                    pvp_val = row.get(columnas_producto['pvp'])
+                    if pvp_val is not None and not pd.isna(pvp_val):
+                        try:
+                            info_producto["pvp"] = float(str(pvp_val).replace(",", "."))
+                        except (ValueError, TypeError):
+                            info_producto["pvp"] = None
+                    else:
+                        info_producto["pvp"] = None
+                
+                if 'subtotal' in columnas_producto:
+                    subtotal_val = row.get(columnas_producto['subtotal'])
+                    if subtotal_val is not None and not pd.isna(subtotal_val):
+                        try:
+                            info_producto["subtotal"] = float(str(subtotal_val).replace(",", "."))
+                        except (ValueError, TypeError):
+                            info_producto["subtotal"] = None
+                    else:
+                        info_producto["subtotal"] = None
+                
+                if 'total' in columnas_producto:
+                    total_val = row.get(columnas_producto['total'])
+                    if total_val is not None and not pd.isna(total_val):
+                        try:
+                            info_producto["total"] = float(str(total_val).replace(",", "."))
+                        except (ValueError, TypeError):
+                            info_producto["total"] = None
+                    else:
+                        info_producto["total"] = None
+                
+                # Procesar bodegas
+                for bodega_codigo, col_bodega_name in columnas_bodegas.items():
+                    cantidad_raw = row.get(col_bodega_name)
+                    if cantidad_raw is not None and not pd.isna(cantidad_raw):
+                        try:
+                            cantidad = int(float(str(cantidad_raw).strip().replace(",", ".")))
+                            if cantidad > 0:
+                                resultado["data"].append({
+                                    "codigoProducto": codigo_producto,
+                                    "idTienda": bodega_codigo,  # Usar código de bodega como ID
+                                    "cantidad": cantidad,
+                                    "filaOrigen": row_num,
+                                    "es_bodega": True,
+                                    "info_producto": info_producto  # Incluir información completa del producto
+                                })
+                                logger.debug(f"   Fila {row_num}: {codigo_producto} → {bodega_codigo} x{cantidad} (bodega)")
+                        except (ValueError, TypeError):
+                            logger.warning(f"⚠️ Fila {row_num}: Cantidad inválida en bodega {bodega_codigo}: {cantidad_raw}")
+                
+                # Procesar tiendas
+                for col_tienda_name, col_idx in columnas_tiendas.items():
+                    cantidad_raw = row.get(col_tienda_name)
+                    if cantidad_raw is not None and not pd.isna(cantidad_raw):
+                        try:
+                            cantidad = int(float(str(cantidad_raw).strip().replace(",", ".")))
+                            if cantidad > 0:
+                                # El nombre de la columna es el código de la tienda
+                                codigo_tienda = str(col_tienda_name).strip().upper()
+                                
+                                resultado["data"].append({
+                                    "codigoProducto": codigo_producto,
+                                    "idTienda": codigo_tienda,
+                                    "cantidad": cantidad,
+                                    "filaOrigen": row_num,
+                                    "es_bodega": False,
+                                    "info_producto": info_producto  # Incluir información completa del producto
+                                })
+                                logger.debug(f"   Fila {row_num}: {codigo_producto} → {codigo_tienda} x{cantidad} (tienda)")
+                        except (ValueError, TypeError):
+                            logger.warning(f"⚠️ Fila {row_num}: Cantidad inválida en tienda {col_tienda_name}: {cantidad_raw}")
+                
+                resultado["resumen"]["filasValidas"] += 1
+            
+            logger.info(
+                f"✅ Parsing nuevo formato v1.0 completado: {resultado['resumen']['filasLeidas']} filas leídas, "
+                f"{resultado['resumen']['filasValidas']} válidas, "
+                f"{len(resultado['data'])} distribuciones creadas"
             )
             
-            if len(df_detalle_direct) > len(df_detalle):
-                df_detalle = df_detalle_direct
+            return resultado
+            
         except Exception as e:
-            logger.warning(f"⚠️ Error al leer con header={header_row_idx}: {e}. Intentando procesar manualmente...")
-            df_detalle_manual = pd.read_excel(excel_file, sheet_name=hoja_detalle, header=None, keep_default_na=False)
-            header_row_idx_int = int(header_row_idx) if header_row_idx is not None else 0
-            
-            if len(df_detalle_manual) > header_row_idx_int + 1:
-                df_detalle = df_detalle_manual.iloc[header_row_idx_int + 1:].copy()
-                df_detalle.columns = df_detalle_manual.iloc[header_row_idx_int].values
-                df_detalle.columns = [str(col).strip() if pd.notna(col) and str(col).strip() != "" else f"col_{i}" 
-                                     for i, col in enumerate(df_detalle.columns)]
-            else:
-                df_detalle = pd.DataFrame()
-        
-        resultado["resumen"]["filasLeidas"] = len(df_detalle)
-        
-        # Ensure df_detalle is a DataFrame (not Series)
-        if not isinstance(df_detalle, pd.DataFrame):
-            resultado["errores"].append(f"❌ Formato inválido en hoja '{hoja_detalle}': no es un DataFrame válido")
-            resultado["status"] = "error"
+            logger.error(f"❌ Error al parsear detalle nuevo formato v1.0: {e}", exc_info=True)
+            resultado["errores"].append({
+                "fila": 0,
+                "campo": "Archivo",
+                "tipo": "ERROR",
+                "mensaje": f"Error al leer el archivo Excel: {str(e)}"
+            })
+            resultado["resumen"]["filasInvalidas"] = resultado["resumen"]["filasLeidas"]
             return resultado
-        
-        # Normalizar nombres de columnas
-        df_detalle.columns = [str(col).strip() if pd.notna(col) else f"col_{i}" 
-                             for i, col in enumerate(df_detalle.columns)]
-        
-        # Buscar columnas obligatorias
-        col_producto, col_tienda, col_cantidad = self._buscar_columnas_obligatorias(df_detalle, hoja_detalle, resultado)
-        
-        if not col_producto or not col_tienda or not col_cantidad:
-            return resultado
-        
-        # Eliminar filas vacías
-        df_detalle = df_detalle.dropna(how='all')
-        
-        # Procesar cada fila
-        duplicados_detectados = set()
-        filas_procesadas = {}
-        
-        for idx, row in df_detalle.iterrows():
-            idx_int = int(idx) if isinstance(idx, (int, float)) else 0
-            row_num = idx_int + 2
-            fila_valida = True
-            errores_fila = []
-            
-            codigo_producto_raw = row.get(col_producto)
-            id_tienda_raw = row.get(col_tienda)
-            cantidad_raw = row.get(col_cantidad)
-            
-            # Normalizar valores
-            codigo_producto = self._normalizar_codigo_producto(codigo_producto_raw)
-            id_tienda = self._normalizar_id_tienda(id_tienda_raw)
-            cantidad = self._validar_cantidad(cantidad_raw, row_num, errores_fila)
-            
-            # Validar campos obligatorios
-            if not codigo_producto:
-                fila_valida = False
-                errores_fila.append({
-                    "fila": row_num,
-                    "campo": "CodigoProducto",
-                    "tipo": "ERROR",
-                    "mensaje": "CodigoProducto es obligatorio y no puede estar vacío"
-                })
-            
-            if not id_tienda:
-                fila_valida = False
-                errores_fila.append({
-                    "fila": row_num,
-                    "campo": "IdTienda",
-                    "tipo": "ERROR",
-                    "mensaje": "IdTienda es obligatorio y no puede estar vacío"
-                })
-            
-            if cantidad is None:
-                fila_valida = False
-            
-            # Verificar duplicados
-            if codigo_producto and id_tienda and cantidad:
-                clave_duplicado = (codigo_producto.upper(), id_tienda.upper())
-                
-                if clave_duplicado in filas_procesadas:
-                    fila_valida = False
-                    fila_original = filas_procesadas[clave_duplicado]
-                    errores_fila.append({
-                        "fila": row_num,
-                        "campo": "CodigoProducto, IdTienda",
-                        "tipo": "ERROR",
-                        "mensaje": f"Registro duplicado (SKU + Tienda). Ya existe en fila {fila_original}"
-                    })
-                    duplicados_detectados.add(clave_duplicado)
-                else:
-                    filas_procesadas[clave_duplicado] = row_num
-            
-            resultado["errores"].extend(errores_fila)
-            
-            if fila_valida and codigo_producto and id_tienda and cantidad:
-                resultado["data"].append({
-                    "codigoProducto": codigo_producto,
-                    "idTienda": id_tienda,
-                    "cantidad": cantidad,
-                    "filaOrigen": row_num
-                })
-                resultado["resumen"]["filasValidas"] += 1
-            else:
-                resultado["resumen"]["filasInvalidas"] += 1
-        
-        return resultado
-    
-    def _buscar_columnas_obligatorias(self, df_detalle: pd.DataFrame, hoja_detalle: str, resultado: Dict[str, Any]) -> tuple:
-        """Busca las columnas obligatorias en el detalle."""
-        col_producto = None
-        col_tienda = None
-        col_cantidad = None
-        
-        posibles_producto = ['codigoproducto', 'codigo producto', 'producto', 'sku', 'codigo', 'codigo/sku', 'codigo_sku']
-        posibles_tienda = ['idtienda', 'id tienda', 'tienda', 'tienda_id', 'codigo tienda', 'id_tienda']
-        posibles_cantidad = ['cantidad', 'qty', 'cant', 'quantity', 'cantidad solicitada']
-        
-        for col in df_detalle.columns:
-            col_lower = str(col).lower().strip()
-            if col_lower in posibles_producto and not col_producto:
-                col_producto = col
-            elif col_lower in posibles_tienda and not col_tienda:
-                col_tienda = col
-            elif col_lower in posibles_cantidad and not col_cantidad:
-                col_cantidad = col
-        
-        if not col_producto:
-            columnas_lista = list(df_detalle.columns) if not isinstance(df_detalle.columns, list) else df_detalle.columns
-            resultado["errores"].append({
-                "fila": 0,
-                "campo": "CodigoProducto",
-                "tipo": "ERROR",
-                "mensaje": f"No se encontró columna 'CodigoProducto' en hoja '{hoja_detalle}'. Columnas disponibles: {', '.join(columnas_lista)}"
-            })
-            resultado["resumen"]["filasInvalidas"] = resultado["resumen"]["filasLeidas"]
-        
-        if not col_tienda:
-            columnas_lista = list(df_detalle.columns) if not isinstance(df_detalle.columns, list) else df_detalle.columns
-            resultado["errores"].append({
-                "fila": 0,
-                "campo": "IdTienda",
-                "tipo": "ERROR",
-                "mensaje": f"No se encontró columna 'IdTienda' en hoja '{hoja_detalle}'. Columnas disponibles: {', '.join(columnas_lista)}"
-            })
-            resultado["resumen"]["filasInvalidas"] = resultado["resumen"]["filasLeidas"]
-        
-        if not col_cantidad:
-            columnas_lista = list(df_detalle.columns) if not isinstance(df_detalle.columns, list) else df_detalle.columns
-            resultado["errores"].append({
-                "fila": 0,
-                "campo": "Cantidad",
-                "tipo": "ERROR",
-                "mensaje": f"No se encontró columna 'Cantidad' en hoja '{hoja_detalle}'. Columnas disponibles: {', '.join(columnas_lista)}"
-            })
-            resultado["resumen"]["filasInvalidas"] = resultado["resumen"]["filasLeidas"]
-        
-        logger.info(f"✅ Columnas detectadas - Producto: {col_producto}, Tienda: {col_tienda}, Cantidad: {col_cantidad}")
-        return col_producto, col_tienda, col_cantidad
     
     def _normalizar_codigo_producto(self, valor_raw: Any) -> Optional[str]:
         """Normaliza código de producto."""
@@ -612,190 +727,6 @@ class PedidoParser:
                 "mensaje": "Cantidad es obligatoria y no puede estar vacía"
             })
             return None
-    
-    def extraer_cabecera(self, df: pd.DataFrame, filename: str, usuario_id: Optional[str]) -> Dict[str, Any]:
-        """
-        Extrae los datos de cabecera del DataFrame (formato legacy).
-        
-        Ajustado según estructura real del Excel:
-        - Los labels están en la columna E (índice 4)
-        - Los valores pueden estar en la misma celda o en columnas adyacentes
-        """
-        cabecera = {
-            "numero_pedido": None,
-            "fecha_pedido": None,
-            "fecha_entrega": None,
-            "forma_pago": None,
-            "odc": None,
-            "proveedor_nombre": None,
-            "comprador_nombre": None,
-            "comprador_codigo": None,
-            "origen_traslado": None,
-            "serie": None,
-            "archivo_nombre": filename,
-            "creado_por": usuario_id,
-        }
-        
-        label_to_field = {
-            "PEDIDO ROLAND NO.": "numero_pedido",
-            "FECHA DE PEDIDO": "fecha_pedido",
-            "FECHA DE ENTREGA": "fecha_entrega",
-            "FORMA DE PAGO": "forma_pago",
-            "ODC": "odc",
-            "NOMBRE PROVEEDOR": "proveedor_nombre",
-            "COMPRADOR NOMBRE": "comprador_nombre",
-            "COD COMPRADOR": "comprador_codigo",
-            "ORIGEN TRASLADO": "origen_traslado",
-            "SERIE": "serie",
-        }
-        
-        max_filas_buscar = min(50, len(df))
-        columna_labels = 4
-        columna_valores = 5
-        
-        for row_idx in range(max_filas_buscar):
-            label_cell = self.obtener_valor_celda(df, row_idx, columna_labels)
-            
-            if label_cell:
-                label_upper = label_cell.upper().strip()
-                
-                for label_key, field_name in label_to_field.items():
-                    if label_upper == label_key or label_upper.startswith(label_key):
-                        valor = None
-                        
-                        if label_upper.startswith(label_key) and len(label_upper) > len(label_key):
-                            valor_str = label_upper[len(label_key):].strip()
-                            if valor_str:
-                                valor = valor_str
-                        
-                        if not valor:
-                            for col_offset in [columna_valores, 6, 3, 7, 2]:
-                                if col_offset < len(df.columns):
-                                    valor = self.obtener_valor_celda(df, row_idx, col_offset)
-                                    if valor:
-                                        break
-                        
-                        if field_name == "numero_pedido" and valor and label_key in valor.upper():
-                            valor = valor.upper().replace(label_key, "").strip()
-                        
-                        cabecera[field_name] = valor if valor else None
-                        break
-        
-        if not cabecera["numero_pedido"]:
-            raise ValueError(
-                "No se pudo encontrar el campo 'PEDIDO ROLAND NO.' en el archivo Excel. "
-                "Verifica que el archivo tenga la estructura correcta."
-            )
-        
-        # Convertir fecha_pedido a DATE si es posible
-        if cabecera["fecha_pedido"]:
-            try:
-                if isinstance(cabecera["fecha_pedido"], datetime):
-                    cabecera["fecha_pedido"] = cabecera["fecha_pedido"].date()
-                elif isinstance(cabecera["fecha_pedido"], str):
-                    cabecera["fecha_pedido"] = pd.to_datetime(cabecera["fecha_pedido"], dayfirst=True).date()
-            except Exception as e:
-                logger.warning(f"⚠️ Error al parsear fecha_pedido: {e}")
-                cabecera["fecha_pedido"] = None
-        
-        return cabecera
-    
-    def obtener_valor_celda(self, df: pd.DataFrame, row: int, col: int) -> Optional[str]:
-        """Obtiene el valor de una celda específica."""
-        try:
-            if row < len(df) and col < len(df.columns):
-                valor = df.iloc[row, col]
-                if pd.isna(valor) or valor == '' or (isinstance(valor, float) and pd.isna(valor)):
-                    return None
-                str_valor = str(valor).strip()
-                return str_valor if str_valor else None
-            return None
-        except Exception as e:
-            logger.debug(f"Error al obtener celda [{row}, {col}]: {e}")
-            return None
-    
-    def extraer_detalle_con_tiendas(
-        self, 
-        df: pd.DataFrame,
-        catalogo_tiendas: Optional[Dict[str, Dict[str, Any]]] = None
-    ) -> List[Dict[str, Any]]:
-        """
-        Extrae detalles con distribuciones por tienda (formato complejo).
-        
-        Args:
-            df: DataFrame con los datos del detalle
-            catalogo_tiendas: Diccionario opcional con tiendas válidas del Excel
-            
-        Returns:
-            Lista de dicts con detalle y distribuciones.
-        """
-        detalles = []
-        
-        try:
-            header_row: Optional[int] = None
-            for idx, row in df.iterrows():
-                row_values = [str(val).upper() if pd.notna(val) else "" for val in row.values]
-                row_values_str = " ".join(row_values)
-                if "CODIGO INTERNO" in row_values_str or "CODIGO PRODUCTO" in row_values_str or "CODIGOPRODUCTO" in row_values_str:
-                    header_row = int(idx) if isinstance(idx, (int, float)) else 0
-                    break
-            
-            if header_row is None:
-                logger.warning("⚠️ No se encontró la fila de headers 'CODIGO INTERNO' o 'CODIGO PRODUCTO'")
-                return []
-            
-            header_row_int = int(header_row) if header_row is not None else 0
-            detalle_df = df.iloc[header_row_int + 1:].copy()
-            
-            if header_row_int < len(df):
-                detalle_df.columns = df.iloc[header_row_int].values
-                detalle_df.columns = [str(col).strip() if pd.notna(col) else f"col_{i}" 
-                                     for i, col in enumerate(detalle_df.columns)]
-            
-            detalle_df = detalle_df.dropna(how='all')
-            detalle_df.columns = [str(col).strip().lower() if pd.notna(col) else f"col_{i}" 
-                                 for i, col in enumerate(detalle_df.columns)]
-            
-            for _, row in detalle_df.iterrows():
-                codigo_interno = self.get_cell_value(row, "codigo interno")
-                if not codigo_interno or pd.isna(codigo_interno):
-                    codigo_interno = self.get_cell_value(row, "codigo producto")
-                if not codigo_interno or pd.isna(codigo_interno):
-                    codigo_interno = self.get_cell_value(row, "codigoproducto")
-                if not codigo_interno or pd.isna(codigo_interno):
-                    continue
-                
-                detalle = {
-                    "codigo_interno": str(codigo_interno).strip(),
-                    "descripcion_sap": self.get_cell_value(row, "descripcion sap", ["descripción sap", "descripcion"]),
-                    "marca": self.get_cell_value(row, "marca"),
-                    "codigo_barras": self.get_cell_value(row, "codigo de barras", ["codigo_barras", "código de barras", "codigo barras"]),
-                    "pack": self.get_cell_value(row, "pack"),
-                    "costo_doc_sin_iva": self.get_numeric_value(row, "costo doc sin iva", ["costo doc sin iva", "costo sin iva", "costo documento sin iva"]),
-                    "descuento_1": (
-                        self.get_numeric_value(row, "dscto 1", ["descuento 1"]) or 
-                        self.get_numeric_value(row, "descuento 1", ["dscto 1"]) or 
-                        self.get_numeric_value(row, "descuento", ["dscto"])
-                    ),
-                    "pvp": self.get_numeric_value(row, "pvp"),
-                    "subtotal": self.get_numeric_value(row, "subtotal"),
-                    "total": self.get_numeric_value(row, "total"),
-                }
-                
-                # Pasar catálogo de tiendas a la función de extracción
-                distribuciones = self.extraer_distribuciones_tienda(row, list(detalle_df.columns), catalogo_tiendas)
-                
-                detalles.append({
-                    "detalle": detalle,
-                    "distribuciones": distribuciones
-                })
-            
-            logger.info(f"✅ _extraer_detalle_con_tiendas: {len(detalle_df)} filas procesadas, {len(detalles)} detalles creados")
-            return detalles
-            
-        except Exception as e:
-            logger.error(f"❌ Error al extraer detalle con tiendas: {e}", exc_info=True)
-            return []
     
     def _find_column_flexible(self, row: pd.Series, column_names: List[str]) -> Optional[str]:
         """
@@ -1300,124 +1231,6 @@ class PedidoParser:
                         })
         
         return distribuciones
-    
-    def extraer_detalle_formato_simple(self, file_content: bytes) -> List[Dict[str, Any]]:
-        """
-        Extrae detalles desde formato simple: CodigoProducto, IdTienda, Cantidad.
-        
-        Consolida productos: si hay múltiples filas con mismo CodigoProducto,
-        se agrupan en un solo detalle con múltiples distribuciones.
-        """
-        detalles = []
-        
-        try:
-            df_raw = pd.read_excel(io.BytesIO(file_content), sheet_name=0, header=0)
-            df_raw.columns = [str(col).strip().lower() if pd.notna(col) else f"col_{i}" 
-                             for i, col in enumerate(df_raw.columns)]
-            
-            col_producto = None
-            col_tienda = None
-            col_cantidad = None
-            
-            posibles_producto = ['codigoproducto', 'codigo producto', 'producto', 'sku', 'codigo']
-            posibles_tienda = ['idtienda', 'id tienda', 'tienda', 'tienda_id', 'codigo tienda']
-            posibles_cantidad = ['cantidad', 'qty', 'cant', 'quantity']
-            
-            for col in df_raw.columns:
-                col_lower = str(col).lower().strip()
-                if col_lower in posibles_producto and not col_producto:
-                    col_producto = col
-                elif col_lower in posibles_tienda and not col_tienda:
-                    col_tienda = col
-                elif col_lower in posibles_cantidad and not col_cantidad:
-                    col_cantidad = col
-            
-            if not col_producto:
-                raise ValueError("No se encontró columna 'CodigoProducto' (o variaciones)")
-            if not col_tienda:
-                raise ValueError("No se encontró columna 'IdTienda' (o variaciones)")
-            if not col_cantidad:
-                raise ValueError("No se encontró columna 'Cantidad' (o variaciones)")
-            
-            df_raw = df_raw.dropna(how='all')
-            productos_agrupados = {}
-            
-            for idx, row in df_raw.iterrows():
-                idx_int = int(idx) if isinstance(idx, (int, float)) else 0
-                row_num = idx_int + 2
-                
-                codigo_producto = self.get_cell_value(row, col_producto)
-                id_tienda = self.get_cell_value(row, col_tienda)
-                cantidad_raw = row.get(col_cantidad)
-                
-                if not codigo_producto or pd.isna(codigo_producto):
-                    continue
-                
-                codigo_producto = str(codigo_producto).strip()
-                id_tienda = str(id_tienda).strip() if id_tienda and not pd.isna(id_tienda) else None
-                
-                cantidad = None
-                if cantidad_raw is not None and not pd.isna(cantidad_raw):
-                    try:
-                        cantidad = int(float(cantidad_raw))
-                        if cantidad <= 0:
-                            logger.warning(f"⚠️ Fila {row_num}: Cantidad debe ser > 0, ignorando")
-                            continue
-                    except (ValueError, TypeError):
-                        logger.warning(f"⚠️ Fila {row_num}: Cantidad inválida: {cantidad_raw}, ignorando")
-                        continue
-                
-                if not cantidad or not id_tienda:
-                    logger.warning(f"⚠️ Fila {row_num}: Faltan IdTienda o Cantidad válida, ignorando")
-                    continue
-                
-                if codigo_producto not in productos_agrupados:
-                    productos_agrupados[codigo_producto] = {
-                        "detalle": {
-                            "codigo_interno": codigo_producto,
-                            "descripcion_sap": None,
-                            "marca": None,
-                            "codigo_barras": None,
-                            "pack": None,
-                            "costo_doc_sin_iva": None,
-                            "descuento_1": None,
-                            "pvp": None,
-                            "subtotal": None,
-                            "total": None,
-                        },
-                        "distribuciones": [],
-                        "filas_origen": []
-                    }
-                
-                tienda_ya_existe = False
-                for dist in productos_agrupados[codigo_producto]["distribuciones"]:
-                    if dist.get("tienda_codigo") == id_tienda.upper():
-                        tienda_ya_existe = True
-                        dist["cantidad"] += cantidad
-                        break
-                
-                if not tienda_ya_existe:
-                    productos_agrupados[codigo_producto]["distribuciones"].append({
-                        "tienda_codigo": id_tienda.upper(),
-                        "tienda_nombre": id_tienda,
-                        "cantidad": cantidad
-                    })
-                
-                productos_agrupados[codigo_producto]["filas_origen"].append(row_num)
-            
-            for codigo, data in productos_agrupados.items():
-                detalles.append({
-                    "detalle": data["detalle"],
-                    "distribuciones": data["distribuciones"],
-                    "filas_origen": data["filas_origen"]
-                })
-            
-            logger.info(f"✅ Extraídos {len(detalles)} productos únicos desde {len(df_raw)} filas")
-            return detalles
-            
-        except Exception as e:
-            logger.error(f"❌ Error al extraer detalle formato simple: {e}", exc_info=True)
-            raise
     
     def leer_hoja_tiendas(self, file_content: bytes) -> Dict[str, Dict]:
         """

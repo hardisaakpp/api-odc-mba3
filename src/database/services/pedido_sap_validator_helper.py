@@ -43,11 +43,15 @@ class PedidoSAPValidatorHelper:
         if not codigos_tiendas:
             return {
                 "total_codigos": 0,
-                "validas": 0,
-                "no_encontradas": 0,
-                "errores": 0,
-                "warnings": 0,
-                "todas_validas": True
+                "validas": [],  # Lista vacía
+                "no_encontradas": [],  # Lista vacía
+                "errores": [],  # Lista vacía
+                "warnings": [],  # Lista vacía
+                "todas_validas": True,
+                "total_validas": 0,
+                "total_no_encontradas": 0,
+                "total_errores": 0,
+                "total_warnings": 0
             }
         
         logger.info("📋 Validación SAP: Verificando códigos de tienda contra SAP OWHS")
@@ -57,37 +61,46 @@ class PedidoSAPValidatorHelper:
             sap_obligatorio=sap_obligatorio
         )
         
+        # Obtener listas originales para retornar
+        validas_lista = validacion_tiendas_sap.get("validas", [])
+        no_encontradas_lista = validacion_tiendas_sap.get("no_encontradas", [])
+        errores_lista = validacion_tiendas_sap.get("errores", [])
+        warnings_lista = validacion_tiendas_sap.get("warnings", [])
+        
         resultado["validacion_tiendas_sap"] = {
             "total_codigos": len(codigos_tiendas),
-            "validas": len(validacion_tiendas_sap.get("validas", [])),
-            "no_encontradas": len(validacion_tiendas_sap.get("no_encontradas", [])),
-            "errores": len(validacion_tiendas_sap.get("errores", [])),
-            "warnings": len(validacion_tiendas_sap.get("warnings", [])),
-            "todas_validas": validacion_tiendas_sap.get("todas_validas", False)
+            "validas": validas_lista,  # Lista de códigos válidos
+            "no_encontradas": no_encontradas_lista,  # Lista de códigos no encontrados
+            "errores": errores_lista,  # Lista de códigos con errores
+            "warnings": warnings_lista,  # Lista de códigos con warnings
+            "todas_validas": validacion_tiendas_sap.get("todas_validas", False),
+            # Campos adicionales para compatibilidad (conteos)
+            "total_validas": len(validas_lista),
+            "total_no_encontradas": len(no_encontradas_lista),
+            "total_errores": len(errores_lista),
+            "total_warnings": len(warnings_lista)
         }
         
         # Si SAP es obligatorio y hay tiendas no encontradas, BLOQUEAR
         if sap_obligatorio and not validacion_tiendas_sap.get("todas_validas", False):
-            no_encontradas = validacion_tiendas_sap.get("no_encontradas", [])
-            errores_sap = validacion_tiendas_sap.get("errores", [])
-            
-            mensaje_error = "No se puede procesar la plantilla: existen tiendas (ID TIENDA) no válidas en SAP."
-            if no_encontradas:
-                mensaje_error += f" Tiendas no encontradas en SAP OWHS: {', '.join(no_encontradas[:5])}"
-                if len(no_encontradas) > 5:
-                    mensaje_error += f" y {len(no_encontradas) - 5} más"
-            if errores_sap:
-                mensaje_error += f" Errores al consultar SAP: {', '.join(errores_sap[:3])}"
-                if len(errores_sap) > 3:
-                    mensaje_error += f" y {len(errores_sap) - 3} más"
-            
+            # Mensaje simple - el frontend construirá el mensaje detallado
+            mensaje_error = "Existen códigos de tienda/bodega no válidos en SAP"
             resultado["status"] = "validation_error"
             resultado["errores"].append(mensaje_error)
-            logger.error(f"❌ {mensaje_error}")
+            
+            # Log detallado para debugging (solo en backend)
+            log_detalle = f"Códigos no encontrados ({len(no_encontradas_lista)}): {', '.join(no_encontradas_lista[:10])}"
+            if len(no_encontradas_lista) > 10:
+                log_detalle += f" y {len(no_encontradas_lista) - 10} más"
+            if errores_lista:
+                log_detalle += f" | Errores ({len(errores_lista)}): {', '.join(errores_lista[:5])}"
+                if len(errores_lista) > 5:
+                    log_detalle += f" y {len(errores_lista) - 5} más"
+            logger.error(f"❌ Validación SAP tiendas falló: {log_detalle}")
         
         logger.info(
-            f"📊 Validación SAP (Tiendas): {len(validacion_tiendas_sap.get('validas', []))} válidas, "
-            f"{len(validacion_tiendas_sap.get('no_encontradas', []))} no encontradas"
+            f"📊 Validación SAP (Tiendas): {len(validas_lista)} válidas, "
+            f"{len(no_encontradas_lista)} no encontradas"
         )
         
         return resultado["validacion_tiendas_sap"]
@@ -143,24 +156,22 @@ class PedidoSAPValidatorHelper:
         if sap_obligatorio and not validacion_sap.get("todos_validos", False):
             no_encontrados = validacion_sap.get("no_encontrados", [])
             errores = validacion_sap.get("errores", [])
-            validos = validacion_sap.get("validos", [])
             
-            # Construir mensaje legible
-            errores_lista = []
-            if no_encontrados:
-                errores_lista.append(f"Productos no encontrados en SAP: {', '.join(no_encontrados[:5])}")
-                if len(no_encontrados) > 5:
-                    errores_lista[-1] += f" y {len(no_encontrados) - 5} más"
-            if errores:
-                errores_lista.append(f"Errores al consultar SAP: {', '.join(errores[:3])}")
-                if len(errores) > 3:
-                    errores_lista[-1] += f" y {len(errores) - 3} más"
-            
-            mensaje_error = "No se puede persistir el pedido: existen productos no válidos en SAP. " + " ".join(errores_lista)
+            # Mensaje simple - el frontend construirá el mensaje detallado
+            mensaje_error = "Existen productos no válidos en SAP"
             
             resultado["status"] = "validation_error"
             resultado["errores"].append(mensaje_error)
-            logger.error(f"❌ {mensaje_error}")
+            
+            # Log detallado para debugging (solo en backend)
+            log_detalle = f"Productos no encontrados ({len(no_encontrados)}): {', '.join(no_encontrados[:10])}"
+            if len(no_encontrados) > 10:
+                log_detalle += f" y {len(no_encontrados) - 10} más"
+            if errores:
+                log_detalle += f" | Errores ({len(errores)}): {', '.join(errores[:5])}"
+                if len(errores) > 5:
+                    log_detalle += f" y {len(errores) - 5} más"
+            logger.error(f"❌ Validación SAP productos falló: {log_detalle}")
             
             return None  # Indicar que hay error y no se debe continuar
         

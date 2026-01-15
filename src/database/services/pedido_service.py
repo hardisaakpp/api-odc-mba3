@@ -78,23 +78,25 @@ class PedidoService:
     def parsear_excel_pedido(
         self,
         file_content: bytes,
-        hoja_cabecera: str = "CABECERA_PEDIDO",
-        hoja_detalle: str = "DETALLE_ARTICULO"
+        hoja_cabecera: str = "cabecera",
+        hoja_detalle: str = "detalle",
+        es_formato_nuevo_v1_0: bool = True
     ) -> Dict[str, Any]:
         """
-        Parsea un archivo Excel de pedido (FASE 1 - TAREA 2).
+        Parsea un archivo Excel de pedido en formato v1.0.
         
         Formato esperado:
-        - Hoja 1: CABECERA_PEDIDO (formato clave-valor: Campo | Valor | Ejemplo)
-        - Hoja 2: DETALLE_ARTICULO (formato tabular con headers)
+        - Hoja 1: "cabecera" (formato clave-valor: Campo | Valor | Ejemplo)
+        - Hoja 2: "detalle" (formato tabular con columnas A-J producto, K-M bodegas, N+ tiendas)
         
         Solo parsing técnico: lee, normaliza y valida estructura.
         NO aplica reglas de negocio, NO consolida duplicados.
         
         Args:
             file_content: Contenido del archivo Excel en bytes
-            hoja_cabecera: Nombre de la hoja de cabecera (default: "CABECERA_PEDIDO")
-            hoja_detalle: Nombre de la hoja de detalle (default: "DETALLE_ARTICULO")
+            hoja_cabecera: Nombre de la hoja de cabecera (default: "cabecera")
+            hoja_detalle: Nombre de la hoja de detalle (default: "detalle")
+            es_formato_nuevo_v1_0: Si True, usa el nuevo formato v1.0 (default: True)
             
         Returns:
             Dict con estructura:
@@ -128,10 +130,12 @@ class PedidoService:
             }
         """
         # Delegar al parser
+        # Solo se soporta el nuevo formato v1.0
         return self.parser.parsear_excel_pedido(
             file_content=file_content,
             hoja_cabecera=hoja_cabecera,
-            hoja_detalle=hoja_detalle
+            hoja_detalle=hoja_detalle,
+            es_formato_nuevo_v1_0=True
         )
     
     def _normalizar_cabecera_para_bd(self, cabecera_parseada: Dict[str, Any], filename: str, usuario_id: Optional[str] = None) -> Dict[str, Any]:
@@ -299,7 +303,7 @@ class PedidoService:
             try:
                 # Usar _parsear_cabecera que soporta ambos formatos
                 excel_file = pd.ExcelFile(io.BytesIO(file_content))
-                cabecera_parseada = self.parser._parsear_cabecera(excel_file, "CABECERA_PEDIDO")
+                cabecera_parseada = self.parser._parsear_cabecera(excel_file, "cabecera")
                 
                 # Convertir a formato BD (mapear campos del Excel a campos de BD)
                 cabecera = {
@@ -379,11 +383,12 @@ class PedidoService:
                 logger.error(f"❌ Error al parsear cabecera: {e}", exc_info=True)
                 raise ValueError(f"Error al extraer cabecera del Excel: {str(e)}")
             
-            # Paso 2: Extraer detalle con distribuciones por tienda
-            detalles_con_tiendas = self.parser.extraer_detalle_con_tiendas(df_raw)
-            
-            if not detalles_con_tiendas:
-                raise ValueError("No se encontraron líneas de detalle en el archivo")
+            # Paso 2: Este método (procesar_archivo_excel) está deprecado
+            # Se debe usar validar_y_procesar_archivo_excel en su lugar
+            raise ValueError(
+                "El método procesar_archivo_excel está deprecado. "
+                "Use validar_y_procesar_archivo_excel en su lugar, que soporta el nuevo formato v1.0."
+            )
             
             # Paso 3: Guardar en base de datos (en transacción)
             with get_db_connection_context() as conn:
@@ -461,33 +466,6 @@ class PedidoService:
             resultado["errores"].append(str(e))
             return resultado
     
-    def _extraer_cabecera(self, df: pd.DataFrame, filename: str, usuario_id: Optional[str]) -> Dict[str, Any]:
-        """Delega al parser para extraer cabecera (método legacy)."""
-        return self.parser.extraer_cabecera(df, filename, usuario_id)
-    
-    def _obtener_valor_celda(self, df: pd.DataFrame, row: int, col: int) -> Optional[str]:
-        """Delega al parser para obtener valor de celda (método legacy)."""
-        return self.parser.obtener_valor_celda(df, row, col)
-    
-    def _extraer_detalle_con_tiendas(self, df: pd.DataFrame) -> List[Dict[str, Any]]:
-        """Delega al parser para extraer detalle con tiendas (método legacy)."""
-        return self.parser.extraer_detalle_con_tiendas(df)
-    
-    def _get_cell_value(self, row: pd.Series, column_name: str) -> Optional[str]:
-        """Delega al parser para obtener valor de celda (método legacy)."""
-        return self.parser.get_cell_value(row, column_name)
-    
-    def _get_numeric_value(self, row: pd.Series, column_name: str) -> Optional[float]:
-        """Delega al parser para obtener valor numérico (método legacy)."""
-        return self.parser.get_numeric_value(row, column_name)
-    
-    def _extraer_distribuciones_tienda(self, row: pd.Series, columnas: List[str]) -> List[Dict[str, Any]]:
-        """Delega al parser para extraer distribuciones (método legacy)."""
-        return self.parser.extraer_distribuciones_tienda(row, columnas)
-    
-    def _extraer_detalle_formato_simple(self, file_content: bytes) -> List[Dict[str, Any]]:
-        """Delega al parser para extraer detalle formato simple (método legacy)."""
-        return self.parser.extraer_detalle_formato_simple(file_content)
     
     def _detectar_y_procesar_formato_excel(
         self,
@@ -648,120 +626,228 @@ class PedidoService:
                     modo_tiendas=modo_tiendas
                 )
             
-            # Formato con dos hojas (Template_Pedido_Inicial_v1.0.xlsx)
-            if tiene_cabecera_pedido and tiene_detalle_articulo:
-                resultado["formato_detectado"] = "dos_hojas"
-                logger.info("📋 Formato DOS HOJAS detectado: CABECERA_PEDIDO + DETALLE_ARTICULO")
+            # Detectar si es nuevo formato v1.0 (hojas "cabecera" y "detalle" en minúsculas)
+            formato_detectado = self.format_detector.detectar_formato(hojas)
+            es_formato_nuevo_v1_0 = formato_detectado == 'dos_hojas_nuevo_v1_0'
+            
+            # Formato con dos hojas - Nuevo formato v1.0 (hojas "cabecera" y "detalle")
+            if es_formato_nuevo_v1_0:
+                resultado["formato_detectado"] = "dos_hojas_nuevo_v1_0"
+                logger.info("📋 Formato DOS HOJAS NUEVO v1.0 detectado: 'cabecera' + 'detalle' (con bodegas centrales)")
                 
-                cabecera_tupla, detalles_con_tiendas = self.formato_processor.procesar_formato_dos_hojas_o_simple(
+                # Parsear usando el nuevo parser
+                resultado_parsing = self.parser.parsear_excel_pedido(
                     file_content=file_content,
-                    filename=filename,
-                    usuario_id=usuario_id,
-                    excel_file=excel_file,
-                    hoja_cabecera_encontrada=hoja_cabecera_encontrada,
-                    hoja_detalle_encontrada=hoja_detalle_encontrada
+                    hoja_cabecera=str(hoja_cabecera_encontrada),
+                    hoja_detalle=str(hoja_detalle_encontrada),
+                    es_formato_nuevo_v1_0=True
                 )
                 
-                if cabecera_tupla is None or detalles_con_tiendas is None:
-                    raise ValueError("Error al procesar archivo de dos hojas")
+                # Convertir datos del parsing al formato esperado
+                cabecera = self._normalizar_cabecera_para_bd(
+                    resultado_parsing.get("cabecera", {}), 
+                    filename, 
+                    usuario_id
+                )
                 
-                cabecera = cabecera_tupla
+                # Convertir distribuciones a formato detalle_con_tiendas
+                datos_parsing = resultado_parsing.get("data", [])
+                detalles_con_tiendas = []
+                
+                # Agrupar por código de producto (incluyendo información completa del producto)
+                productos_agrupados = {}
+                for item in datos_parsing:
+                    codigo_producto = item.get("codigoProducto")
+                    if not codigo_producto:
+                        continue
+                    
+                    # Obtener información del producto del primer item (es la misma para todas las distribuciones)
+                    info_producto = item.get("info_producto", {})
+                    
+                    if codigo_producto not in productos_agrupados:
+                        # Crear detalle con toda la información del producto extraída del Excel
+                        productos_agrupados[codigo_producto] = {
+                            "detalle": {
+                                "codigo_interno": codigo_producto,
+                                "marca": info_producto.get("marca"),
+                                "codigo_barras": info_producto.get("codigo_barras"),
+                                "descripcion_sap": info_producto.get("descripcion_sap"),
+                                "pack": info_producto.get("pack"),
+                                "costo_doc_sin_iva": info_producto.get("costo_doc_sin_iva"),
+                                "descuento_1": info_producto.get("descuento_1"),
+                                "pvp": info_producto.get("pvp"),
+                                "subtotal": info_producto.get("subtotal"),
+                                "total": info_producto.get("total")
+                            },
+                            "distribuciones": []
+                        }
+                    
+                    distribuciones = productos_agrupados[codigo_producto]["distribuciones"]
+                    distribuciones.append({
+                        "tienda_codigo": item.get("idTienda"),
+                        "cantidad": item.get("cantidad"),
+                        "fila_origen": item.get("filaOrigen")
+                    })
+                
+                detalles_con_tiendas = list(productos_agrupados.values())
                 
                 if not detalles_con_tiendas:
-                    raise ValueError("No se encontraron datos válidos en el archivo de dos hojas")
-                
+                    raise ValueError("No se encontraron datos válidos en el archivo de nuevo formato v1.0")
+            
             else:
-                # Detectar formato simple o complejo (legacy)
-                is_formato_simple = self.format_detector.detectar_formato_detalle_simple(file_content)
-                
-                if is_formato_simple:
-                    resultado["formato_detectado"] = "simple"
-                    logger.info("📋 Formato SIMPLE detectado: CodigoProducto, IdTienda, Cantidad")
-                    detalles_con_tiendas = self.parser.extraer_detalle_formato_simple(file_content)
-                    
-                    # Crear cabecera mínima (para formato simple no hay cabecera en Excel)
-                    cabecera = {
-                        "numero_pedido": f"AUTO-{datetime.now().strftime('%Y%m%d-%H%M%S')}",
-                        "fecha_pedido": date.today(),
-                        "fecha_entrega": "INMEDIATO",
-                        "forma_pago": None,
-                        "odc": None,
-                        "proveedor_nombre": None,
-                        "comprador_nombre": None,
-                        "comprador_codigo": None,
-                        "origen_traslado": None,
-                        "serie": None,
-                        "archivo_nombre": filename,
-                        "creado_por": usuario_id,
-                    }
-                else:
-                    # Formato complejo (existente) o formato no reconocido
-                    # Primero verificar si realmente es formato complejo
-                    try:
-                        df_raw_result = pd.read_excel(io.BytesIO(file_content), sheet_name=0, header=None)
-                        # Type assertion: sheet_name=0 returns a single DataFrame, not a dict
-                        df_raw = cast(pd.DataFrame, df_raw_result)
-                        # Intentar extraer cabecera (puede fallar si no es formato complejo)
-                        cabecera = self.parser.extraer_cabecera(df_raw, filename, usuario_id)
-                        detalles_con_tiendas = self.parser.extraer_detalle_con_tiendas(df_raw)
-                        resultado["formato_detectado"] = "complejo"
-                        logger.info("📋 Formato COMPLEJO detectado: estructura con cabecera y columnas de tiendas")
-                    except (ValueError, KeyError) as e:
-                        # No es formato complejo, dar mensaje de error más claro
-                        hojas_disponibles = ", ".join(str(sheet) for sheet in excel_file.sheet_names)
-                        error_msg = (
-                            f"No se pudo detectar el formato del archivo Excel. "
-                            f"Formatos soportados:\n"
-                            f"1. Formato de dos hojas: 'CABECERA_PEDIDO' y 'DETALLE_ARTICULO'\n"
-                            f"2. Formato simple: una hoja con columnas CodigoProducto, IdTienda, Cantidad\n"
-                            f"3. Formato complejo: estructura legacy con cabecera y columnas de tiendas\n\n"
-                            f"Hojas encontradas en el archivo: {hojas_disponibles}\n"
-                            f"Error al procesar: {str(e)}"
-                        )
-                        logger.error(f"❌ {error_msg}")
-                        raise ValueError(error_msg)
+                # Solo se soporta el nuevo formato v1.0 (hojas "cabecera" y "detalle")
+                hojas_disponibles = ", ".join(str(sheet) for sheet in excel_file.sheet_names)
+                error_msg = (
+                    f"Formato de archivo no reconocido. "
+                    f"El sistema solo soporta el formato v1.0 con hojas 'cabecera' y 'detalle' (en minúsculas).\n\n"
+                    f"Hojas encontradas en el archivo: {hojas_disponibles}\n"
+                    f"Se esperaba: hoja 'cabecera' y hoja 'detalle'"
+                )
+                logger.error(f"❌ {error_msg}")
+                raise ValueError(error_msg)
             
             if not detalles_con_tiendas:
                 raise ValueError("No se encontraron datos válidos en el archivo")
             
-            # VALIDAR TIENDAS CONTRA SAP (para todos los formatos antes de la validación general)
+            # ✅ VALIDACIÓN SAP OBLIGATORIA (PRIMERO - fuente de verdad)
+            # Validar productos, tiendas y bodegas contra SAP antes que cualquier otra validación
             if validar_sap and detalles_con_tiendas:
-                # Extraer códigos únicos de tiendas del detalle
+                validator = PedidoValidator()
+                
+                # Extraer códigos únicos
+                codigos_productos = list(set([
+                    det.get("detalle", {}).get("codigo_interno")
+                    for det in detalles_con_tiendas
+                    if det.get("detalle", {}).get("codigo_interno")
+                ]))
+                
                 codigos_tiendas_set = set()
+                codigos_bodegas_set = set()
+                
                 for detalle_item in detalles_con_tiendas:
                     if isinstance(detalle_item, dict):
+                        # Extraer tiendas de distribuciones
                         distribuciones = detalle_item.get("distribuciones", [])
                         for dist in distribuciones:
                             tienda_codigo = dist.get("tienda_codigo")
                             if tienda_codigo:
                                 codigos_tiendas_set.add(tienda_codigo)
+                        
+                        # Extraer bodegas de detalle (si existe campo bodega)
+                        bodega = detalle_item.get("detalle", {}).get("bodega")
+                        if bodega and bodega.strip():
+                            codigos_bodegas_set.add(bodega.strip())
                 
+                # Extraer bodegas de cabecera (origen_traslado)
+                origen_traslado = cabecera.get("origen_traslado")
+                if origen_traslado and origen_traslado.strip():
+                    codigos_bodegas_set.add(origen_traslado.strip())
+                
+                # 1. VALIDAR PRODUCTOS CONTRA SAP (OBLIGATORIO)
+                if codigos_productos:
+                    logger.info(f"🔍 [SAP PRIMERO] Validando {len(codigos_productos)} códigos de producto contra SAP")
+                    validacion_sap_productos = self.sap_validator_helper.validar_productos_sap(
+                        codigos_productos=codigos_productos,
+                        resultado=resultado,
+                        usar_cache=True,
+                        sap_obligatorio=True  # OBLIGATORIO: SAP es fuente de verdad
+                    )
+                    
+                if validacion_sap_productos is None or not validacion_sap_productos.get("todos_validos", False):
+                    no_encontrados = validacion_sap_productos.get("no_encontrados", []) if validacion_sap_productos else []
+                    errores = validacion_sap_productos.get("errores", []) if validacion_sap_productos else []
+                    validos = validacion_sap_productos.get("validos", []) if validacion_sap_productos else []
+                    
+                    # Asegurar que son listas (no ints)
+                    if isinstance(no_encontrados, int):
+                        no_encontrados = []
+                    if isinstance(errores, int):
+                        errores = []
+                    if isinstance(validos, int):
+                        validos = []
+                    
+                    # Mensaje simple - el frontend construirá el mensaje detallado
+                    mensaje_error = "Existen códigos de producto no válidos en SAP"
+                    
+                    # Log detallado para debugging (solo en backend)
+                    log_detalle = f"Productos no encontrados ({len(no_encontrados)}): {', '.join(no_encontrados[:10])}"
+                    if len(no_encontrados) > 10:
+                        log_detalle += f" y {len(no_encontrados) - 10} más"
+                    if errores:
+                        log_detalle += f" | Errores ({len(errores)}): {', '.join(errores[:5])}"
+                        if len(errores) > 5:
+                            log_detalle += f" y {len(errores) - 5} más"
+                    logger.error(f"❌ Validación SAP productos falló: {log_detalle}")
+                    
+                    datos_estructurados = {
+                        "validacion": {
+                            "productos": {
+                                "no_encontrados": no_encontrados,
+                                "errores": errores,
+                                "validos": validos,
+                                "total_validos": len(validos),
+                                "total_invalidos": len(no_encontrados) + len(errores)
+                            }
+                        },
+                        "validacion_sap": resultado.get("validacion_sap", {})
+                    }
+                    
+                    raise BusinessException(
+                        message=mensaje_error,
+                        error_code="PRODUCTOS_NO_VALIDOS_SAP",
+                        data=datos_estructurados
+                    )
+                
+                # 2. VALIDAR TIENDAS CONTRA SAP (OBLIGATORIO)
                 if codigos_tiendas_set:
+                    logger.info(f"🔍 [SAP PRIMERO] Validando {len(codigos_tiendas_set)} códigos de tienda contra SAP")
                     validacion_tiendas_sap = self.sap_validator_helper.validar_tiendas_sap(
                         codigos_tiendas=list(codigos_tiendas_set),
                         resultado=resultado,
-                        sap_obligatorio=sap_obligatorio
+                        sap_obligatorio=True  # OBLIGATORIO: SAP es fuente de verdad
                     )
                     
-                    # Si hay error y es obligatorio, lanzar BusinessException
-                    if sap_obligatorio and not validacion_tiendas_sap.get("todas_validas", False):
+                    if not validacion_tiendas_sap.get("todas_validas", False):
                         no_encontradas = validacion_tiendas_sap.get("no_encontradas", [])
                         errores_sap = validacion_tiendas_sap.get("errores", [])
+                        validas = validacion_tiendas_sap.get("validas", [])
+                        
+                        # Asegurar que son listas (no ints)
+                        if isinstance(no_encontradas, int):
+                            no_encontradas = []
+                        if isinstance(errores_sap, int):
+                            errores_sap = []
+                        if isinstance(validas, int):
+                            validas = []
+                        
+                        # Mensaje simple - el frontend construirá el mensaje detallado
+                        mensaje_error = "Existen códigos de tienda/bodega no válidos en SAP"
+                        
+                        # Log detallado para debugging (solo en backend)
+                        log_detalle = f"Tiendas no encontradas ({len(no_encontradas)}): {', '.join(no_encontradas[:10])}"
+                        if len(no_encontradas) > 10:
+                            log_detalle += f" y {len(no_encontradas) - 10} más"
+                        if errores_sap:
+                            log_detalle += f" | Errores ({len(errores_sap)}): {', '.join(errores_sap[:5])}"
+                            if len(errores_sap) > 5:
+                                log_detalle += f" y {len(errores_sap) - 5} más"
+                        logger.error(f"❌ Validación SAP tiendas falló: {log_detalle}")
                         
                         datos_estructurados = {
                             "validacion": {
                                 "tiendas": {
                                     "no_encontradas": no_encontradas,
                                     "errores": errores_sap,
-                                    "total_validas": len(validacion_tiendas_sap.get("validas", [])),
+                                    "validas": validas,
+                                    "total_validas": len(validas),
                                     "total_invalidas": len(no_encontradas) + len(errores_sap)
                                 }
                             },
                             "validacion_sap": {
-                                "validas": len(validacion_tiendas_sap.get("validas", [])),
-                                "no_encontradas": len(no_encontradas),
-                                "errores": len(errores_sap),
-                                "warnings": validacion_tiendas_sap.get("warnings", 0),
+                                "validas": validas,
+                                "no_encontradas": no_encontradas,
+                                "errores": errores_sap,
+                                "warnings": validacion_tiendas_sap.get("warnings", []),
                                 "total_codigos": len(codigos_tiendas_set),
                                 "todas_validas": False,
                                 "fuente": "ID TIENDA"
@@ -769,12 +855,65 @@ class PedidoService:
                         }
                         
                         raise BusinessException(
-                            message=resultado["errores"][-1] if resultado.get("errores") else "Tiendas no válidas en SAP",
+                            message=mensaje_error,
                             error_code="TIENDAS_NO_VALIDAS_SAP",
                             data=datos_estructurados
                         )
+                
+                # 3. VALIDAR BODEGAS CONTRA SAP (OBLIGATORIO)
+                if codigos_bodegas_set:
+                    logger.info(f"🔍 [SAP PRIMERO] Validando {len(codigos_bodegas_set)} códigos de bodega contra SAP")
+                    codigos_bodegas = list(codigos_bodegas_set)
+                    validacion_bodegas_sap = validator.validar_bodegas_existen_en_sap(
+                        codigos_bodegas=codigos_bodegas,
+                        sap_obligatorio=True  # OBLIGATORIO: SAP es fuente de verdad
+                    )
+                    
+                    if not validacion_bodegas_sap.get("todas_validas", False):
+                        no_encontradas = validacion_bodegas_sap.get("no_encontradas", [])
+                        errores = validacion_bodegas_sap.get("errores", [])
+                        validas = validacion_bodegas_sap.get("validas", [])
+                        
+                        # Asegurar que son listas (no ints)
+                        if isinstance(no_encontradas, int):
+                            no_encontradas = []
+                        if isinstance(errores, int):
+                            errores = []
+                        if isinstance(validas, int):
+                            validas = []
+                        
+                        # Mensaje simple - el frontend construirá el mensaje detallado
+                        mensaje_error = "Existen códigos de bodega no válidos en SAP"
+                        
+                        # Log detallado para debugging (solo en backend)
+                        log_detalle = f"Bodegas no encontradas ({len(no_encontradas)}): {', '.join(no_encontradas[:10])}"
+                        if len(no_encontradas) > 10:
+                            log_detalle += f" y {len(no_encontradas) - 10} más"
+                        if errores:
+                            log_detalle += f" | Errores ({len(errores)}): {', '.join(errores[:5])}"
+                            if len(errores) > 5:
+                                log_detalle += f" y {len(errores) - 5} más"
+                        logger.error(f"❌ Validación SAP bodegas falló: {log_detalle}")
+                        
+                        datos_estructurados = {
+                            "validacion": {
+                                "bodegas": {
+                                    "no_encontradas": no_encontradas,
+                                    "errores": errores,
+                                    "validas": validas,
+                                    "total_validas": len(validas),
+                                    "total_invalidas": len(no_encontradas) + len(errores)
+                                }
+                            }
+                        }
+                        
+                        raise BusinessException(
+                            message=mensaje_error,
+                            error_code="BODEGAS_NO_VALIDAS_SAP",
+                            data=datos_estructurados
+                        )
             
-            # VALIDAR
+            # VALIDAR (solo después de validar SAP)
             if validar_antes_de_guardar:
                 validator = PedidoValidator(
                     tiendas_permitidas=tiendas_permitidas,
@@ -786,8 +925,8 @@ class PedidoService:
                     usar_comas_decimales=False  # Usar punto como separador decimal (formato estándar)
                 )
                 
-                # Determinar si es formato simple para validación
-                es_formato_simple_validacion = resultado["formato_detectado"] == "simple"
+                # El nuevo formato v1.0 no es "simple"
+                es_formato_simple_validacion = False
                 
                 validation_result = validator.validar_pedido_completo(
                     cabecera, 
@@ -827,50 +966,26 @@ class PedidoService:
                     )
                     return resultado
             
-            # ✅ VALIDACIÓN SAP (antes de persistir)
+            # ✅ Preparar validación SAP para persistencia (ya validada arriba)
+            # La validación SAP obligatoria ya se ejecutó arriba, aquí solo preparamos para persistencia
             validacion_sap = None
             if validar_sap and detalles_con_tiendas:
-                # Extraer códigos únicos de productos
                 codigos_productos = list(set([
                     det.get("detalle", {}).get("codigo_interno")
                     for det in detalles_con_tiendas
                     if det.get("detalle", {}).get("codigo_interno")
                 ]))
                 
+                # Obtener resultado de validación SAP (ya ejecutada arriba) para usar en persistencia
                 if codigos_productos:
                     validacion_sap = self.sap_validator_helper.validar_productos_sap(
                         codigos_productos=codigos_productos,
                         resultado=resultado,
                         usar_cache=True,
-                        sap_obligatorio=sap_obligatorio
+                        sap_obligatorio=True  # OBLIGATORIO: SAP es fuente de verdad
                     )
-                    
-                    # Si hay error y es obligatorio, lanzar BusinessException
-                    if validacion_sap is None and sap_obligatorio:
-                        # El helper ya actualizó resultado con errores
-                        no_encontrados = resultado.get("validacion_sap", {}).get("no_encontrados", [])
-                        errores = resultado.get("validacion_sap", {}).get("errores", [])
-                        validos = resultado.get("validacion_sap", {}).get("validos", [])
-                        
-                        datos_estructurados = {
-                            "validacion": {
-                                "productos": {
-                                    "no_encontrados": no_encontrados,
-                                    "errores": errores,
-                                    "total_validos": len(validos),
-                                    "total_invalidos": len(no_encontrados) + len(errores)
-                                }
-                            },
-                            "validacion_sap": resultado.get("validacion_sap", {})
-                        }
-                        
-                        raise BusinessException(
-                            message=resultado["errores"][-1] if resultado.get("errores") else "Productos no válidos en SAP",
-                            error_code="PRODUCTOS_NO_VALIDOS_SAP",
-                            data=datos_estructurados
-                        )
             
-            # GUARDAR (solo si pasó validación o no se valida)
+            # GUARDAR (solo si pasó validación SAP obligatoria)
             self._persistir_pedido(
                 cabecera=cabecera,
                 detalles_con_tiendas=detalles_con_tiendas,
@@ -958,18 +1073,33 @@ class PedidoService:
                 if not hoja_detalle and ("DETALLE" in sheet_name_upper and ("ARTICULO" in sheet_name_upper or "ARTÍCULO" in sheet_name_upper)):
                     hoja_detalle = sheet_name
             
-            if hoja_cabecera and hoja_detalle:
-                resultado_parsing = self.parsear_excel_pedido(file_content, str(hoja_cabecera), str(hoja_detalle))
-                detalles_con_tiendas = self.consolidator.consolidar_detalles_simple(resultado_parsing.get("data", []))
-                cabecera = self._normalizar_cabecera_para_bd(resultado_parsing.get("cabecera", {}), filename, usuario_id)
-                es_formato_simple = True
-            else:
-                df_raw_result = pd.read_excel(io.BytesIO(file_content), sheet_name=0, header=None)
-                # Type assertion: sheet_name=0 returns a single DataFrame, not a dict
-                df_raw = cast(pd.DataFrame, df_raw_result)
-                cabecera = self.parser.extraer_cabecera(df_raw, filename, usuario_id)
-                detalles_con_tiendas = self.parser.extraer_detalle_con_tiendas(df_raw)
-                es_formato_simple = False
+            # Solo se soporta el nuevo formato v1.0 (hojas "cabecera" y "detalle")
+            if not hoja_cabecera or not hoja_detalle:
+                sheet_names_str = ', '.join(str(s) for s in excel_file.sheet_names)
+                raise ValueError(
+                    f"Formato no soportado. Se requiere hoja 'cabecera' y hoja 'detalle' (en minúsculas). "
+                    f"Hojas encontradas: {sheet_names_str}"
+                )
+            
+            # Verificar que sean las hojas correctas (minúsculas)
+            hoja_cabecera_lower = str(hoja_cabecera).lower() if hoja_cabecera else ""
+            hoja_detalle_lower = str(hoja_detalle).lower() if hoja_detalle else ""
+            
+            if hoja_cabecera_lower != "cabecera" or hoja_detalle_lower != "detalle":
+                raise ValueError(
+                    f"Formato no soportado. Se requiere hoja 'cabecera' y hoja 'detalle' (en minúsculas). "
+                    f"Hojas encontradas: {hoja_cabecera}, {hoja_detalle}"
+                )
+            
+            resultado_parsing = self.parsear_excel_pedido(
+                file_content, 
+                str(hoja_cabecera), 
+                str(hoja_detalle),
+                es_formato_nuevo_v1_0=True
+            )
+            detalles_con_tiendas = self.consolidator.consolidar_detalles_simple(resultado_parsing.get("data", []))
+            cabecera = self._normalizar_cabecera_para_bd(resultado_parsing.get("cabecera", {}), filename, usuario_id)
+            es_formato_simple = False  # El nuevo formato no es "simple"
             
             # ✅ Enriquecer detalles con información de SAP (ItemName y U_IXX_PACK)
             detalles_con_tiendas = self._enriquecer_detalles_con_sap(detalles_con_tiendas)
@@ -981,36 +1111,191 @@ class PedidoService:
                 resultado["errores"].append("No se encontraron datos válidos")
                 return resultado
             
-            # Validar productos y tiendas
+            # ✅ VALIDACIÓN SAP OBLIGATORIA (PRIMERO - fuente de verdad)
+            # Validar productos, tiendas y bodegas contra SAP antes que cualquier otra validación
+            validator = PedidoValidator()
+            
+            codigos_productos = list(set([
+                det.get("detalle", {}).get("codigo_interno")
+                for det in detalles_con_tiendas
+                if det.get("detalle", {}).get("codigo_interno")
+            ]))
+            
+            codigos_tiendas = list(set([
+                dist.get("tienda_codigo")
+                for det in detalles_con_tiendas
+                for dist in det.get("distribuciones", [])
+                if dist.get("tienda_codigo")
+            ]))
+            
+            codigos_bodegas_set = set()
+            for det in detalles_con_tiendas:
+                bodega = det.get("detalle", {}).get("bodega")
+                if bodega and bodega.strip():
+                    codigos_bodegas_set.add(bodega.strip())
+            origen_traslado = cabecera.get("origen_traslado")
+            if origen_traslado and origen_traslado.strip():
+                codigos_bodegas_set.add(origen_traslado.strip())
+            
+            # 1. VALIDAR PRODUCTOS CONTRA SAP (OBLIGATORIO)
+            if codigos_productos:
+                logger.info(f"🔍 [SAP PRIMERO] Validando {len(codigos_productos)} códigos de producto contra SAP")
+                validacion_sap_productos = self.sap_validator_helper.validar_productos_sap(
+                    codigos_productos=codigos_productos,
+                    resultado=resultado,
+                    usar_cache=True,
+                    sap_obligatorio=True  # OBLIGATORIO: SAP es fuente de verdad
+                )
+                
+                if validacion_sap_productos is None or not validacion_sap_productos.get("todos_validos", False):
+                    no_encontrados = validacion_sap_productos.get("no_encontrados", []) if validacion_sap_productos else []
+                    errores = validacion_sap_productos.get("errores", []) if validacion_sap_productos else []
+                    
+                    # Asegurar que son listas
+                    if isinstance(no_encontrados, int):
+                        no_encontrados = []
+                    if isinstance(errores, int):
+                        errores = []
+                    
+                    # Mensaje simple - el frontend construirá el mensaje detallado
+                    mensaje_error = "Existen códigos de producto no válidos en SAP"
+                    
+                    # Log detallado para debugging (solo en backend)
+                    log_detalle = f"Productos no encontrados ({len(no_encontrados)}): {', '.join(no_encontrados[:10])}"
+                    if len(no_encontrados) > 10:
+                        log_detalle += f" y {len(no_encontrados) - 10} más"
+                    if errores:
+                        log_detalle += f" | Errores ({len(errores)}): {', '.join(errores[:5])}"
+                        if len(errores) > 5:
+                            log_detalle += f" y {len(errores) - 5} más"
+                    logger.warning(f"⚠️ Validación SAP productos falló: {log_detalle}")
+                    
+                    resultado["status"] = "validation_error"
+                    resultado["errores"].append(mensaje_error)
+                    resultado["validacion"]["productos"] = {
+                        "no_encontrados": no_encontrados,
+                        "errores": errores,
+                        "validos": validacion_sap_productos.get("validos", []) if validacion_sap_productos else []
+                    }
+                    return resultado
+                
+                resultado["validacion"]["productos_sap"] = {
+                    "validos": validacion_sap_productos.get("validos", []),
+                    "no_encontrados": validacion_sap_productos.get("no_encontrados", []),
+                    "errores": validacion_sap_productos.get("errores", []),
+                    "todos_validos": validacion_sap_productos.get("todos_validos", False)
+                }
+            
+            # 2. VALIDAR TIENDAS CONTRA SAP (OBLIGATORIO)
+            if codigos_tiendas:
+                logger.info(f"🔍 [SAP PRIMERO] Validando {len(codigos_tiendas)} códigos de tienda contra SAP")
+                validacion_tiendas_sap = self.sap_validator_helper.validar_tiendas_sap(
+                    codigos_tiendas=codigos_tiendas,
+                    resultado=resultado,
+                    sap_obligatorio=True  # OBLIGATORIO: SAP es fuente de verdad
+                )
+                
+                if not validacion_tiendas_sap.get("todas_validas", False):
+                    no_encontradas = validacion_tiendas_sap.get("no_encontradas", [])
+                    errores_sap = validacion_tiendas_sap.get("errores", [])
+                    
+                    # Asegurar que son listas
+                    if isinstance(no_encontradas, int):
+                        no_encontradas = []
+                    if isinstance(errores_sap, int):
+                        errores_sap = []
+                    
+                    # Mensaje simple - el frontend construirá el mensaje detallado
+                    mensaje_error = "Existen códigos de tienda/bodega no válidos en SAP"
+                    
+                    # Log detallado para debugging (solo en backend)
+                    log_detalle = f"Tiendas no encontradas ({len(no_encontradas)}): {', '.join(no_encontradas[:10])}"
+                    if len(no_encontradas) > 10:
+                        log_detalle += f" y {len(no_encontradas) - 10} más"
+                    if errores_sap:
+                        log_detalle += f" | Errores ({len(errores_sap)}): {', '.join(errores_sap[:5])}"
+                        if len(errores_sap) > 5:
+                            log_detalle += f" y {len(errores_sap) - 5} más"
+                    logger.warning(f"⚠️ Validación SAP tiendas falló: {log_detalle}")
+                    
+                    resultado["status"] = "validation_error"
+                    resultado["errores"].append(mensaje_error)
+                    resultado["validacion"]["tiendas"] = {
+                        "no_encontradas": no_encontradas,
+                        "errores": errores_sap,
+                        "validas": validacion_tiendas_sap.get("validas", [])
+                    }
+                    return resultado
+                
+                resultado["validacion"]["tiendas_sap"] = {
+                    "validas": validacion_tiendas_sap.get("validas", []),
+                    "no_encontradas": validacion_tiendas_sap.get("no_encontradas", []),
+                    "errores": validacion_tiendas_sap.get("errores", []),
+                    "todas_validas": validacion_tiendas_sap.get("todas_validas", False)
+                }
+            
+            # 3. VALIDAR BODEGAS CONTRA SAP (OBLIGATORIO)
+            codigos_bodegas = list(codigos_bodegas_set)
+            if codigos_bodegas:
+                logger.info(f"🔍 [SAP PRIMERO] Validando {len(codigos_bodegas)} códigos de bodega contra SAP")
+                validacion_bodegas_sap = validator.validar_bodegas_existen_en_sap(
+                    codigos_bodegas=codigos_bodegas,
+                    sap_obligatorio=True  # OBLIGATORIO: SAP es fuente de verdad
+                )
+                
+                if not validacion_bodegas_sap.get("todas_validas", False):
+                    no_encontradas = validacion_bodegas_sap.get("no_encontradas", [])
+                    errores = validacion_bodegas_sap.get("errores", [])
+                    
+                    # Asegurar que son listas
+                    if isinstance(no_encontradas, int):
+                        no_encontradas = []
+                    if isinstance(errores, int):
+                        errores = []
+                    
+                    # Mensaje simple - el frontend construirá el mensaje detallado
+                    mensaje_error = "Existen códigos de bodega no válidos en SAP"
+                    
+                    # Log detallado para debugging (solo en backend)
+                    log_detalle = f"Bodegas no encontradas ({len(no_encontradas)}): {', '.join(no_encontradas[:10])}"
+                    if len(no_encontradas) > 10:
+                        log_detalle += f" y {len(no_encontradas) - 10} más"
+                    if errores:
+                        log_detalle += f" | Errores ({len(errores)}): {', '.join(errores[:5])}"
+                        if len(errores) > 5:
+                            log_detalle += f" y {len(errores) - 5} más"
+                    logger.warning(f"⚠️ Validación SAP bodegas falló: {log_detalle}")
+                    
+                    resultado["status"] = "validation_error"
+                    resultado["errores"].append(mensaje_error)
+                    resultado["validacion"]["bodegas"] = {
+                        "no_encontradas": no_encontradas,
+                        "errores": errores,
+                        "validas": validacion_bodegas_sap.get("validas", [])
+                    }
+                    return resultado
+                
+                resultado["validacion"]["bodegas_sap"] = {
+                    "validas": validacion_bodegas_sap.get("validas", []),
+                    "no_encontradas": validacion_bodegas_sap.get("no_encontradas", []),
+                    "errores": validacion_bodegas_sap.get("errores", []),
+                    "todas_validas": validacion_bodegas_sap.get("todas_validas", False)
+                }
+            
+            # ✅ Validaciones locales (opcionales - solo informativas, no bloquean)
+            # NOTA: Estas validaciones son solo informativas porque SAP es la fuente de verdad
             with get_db_connection_context() as conn:
-                validator = PedidoValidator()
-                
-                codigos_productos = list(set([
-                    det.get("detalle", {}).get("codigo_interno")
-                    for det in detalles_con_tiendas
-                    if det.get("detalle", {}).get("codigo_interno")
-                ]))
-                codigos_tiendas = list(set([
-                    dist.get("tienda_codigo")
-                    for det in detalles_con_tiendas
-                    for dist in det.get("distribuciones", [])
-                    if dist.get("tienda_codigo")
-                ]))
-                
+                # Validaciones locales contra BD (solo para información, no bloquean)
+                # Se mantienen para retrocompatibilidad pero SAP ya validó arriba
                 if validar_productos and codigos_productos:
-                    validacion_productos = validator.validar_productos_existen(codigos_productos, conn)
-                    resultado["validacion"]["productos"] = validacion_productos
-                    if not validacion_productos["todos_validos"]:
-                        resultado["errores"].append(f"Productos no encontrados: {', '.join(validacion_productos['no_encontrados'])}")
+                    validacion_productos_local = validator.validar_productos_existen(codigos_productos, conn)
+                    resultado["validacion"]["productos"] = validacion_productos_local
+                    # No bloquear - SAP ya validó
                 
                 if validar_tiendas and codigos_tiendas:
-                    validacion_tiendas = validator.validar_tiendas_existen(codigos_tiendas, conn)
-                    resultado["validacion"]["tiendas"] = validacion_tiendas
-                    if not validacion_tiendas["todas_validas"]:
-                        if validacion_tiendas["no_encontradas"]:
-                            resultado["errores"].append(f"Tiendas no encontradas: {', '.join(validacion_tiendas['no_encontradas'])}")
-                        if validacion_tiendas["inactivas"]:
-                            resultado["errores"].append(f"Tiendas inactivas: {', '.join(validacion_tiendas['inactivas'])}")
+                    validacion_tiendas_local = validator.validar_tiendas_existen(codigos_tiendas, conn)
+                    resultado["validacion"]["tiendas"] = validacion_tiendas_local
+                    # No bloquear - SAP ya validó
                 
                 validacion_cantidades = validator.validar_pedido_completo(cabecera, detalles_con_tiendas, es_formato_simple=es_formato_simple)
                 resultado["validacion"]["cantidades"] = {
@@ -1189,46 +1474,110 @@ class PedidoService:
                     if dist.get("tienda_codigo")
                 ]))
                 
-                # ✅ VALIDACIÓN CONTRA SAP: Validar códigos de producto contra SAP antes de crear el pedido
+                # ✅ VALIDACIÓN SAP OBLIGATORIA (PRIMERO - fuente de verdad)
+                # Validar productos, tiendas y bodegas contra SAP antes que cualquier otra validación
+                
+                # Extraer códigos de bodegas
+                codigos_bodegas_set = set()
+                for det in detalles_con_tiendas:
+                    bodega = det.get("detalle", {}).get("bodega")
+                    if bodega and bodega.strip():
+                        codigos_bodegas_set.add(bodega.strip())
+                origen_traslado = cabecera.get("origen_traslado")
+                if origen_traslado and origen_traslado.strip():
+                    codigos_bodegas_set.add(origen_traslado.strip())
+                codigos_bodegas = list(codigos_bodegas_set)
+                
+                # 1. VALIDAR PRODUCTOS CONTRA SAP (OBLIGATORIO)
                 if codigos_productos:
-                    logger.info(f"🔍 Validando {len(codigos_productos)} códigos de producto contra SAP antes de crear pedido")
-                    validacion_sap = self.sap_validator_helper.validar_productos_sap(
+                    logger.info(f"🔍 [SAP PRIMERO] Validando {len(codigos_productos)} códigos de producto contra SAP")
+                    validacion_sap_productos = self.sap_validator_helper.validar_productos_sap(
                         codigos_productos=codigos_productos,
                         resultado=resultado,
                         usar_cache=True,
-                        sap_obligatorio=True  # Obligatorio: no permitir crear pedido con productos inválidos
+                        sap_obligatorio=True  # OBLIGATORIO: SAP es fuente de verdad
                     )
                     
-                    # Si la validación SAP retorna None, significa que hay errores y no se debe continuar
-                    if validacion_sap is None:
+                    if validacion_sap_productos is None or not validacion_sap_productos.get("todos_validos", False):
+                        no_encontrados = validacion_sap_productos.get("no_encontrados", []) if validacion_sap_productos else []
+                        errores = validacion_sap_productos.get("errores", []) if validacion_sap_productos else []
+                        
+                        # Asegurar que son listas
+                        if isinstance(no_encontrados, int):
+                            no_encontrados = []
+                        if isinstance(errores, int):
+                            errores = []
+                        
+                        # Mensaje simple - el frontend construirá el mensaje detallado
+                        mensaje_error = "Existen códigos de producto no válidos en SAP"
+                        
+                        # Log detallado para debugging (solo en backend)
+                        log_detalle = f"Productos no encontrados ({len(no_encontrados)}): {', '.join(no_encontrados[:10])}"
+                        if len(no_encontrados) > 10:
+                            log_detalle += f" y {len(no_encontrados) - 10} más"
+                        if errores:
+                            log_detalle += f" | Errores ({len(errores)}): {', '.join(errores[:5])}"
+                            if len(errores) > 5:
+                                log_detalle += f" y {len(errores) - 5} más"
+                        logger.warning(f"⚠️ Validación SAP productos falló: {log_detalle}")
+                        
                         resultado["status"] = "validation_error"
-                        logger.warning(f"⚠️ Validación SAP falló: no se puede crear el pedido con productos inválidos")
+                        resultado["errores"].append(mensaje_error)
+                        resultado["validacion"]["productos"] = {
+                            "no_encontrados": no_encontrados,
+                            "errores": errores,
+                            "validos": validacion_sap_productos.get("validos", []) if validacion_sap_productos else []
+                        }
                         return resultado
                     
-                    # Agregar información de validación SAP al resultado
                     resultado["validacion"]["productos_sap"] = {
-                        "validos": validacion_sap.get("validos", []),
-                        "no_encontrados": validacion_sap.get("no_encontrados", []),
-                        "errores": validacion_sap.get("errores", []),
-                        "todos_validos": validacion_sap.get("todos_validos", False)
+                        "validos": validacion_sap_productos.get("validos", []),
+                        "no_encontrados": validacion_sap_productos.get("no_encontrados", []),
+                        "errores": validacion_sap_productos.get("errores", []),
+                        "todos_validos": validacion_sap_productos.get("todos_validos", False)
                     }
                 
-                # ✅ VALIDACIÓN CONTRA SAP: Validar códigos de tienda contra SAP antes de crear el pedido
+                # 2. VALIDAR TIENDAS CONTRA SAP (OBLIGATORIO)
                 if codigos_tiendas:
-                    logger.info(f"🔍 Validando {len(codigos_tiendas)} códigos de tienda contra SAP antes de crear pedido")
+                    logger.info(f"🔍 [SAP PRIMERO] Validando {len(codigos_tiendas)} códigos de tienda contra SAP")
                     validacion_tiendas_sap = self.sap_validator_helper.validar_tiendas_sap(
                         codigos_tiendas=codigos_tiendas,
                         resultado=resultado,
-                        sap_obligatorio=True  # Obligatorio: no permitir crear pedido con tiendas inválidas
+                        sap_obligatorio=True  # OBLIGATORIO: SAP es fuente de verdad
                     )
                     
-                    # Si hay tiendas inválidas y es obligatorio, no continuar
                     if not validacion_tiendas_sap.get("todas_validas", False):
+                        no_encontradas = validacion_tiendas_sap.get("no_encontradas", [])
+                        errores_sap = validacion_tiendas_sap.get("errores", [])
+                        
+                        # Asegurar que son listas
+                        if isinstance(no_encontradas, int):
+                            no_encontradas = []
+                        if isinstance(errores_sap, int):
+                            errores_sap = []
+                        
+                        # Mensaje simple - el frontend construirá el mensaje detallado
+                        mensaje_error = "Existen códigos de tienda/bodega no válidos en SAP"
+                        
+                        # Log detallado para debugging (solo en backend)
+                        log_detalle = f"Tiendas no encontradas ({len(no_encontradas)}): {', '.join(no_encontradas[:10])}"
+                        if len(no_encontradas) > 10:
+                            log_detalle += f" y {len(no_encontradas) - 10} más"
+                        if errores_sap:
+                            log_detalle += f" | Errores ({len(errores_sap)}): {', '.join(errores_sap[:5])}"
+                            if len(errores_sap) > 5:
+                                log_detalle += f" y {len(errores_sap) - 5} más"
+                        logger.warning(f"⚠️ Validación SAP tiendas falló: {log_detalle}")
+                        
                         resultado["status"] = "validation_error"
-                        logger.warning(f"⚠️ Validación SAP de tiendas falló: no se puede crear el pedido con tiendas inválidas")
+                        resultado["errores"].append(mensaje_error)
+                        resultado["validacion"]["tiendas"] = {
+                            "no_encontradas": no_encontradas,
+                            "errores": errores_sap,
+                            "validas": validacion_tiendas_sap.get("validas", [])
+                        }
                         return resultado
                     
-                    # Agregar información de validación SAP de tiendas al resultado
                     resultado["validacion"]["tiendas_sap"] = {
                         "validas": validacion_tiendas_sap.get("validas", []),
                         "no_encontradas": validacion_tiendas_sap.get("no_encontradas", []),
@@ -1236,72 +1585,64 @@ class PedidoService:
                         "todas_validas": validacion_tiendas_sap.get("todas_validas", False)
                     }
                 
-                # ✅ VALIDACIÓN CONTRA SAP: Validar códigos de bodega contra SAP antes de crear el pedido
-                # Extraer códigos de bodegas de los artículos y de origen_traslado
-                codigos_bodegas_set = set()
-                
-                # Bodegas de artículos
-                for det in detalles_con_tiendas:
-                    bodega = det.get("detalle", {}).get("bodega")
-                    if bodega and bodega.strip():
-                        codigos_bodegas_set.add(bodega.strip())
-                
-                # Origen de traslado (si es una bodega)
-                origen_traslado = cabecera.get("origen_traslado")
-                if origen_traslado and origen_traslado.strip():
-                    codigos_bodegas_set.add(origen_traslado.strip())
-                
-                codigos_bodegas = list(codigos_bodegas_set)
-                
+                # 3. VALIDAR BODEGAS CONTRA SAP (OBLIGATORIO)
                 if codigos_bodegas:
-                    logger.info(f"🔍 Validando {len(codigos_bodegas)} códigos de bodega contra SAP antes de crear pedido")
-                    validacion_bodegas = validator.validar_bodegas_existen_en_sap(
+                    logger.info(f"🔍 [SAP PRIMERO] Validando {len(codigos_bodegas)} códigos de bodega contra SAP")
+                    validacion_bodegas_sap = validator.validar_bodegas_existen_en_sap(
                         codigos_bodegas=codigos_bodegas,
-                        sap_obligatorio=True  # Obligatorio: no permitir crear pedido con bodegas inválidas
+                        sap_obligatorio=True  # OBLIGATORIO: SAP es fuente de verdad
                     )
                     
-                    # Si hay bodegas inválidas y es obligatorio, no continuar
-                    if not validacion_bodegas.get("todas_validas", False):
-                        no_encontradas = validacion_bodegas.get("no_encontradas", [])
-                        errores = validacion_bodegas.get("errores", [])
+                    if not validacion_bodegas_sap.get("todas_validas", False):
+                        no_encontradas = validacion_bodegas_sap.get("no_encontradas", [])
+                        errores = validacion_bodegas_sap.get("errores", [])
                         
-                        mensaje_error = "No se puede crear el pedido: existen bodegas no válidas en SAP."
-                        if no_encontradas:
-                            mensaje_error += f" Bodegas no encontradas en SAP OWHS: {', '.join(no_encontradas[:5])}"
-                            if len(no_encontradas) > 5:
-                                mensaje_error += f" y {len(no_encontradas) - 5} más"
+                        # Asegurar que son listas
+                        if isinstance(no_encontradas, int):
+                            no_encontradas = []
+                        if isinstance(errores, int):
+                            errores = []
+                        
+                        # Mensaje simple - el frontend construirá el mensaje detallado
+                        mensaje_error = "Existen códigos de bodega no válidos en SAP"
+                        
+                        # Log detallado para debugging (solo en backend)
+                        log_detalle = f"Bodegas no encontradas ({len(no_encontradas)}): {', '.join(no_encontradas[:10])}"
+                        if len(no_encontradas) > 10:
+                            log_detalle += f" y {len(no_encontradas) - 10} más"
                         if errores:
-                            mensaje_error += f" Errores al consultar SAP: {', '.join(errores[:3])}"
-                            if len(errores) > 3:
-                                mensaje_error += f" y {len(errores) - 3} más"
+                            log_detalle += f" | Errores ({len(errores)}): {', '.join(errores[:5])}"
+                            if len(errores) > 5:
+                                log_detalle += f" y {len(errores) - 5} más"
+                        logger.warning(f"⚠️ Validación SAP bodegas falló: {log_detalle}")
                         
                         resultado["status"] = "validation_error"
                         resultado["errores"].append(mensaje_error)
-                        logger.warning(f"⚠️ Validación SAP de bodegas falló: {mensaje_error}")
+                        resultado["validacion"]["bodegas"] = {
+                            "no_encontradas": no_encontradas,
+                            "errores": errores,
+                            "validas": validacion_bodegas_sap.get("validas", [])
+                        }
                         return resultado
                     
-                    # Agregar información de validación SAP de bodegas al resultado
                     resultado["validacion"]["bodegas_sap"] = {
-                        "validas": validacion_bodegas.get("validas", []),
-                        "no_encontradas": validacion_bodegas.get("no_encontradas", []),
-                        "errores": validacion_bodegas.get("errores", []),
-                        "todas_validas": validacion_bodegas.get("todas_validas", False)
+                        "validas": validacion_bodegas_sap.get("validas", []),
+                        "no_encontradas": validacion_bodegas_sap.get("no_encontradas", []),
+                        "errores": validacion_bodegas_sap.get("errores", []),
+                        "todas_validas": validacion_bodegas_sap.get("todas_validas", False)
                     }
                 
+                # ✅ Validaciones locales (opcionales - solo informativas, no bloquean)
+                # NOTA: Estas validaciones son solo informativas porque SAP es la fuente de verdad
                 if validar_productos and codigos_productos:
-                    validacion_productos = validator.validar_productos_existen(codigos_productos, conn)
-                    resultado["validacion"]["productos"] = validacion_productos
-                    if not validacion_productos["todos_validos"]:
-                        resultado["errores"].append(f"Productos no encontrados: {', '.join(validacion_productos['no_encontrados'])}")
+                    validacion_productos_local = validator.validar_productos_existen(codigos_productos, conn)
+                    resultado["validacion"]["productos"] = validacion_productos_local
+                    # No bloquear - SAP ya validó
                 
                 if validar_tiendas and codigos_tiendas:
-                    validacion_tiendas = validator.validar_tiendas_existen(codigos_tiendas, conn)
-                    resultado["validacion"]["tiendas"] = validacion_tiendas
-                    if not validacion_tiendas["todas_validas"]:
-                        if validacion_tiendas["no_encontradas"]:
-                            resultado["errores"].append(f"Tiendas no encontradas: {', '.join(validacion_tiendas['no_encontradas'])}")
-                        if validacion_tiendas["inactivas"]:
-                            resultado["errores"].append(f"Tiendas inactivas: {', '.join(validacion_tiendas['inactivas'])}")
+                    validacion_tiendas_local = validator.validar_tiendas_existen(codigos_tiendas, conn)
+                    resultado["validacion"]["tiendas"] = validacion_tiendas_local
+                    # No bloquear - SAP ya validó
                 
                 validacion_cantidades = validator.validar_pedido_completo(cabecera, detalles_con_tiendas, es_formato_simple=False)
                 resultado["validacion"]["cantidades"] = {

@@ -34,24 +34,17 @@ class PedidoFormatDetector:
             logger.info(f"📄 Hojas encontradas en el Excel: {excel_file.sheet_names}")
             
             for sheet_name in excel_file.sheet_names:
+                sheet_name_lower = str(sheet_name).lower().strip()
                 sheet_name_upper = str(sheet_name).upper().strip()
                 
-                # Buscar variaciones de CABECERA_PEDIDO
-                if not resultado['cabecera']:
-                    if ("CABECERA" in sheet_name_upper and "PEDIDO" in sheet_name_upper) or \
-                       sheet_name_upper == "CABECERA_PEDIDO" or \
-                       sheet_name_upper == "CABECERA PEDIDO":
-                        resultado['cabecera'] = str(sheet_name)
-                        logger.info(f"✅ Hoja de cabecera detectada: '{sheet_name}'")
+                # Solo se soporta el nuevo formato v1.0 con hojas "cabecera" y "detalle" (minúsculas)
+                if not resultado['cabecera'] and sheet_name_lower == "cabecera":
+                    resultado['cabecera'] = str(sheet_name)
+                    logger.info(f"✅ Hoja de cabecera detectada (formato v1.0): '{sheet_name}'")
                 
-                # Buscar variaciones de DETALLE_ARTICULO
-                if not resultado['detalle']:
-                    if ("DETALLE" in sheet_name_upper and "ARTICULO" in sheet_name_upper) or \
-                       ("DETALLE" in sheet_name_upper and "ARTÍCULO" in sheet_name_upper) or \
-                       sheet_name_upper == "DETALLE_ARTICULO" or \
-                       sheet_name_upper == "DETALLE ARTICULO":
-                        resultado['detalle'] = str(sheet_name)
-                        logger.info(f"✅ Hoja de detalle detectada: '{sheet_name}'")
+                if not resultado['detalle'] and sheet_name_lower == "detalle":
+                    resultado['detalle'] = str(sheet_name)
+                    logger.info(f"✅ Hoja de detalle detectada (formato v1.0): '{sheet_name}'")
                 
                 # Buscar variaciones de MOVIMIENTO (nuevo formato v1.0)
                 if not resultado['movimiento']:
@@ -77,9 +70,7 @@ class PedidoFormatDetector:
         
         Returns:
             - 'cuatro_hojas_v1_0': Contiene Cabecera, Detalle, Movimiento, Tiendas
-            - 'dos_hojas': Contiene Cabecera y Detalle
-            - 'simple': Formato simple con columnas específicas
-            - 'complejo': Formato legacy con cabecera y columnas de tiendas
+            - 'dos_hojas_nuevo_v1_0': Contiene "cabecera" y "detalle" (formato v1.0 con bodegas) - ÚNICO FORMATO SOPORTADO
             - 'desconocido': No se reconoce el formato
         """
         tiene_cabecera = hojas['cabecera'] is not None
@@ -87,32 +78,17 @@ class PedidoFormatDetector:
         tiene_movimiento = hojas['movimiento'] is not None
         tiene_tiendas = hojas['tiendas'] is not None
         
+        # Formato de 4 hojas v1.0 (si tiene todas las hojas)
         if tiene_cabecera and tiene_detalle and tiene_movimiento and tiene_tiendas:
             return 'cuatro_hojas_v1_0'
-        elif tiene_cabecera and tiene_detalle:
-            return 'dos_hojas'
-        else:
-            # Necesitamos más información para determinar si es simple o complejo
-            return 'simple'  # Por defecto, se detectará más adelante
-    
-    @staticmethod
-    def detectar_formato_detalle_simple(file_content: bytes) -> bool:
-        """
-        Detecta si el detalle es formato simple basado en las columnas.
         
-        Returns:
-            True si es formato simple (CodigoProducto, IdTienda, Cantidad)
-        """
-        try:
-            df_detection = pd.read_excel(io.BytesIO(file_content), sheet_name=0, header=0, nrows=5)
-            df_detection.columns = [str(col).strip().lower() if pd.notna(col) else "" 
-                                   for col in df_detection.columns]
-            
-            has_producto = any('codigoproducto' in col or 'producto' in col for col in df_detection.columns)
-            has_idtienda = any('idtienda' in col or 'id tienda' in col for col in df_detection.columns)
-            has_cantidad = any('cantidad' in col for col in df_detection.columns)
-            
-            return has_producto and has_idtienda and has_cantidad
-        except Exception as e:
-            logger.warning(f"⚠️ Error detectando formato detalle simple: {e}")
-            return False
+        # Formato de 2 hojas v1.0: hojas "cabecera" y "detalle" en minúsculas (ÚNICO FORMATO SOPORTADO)
+        if tiene_cabecera and tiene_detalle:
+            cabecera_name = str(hojas['cabecera']).lower().strip()
+            detalle_name = str(hojas['detalle']).lower().strip()
+            if cabecera_name == "cabecera" and detalle_name == "detalle":
+                return 'dos_hojas_nuevo_v1_0'
+        
+        # Formato no reconocido
+        return 'desconocido'
+    

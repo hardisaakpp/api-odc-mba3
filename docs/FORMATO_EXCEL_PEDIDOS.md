@@ -1,6 +1,129 @@
 # Formato Excel de Pedidos - Template_Pedido_Inicial_v1.0.xlsx
 
-## 📋 Estructura del Archivo
+## 📋 Formatos Soportados
+
+El sistema soporta **dos formatos principales**:
+
+### Formato Nuevo v1.0 (con Bodegas Centrales) ⭐
+- **Hojas:** `cabecera` y `detalle` (en minúsculas)
+- **Características:** 
+  - Soporta bodegas centrales (RL-CD, OUT-CD, REG-CD) que NO se incluyen en SUBTOTAL
+  - Tiendas individuales en columnas (N en adelante) que SÍ se incluyen en SUBTOTAL
+  - TOTAL = SUBTOTAL + RL-CD + OUT-CD + REG-CD
+- **Detalles:** Ver sección [Formato Nuevo v1.0](#-formato-nuevo-v10-con-bodegas-centrales)
+
+### Formato Antiguo (Legacy)
+- **Hojas:** `CABECERA_PEDIDO` y `DETALLE_ARTICULO` (en mayúsculas con guiones bajos)
+- **Características:** 
+  - Formato tabular simple con columnas CodigoProducto, IdTienda, Cantidad
+  - O formato complejo con columnas de tiendas
+- **Detalles:** Ver sección [Formato Antiguo](#-formato-antiguo-legacy)
+
+---
+
+## 🔥 Formato Nuevo v1.0 (con Bodegas Centrales)
+
+### Estructura del Archivo
+
+El archivo Excel contiene **dos hojas en minúsculas**:
+
+1. **cabecera** - Información general del pedido
+2. **detalle** - Líneas de artículos con distribución por tiendas y bodegas
+
+---
+
+### 🧾 Hoja 1: "cabecera"
+
+Esta hoja contiene los datos generales del pedido en formato de tabla clave-valor.
+
+| CAMPO            | VALOR                     | DESCRIPCIÓN |
+|------------------|---------------------------|-------------|
+| CODIGO PEDIDO    | P-12.55 - 12 - 2025       | Identificador único del pedido. |
+| FECHA DE PEDIDO  | 2025-12-25 00:00:00       | Fecha y hora de creación del pedido. |
+| FECHA DE ENTREGA | INMEDIATO                 | Tipo de entrega solicitada. |
+| FORMA DE PAGO    | 120 DIAS                  | Condición de pago a 120 días. |
+| ODC              | (vacío)                   | Campo para "Orden de Compra", actualmente sin valor. |
+| NOMBRE PROVEEDOR | TEXTILES EL RAYO S.A.     | Nombre del proveedor. |
+| COMPRADOR NOMBRE | VACA ANDREA               | Nombre del comprador. |
+| COD COMPRADOR    | 801                       | Código interno del comprador. |
+| ORIGEN TRASLADO  | RL-CD                     | Centro de distribución o bodega de origen. |
+| SERIE            | 10131                     | Número de serie asociado al pedido. |
+
+---
+
+### 📦 Hoja 2: "detalle" - Estructura con Bodegas y Tiendas
+
+La hoja organiza la información en **tres niveles jerárquicos**:
+
+1. **Bodegas Centrales** (3 bodegas físicas principales)
+2. **Grupos Comerciales/Tiendas** (3 cadenas/comercializadoras)
+3. **Tiendas Individuales** (más de 50 ubicaciones específicas)
+
+#### 1. Columnas A-J: Información del Producto
+
+| Col | Campo            | Descripción                                              | Ejemplo                              |
+|-----|------------------|----------------------------------------------------------|--------------------------------------|
+| A   | CODIGO PRODUCTO  | Identificador único del artículo                         | MTF123.9                             |
+| B   | MARCA            | Fabricante/Proveedor                                     | ROLAND                               |
+| C   | CODIGO BARRAS    | Código EAN/UPC para escaneo                              | 7861224113401                        |
+| D   | DESCRIPCION SAP  | Descripción detallada del producto                       | VALETAS C. TALONERA LISA ARMA...     |
+| E   | PACK             | Unidad de empaque/venta                                  | X1 (unidad)                          |
+| F   | COSTO SIN IVA    | Precio unitario sin impuestos                            | 6.9                                  |
+| G   | DESCUENTO        | Porcentaje de descuento (en decimal)                     | 0.2 (20%)                            |
+| H   | PVP              | Precio de Venta al Público                               | 1.99                                 |
+| I   | TOTAL            | Fórmula: SUBTOTAL + RL-CD + OUT-CD + REG-CD              | Cálculo automático                   |
+| J   | SUBTOTAL         | Fórmula: =SUM(N3:INDEX(3:3,1,COLUMNS(3:3)))             | Suma de todas las tiendas            |
+
+#### 2. Columnas K-M: Las 3 Bodegas Centrales
+
+Estas columnas representan bodegas físicas reales, **NO se incluyen en SUBTOTAL**:
+
+| Col | Código | Nombre Bodega        | Descripción                               |
+|-----|--------|----------------------|-------------------------------------------|
+| K   | RL-CD  | BODEGA ROLAND        | Bodega central de la cadena ROLAND        |
+| L   | OUT-CD | BODEGA DESCUENTON    | Bodega central de la cadena DESCUENTON    |
+| M   | REG-CD | BODEGA REGIONS       | Bodega central de la cadena REGIONS       |
+
+**Importante:** Estas celdas contienen cantidades que **NO se suman en el SUBTOTAL**. Representan inventario que queda en las bodegas centrales para redistribución, reposición o stock de seguridad.
+
+#### 3. Columnas N-BJ: Distribución por Tiendas
+
+A partir de la columna N, se listan tiendas individuales agrupadas por su cadena comercial. Cada celda indica cuántas unidades se enviarán directamente a esa tienda específica.
+
+**Grupo 1: Tiendas ROLAND (Columnas N-AP)**
+- Prefijo de código: `TRL-`
+- Ejemplos: TRL-QSN, TRL-QSS2, TRL-BMB
+- Total: ~30 tiendas ROLAND
+
+**Grupo 2: Tiendas DESCUENTON (Columnas AQ-BC)**
+- Prefijo de código: `TOUT-`
+- Ejemplos: TOUT-BMB, TOUT-CON, TOUT-CLO
+- Total: ~13 tiendas DESCUENTON
+
+**Grupo 3: Tiendas REGIONS (Columnas BD-BJ)**
+- Prefijo de código: `TRL-RG`
+- Ejemplos: TRL-RGAI, TRL-RGAE, TRL-RGCE
+- Total: 7 tiendas REGIONS
+
+#### 🔍 Lógica de Cálculo
+
+- **SUBTOTAL (J)**: Suma SOLO las columnas N en adelante (todas las tiendas)
+  - NO incluye K, L, M (las 3 bodegas)
+  
+- **TOTAL (I)**: = SUBTOTAL + RL-CD + OUT-CD + REG-CD
+  - Suma bodegas + tiendas = inventario total solicitado
+
+**Ejemplo:**
+- REG-CD (M3) = 40 → 40 unidades se quedarán en la bodega central REGIONS
+- Tiendas REGIONS (BD-BH) = 20 unidades distribuidas en 5 tiendas
+- SUBTOTAL = 20 → solo suma tiendas (no bodegas)
+- TOTAL = 60 → suma bodegas + tiendas = inventario total solicitado
+
+---
+
+## 📋 Formato Antiguo (Legacy)
+
+### Estructura del Archivo
 
 El archivo Excel contiene **dos hojas independientes**:
 

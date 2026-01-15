@@ -653,30 +653,34 @@ def register_plantillas_endpoints(app: FastAPI):
     
     @app.post("/pedidos/importar-excel", tags=["Pedidos"])
     async def importar_excel_pedido(
-        file: UploadFile = File(..., description="Archivo Excel (.xlsx) con hojas 'CABECERA_PEDIDO' y 'DETALLE_ARTICULO'"),
-        hoja_cabecera: str = Query("CABECERA_PEDIDO", description="Nombre de la hoja de cabecera"),
-        hoja_detalle: str = Query("DETALLE_ARTICULO", description="Nombre de la hoja de detalle"),
+        file: UploadFile = File(..., description="Archivo Excel (.xlsx) con hojas 'cabecera' y 'detalle' (formato v1.0)"),
+        hoja_cabecera: str = Query("cabecera", description="Nombre de la hoja de cabecera (default: 'cabecera')"),
+        hoja_detalle: str = Query("detalle", description="Nombre de la hoja de detalle (default: 'detalle')"),
         validar_sap: bool = Query(True, description="Validar códigos de producto contra SAP"),
         sap_obligatorio: bool = Query(True, description="Si True, errores de SAP bloquean la importación. Si False, solo genera warnings"),
         user: Dict = Depends(verify_jwt_token),
         _: None = Depends(require_permission('mba3-consultas.proceso.execute'))
     ):
         """
-        Importa y parsea un archivo Excel de pedido (FASE 1 - TAREA 2).
+        Importa y parsea un archivo Excel de pedido en formato v1.0.
         
         **Formato esperado (Template_Pedido_Inicial_v1.0.xlsx):**
-        - **Hoja 1: CABECERA_PEDIDO** - Formato clave-valor (Campo | Valor | Ejemplo)
-        - **Hoja 2: DETALLE_ARTICULO** - Formato tabular con headers
+        - **Hoja 1: "cabecera"** - Formato clave-valor (Campo | Valor | Ejemplo)
+        - **Hoja 2: "detalle"** - Formato tabular con:
+          - Columnas A-J: Información del producto (CODIGO PRODUCTO, MARCA, CODIGO BARRAS, etc.)
+          - Columnas K-M: Bodegas centrales (RL-CD, OUT-CD, REG-CD) - NO incluidas en SUBTOTAL
+          - Columnas N+: Tiendas individuales - SÍ incluidas en SUBTOTAL (parsea hasta última columna con información)
         
         **Solo parsing técnico:** lee, normaliza y valida estructura.
         NO aplica reglas de negocio, NO consolida duplicados.
+        NO calcula SUBTOTAL ni TOTAL - solo parsea los valores que contiene el Excel.
         
         **Validaciones técnicas:**
         - Extensión: .xlsx
         - Tamaño máximo: 10 MB
-        - Hojas obligatorias: "CABECERA_PEDIDO" y "DETALLE_ARTICULO"
-        - Columnas obligatorias en detalle: CodigoProducto, IdTienda, Cantidad
-        - Duplicados (CodigoProducto + IdTienda) = ERROR
+        - Hojas obligatorias: "cabecera" y "detalle" (en minúsculas)
+        - Columnas obligatorias en detalle: CODIGO PRODUCTO (columna A)
+        - Parsea desde columna N (índice 13) hasta la última columna con información
         
         **Estructura de respuesta:**
         ```json
@@ -889,7 +893,7 @@ def register_plantillas_endpoints(app: FastAPI):
     
     @app.post("/api/pedidos/validar-y-crear-lote", tags=["Pedidos"])
     async def validar_y_crear_lote(
-        file: UploadFile = File(..., description="Archivo Excel (.xlsx) con hojas 'CABECERA_PEDIDO' y 'DETALLE_ARTICULO'"),
+        file: UploadFile = File(..., description="Archivo Excel (.xlsx) con hojas 'cabecera' y 'detalle' (formato v1.0)"),
         validar_productos: bool = Query(True, description="Validar que productos existan en catálogo"),
         validar_tiendas: bool = Query(True, description="Validar que tiendas existan y estén activas"),
         user: Dict = Depends(verify_jwt_token),
@@ -906,9 +910,10 @@ def register_plantillas_endpoints(app: FastAPI):
         5. Genera pedido consolidado (sumatoria por producto)
         6. Guarda pedido con estado "PENDIENTE_CONFIRMACION_PROVEEDOR"
         
-        **Formatos soportados:**
-        - Formato de dos hojas: 'CABECERA_PEDIDO' y 'DETALLE_ARTICULO'
-        - Formato simple: CodigoProducto, IdTienda, Cantidad
+        **Formato soportado:**
+        - Formato v1.0: hojas 'cabecera' y 'detalle' (en minúsculas)
+          - Cabecera: formato clave-valor
+          - Detalle: columnas A-J (producto), K-M (bodegas), N+ (tiendas)
         
         **Respuesta exitosa:**
         ```json
