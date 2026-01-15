@@ -402,17 +402,100 @@ class PedidoProveedorWebService:
                 # Obtener cantidad solicitada total (suma de todas las tiendas)
                 cantidad_solicitada_total = sum(t.get("cantidad", 0) for t in tiendas)
                 
-                # Obtener cantidad confirmada desde el campo "total" del detalle
+                # ⭐ MEJORADO: Leer total directamente desde BD para asegurar valor más reciente
+                # y verificar si fue modificado manualmente por EL RAYO
+                cursor = conn.cursor()
+                try:
+                    cursor.execute("""
+                        SELECT 
+                            total,
+                            ISNULL(total_modificado_manual, 0) AS total_modificado_manual
+                        FROM pedido_detalle
+                        WHERE pedido_detalle_id = ?
+                    """, (pedido_detalle_id,))
+                    row = cursor.fetchone()
+                    
+                    if row:
+                        total_value = float(row[0]) if row[0] is not None else None
+                        total_modificado_manual = bool(row[1])
+                    else:
+                        total_value = detalle.get("total")
+                        total_modificado_manual = detalle.get("total_modificado_manual", False)
+                        logger.warning(f"No se pudo leer total desde BD para {pedido_detalle_id}, usando valor del detalle")
+                except Exception as e:
+                    logger.warning(f"Error al leer total desde BD para {pedido_detalle_id}: {e}, usando valor del detalle")
+                    total_value = detalle.get("total")
+                    total_modificado_manual = detalle.get("total_modificado_manual", False)
+                finally:
+                    cursor.close()
+                
+                # ⭐ MEJORADO: Obtener cantidad confirmada desde el campo "total" del detalle
                 # NOTA: En el frontend, cuando EL RAYO edita, el campo "total" se usa para la cantidad confirmada
-                # Si no existe "total" o es None, usar la cantidad solicitada
-                total_value = detalle.get("total")
+                # El valor 0 es válido para la lógica del negocio
                 if total_value is not None:
                     # Convertir a entero (puede venir como float desde la BD)
                     try:
                         cantidad_confirmada_total = int(float(total_value))
-                    except (ValueError, TypeError):
+                        
+                        # ⭐ VALIDACIÓN: Si EL RAYO modificó manualmente el total, validar explícitamente
+                        if total_modificado_manual:
+                            if cantidad_confirmada_total < 0:
+                                error_msg = (
+                                    f"El producto {codigo_producto} (ID: {pedido_detalle_id}) "
+                                    f"fue modificado manualmente por EL RAYO pero el total es negativo ({cantidad_confirmada_total}). "
+                                    f"El total debe ser mayor o igual a 0. Por favor, verifique el valor antes de confirmar."
+                                )
+                                logger.error(f"❌ {error_msg}")
+                                raise ValueError(error_msg)
+                            
+                            # ⭐ VALIDACIÓN ESPECÍFICA: Si total_modificado_manual es True y el valor es 0, registrar explícitamente
+                            if cantidad_confirmada_total == 0:
+                                logger.info(
+                                    f"✅ Producto {codigo_producto} (ID: {pedido_detalle_id}): "
+                                    f"EL RAYO modificó manualmente el total a 0. "
+                                    f"Esto es válido para la lógica del negocio. "
+                                    f"Se procesará con cantidad_confirmada_total = 0."
+                                )
+                            else:
+                                logger.info(
+                                    f"✅ Producto {codigo_producto} (ID: {pedido_detalle_id}): "
+                                    f"Usando total modificado por EL RAYO: {cantidad_confirmada_total} "
+                                    f"(cantidad solicitada original: {cantidad_solicitada_total})"
+                                )
+                        else:
+                            # Si no fue modificado manualmente, usar el valor tal cual
+                            if cantidad_confirmada_total != cantidad_solicitada_total:
+                                logger.info(
+                                    f"ℹ️ Producto {codigo_producto} (ID: {pedido_detalle_id}): "
+                                    f"Total ({cantidad_confirmada_total}) difiere de cantidad solicitada ({cantidad_solicitada_total}), "
+                                    f"pero no fue marcado como modificado manualmente."
+                                )
+                            else:
+                                logger.debug(
+                                    f"Producto {codigo_producto} (ID: {pedido_detalle_id}): "
+                                    f"Total coincide con cantidad solicitada: {cantidad_confirmada_total}"
+                                )
+                    except (ValueError, TypeError) as e:
+                        logger.warning(
+                            f"⚠️ Error al convertir total a entero para {codigo_producto} (ID: {pedido_detalle_id}): {e}. "
+                            f"Usando cantidad solicitada como fallback: {cantidad_solicitada_total}"
+                        )
                         cantidad_confirmada_total = cantidad_solicitada_total
                 else:
+                    # Si total es None, usar cantidad solicitada
+                    if total_modificado_manual:
+                        error_msg = (
+                            f"El producto {codigo_producto} (ID: {pedido_detalle_id}) "
+                            f"fue marcado como modificado manualmente por EL RAYO pero el total es None. "
+                            f"Por favor, verifique que el total tenga un valor antes de confirmar."
+                        )
+                        logger.error(f"❌ {error_msg}")
+                        raise ValueError(error_msg)
+                    
+                    logger.warning(
+                        f"⚠️ Producto {codigo_producto} (ID: {pedido_detalle_id}): "
+                        f"Total no disponible (None), usando cantidad solicitada como fallback: {cantidad_solicitada_total}"
+                    )
                     cantidad_confirmada_total = cantidad_solicitada_total
                 
                 # Obtener costos originales y ajustados
