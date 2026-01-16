@@ -4,9 +4,10 @@ Endpoints para gestión de plantillas Excel.
 
 import logging
 import base64
+import json
 from typing import Dict, Optional
 from datetime import datetime
-from fastapi import FastAPI, UploadFile, File, Depends, HTTPException, Path, Query, Body, status
+from fastapi import FastAPI, UploadFile, File, Depends, HTTPException, Path, Query, Body, Form, status
 from fastapi.responses import JSONResponse
 
 from src.security.jwt_auth import verify_jwt_token, require_permission
@@ -133,6 +134,10 @@ def register_plantillas_endpoints(app: FastAPI):
             False,
             description="⚠️ REQUERIDO si modo_tiendas='sincronizar_maestro'. Confirma que deseas DESACTIVAR tiendas no presentes en Excel"
         ),
+        correcciones_codigos: Optional[str] = Form(
+            None, 
+            description="JSON con mapa de correcciones de códigos: {\"codigo_original\": \"codigo_sap_corregido\"}"
+        ),
         user: Dict = Depends(verify_jwt_token),
         _: None = Depends(require_permission('mba3-consultas.proceso.execute'))
     ):
@@ -254,6 +259,23 @@ def register_plantillas_endpoints(app: FastAPI):
             # Obtener ID del usuario (normalizado)
             user_id = get_user_id(user)
             
+            # ⭐ NUEVO: Parsear correcciones de códigos si se proporcionan
+            correcciones_dict: Optional[Dict[str, str]] = None
+            if correcciones_codigos:
+                try:
+                    correcciones_dict = json.loads(correcciones_codigos)
+                    if not isinstance(correcciones_dict, dict):
+                        raise ValueError("correcciones_codigos debe ser un objeto JSON")
+                    logger.info(f"✅ Correcciones de códigos recibidas: {len(correcciones_dict)} código(s) a corregir")
+                    for codigo_orig, codigo_corr in correcciones_dict.items():
+                        logger.info(f"   • {codigo_orig} → {codigo_corr}")
+                except json.JSONDecodeError as e:
+                    logger.warning(f"⚠️ Error al parsear correcciones_codigos JSON: {e}")
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Formato JSON inválido en correcciones_codigos: {str(e)}"
+                    )
+            
             # Log informativo sobre el procesamiento
             logger.info(
                 f"⏱️ Iniciando procesamiento de plantilla '{file.filename}' "
@@ -277,7 +299,8 @@ def register_plantillas_endpoints(app: FastAPI):
                 usuario_id=user_id,
                 validar_antes_de_guardar=validar,
                 bloquea_con_errores=bloquea_con_errores,
-                tiendas_permitidas=None  # None = todas permitidas
+                tiendas_permitidas=None,  # None = todas permitidas
+                correcciones_codigos=correcciones_dict  # ⭐ NUEVO: Pasar correcciones
             )
             
             # Construir mensaje de respuesta

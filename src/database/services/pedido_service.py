@@ -467,6 +467,58 @@ class PedidoService:
             return resultado
     
     
+    def _aplicar_correcciones_codigos(
+        self,
+        detalles_con_tiendas: List[Dict[str, Any]],
+        correcciones: Dict[str, str]
+    ) -> List[Dict[str, Any]]:
+        """
+        Aplica correcciones de códigos de producto en memoria.
+        
+        Reemplaza los códigos originales del Excel por los códigos SAP corregidos
+        antes de validar contra SAP. Esto permite que el usuario seleccione sugerencias
+        SAP sin necesidad de modificar el archivo Excel.
+        
+        Args:
+            detalles_con_tiendas: Lista de detalles con productos y distribuciones
+            correcciones: Diccionario {codigo_original: codigo_sap_corregido}
+            
+        Returns:
+            Lista de detalles con códigos corregidos aplicados
+        """
+        if not correcciones:
+            return detalles_con_tiendas
+        
+        correcciones_aplicadas = 0
+        
+        for detalle_item in detalles_con_tiendas:
+            if not isinstance(detalle_item, dict):
+                continue
+                
+            detalle = detalle_item.get("detalle", {})
+            codigo_original = detalle.get("codigo_interno")
+            
+            if codigo_original and codigo_original in correcciones:
+                codigo_corregido = correcciones[codigo_original]
+                
+                # Reemplazar código original por código SAP corregido
+                detalle["codigo_interno"] = codigo_corregido
+                correcciones_aplicadas += 1
+                
+                logger.info(
+                    f"✅ [CORRECCIÓN] Código reemplazado: "
+                    f"{codigo_original} → {codigo_corregido}"
+                )
+                
+                # Actualizar también en el detalle_item
+                detalle_item["detalle"] = detalle
+        
+        logger.info(
+            f"📋 [CORRECCIONES] Total de códigos corregidos: {correcciones_aplicadas} de {len(correcciones)}"
+        )
+        
+        return detalles_con_tiendas
+    
     def _detectar_y_procesar_formato_excel(
         self,
         file_content: bytes,
@@ -546,7 +598,8 @@ class PedidoService:
         bloquea_con_errores: bool = True,
         validar_sap: bool = True,
         sap_obligatorio: bool = True,
-        modo_tiendas: str = "validar_estricto"
+        modo_tiendas: str = "validar_estricto",
+        correcciones_codigos: Optional[Dict[str, str]] = None
     ) -> Dict[str, Any]:
         """
         Valida y procesa un archivo Excel de pedido.
@@ -623,7 +676,8 @@ class PedidoService:
                     bloquea_con_errores=bloquea_con_errores,
                     validar_sap=validar_sap,
                     sap_obligatorio=sap_obligatorio,
-                    modo_tiendas=modo_tiendas
+                    modo_tiendas=modo_tiendas,
+                    correcciones_codigos=correcciones_codigos  # ⭐ NUEVO: Pasar correcciones
                 )
             
             # Detectar si es nuevo formato v1.0 (hojas "cabecera" y "detalle" en minúsculas)
@@ -708,6 +762,13 @@ class PedidoService:
             
             if not detalles_con_tiendas:
                 raise ValueError("No se encontraron datos válidos en el archivo")
+            
+            # ⭐ NUEVO: Aplicar correcciones de códigos si se proporcionan (antes de validación SAP)
+            if correcciones_codigos:
+                detalles_con_tiendas = self._aplicar_correcciones_codigos(
+                    detalles_con_tiendas, 
+                    correcciones_codigos
+                )
             
             # ✅ VALIDACIÓN SAP OBLIGATORIA (PRIMERO - fuente de verdad)
             # Validar productos, tiendas y bodegas contra SAP antes que cualquier otra validación

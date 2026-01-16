@@ -65,7 +65,8 @@ class PedidoFormatoV1Processor:
         bloquea_con_errores: bool = True,
         validar_sap: bool = True,
         sap_obligatorio: bool = True,
-        modo_tiendas: str = "validar_estricto"
+        modo_tiendas: str = "validar_estricto",
+        correcciones_codigos: Optional[Dict[str, str]] = None
     ) -> Dict[str, Any]:
         """
         Procesa el formato v1.0 completo.
@@ -131,6 +132,13 @@ class PedidoFormatoV1Processor:
             detalles_finales = self._consolidar_distribuciones(
                 distribuciones_movimiento, productos_dict, resultado, bloquea_con_errores
             )
+            
+            # ⭐ NUEVO: Aplicar correcciones de códigos si se proporcionan (antes de validación SAP)
+            if correcciones_codigos:
+                detalles_finales = self._aplicar_correcciones_codigos_v1_0(
+                    detalles_finales, 
+                    correcciones_codigos
+                )
             
             # Validaciones SAP adicionales
             self._validar_sap_productos_y_bodegas(
@@ -282,6 +290,57 @@ class PedidoFormatoV1Processor:
             resultado["status"] = "error"
             resultado["errores"].append(str(e))
             return None, None
+    
+    def _aplicar_correcciones_codigos_v1_0(
+        self,
+        detalles_finales: List[Dict[str, Any]],
+        correcciones: Dict[str, str]
+    ) -> List[Dict[str, Any]]:
+        """
+        Aplica correcciones de códigos de producto en memoria (formato v1.0).
+        
+        Reemplaza los códigos originales del Excel por los códigos SAP corregidos
+        antes de validar contra SAP.
+        
+        Args:
+            detalles_finales: Lista de detalles con productos y distribuciones
+            correcciones: Diccionario {codigo_original: codigo_sap_corregido}
+            
+        Returns:
+            Lista de detalles con códigos corregidos aplicados
+        """
+        if not correcciones:
+            return detalles_finales
+        
+        correcciones_aplicadas = 0
+        
+        for detalle_item in detalles_finales:
+            if not isinstance(detalle_item, dict):
+                continue
+                
+            detalle = detalle_item.get("detalle", {})
+            codigo_original = detalle.get("codigo_interno")
+            
+            if codigo_original and codigo_original in correcciones:
+                codigo_corregido = correcciones[codigo_original]
+                
+                # Reemplazar código original por código SAP corregido
+                detalle["codigo_interno"] = codigo_corregido
+                correcciones_aplicadas += 1
+                
+                logger.info(
+                    f"✅ [CORRECCIÓN v1.0] Código reemplazado: "
+                    f"{codigo_original} → {codigo_corregido}"
+                )
+                
+                # Actualizar también en el detalle_item
+                detalle_item["detalle"] = detalle
+        
+        logger.info(
+            f"📋 [CORRECCIONES v1.0] Total de códigos corregidos: {correcciones_aplicadas} de {len(correcciones)}"
+        )
+        
+        return detalles_finales
     
     def _consolidar_distribuciones(
         self,
