@@ -407,16 +407,17 @@ def register_plantillas_endpoints(app: FastAPI):
         ```
         
         **Respuesta si no hay pedidos:**
-        - HTTP 404 con mensaje: "No hay pedidos cargados para este usuario"
+        - HTTP 200 con `null` (evita logs de 404 esperados)
         
         **Formato de respuesta:**
-        - ✅ **Mismo formato exacto** que `GET /api/plantillas/{identificador}`
+        - ✅ **Mismo formato exacto** que `GET /api/plantillas/{identificador}` cuando hay pedidos
         - ✅ Devuelve directamente `{cabecera: {...}, detalles: [...]}` (sin envolver en `{status, data, etc}`)
+        - ✅ Retorna `null` (HTTP 200) cuando no hay pedidos
         - ✅ Esto permite que el frontend use el mismo código para procesar ambos endpoints
         
         Returns:
             JSON con pedido completo en formato directo: `{cabecera: {...}, detalles: [...]}`
-            O HTTP 404 si el usuario no tiene pedidos
+            O `null` (HTTP 200) si el usuario no tiene pedidos
         """
         try:
             from src.database.connection import get_db_connection_context
@@ -433,11 +434,9 @@ def register_plantillas_endpoints(app: FastAPI):
                 ultimo_pedido = repo.get_ultimo_pedido(user_id)
                 
                 if not ultimo_pedido:
-                    # Retornar 404 cuando no hay pedidos (consistente con GET /api/plantillas/{identificador})
-                    raise HTTPException(
-                        status_code=404,
-                        detail="No hay pedidos cargados para este usuario"
-                    )
+                    # Retornar 200 con null cuando no hay pedidos (evita logs de 404 esperados)
+                    # El frontend maneja null como "no hay pedidos"
+                    return JSONResponse(status_code=200, content=None)
                 
                 # Obtener pedido completo (mismo método que GET /api/plantillas/{identificador})
                 pedido_completo = repo.get_pedido_completo(ultimo_pedido["pedido_id"])
