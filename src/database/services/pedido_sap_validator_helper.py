@@ -127,10 +127,10 @@ class PedidoSAPValidatorHelper:
         if not codigos_productos:
             return {
                 "total_codigos": 0,
-                "validos": 0,
-                "no_encontrados": 0,
-                "errores": 0,
-                "warnings": 0,
+                "validos": [],
+                "no_encontrados": [],  # ⭐ Array vacío, no 0
+                "errores": [],  # ⭐ Array vacío, no 0
+                "warnings": [],  # ⭐ Array vacío, no 0
                 "todos_validos": True,
                 "detalle": {}
             }
@@ -143,19 +143,30 @@ class PedidoSAPValidatorHelper:
             sap_obligatorio=sap_obligatorio
         )
         
+        # ⭐ MEJORADO: Incluir códigos específicos, no solo conteos
+        no_encontrados_list = validacion_sap.get("no_encontrados", [])
+        errores_list = validacion_sap.get("errores", [])
+        validos_list = validacion_sap.get("validos", [])
+        warnings_list = validacion_sap.get("warnings", [])
+        
         resultado["validacion_sap"] = {
             "total_codigos": len(codigos_productos),
-            "validos": len(validacion_sap.get("validos", [])),
-            "no_encontrados": len(validacion_sap.get("no_encontrados", [])),
-            "errores": len(validacion_sap.get("errores", [])),
-            "warnings": len(validacion_sap.get("warnings", [])),
-            "todos_validos": validacion_sap.get("todos_validos", False)
+            "validos": len(validos_list),
+            "no_encontrados": no_encontrados_list,  # ⭐ Array de códigos, no solo conteo
+            "errores": errores_list,  # ⭐ Array de errores, no solo conteo
+            "warnings": warnings_list,  # ⭐ Array de warnings, no solo conteo
+            "todos_validos": validacion_sap.get("todos_validos", False),
+            # ⭐ Mantener conteos para compatibilidad (opcional, pero útil)
+            "total_no_encontrados": len(no_encontrados_list),
+            "total_errores": len(errores_list),
+            "total_warnings": len(warnings_list)
         }
         
         # Si SAP es obligatorio y hay errores, NO persistir
         if sap_obligatorio and not validacion_sap.get("todos_validos", False):
-            no_encontrados = validacion_sap.get("no_encontrados", [])
-            errores = validacion_sap.get("errores", [])
+            # ⭐ Usar los arrays ya extraídos arriba
+            no_encontrados = no_encontrados_list
+            errores = errores_list
             
             # Mensaje simple - el frontend construirá el mensaje detallado
             mensaje_error = "Existen productos no válidos en SAP"
