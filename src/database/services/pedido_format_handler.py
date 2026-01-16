@@ -74,19 +74,14 @@ class PedidoFormatHandler:
         Detecta el formato del Excel basado en las hojas disponibles.
         
         Retorna:
-        - 'cuatro_hojas_v1_0': Contiene Cabecera, Detalle, Movimiento, Tiendas
-        - 'dos_hojas': Contiene Cabecera y Detalle
+        - 'dos_hojas': Contiene Cabecera y Detalle (ÚNICO FORMATO SOPORTADO)
         - 'simple': Formato simple con columnas específicas
         - 'desconocido': No se reconoce el formato
         """
         tiene_cabecera = hojas['cabecera'] is not None
         tiene_detalle = hojas['detalle'] is not None
-        tiene_movimiento = hojas['movimiento'] is not None
-        tiene_tiendas = hojas['tiendas'] is not None
         
-        if tiene_cabecera and tiene_detalle and tiene_movimiento and tiene_tiendas:
-            return 'cuatro_hojas_v1_0'
-        elif tiene_cabecera and tiene_detalle:
+        if tiene_cabecera and tiene_detalle:
             return 'dos_hojas'
         else:
             return 'simple'

@@ -69,18 +69,11 @@ class PedidoFormatDetector:
         Detecta el formato del Excel basado en las hojas disponibles.
         
         Returns:
-            - 'cuatro_hojas_v1_0': Contiene Cabecera, Detalle, Movimiento, Tiendas
             - 'dos_hojas_nuevo_v1_0': Contiene "cabecera" y "detalle" (formato v1.0 con bodegas) - ÚNICO FORMATO SOPORTADO
             - 'desconocido': No se reconoce el formato
         """
         tiene_cabecera = hojas['cabecera'] is not None
         tiene_detalle = hojas['detalle'] is not None
-        tiene_movimiento = hojas['movimiento'] is not None
-        tiene_tiendas = hojas['tiendas'] is not None
-        
-        # Formato de 4 hojas v1.0 (si tiene todas las hojas)
-        if tiene_cabecera and tiene_detalle and tiene_movimiento and tiene_tiendas:
-            return 'cuatro_hojas_v1_0'
         
         # Formato de 2 hojas v1.0: hojas "cabecera" y "detalle" en minúsculas (ÚNICO FORMATO SOPORTADO)
         if tiene_cabecera and tiene_detalle:

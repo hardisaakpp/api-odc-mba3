@@ -25,14 +25,9 @@ from .pedido_consolidator import PedidoConsolidator
 from .pedido_type_converter import PedidoTypeConverter
 from .pedido_format_handler import PedidoFormatHandler
 from .pedido_sap_handler import PedidoSAPHandler
-from .pedido_tiendas_handler import procesar_tiendas_y_validar_sap_v1_0
-from .pedido_detalle_handler import procesar_detalle_articulos_v1_0
-from .pedido_movimiento_handler import procesar_movimiento_y_coherencia_v1_0
-from .pedido_guardado_handler import guardar_pedido_v1_0
 from .pedido_format_detector import PedidoFormatDetector
 from .pedido_sap_validator_helper import PedidoSAPValidatorHelper
 from .pedido_formato_processor import PedidoFormatoProcessor
-from .pedido_formato_v1_processor import PedidoFormatoV1Processor
 from ..clients.sap_client import SAPClient
 from src.config import ENABLE_SAP_QUERIES
 
@@ -66,12 +61,6 @@ class PedidoService:
         self.formato_processor = PedidoFormatoProcessor(
             self.parser,
             self.consolidator,
-            self.type_converter
-        )
-        self.formato_v1_processor = PedidoFormatoV1Processor(
-            self.parser,
-            self.consolidator,
-            self.validator,
             self.type_converter
         )
     
@@ -540,21 +529,13 @@ class PedidoService:
         hojas = self.format_detector.detectar_hojas(file_content)
         formato = self.format_detector.detectar_formato(hojas)
         
-        # Formato v1.0: 4 hojas
-        if formato == 'cuatro_hojas_v1_0':
-            logger.info("📋 Detectado formato v1.0 (4 hojas)")
-            resultado["formato_detectado"] = "cuatro_hojas_v1_0"
-            # Asegurar que todas las hojas están presentes (ya validado por formato)
-            if hojas['cabecera'] and hojas['detalle'] and hojas['movimiento'] and hojas['tiendas']:
-                resultado_v1 = self.formato_v1_processor.procesar(
-                    file_content, filename, usuario_id,
-                    str(hojas['cabecera']), str(hojas['detalle']), 
-                    str(hojas['movimiento']), str(hojas['tiendas']),
-                    validar_antes_de_guardar, tiendas_permitidas, bloquea_con_errores,
-                    validar_sap, sap_obligatorio, modo_tiendas
-                )
-                resultado.update(resultado_v1)
-                return resultado.get("status") == "success"
+        # Formato de 2 hojas v1.0 (ÚNICO FORMATO SOPORTADO)
+        if formato == 'dos_hojas_nuevo_v1_0':
+            logger.info("📋 Detectado formato v1.0 (2 hojas)")
+            resultado["formato_detectado"] = "dos_hojas_nuevo_v1_0"
+            # El procesamiento de 2 hojas se maneja en validar_y_procesar_archivo_excel
+            # Este método solo valida, no procesa completamente
+            return True
         
         # Otros formatos: dos hojas o simple (legacy)
         logger.info("📋 Detectado formato legacy (dos hojas o simple)")
@@ -642,43 +623,14 @@ class PedidoService:
             
             hoja_cabecera_encontrada = hojas['cabecera']
             hoja_detalle_encontrada = hojas['detalle']
-            hoja_movimiento_encontrada = hojas['movimiento']
-            hoja_tiendas_encontrada = hojas['tiendas']
             
             tiene_cabecera_pedido = hoja_cabecera_encontrada is not None
             tiene_detalle_articulo = hoja_detalle_encontrada is not None
-            tiene_movimiento = hoja_movimiento_encontrada is not None
-            tiene_tiendas = hoja_tiendas_encontrada is not None
             
             if not tiene_cabecera_pedido:
                 logger.warning(f"⚠️ No se encontró hoja de cabecera. Hojas disponibles: {excel_file.sheet_names}")
             if not tiene_detalle_articulo:
                 logger.warning(f"⚠️ No se encontró hoja de detalle. Hojas disponibles: {excel_file.sheet_names}")
-            
-            # Detectar formato: ¿Tiene las 4 hojas del nuevo formato v1.0?
-            # (Cabecera Pedido, Detalle Articulos, Movimiento, Tiendas)
-            if tiene_cabecera_pedido and tiene_detalle_articulo and tiene_movimiento and tiene_tiendas:
-                resultado["formato_detectado"] = "cuatro_hojas_v1_0"
-                logger.info("📋 Formato CUATRO HOJAS v1.0 detectado: Cabecera Pedido + Detalle Articulos + Movimiento + Tiendas")
-                
-                # NUEVO FLUJO: Procesar formato v1.0 con 4 hojas
-                # Las variables han sido validadas arriba, aseguramos tipos con cast
-                return self.formato_v1_processor.procesar(
-                    file_content=file_content,
-                    filename=filename,
-                    usuario_id=usuario_id,
-                    hoja_cabecera=str(hoja_cabecera_encontrada),
-                    hoja_detalle=str(hoja_detalle_encontrada),
-                    hoja_movimiento=str(hoja_movimiento_encontrada),
-                    hoja_tiendas=str(hoja_tiendas_encontrada),
-                    validar_antes_de_guardar=validar_antes_de_guardar,
-                    tiendas_permitidas=tiendas_permitidas,
-                    bloquea_con_errores=bloquea_con_errores,
-                    validar_sap=validar_sap,
-                    sap_obligatorio=sap_obligatorio,
-                    modo_tiendas=modo_tiendas,
-                    correcciones_codigos=correcciones_codigos  # ⭐ NUEVO: Pasar correcciones
-                )
             
             # Detectar si es nuevo formato v1.0 (hojas "cabecera" y "detalle" en minúsculas)
             formato_detectado = self.format_detector.detectar_formato(hojas)
@@ -697,6 +649,88 @@ class PedidoService:
                     es_formato_nuevo_v1_0=True
                 )
                 
+                # ✅ VALIDACIÓN TEMPRANA: Extraer códigos de producto inmediatamente después del parsing
+                # y validarlos ANTES de procesar y consolidar datos
+                datos_parsing = resultado_parsing.get("data", [])
+                if validar_sap and datos_parsing:
+                    # Extraer códigos únicos de productos del parsing
+                    codigos_productos_parsing = list(set([
+                        item.get("codigoProducto")
+                        for item in datos_parsing
+                        if item.get("codigoProducto")
+                    ]))
+                    
+                    # ⭐ Aplicar correcciones de códigos si se proporcionan (antes de validación SAP)
+                    if correcciones_codigos:
+                        codigos_productos_parsing = [
+                            correcciones_codigos.get(codigo, codigo)
+                            for codigo in codigos_productos_parsing
+                        ]
+                    
+                    # Validar códigos de producto INMEDIATAMENTE - interrumpir si hay errores
+                    if codigos_productos_parsing:
+                        logger.info(f"🔍 [VALIDACIÓN TEMPRANA] Validando {len(codigos_productos_parsing)} códigos de producto contra SAP ANTES de procesar")
+                        validator = PedidoValidator()
+                        validacion_sap_productos = validator.validar_productos_existen_en_sap(
+                            codigos_productos=codigos_productos_parsing,
+                            usar_cache=True,
+                            sap_obligatorio=True  # OBLIGATORIO: SAP es fuente de verdad
+                        )
+                        
+                        if validacion_sap_productos is None or not validacion_sap_productos.get("todos_validos", False):
+                            no_encontrados = validacion_sap_productos.get("no_encontrados", []) if validacion_sap_productos else []
+                            errores = validacion_sap_productos.get("errores", []) if validacion_sap_productos else []
+                            validos = validacion_sap_productos.get("validos", []) if validacion_sap_productos else []
+                            
+                            # Asegurar que son listas (no ints)
+                            if isinstance(no_encontrados, int):
+                                no_encontrados = []
+                            if isinstance(errores, int):
+                                errores = []
+                            if isinstance(validos, int):
+                                validos = []
+                            
+                            # Mensaje simple - el frontend construirá el mensaje detallado
+                            mensaje_error = "Existen códigos de producto no válidos en SAP"
+                            
+                            # Log detallado para debugging (solo en backend)
+                            log_detalle = f"Productos no encontrados ({len(no_encontrados)}): {', '.join(no_encontrados[:10])}"
+                            if len(no_encontrados) > 10:
+                                log_detalle += f" y {len(no_encontrados) - 10} más"
+                            if errores:
+                                log_detalle += f" | Errores ({len(errores)}): {', '.join(errores[:5])}"
+                                if len(errores) > 5:
+                                    log_detalle += f" y {len(errores) - 5} más"
+                            logger.error(f"❌ Validación SAP productos falló (TEMPRANA): {log_detalle}")
+                            
+                            datos_estructurados = {
+                                "validacion": {
+                                    "productos": {
+                                        "no_encontrados": no_encontrados,
+                                        "errores": errores,
+                                        "validos": validos,
+                                        "total_validos": len(validos),
+                                        "total_invalidos": len(no_encontrados) + len(errores)
+                                    }
+                                },
+                                "validacion_sap": {
+                                    "total_codigos": len(codigos_productos_parsing),
+                                    "validos": len(validos),
+                                    "no_encontrados": len(no_encontrados),
+                                    "errores": len(errores),
+                                    "todos_validos": False
+                                }
+                            }
+                            
+                            # INTERRUMPIR INMEDIATAMENTE - no procesar ni guardar nada
+                            raise BusinessException(
+                                message=mensaje_error,
+                                error_code="PRODUCTOS_NO_VALIDOS_SAP",
+                                data=datos_estructurados
+                            )
+                        
+                        logger.info(f"✅ Validación temprana SAP productos: {len(validacion_sap_productos.get('validos', []))} válidos")
+                
                 # Convertir datos del parsing al formato esperado
                 cabecera = self._normalizar_cabecera_para_bd(
                     resultado_parsing.get("cabecera", {}), 
@@ -705,7 +739,6 @@ class PedidoService:
                 )
                 
                 # Convertir distribuciones a formato detalle_con_tiendas
-                datos_parsing = resultado_parsing.get("data", [])
                 detalles_con_tiendas = []
                 
                 # Agrupar por código de producto (incluyendo información completa del producto)
@@ -714,6 +747,11 @@ class PedidoService:
                     codigo_producto = item.get("codigoProducto")
                     if not codigo_producto:
                         continue
+                    
+                    # ⭐ Aplicar correcciones de códigos si se proporcionan
+                    if correcciones_codigos and codigo_producto in correcciones_codigos:
+                        codigo_producto = correcciones_codigos[codigo_producto]
+                        item["codigoProducto"] = codigo_producto
                     
                     # Obtener información del producto del primer item (es la misma para todas las distribuciones)
                     info_producto = item.get("info_producto", {})
@@ -763,15 +801,8 @@ class PedidoService:
             if not detalles_con_tiendas:
                 raise ValueError("No se encontraron datos válidos en el archivo")
             
-            # ⭐ NUEVO: Aplicar correcciones de códigos si se proporcionan (antes de validación SAP)
-            if correcciones_codigos:
-                detalles_con_tiendas = self._aplicar_correcciones_codigos(
-                    detalles_con_tiendas, 
-                    correcciones_codigos
-                )
-            
-            # ✅ VALIDACIÓN SAP OBLIGATORIA (PRIMERO - fuente de verdad)
-            # Validar productos, tiendas y bodegas contra SAP antes que cualquier otra validación
+            # ✅ VALIDACIÓN SAP OBLIGATORIA (para tiendas y bodegas - productos ya validados arriba)
+            # Validar tiendas y bodegas contra SAP antes que cualquier otra validación
             if validar_sap and detalles_con_tiendas:
                 validator = PedidoValidator()
                 
@@ -804,62 +835,10 @@ class PedidoService:
                 if origen_traslado and origen_traslado.strip():
                     codigos_bodegas_set.add(origen_traslado.strip())
                 
-                # 1. VALIDAR PRODUCTOS CONTRA SAP (OBLIGATORIO)
-                if codigos_productos:
-                    logger.info(f"🔍 [SAP PRIMERO] Validando {len(codigos_productos)} códigos de producto contra SAP")
-                    validacion_sap_productos = self.sap_validator_helper.validar_productos_sap(
-                        codigos_productos=codigos_productos,
-                        resultado=resultado,
-                        usar_cache=True,
-                        sap_obligatorio=True  # OBLIGATORIO: SAP es fuente de verdad
-                    )
-                    
-                if validacion_sap_productos is None or not validacion_sap_productos.get("todos_validos", False):
-                    no_encontrados = validacion_sap_productos.get("no_encontrados", []) if validacion_sap_productos else []
-                    errores = validacion_sap_productos.get("errores", []) if validacion_sap_productos else []
-                    validos = validacion_sap_productos.get("validos", []) if validacion_sap_productos else []
-                    
-                    # Asegurar que son listas (no ints)
-                    if isinstance(no_encontrados, int):
-                        no_encontrados = []
-                    if isinstance(errores, int):
-                        errores = []
-                    if isinstance(validos, int):
-                        validos = []
-                    
-                    # Mensaje simple - el frontend construirá el mensaje detallado
-                    mensaje_error = "Existen códigos de producto no válidos en SAP"
-                    
-                    # Log detallado para debugging (solo en backend)
-                    log_detalle = f"Productos no encontrados ({len(no_encontrados)}): {', '.join(no_encontrados[:10])}"
-                    if len(no_encontrados) > 10:
-                        log_detalle += f" y {len(no_encontrados) - 10} más"
-                    if errores:
-                        log_detalle += f" | Errores ({len(errores)}): {', '.join(errores[:5])}"
-                        if len(errores) > 5:
-                            log_detalle += f" y {len(errores) - 5} más"
-                    logger.error(f"❌ Validación SAP productos falló: {log_detalle}")
-                    
-                    datos_estructurados = {
-                        "validacion": {
-                            "productos": {
-                                "no_encontrados": no_encontrados,
-                                "errores": errores,
-                                "validos": validos,
-                                "total_validos": len(validos),
-                                "total_invalidos": len(no_encontrados) + len(errores)
-                            }
-                        },
-                        "validacion_sap": resultado.get("validacion_sap", {})
-                    }
-                    
-                    raise BusinessException(
-                        message=mensaje_error,
-                        error_code="PRODUCTOS_NO_VALIDOS_SAP",
-                        data=datos_estructurados
-                    )
+                # NOTA: Los productos ya fueron validados tempranamente después del parsing
+                # Aquí solo validamos tiendas y bodegas
                 
-                # 2. VALIDAR TIENDAS CONTRA SAP (OBLIGATORIO)
+                # 1. VALIDAR TIENDAS CONTRA SAP (OBLIGATORIO)
                 if codigos_tiendas_set:
                     logger.info(f"🔍 [SAP PRIMERO] Validando {len(codigos_tiendas_set)} códigos de tienda contra SAP")
                     validacion_tiendas_sap = self.sap_validator_helper.validar_tiendas_sap(
@@ -1779,61 +1758,6 @@ class PedidoService:
             resultado["errores"].append(str(e))
             return resultado
     
-    def _procesar_formato_v1_0(
-        self,
-        file_content: bytes,
-        filename: str,
-        usuario_id: Optional[str] = None,
-        hoja_cabecera: str = "Cabecera Pedido",
-        hoja_detalle: str = "Detalle Articulos",
-        hoja_movimiento: str = "Movimiento",
-        hoja_tiendas: str = "Tiendas",
-        validar_antes_de_guardar: bool = True,
-        tiendas_permitidas: Optional[List[str]] = None,
-        bloquea_con_errores: bool = True,
-        validar_sap: bool = True,
-        sap_obligatorio: bool = True,
-        modo_tiendas: str = "validar_estricto"
-    ) -> Dict[str, Any]:
-        """
-        Procesa el nuevo formato v1.0 con 4 hojas.
-        
-        REFACTORIZADO: Ahora delega a PedidoFormatoV1Processor.
-        Se mantiene este método para compatibilidad hacia atrás.
-        
-        Args:
-            file_content: Contenido del archivo Excel
-            filename: Nombre del archivo
-            usuario_id: ID del usuario
-            hoja_cabecera: Nombre de la hoja de cabecera
-            hoja_detalle: Nombre de la hoja de detalle
-            hoja_movimiento: Nombre de la hoja de movimiento
-            hoja_tiendas: Nombre de la hoja de tiendas
-            validar_antes_de_guardar: Si True, valida antes de persistir
-            tiendas_permitidas: Lista de tiendas permitidas
-            bloquea_con_errores: Si True, no guarda si hay errores
-            validar_sap: Si True, valida códigos contra SAP
-            sap_obligatorio: Si True, errores de SAP bloquean persistencia
-            
-        Returns:
-            Dict con resultado del procesamiento
-        """
-        return self.formato_v1_processor.procesar(
-            file_content=file_content,
-            filename=filename,
-            usuario_id=usuario_id,
-            hoja_cabecera=hoja_cabecera,
-            hoja_detalle=hoja_detalle,
-            hoja_movimiento=hoja_movimiento,
-            hoja_tiendas=hoja_tiendas,
-            validar_antes_de_guardar=validar_antes_de_guardar,
-            tiendas_permitidas=tiendas_permitidas,
-            bloquea_con_errores=bloquea_con_errores,
-            validar_sap=validar_sap,
-            sap_obligatorio=sap_obligatorio,
-            modo_tiendas=modo_tiendas
-        )
-    
     def _persistir_pedido(
         self,
         cabecera: Dict[str, Any],
@@ -1852,6 +1776,11 @@ class PedidoService:
             validar_sap: Si True, filtra productos no validados en SAP
             validacion_sap: Resultado de validación SAP (opcional)
         """
+        # ✅ NO GUARDAR si hay errores de validación
+        if resultado.get("status") != "success":
+            logger.warning(f"⚠️ No se guardó el pedido debido a errores de validación. Status: {resultado.get('status')}")
+            return
+        
         # ✅ FILTRAR productos no validados en SAP (si se validó SAP)
         with get_db_connection_context() as conn:
             repository = PedidoRepository(conn)
