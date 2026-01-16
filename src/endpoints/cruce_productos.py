@@ -324,7 +324,7 @@ def register_cruce_productos_endpoints(app: FastAPI):
     async def buscar_sku_mba3(
         sku: str = Query(..., description="SKU del producto a buscar en MBA3"),
         incluir_sugerencias_sap: bool = Query(False, description="Si True, incluye sugerencias similares de SAP basadas en el código de MBA3"),
-        limite_sugerencias: int = Query(20, ge=1, le=100, description="Límite máximo de sugerencias SAP a retornar (1-100, solo si incluir_sugerencias_sap=True)"),
+        limite_sugerencias: int = Query(20, ge=1, le=50, description="Límite máximo de sugerencias SAP a retornar (1-50, solo si incluir_sugerencias_sap=True)"),
         user: dict = Depends(verify_jwt_token),
         _: None = Depends(require_permission('mba3-consultas.proceso.execute'))
     ):
@@ -344,7 +344,7 @@ def register_cruce_productos_endpoints(app: FastAPI):
         Args:
             sku: Código del producto (PRODUCT_ID) a buscar
             incluir_sugerencias_sap: Si True, busca sugerencias similares en SAP
-            limite_sugerencias: Límite de sugerencias a retornar (1-100, solo si incluir_sugerencias_sap=True)
+            limite_sugerencias: Límite de sugerencias a retornar (solo si incluir_sugerencias_sap=True)
         
         Returns:
             Información del producto en MBA3 y opcionalmente sugerencias similares en SAP:
@@ -742,7 +742,7 @@ def register_cruce_productos_endpoints(app: FastAPI):
     @app.get("/cruce-productos/buscar-sku/sap/sugerencias", tags=["Cruce de Productos"])
     async def buscar_sugerencias_sku_sap(
         sku: str = Query(..., description="SKU (ItemCode) de referencia para buscar sugerencias similares en SAP"),
-        limite: int = Query(20, ge=1, le=100, description="Límite máximo de sugerencias a retornar (1-100)"),
+        limite: int = Query(20, ge=1, le=50, description="Límite máximo de sugerencias a retornar (1-50)"),
         user: dict = Depends(verify_jwt_token),
         _: None = Depends(require_permission('mba3-consultas.proceso.execute'))
     ):
@@ -756,7 +756,7 @@ def register_cruce_productos_endpoints(app: FastAPI):
         
         Args:
             sku: SKU de referencia (ItemCode) para buscar sugerencias similares
-            limite: Límite máximo de sugerencias (default: 20, máximo: 100)
+            limite: Límite máximo de sugerencias (default: 20, máximo: 50)
         
         Returns:
             Lista de sugerencias con información detallada:
