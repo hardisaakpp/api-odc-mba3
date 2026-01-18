@@ -1,0 +1,273 @@
+"""
+Endpoints de edición de detalles de pedidos.
+"""
+
+import logging
+from typing import Dict
+from fastapi import FastAPI, Depends, HTTPException, Path, Body, status
+from fastapi.responses import JSONResponse
+
+from src.security.jwt_auth import verify_jwt_token, require_permission
+from src.models import (
+    ActualizarCostoRequest,
+    ActualizarTotalRequest,
+    ActualizarComentarioRequest,
+    GuardarModificacionesColumnasRequest,
+    GuardarModificacionesColumnasResponse,
+    ObtenerModificacionesColumnasResponse,
+    ModificacionColumnaItem
+)
+from .utils import get_user_id
+
+logger = logging.getLogger(__name__)
+
+
+def register_edicion_endpoints(app: FastAPI):
+    """Registra los endpoints de edición de detalles de pedidos."""
+    
+    @app.patch("/api/pedidos/{numero_pedido}/detalle/{pedido_detalle_id}/costo", tags=["Pedidos - Edición"])
+    async def actualizar_costo_detalle(
+        numero_pedido: str = Path(..., description="Número del pedido"),
+        pedido_detalle_id: str = Path(..., description="UUID del detalle del pedido"),
+        request_body: ActualizarCostoRequest = Body(..., description="Datos del costo a actualizar"),
+        user: Dict = Depends(verify_jwt_token),
+        _: None = Depends(require_permission('mba3-consultas.proceso.execute'))
+    ):
+        """Actualiza el costo unitario de una línea de detalle del pedido."""
+        try:
+            from src.database.connection import get_db_connection_context
+            from src.database.repositories.pedido_repository import PedidoRepository
+            
+            nuevo_costo = request_body.costo_doc_sin_iva
+            
+            if nuevo_costo is None:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                                  detail={"error": "validation_error", "message": "El costo no puede ser null"})
+            if not isinstance(nuevo_costo, (int, float)):
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                                  detail={"error": "validation_error", "message": "El costo debe ser un número válido"})
+            if nuevo_costo < 0:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                                  detail={"error": "validation_error", "message": "El costo no puede ser negativo"})
+            if nuevo_costo > 1000000:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                                  detail={"error": "validation_error", 
+                                         "message": f"El costo ({nuevo_costo}) excede el límite máximo permitido (1,000,000)"})
+            
+            user_id = get_user_id(user)
+            
+            with get_db_connection_context() as conn:
+                repo = PedidoRepository(conn)
+                resultado = repo.update_costo_detalle(pedido_detalle_id, nuevo_costo, modificado_por=user_id)
+            
+            if resultado["success"]:
+                logger.info(f"✅ Costo actualizado para detalle {pedido_detalle_id} por usuario {user.get('username', 'UNKNOWN')}")
+                return JSONResponse(status_code=status.HTTP_200_OK,
+                                  content={"status": "success", "message": resultado["mensaje"],
+                                          "pedido_detalle_id": resultado["pedido_detalle_id"],
+                                          "costo_anterior": resultado["costo_anterior"],
+                                          "costo_nuevo": resultado["costo_nuevo"]})
+            else:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
+                                  detail={"error": "detalle_not_found", "message": resultado["mensaje"]})
+                
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"❌ Error al actualizar costo: {e}", exc_info=True)
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                              detail={"error": "internal_error", "message": f"Error interno al actualizar costo: {str(e)}"})
+    
+    @app.patch("/api/pedidos/{numero_pedido}/detalle/{pedido_detalle_id}/total", tags=["Pedidos - Edición"])
+    async def actualizar_total_detalle(
+        numero_pedido: str = Path(..., description="Número del pedido"),
+        pedido_detalle_id: str = Path(..., description="UUID del detalle del pedido"),
+        request_body: ActualizarTotalRequest = Body(..., description="Datos del total a actualizar"),
+        user: Dict = Depends(verify_jwt_token),
+        _: None = Depends(require_permission('mba3-consultas.proceso.execute'))
+    ):
+        """Actualiza el total de una línea de detalle del pedido."""
+        try:
+            from src.database.connection import get_db_connection_context
+            from src.database.repositories.pedido_repository import PedidoRepository
+            
+            nuevo_total = request_body.total
+            
+            if nuevo_total is None:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                                  detail={"error": "validation_error", "message": "El total no puede ser null"})
+            if not isinstance(nuevo_total, (int, float)):
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                                  detail={"error": "validation_error", "message": "El total debe ser un número válido"})
+            if isinstance(nuevo_total, float) and nuevo_total % 1 != 0:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                                  detail={"error": "validation_error", 
+                                         "message": "El total debe ser un número entero (sin decimales)"})
+            
+            nuevo_total = int(nuevo_total)
+            
+            if nuevo_total < 0:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                                  detail={"error": "validation_error", "message": "El total no puede ser negativo"})
+            if nuevo_total > 10000000:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                                  detail={"error": "validation_error",
+                                         "message": f"El total ({nuevo_total}) excede el límite máximo permitido (10,000,000)"})
+            
+            user_id = get_user_id(user)
+            
+            with get_db_connection_context() as conn:
+                repo = PedidoRepository(conn)
+                resultado = repo.update_total_detalle(pedido_detalle_id, nuevo_total, modificado_por=user_id)
+            
+            if resultado["success"]:
+                logger.info(f"✅ Total actualizado para detalle {pedido_detalle_id} por usuario {user.get('username', 'UNKNOWN')}")
+                return JSONResponse(status_code=status.HTTP_200_OK,
+                                  content={"status": "success", "message": resultado["mensaje"],
+                                          "pedido_detalle_id": resultado["pedido_detalle_id"],
+                                          "total_anterior": resultado["total_anterior"],
+                                          "total_nuevo": resultado["total_nuevo"],
+                                          "costo_actualizado": resultado["costo_actualizado"]})
+            else:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
+                                  detail={"error": "detalle_not_found", "message": resultado["mensaje"]})
+                
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"❌ Error al actualizar total: {e}", exc_info=True)
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                              detail={"error": "internal_error", "message": f"Error interno al actualizar total: {str(e)}"})
+    
+    @app.patch("/api/pedidos/{numero_pedido}/detalle/{pedido_detalle_id}/comentario", tags=["Pedidos - Edición"])
+    async def actualizar_comentario_detalle(
+        numero_pedido: str = Path(..., description="Número del pedido"),
+        pedido_detalle_id: str = Path(..., description="UUID del detalle del pedido"),
+        request_body: ActualizarComentarioRequest = Body(..., description="Datos del comentario a actualizar"),
+        user: Dict = Depends(verify_jwt_token),
+        _: None = Depends(require_permission('mba3-consultas.proceso.execute'))
+    ):
+        """Actualiza el comentario de una línea de detalle del pedido."""
+        try:
+            from src.database.connection import get_db_connection_context
+            from src.database.repositories.pedido_repository import PedidoRepository
+            
+            nuevo_comentario = request_body.comentario
+            
+            if nuevo_comentario is not None:
+                if not isinstance(nuevo_comentario, str):
+                    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                                      detail={"error": "validation_error", 
+                                             "message": "El comentario debe ser una cadena de texto"})
+                if len(nuevo_comentario) > 2000:
+                    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                                      detail={"error": "validation_error",
+                                             "message": f"El comentario excede la longitud máxima permitida (2000 caracteres). Longitud actual: {len(nuevo_comentario)}"})
+                if nuevo_comentario.strip() == "":
+                    nuevo_comentario = None
+            
+            user_id = get_user_id(user)
+            
+            with get_db_connection_context() as conn:
+                repo = PedidoRepository(conn)
+                resultado = repo.update_comentario_detalle(pedido_detalle_id, nuevo_comentario, modificado_por=user_id)
+            
+            if resultado["success"]:
+                logger.info(f"✅ Comentario actualizado para detalle {pedido_detalle_id} por usuario {user.get('username', 'UNKNOWN')}")
+                return JSONResponse(status_code=status.HTTP_200_OK,
+                                  content={"status": "success", "message": resultado["mensaje"],
+                                          "pedido_detalle_id": resultado["pedido_detalle_id"],
+                                          "comentario_anterior": resultado["comentario_anterior"],
+                                          "comentario_nuevo": resultado["comentario_nuevo"],
+                                          "costo_nuevo": None, "total_actualizado": None})
+            else:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
+                                  detail={"error": "detalle_not_found", "message": resultado["mensaje"]})
+                
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"❌ Error al actualizar comentario: {e}", exc_info=True)
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                              detail={"error": "internal_error", "message": f"Error interno al actualizar comentario: {str(e)}"})
+    
+    @app.post("/api/pedidos/{numero_pedido}/modificaciones-columnas",
+              response_model=GuardarModificacionesColumnasResponse,
+              tags=["Pedidos - Modificaciones"])
+    async def guardar_modificaciones_columnas(
+        numero_pedido: str = Path(..., description="Número del pedido"),
+        request_body: GuardarModificacionesColumnasRequest = Body(..., description="Datos de las modificaciones"),
+        user: Dict = Depends(verify_jwt_token),
+        _: None = Depends(require_permission('mba3-consultas.proceso.execute'))
+    ):
+        """Guarda o actualiza las modificaciones de columnas para un pedido."""
+        try:
+            from src.database.connection import get_db_connection_context
+            from src.database.repositories.pedido_repository import PedidoRepository
+            
+            if request_body.numero_pedido != numero_pedido:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                                  detail={"error": "numero_pedido_mismatch",
+                                         "message": f"El número de pedido en la URL ({numero_pedido}) no coincide con el del body ({request_body.numero_pedido})"})
+            
+            modificaciones_list = [{"pedido_detalle_id": mod.pedido_detalle_id, "columna_key": mod.columna_key}
+                                  for mod in request_body.modificaciones]
+            user_id = get_user_id(user)
+            
+            with get_db_connection_context() as conn:
+                repo = PedidoRepository(conn)
+                resultado = repo.guardar_modificaciones_columnas(
+                    numero_pedido=numero_pedido, modificaciones=modificaciones_list, modificado_por=user_id)
+            
+            if resultado["success"]:
+                logger.info(f"✅ Modificaciones guardadas para pedido {numero_pedido} por usuario {user.get('username', 'UNKNOWN')}")
+                return GuardarModificacionesColumnasResponse(
+                    status="success", message=resultado["mensaje"],
+                    numero_pedido=numero_pedido, modificaciones_guardadas=resultado["modificaciones_guardadas"])
+            else:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
+                                  detail={"error": "pedido_not_found", "message": resultado["mensaje"]})
+                
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"❌ Error al guardar modificaciones de columnas: {e}", exc_info=True)
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                              detail={"error": "internal_error", "message": f"Error interno al guardar modificaciones: {str(e)}"})
+    
+    @app.get("/api/pedidos/{numero_pedido}/modificaciones-columnas",
+             response_model=ObtenerModificacionesColumnasResponse,
+             tags=["Pedidos - Modificaciones"])
+    async def obtener_modificaciones_columnas(
+        numero_pedido: str = Path(..., description="Número del pedido"),
+        user: Dict = Depends(verify_jwt_token),
+        _: None = Depends(require_permission('mba3-consultas.facturas.view'))
+    ):
+        """Obtiene las modificaciones de columnas para un pedido."""
+        try:
+            from src.database.connection import get_db_connection_context
+            from src.database.repositories.pedido_repository import PedidoRepository
+            
+            with get_db_connection_context() as conn:
+                repo = PedidoRepository(conn)
+                resultado = repo.obtener_modificaciones_columnas(numero_pedido=numero_pedido)
+            
+            if not resultado["success"]:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
+                                  detail={"error": "pedido_not_found", "message": resultado["mensaje"]})
+            
+            modificaciones_items = [ModificacionColumnaItem(
+                pedido_detalle_id=mod["pedido_detalle_id"], columna_key=mod["columna_key"],
+                modificado_por=mod["modificado_por"], fecha_modificacion=mod["fecha_modificacion"])
+                for mod in resultado["modificaciones"]]
+            
+            logger.info(f"✅ Modificaciones obtenidas para pedido {numero_pedido} por usuario {user.get('username', 'UNKNOWN')}")
+            return ObtenerModificacionesColumnasResponse(
+                status="success", numero_pedido=numero_pedido, modificaciones=modificaciones_items)
+                
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"❌ Error al obtener modificaciones de columnas: {e}", exc_info=True)
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                              detail={"error": "internal_error", "message": f"Error interno al obtener modificaciones: {str(e)}"})

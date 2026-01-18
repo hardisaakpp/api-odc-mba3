@@ -1,8 +1,8 @@
 """
-Módulo de endpoints FastAPI para la API de consultas MBA3.
+M?dulo de endpoints FastAPI para la API de consultas MBA3.
 
-Esta es la versión refactorizada que organiza los endpoints en módulos separados.
-Mantiene compatibilidad con la función create_endpoints() original.
+Esta es la versi?n refactorizada que organiza los endpoints en m?dulos separados.
+Mantiene compatibilidad con la funci?n create_endpoints() original.
 """
 
 from fastapi import FastAPI
@@ -16,14 +16,15 @@ from .remisiones import register_remisiones_endpoints
 from .homologaciones_sku import register_homologaciones_sku_endpoints
 from .cruce_productos import register_cruce_productos_endpoints
 from .plantillas import register_plantillas_endpoints
+from .pedidos import register_pedidos_endpoints
 
 
 def create_endpoints(app: FastAPI):
     """
-    Registra todos los endpoints en la aplicación FastAPI.
+    Registra todos los endpoints en la aplicaci?n FastAPI.
     
-    Esta función mantiene la compatibilidad con el código existente.
-    Los endpoints se registran desde módulos separados para mejor organización.
+    Esta funci?n mantiene la compatibilidad con el c?digo existente.
+    Los endpoints se registran desde m?dulos separados para mejor organizaci?n.
     
     Args:
         app: Instancia de FastAPI
@@ -37,7 +38,7 @@ def create_endpoints(app: FastAPI):
     # Registrar endpoints de SAP (migrado)
     register_sap_endpoints(app)
     
-    # Registrar endpoints de órdenes de compra (migrado)
+    # Registrar endpoints de ?rdenes de compra (migrado)
     register_ordenes_compra_endpoints(app)
     
     # Registrar endpoints de pruebas (migrado)
@@ -58,8 +59,11 @@ def create_endpoints(app: FastAPI):
     # Registrar endpoints de plantillas Excel
     register_plantillas_endpoints(app)
     
-    # ✅ TODOS LOS ENDPOINTS HAN SIDO MIGRADOS
-    # Ya no es necesario importar el módulo legacy
+    # Registrar endpoints de pedidos (refactorizado - 29 endpoints)
+    register_pedidos_endpoints(app)
+    
+    # ? TODOS LOS ENDPOINTS HAN SIDO MIGRADOS
+    # Ya no es necesario importar el m?dulo legacy
     # El archivo _endpoints_legacy.py puede mantenerse como respaldo o eliminarse
     # si se confirma que todo funciona correctamente
 

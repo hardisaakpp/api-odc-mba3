@@ -1,0 +1,560 @@
+"""
+Endpoints CRUD para gestión de pedidos.
+"""
+
+import logging
+from typing import Dict, Optional
+from fastapi import FastAPI, UploadFile, File, Depends, HTTPException, Path, Query, Body, status
+from fastapi.responses import JSONResponse
+
+from src.security.jwt_auth import verify_jwt_token, require_permission
+from src.exceptions import BusinessException
+from src.models import (
+    ModificarPedidoCabeceraRequest,
+    ModificarPedidoCabeceraResponse,
+    CrearPedidoRequest,
+    CrearPedidoResponse
+)
+from .utils import get_user_id, MAX_FILE_SIZE
+
+logger = logging.getLogger(__name__)
+
+
+def register_crud_endpoints(app: FastAPI):
+    """Registra los endpoints CRUD de pedidos."""
+    
+    @app.get("/api/pedidos", tags=["Pedidos"])
+    async def listar_pedidos(
+        estado: Optional[str] = Query(None, description="Filtrar por estado del pedido"),
+        fecha_desde: Optional[str] = Query(None, description="Filtrar desde fecha (YYYY-MM-DD)"),
+        fecha_hasta: Optional[str] = Query(None, description="Filtrar hasta fecha (YYYY-MM-DD)"),
+        proveedor_nombre: Optional[str] = Query(None, description="Buscar por nombre de proveedor (parcial)"),
+        numero_pedido: Optional[str] = Query(None, description="Buscar por número de pedido (parcial)"),
+        creado_por: Optional[str] = Query(None, description="Filtrar por usuario que creó el pedido"),
+        limit: Optional[int] = Query(50, description="Límite de registros por página"),
+        offset: Optional[int] = Query(0, description="Offset para paginación"),
+        user: Dict = Depends(verify_jwt_token),
+        _: None = Depends(require_permission('mba3-consultas.facturas.view'))
+    ):
+        """
+        Lista pedidos con filtros y paginación.
+        
+        **HU-02 y HU-07: Visualizar estado de pedidos con filtros**
+        
+        Este endpoint permite a los usuarios de Mabel Trading y El Rayo visualizar
+        los pedidos con múltiples filtros y seguimiento del estado.
+        
+        **Query Parameters:**
+        - `estado` (string, opcional) - Filtrar por estado (ej: "PENDIENTE_CONFIRMACION_PROVEEDOR", "CONFIRMADO_PROVEEDOR")
+        - `fecha_desde` (string, opcional) - Filtrar desde fecha (YYYY-MM-DD)
+        - `fecha_hasta` (string, opcional) - Filtrar hasta fecha (YYYY-MM-DD)
+        - `proveedor_nombre` (string, opcional) - Búsqueda parcial por nombre de proveedor
+        - `numero_pedido` (string, opcional) - Búsqueda parcial por número de pedido
+        - `creado_por` (string, opcional) - Filtrar por usuario que creó el pedido
+        - `limit` (int, default: 50) - Límite de registros por página
+        - `offset` (int, default: 0) - Offset para paginación
+        
+        **Ejemplo:**
+        ```
+        GET /api/pedidos?estado=PENDIENTE_CONFIRMACION_PROVEEDOR&limit=20&offset=0
+        GET /api/pedidos?fecha_desde=2025-01-01&fecha_hasta=2025-01-31&proveedor_nombre=RAYO
+        ```
+        
+        **Respuesta:**
+        ```json
+        {
+            "status": "success",
+            "data": [
+                {
+                    "pedido_id": "...",
+                    "numero_pedido": "P-12.48 - 12 - 2025",
+                    "fecha_pedido": "2025-01-21",
+                    "proveedor_nombre": "TEXTILES EL RAYO S.A.",
+                    "estado": "PENDIENTE_CONFIRMACION_PROVEEDOR",
+                    ...
+                }
+            ],
+            "metadata": {
+                "total": 150,
+                "limit": 50,
+                "offset": 0,
+                "has_more": true
+            }
+        }
+        ```
+        
+        Returns:
+            JSON con lista de pedidos y metadata de paginación
+        """
+        try:
+            from src.database.connection import get_db_connection_context
+            from src.database.repositories.pedido_repository import PedidoRepository
+            
+            with get_db_connection_context() as conn:
+                repo = PedidoRepository(conn)
+                resultado = repo.get_pedidos_con_filtros(
+                    estado=estado,
+                    fecha_desde=fecha_desde,
+                    fecha_hasta=fecha_hasta,
+                    proveedor_nombre=proveedor_nombre,
+                    numero_pedido=numero_pedido,
+                    creado_por=creado_por,
+                    limit=limit,
+                    offset=offset
+                )
+                
+                return JSONResponse(
+                    status_code=200,
+                    content={
+                        "status": "success",
+                        "data": resultado["data"],
+                        "metadata": {
+                            "total": resultado["total"],
+                            "limit": resultado["limit"],
+                            "offset": resultado["offset"],
+                            "has_more": resultado["has_more"]
+                        }
+                    }
+                )
+                
+        except Exception as e:
+            logger.error(f"❌ Error al listar pedidos: {e}", exc_info=True)
+            raise HTTPException(
+                status_code=500,
+                detail=f"Error interno al listar pedidos: {str(e)}"
+            )
+    
+    @app.get("/api/plantillas/{identificador}", tags=["Plantillas"])
+    async def get_pedido(
+        identificador: str = Path(..., description="Número de pedido (ej: 'P-12.48 - 12 - 2025') o UUID del pedido (para compatibilidad)"),
+        incluir_respuesta: bool = Query(False, description="Incluir respuesta del proveedor si existe"),
+        user: Dict = Depends(verify_jwt_token),
+        _: None = Depends(require_permission('mba3-consultas.facturas.view'))
+    ):
+        """
+        Obtiene un pedido completo con cabecera, detalles y distribuciones por tienda.
+        Acepta número de pedido (recomendado) o UUID (para compatibilidad).
+        Opcionalmente incluye la respuesta del proveedor.
+        
+        **Path Parameters:**
+        - `identificador` (string, requerido) - Puede ser:
+          - Número de pedido (business key, ej: 'P-12.48 - 12 - 2025') ⭐ RECOMENDADO
+          - UUID del pedido (ej: 'AEDEC52D-D007-416F-8A09-9F0D31282EEE') ⚠️ Compatibilidad
+        
+        **Query Parameters:**
+        - `incluir_respuesta` (bool, default: false): Si true, incluye respuesta del proveedor si existe
+        
+        **Respuesta exitosa:**
+        ```json
+        {
+            "cabecera": {
+                "pedido_id": "...",
+                "numero_pedido": "...",
+                "fecha_pedido": "...",
+                ...
+            },
+            "detalles": [
+                {
+                    "pedido_detalle_id": "...",
+                    "codigo_interno": "...",
+                    "descripcion_sap": "...",
+                    "tiendas": [
+                        {
+                            "tienda_id": "...",
+                            "codigo": "RECREO",
+                            "nombre": "...",
+                            "cantidad": 10
+                        }
+                    ]
+                }
+            ],
+            "respuesta_proveedor": {
+                "cabecera": {...},
+                "detalles": [...]
+            }
+        }
+        ```
+        
+        Returns:
+            JSON con pedido completo
+        """
+        try:
+            import re
+            from src.database.connection import get_db_connection_context
+            from src.database.repositories.pedido_repository import PedidoRepository
+            from src.database.repositories.pedido_respuesta_repository import PedidoRespuestaRepository
+            
+            # Detectar si es UUID (formato: 8-4-4-4-12 caracteres hexadecimales)
+            uuid_pattern = re.compile(r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$')
+            es_uuid = uuid_pattern.match(identificador.strip()) is not None
+            
+            with get_db_connection_context() as conn:
+                repository = PedidoRepository(conn)
+                
+                # Usar método apropiado según el formato detectado
+                if es_uuid:
+                    logger.info(f"🔍 Detectado UUID: {identificador}, usando get_pedido_completo")
+                    pedido = repository.get_pedido_completo(identificador)
+                    if not pedido:
+                        raise HTTPException(
+                            status_code=404,
+                            detail=f"Pedido no encontrado con UUID: {identificador}"
+                        )
+                else:
+                    logger.info(f"🔍 Detectado numero_pedido: {identificador}, usando get_pedido_completo_por_numero")
+                    pedido = repository.get_pedido_completo_por_numero(identificador)
+                    if not pedido:
+                        raise HTTPException(
+                            status_code=404,
+                            detail=f"Pedido no encontrado con número: {identificador}"
+                        )
+                
+                # Agregar respuesta si se solicita y existe (usando pedido_id de la cabecera)
+                if incluir_respuesta:
+                    respuesta_repo = PedidoRespuestaRepository(conn)
+                    pedido_id = pedido["cabecera"]["pedido_id"]
+                    respuesta = respuesta_repo.obtener_respuesta_activa(pedido_id)
+                    if respuesta:
+                        pedido["respuesta_proveedor"] = respuesta
+                
+                return JSONResponse(status_code=200, content=pedido)
+            
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"❌ Error al obtener pedido: {e}", exc_info=True)
+            raise HTTPException(
+                status_code=500,
+                detail=f"Error interno al obtener pedido: {str(e)}"
+            )
+    
+    @app.post("/pedidos/importar-excel", tags=["Pedidos"])
+    async def importar_excel_pedido(
+        file: UploadFile = File(..., description="Archivo Excel (.xlsx) con hojas 'cabecera' y 'detalle' (formato v1.0)"),
+        hoja_cabecera: str = Query("cabecera", description="Nombre de la hoja de cabecera (default: 'cabecera')"),
+        hoja_detalle: str = Query("detalle", description="Nombre de la hoja de detalle (default: 'detalle')"),
+        validar_sap: bool = Query(True, description="Validar códigos de producto contra SAP"),
+        sap_obligatorio: bool = Query(True, description="Si True, errores de SAP bloquean la importación. Si False, solo genera warnings"),
+        user: Dict = Depends(verify_jwt_token),
+        _: None = Depends(require_permission('mba3-consultas.proceso.execute'))
+    ):
+        """
+        Importa y parsea un archivo Excel de pedido en formato v1.0.
+        
+        **Formato esperado (Template_Pedido_Inicial_v1.0.xlsx):**
+        - **Hoja 1: "cabecera"** - Formato clave-valor (Campo | Valor | Ejemplo)
+        - **Hoja 2: "detalle"** - Formato tabular con:
+          - Columnas A-J: Información del producto (CODIGO PRODUCTO, MARCA, CODIGO BARRAS, etc.)
+          - Columnas K-M: Bodegas centrales (RL-CD, OUT-CD, REG-CD) - NO incluidas en SUBTOTAL
+          - Columnas N+: Tiendas individuales - SÍ incluidas en SUBTOTAL (parsea hasta última columna con información)
+        
+        **Solo parsing técnico:** lee, normaliza y valida estructura.
+        NO aplica reglas de negocio, NO consolida duplicados.
+        NO calcula SUBTOTAL ni TOTAL - solo parsea los valores que contiene el Excel.
+        
+        **Validaciones técnicas:**
+        - Extensión: .xlsx
+        - Tamaño máximo: 10 MB
+        - Hojas obligatorias: "cabecera" y "detalle" (en minúsculas)
+        - Columnas obligatorias en detalle: CODIGO PRODUCTO (columna A)
+        - Parsea desde columna N (índice 13) hasta la última columna con información
+        
+        **Estructura de respuesta:**
+        ```json
+        {
+            "cabecera": {...},
+            "resumen": {
+                "filasLeidas": 120,
+                "filasValidas": 115,
+                "filasInvalidas": 5
+            },
+            "errores": [...],
+            "data": [...]
+        }
+        ```
+        
+        Returns:
+            JSON con resultado del parsing técnico incluyendo cabecera y detalle
+        """
+        try:
+            # Validar archivo
+            file_name = file.filename.lower() if file.filename else ""
+            if not file_name.endswith('.xlsx'):
+                raise HTTPException(
+                    status_code=400,
+                    detail="Formato de archivo no permitido. Solo se permiten archivos .xlsx"
+                )
+            
+            # Leer contenido del archivo
+            content = await file.read()
+            file_size = len(content)
+            
+            # Validar tamaño
+            if file_size > MAX_FILE_SIZE:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"El archivo es demasiado grande. Tamaño máximo: {MAX_FILE_SIZE / (1024*1024):.1f} MB"
+                )
+            
+            if file_size == 0:
+                raise HTTPException(
+                    status_code=400,
+                    detail="El archivo está vacío"
+                )
+            
+            # Parsear Excel (solo parsing técnico)
+            from src.database.services.pedido_service import PedidoService
+            
+            service = PedidoService()
+            resultado = service.parsear_excel_pedido(
+                file_content=content,
+                hoja_cabecera=hoja_cabecera,
+                hoja_detalle=hoja_detalle
+            )
+            
+            # ✅ VALIDACIÓN SAP POST-PARSING (si está habilitada)
+            if validar_sap and resultado.get("data"):
+                from src.database.services.pedido_validator import PedidoValidator
+                
+                # Extraer códigos únicos de productos (performance: validar una vez por código)
+                codigos_productos = list(set([
+                    item.get("codigoProducto")
+                    for item in resultado.get("data", [])
+                    if item.get("codigoProducto")
+                ]))
+                
+                if codigos_productos:
+                    validator = PedidoValidator()
+                    validacion_sap = validator.validar_productos_existen_en_sap_con_sugerencias(
+                        codigos_productos=codigos_productos,
+                        usar_cache=True,
+                        sap_obligatorio=sap_obligatorio,
+                        incluir_sugerencias=True,
+                        limite_sugerencias=20
+                    )
+                    
+                    # Mapear códigos a filas para reportar errores por fila
+                    codigo_a_filas = {}
+                    for item in resultado.get("data", []):
+                        codigo = item.get("codigoProducto")
+                        fila = item.get("filaOrigen")
+                        if codigo and fila:
+                            if codigo not in codigo_a_filas:
+                                codigo_a_filas[codigo] = []
+                            codigo_a_filas[codigo].append(fila)
+                    
+                    # Agregar errores y warnings por fila
+                    codigos_no_encontrados = set(validacion_sap.get("no_encontrados", []))
+                    codigos_errores = set(validacion_sap.get("errores", []))
+                    codigos_warnings = set(validacion_sap.get("warnings", []))
+                    
+                    # Errores: códigos no encontrados o errores críticos
+                    for codigo in (codigos_no_encontrados | codigos_errores):
+                        detalle_codigo = validacion_sap.get("detalle", {}).get(codigo, {})
+                        mensaje = detalle_codigo.get("mensaje") or f"El código de producto '{codigo}' no es válido en SAP"
+                        
+                        for fila in codigo_a_filas.get(codigo, []):
+                            resultado["errores"].append({
+                                "fila": fila,
+                                "campo": "CodigoProducto",
+                                "tipo": "ERROR",
+                                "mensaje": mensaje
+                            })
+                    
+                    # Warnings
+                    for codigo in codigos_warnings:
+                        detalle_codigo = validacion_sap.get("detalle", {}).get(codigo, {})
+                        mensaje = detalle_codigo.get("mensaje") or f"No se pudo validar el código '{codigo}' en SAP"
+                        
+                        for fila in codigo_a_filas.get(codigo, []):
+                            resultado["errores"].append({
+                                "fila": fila,
+                                "campo": "CodigoProducto",
+                                "tipo": "WARNING",
+                                "mensaje": mensaje
+                            })
+                    
+                    # Recalcular filasValidas/filasInvalidas
+                    filas_con_errores_criticos = set()
+                    for error in resultado.get("errores", []):
+                        if error.get("tipo") == "ERROR":
+                            fila = error.get("fila")
+                            if fila and fila > 0:
+                                filas_con_errores_criticos.add(fila)
+                    
+                    filas_leidas = resultado["resumen"].get("filasLeidas", 0)
+                    filas_invalidas_originales = resultado["resumen"].get("filasInvalidas", 0)
+                    filas_invalidas_finales = max(filas_invalidas_originales, len(filas_con_errores_criticos))
+                    
+                    resultado["resumen"]["filasInvalidas"] = filas_invalidas_finales
+                    resultado["resumen"]["filasValidas"] = max(0, filas_leidas - filas_invalidas_finales)
+                    
+                    # Agregar resumen de validación SAP
+                    resultado["validacion_sap"] = {
+                        "total_codigos": len(codigos_productos),
+                        "validos": len(validacion_sap.get("validos", [])),
+                        "no_encontrados": len(codigos_no_encontrados),
+                        "errores": len(codigos_errores),
+                        "warnings": len(codigos_warnings),
+                        "todos_validos": validacion_sap.get("todos_validos", False),
+                        "detalle_validacion": {
+                            codigo: {
+                                "existe": info.get("existe"),
+                                "severity": info.get("severity"),
+                                "error": info.get("error"),
+                                "mensaje": info.get("mensaje"),
+                                "mba3": info.get("mba3"),
+                                "sugerencias_sap": info.get("sugerencias_sap", [])
+                            }
+                            for codigo, info in validacion_sap.get("detalle", {}).items()
+                        }
+                    }
+                    
+                    logger.info(
+                        f"📊 Validación SAP: {len(validacion_sap.get('validos', []))} válidos, "
+                        f"{len(codigos_no_encontrados)} no encontrados, "
+                        f"{len(codigos_errores)} errores, {len(codigos_warnings)} warnings"
+                    )
+            
+            return JSONResponse(status_code=200, content=resultado)
+            
+        except HTTPException:
+            raise
+        except BusinessException:
+            raise
+        except Exception as e:
+            logger.error(f"❌ Error al importar Excel: {e}", exc_info=True)
+            raise HTTPException(
+                status_code=500,
+                detail=f"Error interno al importar el archivo: {str(e)}"
+            )
+    
+    @app.post("/api/pedidos", 
+             response_model=CrearPedidoResponse,
+             tags=["Pedidos"])
+    async def crear_pedido_manual(
+        request_body: CrearPedidoRequest = Body(..., description="Datos del pedido a crear"),
+        user: Dict = Depends(verify_jwt_token),
+        _: None = Depends(require_permission('mba3-consultas.proceso.execute'))
+    ):
+        """
+        Crea un pedido manualmente desde la pantalla web (HU-01 - Carga por Pantalla).
+        
+        Este endpoint permite crear pedidos directamente desde la interfaz web
+        sin necesidad de subir un archivo Excel.
+        
+        Returns:
+            JSON con resultado completo de creación del pedido
+        """
+        try:
+            from src.database.services.pedido_service import PedidoService
+            
+            service = PedidoService()
+            usuario_id = user.get("sub") or user.get("user_id")
+            
+            datos_pedido = request_body.model_dump(exclude_none=False)
+            
+            logger.debug(f"📦 Datos recibidos para crear pedido manual: {datos_pedido}")
+            if datos_pedido.get("articulos"):
+                logger.debug(f"📦 Primer artículo recibido: {datos_pedido['articulos'][0]}")
+            
+            resultado = service.crear_pedido_manual(
+                datos_pedido=datos_pedido,
+                usuario_id=usuario_id,
+                validar_productos=datos_pedido.get("validar_productos", True),
+                validar_tiendas=datos_pedido.get("validar_tiendas", True)
+            )
+            
+            # Determinar código de estado HTTP
+            status_code = 200
+            if resultado["status"] == "validation_error":
+                status_code = 400
+            elif resultado["status"] == "error":
+                if resultado.get("error_tipo") == "numero_pedido_duplicado":
+                    status_code = 400
+                else:
+                    status_code = 500
+            
+            return JSONResponse(status_code=status_code, content=resultado)
+            
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"❌ Error al crear pedido manual: {e}", exc_info=True)
+            raise HTTPException(
+                status_code=500,
+                detail=f"Error interno al crear el pedido: {str(e)}"
+            )
+    
+    @app.put("/api/pedidos/{pedido_id}",
+             response_model=ModificarPedidoCabeceraResponse,
+             tags=["Pedidos - Edición"])
+    async def modificar_pedido_cabecera(
+        pedido_id: str = Path(..., description="UUID del pedido"),
+        request_body: ModificarPedidoCabeceraRequest = Body(..., description="Datos de la cabecera a modificar"),
+        user: Dict = Depends(verify_jwt_token),
+        _: None = Depends(require_permission('mba3-consultas.proceso.execute'))
+    ):
+        """
+        Modifica la cabecera de un pedido (HU-03 - Modificación de pedidos).
+        
+        Este endpoint permite modificar los datos de la cabecera del pedido.
+        
+        Returns:
+            JSON con resultado de la modificación
+        """
+        try:
+            from src.database.connection import get_db_connection_context
+            from src.database.repositories.pedido_repository import PedidoRepository
+            
+            datos_cabecera = request_body.model_dump(exclude_unset=True)
+            campos_modificados = list(datos_cabecera.keys())
+            user_id = get_user_id(user)
+            
+            with get_db_connection_context() as conn:
+                repo = PedidoRepository(conn)
+                
+                pedido_existente = repo.get_pedido_completo(pedido_id)
+                if not pedido_existente:
+                    raise HTTPException(
+                        status_code=status.HTTP_404_NOT_FOUND,
+                        detail={
+                            "error": "pedido_not_found",
+                            "message": f"No se encontró el pedido con ID: {pedido_id}"
+                        }
+                    )
+                
+                resultado = repo.update_cabecera(pedido_id, datos_cabecera)
+                
+                if not resultado:
+                    raise HTTPException(
+                        status_code=status.HTTP_404_NOT_FOUND,
+                        detail={
+                            "error": "update_failed",
+                            "message": "No se pudo actualizar la cabecera del pedido"
+                        }
+                    )
+            
+            logger.info(f"✅ Cabecera del pedido {pedido_id} actualizada por usuario {user.get('username', 'UNKNOWN')}")
+            
+            return JSONResponse(
+                status_code=status.HTTP_200_OK,
+                content={
+                    "status": "success",
+                    "message": "Cabecera del pedido actualizada correctamente",
+                    "pedido_id": pedido_id,
+                    "campos_modificados": campos_modificados
+                }
+            )
+            
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"❌ Error al modificar cabecera del pedido: {e}", exc_info=True)
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail={
+                    "error": "internal_error",
+                    "message": f"Error interno al modificar cabecera del pedido: {str(e)}"
+                }
+            )
