@@ -528,7 +528,8 @@ class PedidoParser:
                     continue
                 
                 # Extraer información completa del producto (columnas A-J)
-                info_producto = {
+                from typing import Any
+                info_producto: Dict[str, Any] = {
                     "codigo_interno": codigo_producto
                 }
                 
