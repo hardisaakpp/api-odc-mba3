@@ -135,7 +135,7 @@ class PedidoSAPValidatorHelper:
                 "detalle": {}
             }
         
-        logger.info("📋 Validación SAP: Verificando productos en SAP (con sugerencias)")
+        logger.debug("📋 Validando productos en SAP (con sugerencias)")
         
         # ⭐ USAR MÉTODO CON SUGERENCIAS para incluir sugerencias en la respuesta
         validacion_sap = self.validator.validar_productos_existen_en_sap_con_sugerencias(
@@ -202,9 +202,12 @@ class PedidoSAPValidatorHelper:
             
             return None  # Indicar que hay error y no se debe continuar
         
-        logger.info(
-            f"📊 Validación SAP: {len(validacion_sap.get('validos', []))} válidos, "
-            f"{len(validacion_sap.get('no_encontrados', []))} no encontrados"
-        )
+        # Log resumido solo si hay problemas
+        if no_encontrados_list or errores_list:
+            logger.warning(
+                f"📊 Validación SAP: {len(validos_list)}✓, {len(no_encontrados_list)}✗"
+            )
+        else:
+            logger.debug(f"📊 Validación SAP: {len(validos_list)} productos válidos")
         
         return validacion_sap

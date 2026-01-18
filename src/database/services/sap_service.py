@@ -104,11 +104,11 @@ class SAPService:
                         }
             
             # Cache no válido o force_refresh=True, consultar SAP
-            logger.info(f"🔍 Consultando SAP para SKU: {sku}")
+            logger.debug(f"🔍 Consultando SAP para SKU: {sku}")
             sap_info = self.sap_client.get_producto_info(sku)
             
             if not sap_info:
-                logger.warning(f"⚠️ No se encontró información en SAP para SKU: {sku}")
+                logger.debug(f"⚠️ SKU no encontrado en SAP: {sku}")
                 # Retornar diccionario especial para indicar que no existe en SAP
                 return {
                     "_error": True,

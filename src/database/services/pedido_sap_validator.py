@@ -259,14 +259,8 @@ class PedidoSAPValidator:
                     
                     if incluir_sugerencias and ENABLE_SAP_QUERIES:
                         try:
-                            logger.info(f"🔍 [validar_productos_existen_en_sap_con_sugerencias] Buscando MBA3 y sugerencias para {codigo_clean}")
-                            
                             # Buscar en MBA3
                             info_mba3 = self._buscar_en_mba3(codigo_clean)
-                            if info_mba3:
-                                logger.info(f"✅ [validar_productos_existen_en_sap_con_sugerencias] Encontrado en MBA3: {codigo_clean}")
-                            else:
-                                logger.info(f"ℹ️ [validar_productos_existen_en_sap_con_sugerencias] No encontrado en MBA3: {codigo_clean} (continuando con sugerencias)")
                             
                             # ⭐ SIEMPRE generar sugerencias (incluso si no está en MBA3)
                             # Esto permite encontrar variaciones del código en SAP
@@ -276,7 +270,9 @@ class PedidoSAPValidator:
                                 limite_sugerencias
                             )
                             
-                            logger.info(f"📊 [validar_productos_existen_en_sap_con_sugerencias] Generadas {len(sugerencias)} sugerencias para {codigo_clean}")
+                            # Log consolidado solo si hay sugerencias o info MBA3
+                            if sugerencias or info_mba3:
+                                logger.debug(f"🔍 {codigo_clean}: MBA3={'✓' if info_mba3 else '✗'}, Sugerencias={len(sugerencias)}")
                             
                         except Exception as e:
                             logger.warning(f"⚠️ Error al buscar sugerencias para {codigo_clean}: {e}", exc_info=True)
@@ -285,8 +281,6 @@ class PedidoSAPValidator:
                     detalle_base["mba3"] = info_mba3
                     detalle_base["sugerencias_sap"] = sugerencias
                     detalle[codigo] = detalle_base
-                    
-                    logger.debug(f"📋 [validar_productos_existen_en_sap_con_sugerencias] Detalle para {codigo}: mba3={info_mba3 is not None}, sugerencias={len(sugerencias)}")
                     
                     if resultado_codigo["tipo"] == "no_encontrado":
                         no_encontrados.append(codigo)
@@ -313,10 +307,13 @@ class PedidoSAPValidator:
         
         todos_validos = len(no_encontrados) == 0 and len(errores) == 0
         
-        logger.info(
-            f"📊 Validación SAP productos (con sugerencias): {len(validos)} válidos, "
-            f"{len(no_encontrados)} no encontrados, {len(errores)} errores, {len(warnings)} warnings"
-        )
+        # Log resumido solo si hay problemas
+        if no_encontrados or errores:
+            logger.warning(
+                f"📊 Validación SAP: {len(validos)}✓, {len(no_encontrados)}✗, {len(errores)} errores"
+            )
+        else:
+            logger.debug(f"📊 Validación SAP: {len(validos)} productos válidos")
         
         return {
             "validos": validos,
@@ -490,7 +487,7 @@ class PedidoSAPValidator:
             # Limitar a la cantidad solicitada
             sugerencias_finales = sugerencias_formateadas[:limite]
             
-            logger.info(f"✅ [_generar_sugerencias_sap] Generadas {len(sugerencias_finales)} sugerencias para {codigo} (de {len(sugerencias_formateadas)} encontradas)")
+            logger.debug(f"✅ Sugerencias generadas para {codigo}: {len(sugerencias_finales)}/{len(sugerencias_formateadas)}")
             
             return sugerencias_finales
             

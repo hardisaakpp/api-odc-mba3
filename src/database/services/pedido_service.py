@@ -673,7 +673,7 @@ class PedidoService:
                     
                     # Validar códigos de producto INMEDIATAMENTE - interrumpir si hay errores
                     if codigos_productos_parsing:
-                        logger.info(f"🔍 [VALIDACIÓN TEMPRANA] Validando {len(codigos_productos_parsing)} códigos de producto contra SAP ANTES de procesar (con sugerencias)")
+                        logger.info(f"🔍 Validando {len(codigos_productos_parsing)} productos contra SAP (con sugerencias)")
                         validator = PedidoValidator()
                         # ⭐ USAR MÉTODO CON SUGERENCIAS para incluir sugerencias en la respuesta
                         validacion_sap_productos = validator.validar_productos_existen_en_sap_con_sugerencias(
@@ -701,15 +701,11 @@ class PedidoService:
                             # Mensaje simple - el frontend construirá el mensaje detallado
                             mensaje_error = "Existen códigos de producto no válidos en SAP"
                             
-                            # Log detallado para debugging (solo en backend)
-                            log_detalle = f"Productos no encontrados ({len(no_encontrados)}): {', '.join(no_encontrados[:10])}"
-                            if len(no_encontrados) > 10:
-                                log_detalle += f" y {len(no_encontrados) - 10} más"
-                            if errores:
-                                log_detalle += f" | Errores ({len(errores)}): {', '.join(errores[:5])}"
-                                if len(errores) > 5:
-                                    log_detalle += f" y {len(errores) - 5} más"
-                            logger.error(f"❌ Validación SAP productos falló (TEMPRANA): {log_detalle}")
+                            # Log consolidado y conciso
+                            no_encontrados_str = ', '.join(no_encontrados[:5])
+                            if len(no_encontrados) > 5:
+                                no_encontrados_str += f" (+{len(no_encontrados) - 5} más)"
+                            logger.error(f"❌ Validación SAP falló: {len(validos)}✓, {len(no_encontrados)}✗ [{no_encontrados_str}]")
                             
                             # ⭐ INCLUIR DETALLE CON SUGERENCIAS en la respuesta
                             datos_estructurados = {
@@ -750,7 +746,7 @@ class PedidoService:
                                 data=datos_estructurados
                             )
                         
-                        logger.info(f"✅ Validación temprana SAP productos: {len(validacion_sap_productos.get('validos', []))} válidos")
+                        logger.debug(f"✅ Validación SAP: {len(validacion_sap_productos.get('validos', []))} productos válidos")
                 
                 # Convertir datos del parsing al formato esperado
                 cabecera = self._normalizar_cabecera_para_bd(
@@ -1221,15 +1217,12 @@ class PedidoService:
                     # Mensaje simple - el frontend construirá el mensaje detallado
                     mensaje_error = "Existen códigos de producto no válidos en SAP"
                     
-                    # Log detallado para debugging (solo en backend)
-                    log_detalle = f"Productos no encontrados ({len(no_encontrados)}): {', '.join(no_encontrados[:10])}"
-                    if len(no_encontrados) > 10:
-                        log_detalle += f" y {len(no_encontrados) - 10} más"
-                    if errores:
-                        log_detalle += f" | Errores ({len(errores)}): {', '.join(errores[:5])}"
-                        if len(errores) > 5:
-                            log_detalle += f" y {len(errores) - 5} más"
-                    logger.warning(f"⚠️ Validación SAP productos falló: {log_detalle}")
+                    # Log consolidado y conciso
+                    validos_count = len(validacion_sap_productos.get("validos", [])) if validacion_sap_productos else 0
+                    no_encontrados_str = ', '.join(no_encontrados[:5])
+                    if len(no_encontrados) > 5:
+                        no_encontrados_str += f" (+{len(no_encontrados) - 5} más)"
+                    logger.warning(f"⚠️ Validación SAP falló: {validos_count}✓, {len(no_encontrados)}✗ [{no_encontrados_str}]")
                     
                     resultado["status"] = "validation_error"
                     resultado["errores"].append(mensaje_error)
