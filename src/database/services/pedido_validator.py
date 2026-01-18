@@ -554,6 +554,54 @@ class PedidoValidator:
             sap_obligatorio=sap_obligatorio
         )
     
+    def validar_productos_existen_en_sap_con_sugerencias(
+        self,
+        codigos_productos: List[str],
+        usar_cache: bool = True,
+        sap_obligatorio: bool = True,
+        incluir_sugerencias: bool = True,
+        limite_sugerencias: int = 20
+    ) -> Dict[str, Any]:
+        """
+        Valida que los códigos de producto existan en SAP, y si no se encuentran,
+        busca en MBA3 y genera sugerencias similares en SAP.
+        
+        Similar a la funcionalidad de "Buscar SKU" en homologaciones.
+        
+        Args:
+            codigos_productos: Lista de códigos de productos a validar (deben ser únicos)
+            usar_cache: Si True, usa SAPService que tiene cache. Si False, consulta directamente SAPClient
+            sap_obligatorio: Si True, errores de SAP bloquean. Si False, solo WARNING
+            incluir_sugerencias: Si True, busca sugerencias similares cuando no encuentra exacto
+            limite_sugerencias: Límite máximo de sugerencias a retornar por código (default: 20)
+            
+        Returns:
+            {
+                "validos": List[str],  # Códigos que existen en SAP con ItemCode exacto
+                "no_encontrados": List[str],  # Códigos que NO existen en SAP
+                "errores": List[str],  # Códigos con error al consultar SAP
+                "warnings": List[str],  # Códigos con warnings (SAP no respondió pero no es obligatorio)
+                "todos_validos": bool,
+                "detalle": Dict[str, Dict[str, Any]]  # {codigo: {
+                    #   "existe": bool,
+                    #   "info": {...},
+                    #   "error": str,
+                    #   "severity": str,
+                    #   "mba3": {...},  # Información de MBA3 si existe
+                    #   "sugerencias_sap": [...]  # Sugerencias similares en SAP
+                    # }}
+            }
+        """
+        from .pedido_sap_validator import PedidoSAPValidator
+        sap_validator = PedidoSAPValidator()
+        return sap_validator.validar_productos_existen_en_sap_con_sugerencias(
+            codigos_productos=codigos_productos,
+            usar_cache=usar_cache,
+            sap_obligatorio=sap_obligatorio,
+            incluir_sugerencias=incluir_sugerencias,
+            limite_sugerencias=limite_sugerencias
+        )
+    
     def validar_bodegas_existen_en_sap(
         self,
         codigos_bodegas: List[str],

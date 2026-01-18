@@ -654,33 +654,41 @@ class PedidoService:
                 datos_parsing = resultado_parsing.get("data", [])
                 if validar_sap and datos_parsing:
                     # Extraer códigos únicos de productos del parsing
-                    codigos_productos_parsing = list(set([
-                        item.get("codigoProducto")
-                        for item in datos_parsing
-                        if item.get("codigoProducto")
-                    ]))
+                    # ⭐ Filtrar explícitamente None para satisfacer el type checker
+                    codigos_set = set()  # type: set[str]
+                    for item in datos_parsing:
+                        codigo = item.get("codigoProducto")
+                        if codigo is not None and isinstance(codigo, str):
+                            codigos_set.add(codigo)
+                    codigos_productos_parsing: List[str] = list(codigos_set)
                     
                     # ⭐ Aplicar correcciones de códigos si se proporcionan (antes de validación SAP)
                     if correcciones_codigos:
-                        codigos_productos_parsing = [
-                            correcciones_codigos.get(codigo, codigo)
-                            for codigo in codigos_productos_parsing
-                        ]
+                        codigos_corregidos: List[str] = []
+                        for codigo in codigos_productos_parsing:
+                            codigo_corregido = correcciones_codigos.get(codigo, codigo)
+                            if codigo_corregido is not None and isinstance(codigo_corregido, str):
+                                codigos_corregidos.append(codigo_corregido)
+                        codigos_productos_parsing = codigos_corregidos
                     
                     # Validar códigos de producto INMEDIATAMENTE - interrumpir si hay errores
                     if codigos_productos_parsing:
-                        logger.info(f"🔍 [VALIDACIÓN TEMPRANA] Validando {len(codigos_productos_parsing)} códigos de producto contra SAP ANTES de procesar")
+                        logger.info(f"🔍 [VALIDACIÓN TEMPRANA] Validando {len(codigos_productos_parsing)} códigos de producto contra SAP ANTES de procesar (con sugerencias)")
                         validator = PedidoValidator()
-                        validacion_sap_productos = validator.validar_productos_existen_en_sap(
+                        # ⭐ USAR MÉTODO CON SUGERENCIAS para incluir sugerencias en la respuesta
+                        validacion_sap_productos = validator.validar_productos_existen_en_sap_con_sugerencias(
                             codigos_productos=codigos_productos_parsing,
                             usar_cache=True,
-                            sap_obligatorio=True  # OBLIGATORIO: SAP es fuente de verdad
+                            sap_obligatorio=True,  # OBLIGATORIO: SAP es fuente de verdad
+                            incluir_sugerencias=True,  # ⭐ Habilitar sugerencias
+                            limite_sugerencias=20
                         )
                         
                         if validacion_sap_productos is None or not validacion_sap_productos.get("todos_validos", False):
                             no_encontrados = validacion_sap_productos.get("no_encontrados", []) if validacion_sap_productos else []
                             errores = validacion_sap_productos.get("errores", []) if validacion_sap_productos else []
                             validos = validacion_sap_productos.get("validos", []) if validacion_sap_productos else []
+                            detalle_validacion = validacion_sap_productos.get("detalle", {}) if validacion_sap_productos else {}
                             
                             # Asegurar que son listas (no ints)
                             if isinstance(no_encontrados, int):
@@ -703,6 +711,7 @@ class PedidoService:
                                     log_detalle += f" y {len(errores) - 5} más"
                             logger.error(f"❌ Validación SAP productos falló (TEMPRANA): {log_detalle}")
                             
+                            # ⭐ INCLUIR DETALLE CON SUGERENCIAS en la respuesta
                             datos_estructurados = {
                                 "validacion": {
                                     "productos": {
@@ -718,7 +727,19 @@ class PedidoService:
                                     "validos": len(validos),
                                     "no_encontrados": len(no_encontrados),
                                     "errores": len(errores),
-                                    "todos_validos": False
+                                    "todos_validos": False,
+                                    # ⭐ INCLUIR DETALLE CON SUGERENCIAS
+                                    "detalle_validacion": {
+                                        codigo: {
+                                            "existe": info.get("existe"),
+                                            "severity": info.get("severity"),
+                                            "error": info.get("error"),
+                                            "mensaje": info.get("mensaje"),
+                                            "mba3": info.get("mba3"),  # Información de MBA3 si existe
+                                            "sugerencias_sap": info.get("sugerencias_sap", [])  # Sugerencias similares en SAP
+                                        }
+                                        for codigo, info in detalle_validacion.items()
+                                    }
                                 }
                             }
                             
@@ -1355,6 +1376,7 @@ class PedidoService:
                 repository = PedidoRepository(conn)
                 pedido_id = repository.insert_cabecera(cabecera)
                 resultado["pedido_id"] = pedido_id
+                resultado["numero_pedido"] = cabecera.get("numero_pedido")  # ⭐ Agregado para redirección del frontend
                 resultado["estado"] = "PENDIENTE_CONFIRMACION_PROVEEDOR"
                 
                 for detalle_data in detalles_con_tiendas:
@@ -1709,6 +1731,7 @@ class PedidoService:
                 repository = PedidoRepository(conn)
                 pedido_id = repository.insert_cabecera(cabecera)
                 resultado["pedido_id"] = pedido_id
+                resultado["numero_pedido"] = cabecera.get("numero_pedido")  # ⭐ Agregado para redirección del frontend
                 resultado["estado"] = "PENDIENTE_CONFIRMACION_PROVEEDOR"
                 
                 for detalle_data in detalles_con_tiendas:
@@ -1798,6 +1821,8 @@ class PedidoService:
                 # Otros ValueError se propagan
                 raise
             resultado["pedido_id"] = pedido_id
+            # ⭐ Agregar numero_pedido al resultado para que el frontend pueda redirigir
+            resultado["numero_pedido"] = cabecera.get("numero_pedido")
             
             # Crear conjunto de códigos válidos en SAP (si se validó)
             codigos_validos_sap = set()

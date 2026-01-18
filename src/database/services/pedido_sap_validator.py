@@ -4,7 +4,9 @@ Extraído de pedido_validator.py para mejorar separación de responsabilidades.
 """
 
 import logging
-from typing import Dict, Any, List
+import re
+import asyncio
+from typing import Dict, Any, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -141,6 +143,360 @@ class PedidoSAPValidator:
             "todos_validos": todos_validos,
             "detalle": detalle
         }
+    
+    def validar_productos_existen_en_sap_con_sugerencias(
+        self,
+        codigos_productos: List[str],
+        usar_cache: bool = True,
+        sap_obligatorio: bool = True,
+        incluir_sugerencias: bool = True,
+        limite_sugerencias: int = 20
+    ) -> Dict[str, Any]:
+        """
+        Valida que los códigos de producto existan en SAP, y si no se encuentran,
+        busca en MBA3 y genera sugerencias similares en SAP.
+        
+        Similar a la funcionalidad de "Buscar SKU" en homologaciones:
+        - Busca exacto en SAP (validación estricta)
+        - Si no encuentra en SAP, busca en MBA3
+        - Genera sugerencias similares en SAP usando normalización flexible
+        
+        REGLAS DE VALIDACIÓN:
+        - ItemCode debe coincidir EXACTO con el código del Excel para ser válido
+        - Si no encuentra en SAP, busca en MBA3 y genera sugerencias
+        - Las sugerencias usan normalización flexible (sin espacios, guiones, puntos)
+        - Si SAP no responde y sap_obligatorio=True → ERROR
+        - Si SAP no responde y sap_obligatorio=False → WARNING
+        
+        Args:
+            codigos_productos: Lista de códigos de productos a validar (deben ser únicos)
+            usar_cache: Si True, usa SAPService que tiene cache. Si False, consulta directamente SAPClient
+            sap_obligatorio: Si True, errores de SAP bloquean. Si False, solo WARNING
+            incluir_sugerencias: Si True, busca sugerencias similares cuando no encuentra exacto
+            limite_sugerencias: Límite máximo de sugerencias a retornar por código (default: 20)
+            
+        Returns:
+            {
+                "validos": List[str],  # Códigos que existen en SAP con ItemCode exacto
+                "no_encontrados": List[str],  # Códigos que NO existen en SAP
+                "errores": List[str],  # Códigos con error al consultar SAP
+                "warnings": List[str],  # Códigos con warnings (SAP no respondió pero no es obligatorio)
+                "todos_validos": bool,
+                "detalle": Dict[str, Dict[str, Any]]  # {codigo: {
+                    #   "existe": bool,
+                    #   "info": {...},
+                    #   "error": str,
+                    #   "severity": str,
+                    #   "mba3": {...},  # Información de MBA3 si existe
+                    #   "sugerencias_sap": [...]  # Sugerencias similares en SAP
+                    # }}
+            }
+        """
+        from ..services.sap_service import SAPService
+        from src.config import ENABLE_SAP_QUERIES
+        
+        if not codigos_productos:
+            return {
+                "validos": [],
+                "no_encontrados": [],
+                "errores": [],
+                "warnings": [],
+                "todos_validos": True,
+                "detalle": {}
+            }
+        
+        # Verificar si SAP está habilitado
+        resultado_deshabilitado = self._handle_sap_disabled(codigos_productos, sap_obligatorio, "productos")
+        if resultado_deshabilitado:
+            return resultado_deshabilitado
+        
+        detalle = {}
+        validos = []
+        no_encontrados = []
+        errores = []
+        warnings = []
+        
+        # Usar SAPService que tiene cache
+        sap_service = SAPService()
+        
+        for codigo in codigos_productos:
+            try:
+                # Normalizar código (quitar espacios)
+                codigo_clean = codigo.strip() if codigo else ""
+                
+                if not codigo_clean:
+                    detalle[codigo] = {
+                        "existe": False,
+                        "info": None,
+                        "error": "Código vacío",
+                        "severity": "ERROR",
+                        "mba3": None,
+                        "sugerencias_sap": []
+                    }
+                    no_encontrados.append(codigo)
+                    continue
+                
+                # Consultar SAP (usa cache si está disponible)
+                producto_info = sap_service.get_or_fetch_producto_info(codigo_clean)
+                
+                # Procesar resultado
+                resultado_codigo = self._procesar_resultado_producto(
+                    codigo, codigo_clean, producto_info, sap_obligatorio
+                )
+                
+                detalle_base = resultado_codigo["detalle"]
+                
+                # Si el producto es válido en SAP, no buscar sugerencias
+                if resultado_codigo["tipo"] == "valido":
+                    detalle_base["mba3"] = None
+                    detalle_base["sugerencias_sap"] = []
+                    detalle[codigo] = detalle_base
+                    validos.append(codigo)
+                else:
+                    # Producto no encontrado en SAP: buscar en MBA3 y generar sugerencias
+                    info_mba3 = None
+                    sugerencias = []
+                    
+                    if incluir_sugerencias and ENABLE_SAP_QUERIES:
+                        try:
+                            logger.info(f"🔍 [validar_productos_existen_en_sap_con_sugerencias] Buscando MBA3 y sugerencias para {codigo_clean}")
+                            
+                            # Buscar en MBA3
+                            info_mba3 = self._buscar_en_mba3(codigo_clean)
+                            if info_mba3:
+                                logger.info(f"✅ [validar_productos_existen_en_sap_con_sugerencias] Encontrado en MBA3: {codigo_clean}")
+                            else:
+                                logger.info(f"ℹ️ [validar_productos_existen_en_sap_con_sugerencias] No encontrado en MBA3: {codigo_clean} (continuando con sugerencias)")
+                            
+                            # ⭐ SIEMPRE generar sugerencias (incluso si no está en MBA3)
+                            # Esto permite encontrar variaciones del código en SAP
+                            sugerencias = self._generar_sugerencias_sap(
+                                codigo_clean,
+                                info_mba3,
+                                limite_sugerencias
+                            )
+                            
+                            logger.info(f"📊 [validar_productos_existen_en_sap_con_sugerencias] Generadas {len(sugerencias)} sugerencias para {codigo_clean}")
+                            
+                        except Exception as e:
+                            logger.warning(f"⚠️ Error al buscar sugerencias para {codigo_clean}: {e}", exc_info=True)
+                            # Continuar sin sugerencias
+                    
+                    detalle_base["mba3"] = info_mba3
+                    detalle_base["sugerencias_sap"] = sugerencias
+                    detalle[codigo] = detalle_base
+                    
+                    logger.debug(f"📋 [validar_productos_existen_en_sap_con_sugerencias] Detalle para {codigo}: mba3={info_mba3 is not None}, sugerencias={len(sugerencias)}")
+                    
+                    if resultado_codigo["tipo"] == "no_encontrado":
+                        no_encontrados.append(codigo)
+                    elif resultado_codigo["tipo"] == "error":
+                        errores.append(codigo)
+                    elif resultado_codigo["tipo"] == "warning":
+                        warnings.append(codigo)
+                    
+            except Exception as e:
+                logger.error(f"❌ Error inesperado al validar código {codigo} en SAP: {e}", exc_info=True)
+                severity = "ERROR" if sap_obligatorio else "WARNING"
+                detalle[codigo] = {
+                    "existe": False,
+                    "info": None,
+                    "error": str(e),
+                    "severity": severity,
+                    "mba3": None,
+                    "sugerencias_sap": []
+                }
+                if sap_obligatorio:
+                    errores.append(codigo)
+                else:
+                    warnings.append(codigo)
+        
+        todos_validos = len(no_encontrados) == 0 and len(errores) == 0
+        
+        logger.info(
+            f"📊 Validación SAP productos (con sugerencias): {len(validos)} válidos, "
+            f"{len(no_encontrados)} no encontrados, {len(errores)} errores, {len(warnings)} warnings"
+        )
+        
+        return {
+            "validos": validos,
+            "no_encontrados": no_encontrados,
+            "errores": errores,
+            "warnings": warnings,
+            "todos_validos": todos_validos,
+            "detalle": detalle
+        }
+    
+    def _buscar_en_mba3(self, codigo: str) -> Optional[Dict[str, Any]]:
+        """
+        Busca un código de producto en MBA3.
+        
+        Args:
+            codigo: Código del producto a buscar
+            
+        Returns:
+            Diccionario con información del producto en MBA3 o None si no se encuentra
+        """
+        try:
+            from src.services.mba3_service import MBA3Service
+            import re
+            
+            # Validar formato del código
+            if not codigo or not codigo.strip():
+                return None
+            
+            codigo_clean = codigo.strip()
+            if not re.match(r'^[A-Za-z0-9.\- ]{1,50}$', codigo_clean):
+                logger.warning(f"⚠️ Código con formato inválido para MBA3: {codigo_clean}")
+                return None
+            
+            # Escapar comillas simples
+            codigo_escaped = codigo_clean.replace("'", "''")
+            
+            # Consulta a MBA3
+            query = (
+                "SELECT PRODUCT_ID, PRODUCT_NAME, CORP, GrupoPrenda, Talla, PRESENTACION, "
+                "GROUP_CODE, Tipo_Origen, Descontinuado, INACTIVE "
+                "FROM INVT_FICHA_PRINCIPAL "
+                f"WHERE PRODUCT_ID = '{codigo_escaped}' "
+                "LIMIT 1"
+            )
+            
+            mba3_service = MBA3Service()
+            result = mba3_service.execute_query(query)
+            
+            # Normalizar resultado
+            if isinstance(result, list):
+                productos = result
+            elif isinstance(result, dict):
+                productos = []
+                for key, value in result.items():
+                    if isinstance(value, list):
+                        productos = value
+                        break
+                if not productos and result:
+                    productos = [result]
+            else:
+                productos = []
+            
+            if not productos:
+                return None
+            
+            producto = productos[0]
+            
+            # Normalizar nombres de campos
+            return {
+                "codigo": producto.get("PRODUCT_ID") or producto.get("product_id") or producto.get("Product_ID") or codigo_clean,
+                "nombre": producto.get("PRODUCT_NAME") or producto.get("product_name") or producto.get("Product_Name") or "",
+                "corp": producto.get("CORP") or producto.get("corp") or producto.get("Corp") or "",
+                "grupo_prenda": producto.get("GrupoPrenda") or producto.get("grupoPrenda") or producto.get("grupo_prenda") or "",
+                "talla": producto.get("Talla") or producto.get("talla") or "",
+                "presentacion": producto.get("PRESENTACION") or producto.get("presentacion") or producto.get("Presentacion") or "",
+                "group_code": producto.get("GROUP_CODE") or producto.get("group_code") or producto.get("Group_Code") or "",
+                "tipo_origen": producto.get("Tipo_Origen") or producto.get("tipo_origen") or producto.get("Tipo_Origen") or "",
+                "descontinuado": producto.get("Descontinuado") or producto.get("descontinuado") or False,
+                "inactive": producto.get("INACTIVE") or producto.get("inactive") or producto.get("Inactive") or False
+            }
+            
+        except Exception as e:
+            logger.warning(f"⚠️ Error al buscar código {codigo} en MBA3: {e}")
+            return None
+    
+    def _generar_sugerencias_sap(
+        self,
+        codigo: str,
+        info_mba3: Optional[Dict[str, Any]],
+        limite: int = 20
+    ) -> List[Dict[str, Any]]:
+        """
+        Genera sugerencias similares en SAP para un código de producto.
+        
+        Args:
+            codigo: Código del producto de referencia
+            info_mba3: Información del producto en MBA3 (opcional)
+            limite: Límite máximo de sugerencias
+            
+        Returns:
+            Lista de sugerencias con scores y motivos
+        """
+        try:
+            from ..clients.sap_client import SAPClient
+            from ..services.sugerencias_homologacion_service import SugerenciasHomologacionService
+            from src.config import ENABLE_SAP_QUERIES
+            
+            if not ENABLE_SAP_QUERIES:
+                return []
+            
+            sap_client = SAPClient()
+            sugerencias_service = SugerenciasHomologacionService()
+            
+            # Buscar SKUs similares en SAP
+            productos_sap = sap_client.buscar_skus_similares(
+                sku_referencia=codigo,
+                limite=limite * 2,  # Buscar más para tener mejor selección
+                solo_activos=True
+            )
+            
+            if not productos_sap:
+                return []
+            
+            # Preparar producto de referencia (MBA3 o solo código)
+            producto_referencia = {
+                "codigo_mba3": codigo,
+                "nombre_mba3": info_mba3.get("nombre", "") if info_mba3 else "",
+            }
+            
+            # Convertir productos SAP al formato esperado
+            productos_sap_formateados = []
+            for prod in productos_sap:
+                productos_sap_formateados.append({
+                    "item_code": prod.get("ItemCode", ""),
+                    "item_name": prod.get("ItemName", ""),
+                    "pack": prod.get("U_IXX_PACK", ""),
+                    "active": prod.get("validFor", "N").upper() == "Y"
+                })
+            
+            # Calcular scores y motivos usando servicio de sugerencias
+            sugerencias = sugerencias_service.buscar_sugerencias_para_producto(
+                producto_mba3=producto_referencia,
+                productos_sap=productos_sap_formateados,
+                productos_ya_homologados=set()  # No excluir ningún producto
+            )
+            
+            # Formatear sugerencias con información adicional
+            sugerencias_formateadas = []
+            productos_sap_dict = {p.get("ItemCode"): p for p in productos_sap}
+            
+            for sugerencia in sugerencias:
+                codigo_sap = sugerencia.get("codigo_sap")
+                producto_sap = productos_sap_dict.get(codigo_sap, {})
+                
+                valid_for = producto_sap.get("validFor", "N")
+                estado = "activo" if valid_for.upper() == "Y" else "inactivo"
+                
+                sugerencias_formateadas.append({
+                    "codigo": codigo_sap,
+                    "nombre": producto_sap.get("ItemName", ""),
+                    "pack": producto_sap.get("U_IXX_PACK", ""),
+                    "group_code": producto_sap.get("ItmsGrpCod"),
+                    "group_name": producto_sap.get("ItmsGrpNam", ""),
+                    "estado": estado,
+                    "valid_for": valid_for,
+                    "score": sugerencia.get("score", 0.0),
+                    "score_porcentaje": round(sugerencia.get("score", 0.0) * 100, 1),
+                    "motivos": sugerencia.get("motivos", [])
+                })
+            
+            # Limitar a la cantidad solicitada
+            sugerencias_finales = sugerencias_formateadas[:limite]
+            
+            logger.info(f"✅ [_generar_sugerencias_sap] Generadas {len(sugerencias_finales)} sugerencias para {codigo} (de {len(sugerencias_formateadas)} encontradas)")
+            
+            return sugerencias_finales
+            
+        except Exception as e:
+            logger.warning(f"⚠️ Error al generar sugerencias SAP para {codigo}: {e}", exc_info=True)
+            return []
     
     def validar_bodegas_existen_en_sap(
         self,

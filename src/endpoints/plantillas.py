@@ -171,6 +171,7 @@ def register_plantillas_endpoints(app: FastAPI):
             "status": "success",
             "message": "Plantilla procesada y guardada exitosamente",
             "pedido_id": "...",
+            "numero_pedido": "P-12.48 - 12 - 2025",
             "formato_detectado": "simple",
             "articulos_cargados": 5,
             "distribuciones_cargadas": 10,
@@ -321,6 +322,7 @@ def register_plantillas_endpoints(app: FastAPI):
                 "status": resultado["status"],
                 "message": mensaje_respuesta,
                 "pedido_id": resultado.get("pedido_id"),
+                "numero_pedido": resultado.get("numero_pedido"),  # ⭐ Agregado para redirección del frontend
                 "formato_detectado": resultado.get("formato_detectado"),
                 "articulos_cargados": resultado.get("articulos_cargados", 0),
                 "distribuciones_cargadas": resultado.get("distribuciones_cargadas", 0),
@@ -794,10 +796,13 @@ def register_plantillas_endpoints(app: FastAPI):
                 
                 if codigos_productos:
                     validator = PedidoValidator()
-                    validacion_sap = validator.validar_productos_existen_en_sap(
+                    # Usar nuevo método que incluye búsqueda en MBA3 y sugerencias
+                    validacion_sap = validator.validar_productos_existen_en_sap_con_sugerencias(
                         codigos_productos=codigos_productos,
                         usar_cache=True,
-                        sap_obligatorio=sap_obligatorio
+                        sap_obligatorio=sap_obligatorio,
+                        incluir_sugerencias=True,  # Habilitar sugerencias por defecto
+                        limite_sugerencias=20
                     )
                     
                     # Mapear códigos a filas para reportar errores por fila
@@ -870,7 +875,7 @@ def register_plantillas_endpoints(app: FastAPI):
                         filas_leidas - filas_invalidas_finales
                     )
                     
-                    # Agregar resumen de validación SAP al resultado
+                    # Agregar resumen de validación SAP al resultado (incluye MBA3 y sugerencias)
                     resultado["validacion_sap"] = {
                         "total_codigos": len(codigos_productos),
                         "validos": len(validacion_sap.get("validos", [])),
@@ -883,7 +888,10 @@ def register_plantillas_endpoints(app: FastAPI):
                                 "existe": info.get("existe"),
                                 "severity": info.get("severity"),
                                 "error": info.get("error"),
-                                "mensaje": info.get("mensaje")
+                                "mensaje": info.get("mensaje"),
+                                # ⭐ Nueva información: MBA3 y sugerencias
+                                "mba3": info.get("mba3"),  # Información del producto en MBA3
+                                "sugerencias_sap": info.get("sugerencias_sap", [])  # Sugerencias similares en SAP
                             }
                             for codigo, info in validacion_sap.get("detalle", {}).items()
                         }
@@ -1104,6 +1112,7 @@ def register_plantillas_endpoints(app: FastAPI):
         {
             "status": "success",
             "pedido_id": "uuid-del-pedido",
+            "numero_pedido": "P-12.48 - 12 - 2025",
             "estado": "PENDIENTE_CONFIRMACION_PROVEEDOR",
             "validacion": {
                 "productos": {"validos": [...], "no_encontrados": [], "todos_validos": true},

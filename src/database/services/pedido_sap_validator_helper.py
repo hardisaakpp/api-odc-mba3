@@ -135,12 +135,15 @@ class PedidoSAPValidatorHelper:
                 "detalle": {}
             }
         
-        logger.info("📋 Validación SAP: Verificando productos en SAP")
+        logger.info("📋 Validación SAP: Verificando productos en SAP (con sugerencias)")
         
-        validacion_sap = self.validator.validar_productos_existen_en_sap(
+        # ⭐ USAR MÉTODO CON SUGERENCIAS para incluir sugerencias en la respuesta
+        validacion_sap = self.validator.validar_productos_existen_en_sap_con_sugerencias(
             codigos_productos=codigos_productos,
             usar_cache=usar_cache,
-            sap_obligatorio=sap_obligatorio
+            sap_obligatorio=sap_obligatorio,
+            incluir_sugerencias=True,  # ⭐ Habilitar sugerencias
+            limite_sugerencias=20
         )
         
         # ⭐ MEJORADO: Incluir códigos específicos, no solo conteos
@@ -148,6 +151,7 @@ class PedidoSAPValidatorHelper:
         errores_list = validacion_sap.get("errores", [])
         validos_list = validacion_sap.get("validos", [])
         warnings_list = validacion_sap.get("warnings", [])
+        detalle_validacion = validacion_sap.get("detalle", {})
         
         resultado["validacion_sap"] = {
             "total_codigos": len(codigos_productos),
@@ -159,7 +163,19 @@ class PedidoSAPValidatorHelper:
             # ⭐ Mantener conteos para compatibilidad (opcional, pero útil)
             "total_no_encontrados": len(no_encontrados_list),
             "total_errores": len(errores_list),
-            "total_warnings": len(warnings_list)
+            "total_warnings": len(warnings_list),
+            # ⭐ INCLUIR DETALLE CON SUGERENCIAS
+            "detalle_validacion": {
+                codigo: {
+                    "existe": info.get("existe"),
+                    "severity": info.get("severity"),
+                    "error": info.get("error"),
+                    "mensaje": info.get("mensaje"),
+                    "mba3": info.get("mba3"),  # Información de MBA3 si existe
+                    "sugerencias_sap": info.get("sugerencias_sap", [])  # Sugerencias similares en SAP
+                }
+                for codigo, info in detalle_validacion.items()
+            }
         }
         
         # Si SAP es obligatorio y hay errores, NO persistir

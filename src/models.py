@@ -1306,6 +1306,7 @@ class CrearPedidoResponse(BaseModel):
     
     status: str = Field(..., description="Estado del procesamiento: 'success', 'validation_error', 'error'")
     pedido_id: Optional[str] = Field(None, description="UUID del pedido creado")
+    numero_pedido: Optional[str] = Field(None, description="Número de pedido (business key, ej: 'P-12.48 - 12 - 2025')")
     estado: Optional[str] = Field(None, description="Estado del pedido")
     validacion: Dict[str, Any] = Field(default_factory=dict, description="Resultados de validación")
     consolidacion: Dict[str, Any] = Field(default_factory=dict, description="Resumen de consolidación")
