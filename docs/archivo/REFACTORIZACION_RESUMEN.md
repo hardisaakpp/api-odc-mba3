@@ -67,7 +67,6 @@ pedido_service.py               pedido_service.py
 ✅ parsear_excel_pedido()
 ✅ procesar_archivo_excel()
 ✅ validar_y_procesar_archivo_excel()
-✅ validar_y_crear_lote()
 ✅ Validación SAP
 ✅ Detección de formatos
 ✅ Conversiones de tipos

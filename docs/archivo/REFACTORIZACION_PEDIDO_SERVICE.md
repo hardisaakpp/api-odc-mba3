@@ -100,7 +100,6 @@ pedido_service.py (Orquestador principal)
 - `parsear_excel_pedido()`
 - `procesar_archivo_excel()`
 - `validar_y_procesar_archivo_excel()`
-- `validar_y_crear_lote()`
 
 Todos los cambios son internos. Código cliente existente funciona sin modificaciones.
 

@@ -205,7 +205,8 @@ class PedidoRepository:
                 WHERE TABLE_NAME = 'pedido_detalle' 
                 AND COLUMN_NAME = 'comentario'
             """)
-            tiene_comentario = cursor.fetchone()[0] > 0
+            result = cursor.fetchone()
+            tiene_comentario = result[0] > 0 if result else False
             
             if tiene_comentario:
                 sql = """
@@ -1131,7 +1132,7 @@ class PedidoRepository:
                 "updated_at = GETDATE()",
                 "costo_modificado_manual = 1"  # Marcar que fue modificado manualmente
             ]
-            values = [nuevo_costo]
+            values: List[Any] = [nuevo_costo]
             
             if modificado_por:
                 set_clauses.append("modificado_por = ?")
@@ -1171,7 +1172,6 @@ class PedidoRepository:
                     "pedido_detalle_id": pedido_detalle_id,
                     "costo_anterior": costo_anterior_float,
                     "costo_nuevo": float(nuevo_costo),
-                    "total_actualizado": total_anterior_float,
                     "mensaje": "No se pudo actualizar el costo (0 filas afectadas)"
                 }
                 
@@ -1244,7 +1244,7 @@ class PedidoRepository:
                 "updated_at = GETDATE()",
                 "total_modificado_manual = 1"  # Marcar que fue modificado manualmente
             ]
-            values = [nuevo_total]
+            values: List[Any] = [nuevo_total]
             
             if modificado_por:
                 set_clauses.append("modificado_por = ?")
@@ -1609,7 +1609,8 @@ class PedidoRepository:
             # Query para obtener total
             count_query = f"SELECT COUNT(*) FROM pedido p WHERE {where_clause}"
             cursor.execute(count_query, params)
-            total = cursor.fetchone()[0]
+            result = cursor.fetchone()
+            total = result[0] if result else 0
             
             # Query para obtener datos con paginación
             select_fields = """

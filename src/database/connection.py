@@ -4,7 +4,7 @@ Gestión de conexiones a SQL Server.
 
 import logging
 import pyodbc
-from typing import Optional
+from typing import Optional, Iterator
 from contextlib import contextmanager
 
 from src.config import (
@@ -147,7 +147,7 @@ def get_sap_db_connection() -> pyodbc.Connection:
 
 
 @contextmanager
-def get_db_connection_context():
+def get_db_connection_context() -> Iterator[pyodbc.Connection]:
     """
     Context manager para conexiones SQL Server que GARANTIZA el cierre de conexión.
     
@@ -238,7 +238,7 @@ def get_db_connection_context():
 
 
 @contextmanager
-def get_sap_db_connection_context():
+def get_sap_db_connection_context() -> Iterator[pyodbc.Connection]:
     """
     Context manager para conexiones SQL Server SAP que GARANTIZA el cierre.
     

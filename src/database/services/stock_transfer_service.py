@@ -97,6 +97,10 @@ class StockTransferService:
                 else:
                     logger.info(f"📍 Usando bodega origen proporcionada: {bodega_origen}")
                 
+                # Asegurar que bodega_origen nunca sea None
+                if bodega_origen is None:
+                    bodega_origen = "01"
+                
                 # 3. Obtener distribución confirmada (última versión)
                 version_actual = dist_repo.get_version_actual(pedido_id)
                 if version_actual == 0:
