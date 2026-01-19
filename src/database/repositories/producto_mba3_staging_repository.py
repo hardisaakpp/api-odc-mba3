@@ -481,7 +481,3 @@ class ProductoMBA3StagingRepository:
         finally:
             cursor.close()
 
-
-
-
-

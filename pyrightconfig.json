@@ -1,13 +1,18 @@
 {
   "include": [
     "src",
-    "tests"
+    "tests",
+    "scripts"
   ],
   "exclude": [
     "**/__pycache__",
     "**/node_modules",
     ".venv",
     "venv"
+  ],
+  "extraPaths": [
+    ".",
+    "src"
   ],
   "reportMissingImports": true,
   "reportMissingTypeStubs": false,

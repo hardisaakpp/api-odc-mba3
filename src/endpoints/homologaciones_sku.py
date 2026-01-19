@@ -543,8 +543,3 @@ def register_homologaciones_sku_endpoints(app: FastAPI):
                 status_code=500,
                 detail=f"Error al sincronizar homologaciones: {str(e)}"
             )
-
-
-
-
-
