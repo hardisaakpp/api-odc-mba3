@@ -649,7 +649,40 @@ class PedidoService:
                     es_formato_nuevo_v1_0=True
                 )
                 
-                # ✅ VALIDACIÓN TEMPRANA: Extraer códigos de producto inmediatamente después del parsing
+                # ⭐ VALIDACIÓN TEMPRANA #1: Verificar número de pedido duplicado PRIMERO (antes de SAP)
+                cabecera_parseada = resultado_parsing.get("cabecera", {})
+                numero_pedido_raw = (
+                    cabecera_parseada.get("numero_pedido") or 
+                    cabecera_parseada.get("CODIGO PEDIDO") or 
+                    cabecera_parseada.get("CÓDIGO PEDIDO")
+                )
+                
+                if numero_pedido_raw:
+                    with get_db_connection_context() as conn_check:
+                        from ..repositories.pedido_repository import PedidoRepository
+                        repo_check = PedidoRepository(conn_check)
+                        
+                        if repo_check.existe_numero_pedido(numero_pedido_raw):
+                            logger.warning(f"⚠️ [VALIDACIÓN TEMPRANA #1] Número de pedido duplicado detectado: '{numero_pedido_raw}'")
+                            
+                            # Lanzar BusinessException INMEDIATAMENTE (antes de validar SAP)
+                            raise BusinessException(
+                                message=f"El número de pedido '{numero_pedido_raw}' ya existe en el sistema",
+                                error_code="NUMERO_PEDIDO_DUPLICADO",
+                                data={
+                                    "numero_pedido": numero_pedido_raw,
+                                    "validacion": {
+                                        "numero_pedido": {
+                                            "duplicado": True,
+                                            "mensaje": f"El número de pedido '{numero_pedido_raw}' ya fue utilizado anteriormente"
+                                        }
+                                    }
+                                }
+                            )
+                        else:
+                            logger.info(f"✅ [VALIDACIÓN TEMPRANA #1] Número de pedido '{numero_pedido_raw}' disponible")
+                
+                # ✅ VALIDACIÓN TEMPRANA #2: Extraer códigos de producto inmediatamente después del parsing
                 # y validarlos ANTES de procesar y consolidar datos
                 datos_parsing = resultado_parsing.get("data", [])
                 if validar_sap and datos_parsing:
@@ -1180,6 +1213,28 @@ class PedidoService:
             # ✅ Enriquecer detalles con información de SAP (ItemName y U_IXX_PACK)
             detalles_con_tiendas = self._enriquecer_detalles_con_sap(detalles_con_tiendas)
             
+            # ✅ VALIDACIÓN TEMPRANA: Verificar número de pedido duplicado ANTES de validaciones SAP costosas
+            numero_pedido = cabecera.get("numero_pedido")
+            if numero_pedido:
+                with get_db_connection_context() as conn_check:
+                    from ..repositories.pedido_repository import PedidoRepository
+                    repo_check = PedidoRepository(conn_check)
+                    
+                    if repo_check.existe_numero_pedido(numero_pedido):
+                        logger.warning(f"⚠️ [VALIDACIÓN TEMPRANA - MANUAL] Número de pedido duplicado detectado: '{numero_pedido}'")
+                        resultado["status"] = "error"
+                        resultado["errores"].append(f"El número de pedido '{numero_pedido}' ya existe en el sistema")
+                        resultado["error_tipo"] = "numero_pedido_duplicado"
+                        # Agregar datos estructurados
+                        resultado["validacion_numero_pedido"] = {
+                            "numero_pedido": numero_pedido,
+                            "duplicado": True,
+                            "mensaje": f"El número de pedido '{numero_pedido}' ya fue utilizado anteriormente"
+                        }
+                        return resultado
+                    else:
+                        logger.info(f"✅ [VALIDACIÓN TEMPRANA - MANUAL] Número de pedido '{numero_pedido}' disponible")
+            
             # Validar productos y tiendas
             with get_db_connection_context() as conn:
                 validator = PedidoValidator()
@@ -1425,10 +1480,17 @@ class PedidoService:
             # Detectar específicamente el error de número de pedido duplicado
             error_msg = str(e)
             if "número de pedido" in error_msg.lower() and "ya existe" in error_msg.lower():
-                logger.warning(f"⚠️ Intento de crear pedido con número duplicado: {error_msg}")
+                numero_pedido = cabecera.get("numero_pedido")
+                logger.warning(f"⚠️ Intento de crear pedido con número duplicado: {numero_pedido}")
                 resultado["status"] = "error"
-                resultado["errores"].append(error_msg)
+                resultado["errores"].append(f"El número de pedido '{numero_pedido}' ya existe en el sistema")
                 resultado["error_tipo"] = "numero_pedido_duplicado"
+                # ✅ Agregar datos estructurados para el frontend (consistente con validaciones SAP)
+                resultado["validacion_numero_pedido"] = {
+                    "numero_pedido": numero_pedido,
+                    "duplicado": True,
+                    "mensaje": f"El número de pedido '{numero_pedido}' ya fue utilizado anteriormente"
+                }
                 return resultado
             # Otros ValueError se propagan como error genérico
             logger.error(f"❌ Error de validación al crear pedido manual: {e}", exc_info=True)
@@ -1473,11 +1535,23 @@ class PedidoService:
                 # Detectar específicamente el error de número de pedido duplicado
                 error_msg = str(e)
                 if "número de pedido" in error_msg.lower() and "ya existe" in error_msg.lower():
-                    logger.warning(f"⚠️ Intento de crear pedido con número duplicado: {error_msg}")
-                    resultado["status"] = "error"
-                    resultado["errores"].append(error_msg)
-                    resultado["error_tipo"] = "numero_pedido_duplicado"
-                    return
+                    numero_pedido = cabecera.get("numero_pedido")
+                    logger.warning(f"⚠️ Intento de crear pedido con número duplicado: {numero_pedido}")
+                    
+                    # ✅ Lanzar BusinessException con datos estructurados (consistente con validaciones SAP)
+                    raise BusinessException(
+                        message=f"El número de pedido '{numero_pedido}' ya existe en el sistema",
+                        error_code="NUMERO_PEDIDO_DUPLICADO",
+                        data={
+                            "numero_pedido": numero_pedido,
+                            "validacion": {
+                                "numero_pedido": {
+                                    "duplicado": True,
+                                    "mensaje": f"El número de pedido '{numero_pedido}' ya fue utilizado anteriormente"
+                                }
+                            }
+                        }
+                    )
                 # Otros ValueError se propagan
                 raise
             resultado["pedido_id"] = pedido_id

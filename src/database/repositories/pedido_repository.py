@@ -1678,6 +1678,42 @@ class PedidoRepository:
         finally:
             cursor.close()
     
+    def existe_numero_pedido(self, numero_pedido: str) -> bool:
+        """
+        Verifica si un número de pedido ya existe en el sistema.
+        
+        Args:
+            numero_pedido: Número del pedido a verificar
+            
+        Returns:
+            True si el número de pedido ya existe, False si no existe
+        """
+        cursor = self.conn.cursor()
+        
+        try:
+            cursor.execute("""
+                SELECT COUNT(*) 
+                FROM pedido 
+                WHERE numero_pedido = ?
+            """, (numero_pedido,))
+            
+            row = cursor.fetchone()
+            count = row[0] if row else 0
+            
+            existe = count > 0
+            if existe:
+                logger.debug(f"✓ Número de pedido '{numero_pedido}' YA EXISTE en el sistema")
+            else:
+                logger.debug(f"✓ Número de pedido '{numero_pedido}' disponible (no existe)")
+            
+            return existe
+            
+        except Exception as e:
+            logger.error(f"❌ Error al verificar existencia de número de pedido '{numero_pedido}': {e}", exc_info=True)
+            raise
+        finally:
+            cursor.close()
+    
     def get_ultimo_pedido(self, usuario_id: str) -> Optional[Dict[str, Any]]:
         """
         Obtiene el último pedido cargado por un usuario específico.
