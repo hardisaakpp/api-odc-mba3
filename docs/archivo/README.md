@@ -4,10 +4,15 @@ Este directorio contiene documentación histórica y de referencia que ha sido c
 
 ## 📋 Contenido
 
+### Refactorizaciones Completadas
+- `REFACTORIZACION_COMPLETADA.md` - Refactorización de pedido_validator.py (2026-01-08)
+- `REFACTORIZACION_COMPLETADA_DESPACHO.md` - Refactorización de DespachoRepository (2026-01-08)
+- `REFACTORIZACION_PEDIDO_SERVICE.md` - Refactorización del servicio de pedidos
+- `REFACTORIZACION_RESUMEN.md` - Resumen general de refactorizaciones
+
 ### Implementaciones Históricas
 - `FASE5_*.md` - Documentación de la Fase 5 de implementación
 - `RESUMEN_IMPLEMENTACION_*.md` - Resúmenes de implementaciones pasadas
-- `REFACTORIZACION_*.md` - Documentación de refactorizaciones completadas
 - `IMPLEMENTACION_VALIDACION_*.md` - Implementaciones de validación
 
 ### Documentación de Versiones Específicas

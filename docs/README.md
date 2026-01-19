@@ -120,28 +120,67 @@
 ```
 docs/
 ├── README.md (este archivo - índice completo)
-├── CONFIGURACION.md ⭐ (Configuración completa consolidada)
-├── CELERY_QUICKSTART.md 🚀 (Inicio rápido Celery)
-├── CELERY_IMPLEMENTATION.md ⭐ (Implementación completa Celery)
-├── ENDPOINTS.md (Documentación de API REST)
-├── FLUJO_COMPLETO.md (Flujo de 4 endpoints principales)
-├── INTEGRACION_SAP.md ⭐ (Integración SAP consolidada)
-├── SEGURIDAD.md (Configuración de seguridad)
-├── TESTING.md (Guía de testing)
-├── ORDEN_COMPRA_COPIA.md (Proceso de ODCs)
-├── HOMOLOGACIONES_SKU.md ⭐ (Sistema de homologaciones)
-├── QUICKSTART_HOMOLOGACIONES.md 🚀 (Inicio rápido)
-├── IMPLEMENTACION_HOMOLOGACIONES_SKU.md (Resumen técnico)
-├── JWT_AUTHENTICATION.md (Autenticación JWT)
-├── USER_PREFERENCES_IMPLEMENTATION.md (Preferencias de usuario)
-├── MENSAJES_SAP.md (Mensajes de integración SAP)
-├── SAP_INTEGRATION_LOGS.md (Logs de integración)
-├── REGISTRO_PERMISOS_CORE.md (Registro de permisos)
-├── RESPUESTA_SAP_IMPLEMENTATION.md (Respuesta de SAP)
-└── pruebas/
-    ├── README.md
-    ├── PRUEBAS_POWERSHELL.md
-    └── test_endpoints.ps1
+│
+├── 🚀 INICIO RÁPIDO
+│   ├── CONFIGURACION.md ⭐
+│   ├── CELERY_QUICKSTART.md 🚀
+│   └── QUICKSTART_HOMOLOGACIONES.md 🚀
+│
+├── 📖 API Y FLUJOS
+│   ├── ENDPOINTS.md
+│   ├── FLUJO_COMPLETO.md
+│   └── ORDEN_COMPRA_COPIA.md
+│
+├── 🗄️ BASE DE DATOS
+│   ├── ESTRUCTURA_BD_PEDIDOS.md ⭐
+│   ├── ESTRUCTURA_REQUEST_CREAR_PEDIDO.md
+│   └── FORMATO_EXCEL_PEDIDOS.md
+│
+├── ⚙️ PROCESOS Y SERVICIOS
+│   ├── CELERY_IMPLEMENTATION.md ⭐
+│   ├── IMPLEMENTACION_PEDIDO_SAP_PROCESAMIENTO.md
+│   └── IMPLEMENTACION_CARGAR_ULTIMO_PEDIDO.md
+│
+├── 🔌 INTEGRACIÓN SAP
+│   ├── INTEGRACION_SAP.md ⭐
+│   ├── MENSAJES_SAP.md
+│   ├── RESPUESTA_SAP_IMPLEMENTATION.md
+│   └── SAP_INTEGRATION_LOGS.md
+│
+├── 🏷️ HOMOLOGACIONES
+│   ├── HOMOLOGACIONES_SKU.md ⭐
+│   ├── QUICKSTART_HOMOLOGACIONES.md 🚀
+│   └── IMPLEMENTACION_HOMOLOGACIONES_SKU.md
+│
+├── 🔒 SEGURIDAD
+│   ├── SEGURIDAD.md ⭐
+│   └── REGISTRO_PERMISOS_CORE.md
+│
+├── 👤 PREFERENCIAS
+│   ├── USER_PREFERENCES_IMPLEMENTATION.md
+│   ├── PERSISTENCIA_CAMPOS_MODIFICADOS.md
+│   └── RESUMEN_IMPLEMENTACION_CAMPOS_MODIFICADOS.md
+│
+├── 🔧 REFACTORIZACIONES Y MEJORAS
+│   ├── REFACTORIZACION_ENDPOINTS_PEDIDOS.md
+│   ├── REFACTORIZACION_PEDIDO_VALIDATOR.md
+│   ├── REFACTORIZACION_PEDIDO_VALIDATOR_SUMMARY.md
+│   ├── REFACTORIZACION_DESPACHO_REPOSITORY.md
+│   ├── CHECKLIST_REFACTORIZACION_DESPACHO.md
+│   ├── VALIDACION_TEMPRANA_NUMERO_PEDIDO.md
+│   ├── MEJORA_ERROR_NUMERO_PEDIDO_DUPLICADO.md
+│   ├── ANALISIS_REDUNDANCIAS.md
+│   └── FRONTEND_PRODUCTOS_PROCESADOS.md
+│
+├── 🧪 TESTING
+│   ├── TESTING.md
+│   └── pruebas/
+│       ├── README.md
+│       └── PRUEBAS_POWERSHELL.md
+│
+└── 📦 ARCHIVO
+    └── archivo/ (documentación histórica)
+        └── README.md
 ```
 
 ## 🚀 Guía de Inicio Rápido
