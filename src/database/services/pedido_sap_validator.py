@@ -541,29 +541,25 @@ class PedidoSAPValidator:
         errores = []
         warnings = []
         
-        sap_client = SAPClient()
+        # ⭐ NUEVO: Usar servicio con caché optimizado - solo consulta SAP para códigos nuevos
+        from ..services.bodega_sap_service import BodegaSAPService
+        bodega_sap_service = BodegaSAPService()
         
         try:
-            # Obtener TODAS las bodegas de SAP de una sola vez
-            logger.info("🔍 Obteniendo catálogo completo de bodegas desde SAP OWHS")
-            todas_bodegas_sap = sap_client.get_todas_bodegas()
+            # Validar códigos: consulta caché primero, SAP solo para los nuevos
+            logger.info(f"🔍 Validando {len(codigos_bodegas)} códigos de bodegas (caché primero, SAP solo si es necesario)")
+            bodegas_validadas = bodega_sap_service.validate_codigos_bodegas_tiendas(
+                codigos=codigos_bodegas,
+                force_refresh=False
+            )
             
-            if not todas_bodegas_sap:
-                logger.error("❌ No se pudo obtener el catálogo de bodegas desde SAP")
+            if not bodegas_validadas:
+                logger.error("❌ No se pudo validar códigos de bodegas")
                 return self._crear_resultado_error_catalogo(
-                    codigos_bodegas, sap_obligatorio, "No se pudo obtener catálogo SAP"
+                    codigos_bodegas, sap_obligatorio, "No se pudo validar códigos"
                 )
             
-            # Crear diccionario de bodegas SAP para búsqueda rápida
-            bodegas_sap_dict = {
-                bodega["WhsCode"]: bodega 
-                for bodega in todas_bodegas_sap 
-                if bodega.get("WhsCode")
-            }
-            
-            logger.info(f"📋 Catálogo SAP: {len(bodegas_sap_dict)} bodegas disponibles")
-            
-            # Validar cada código contra el catálogo
+            # Procesar resultados de validación
             for codigo in codigos_bodegas:
                 codigo_clean = codigo.strip() if codigo else ""
                 
@@ -577,18 +573,26 @@ class PedidoSAPValidator:
                     no_encontradas.append(codigo)
                     continue
                 
-                # Buscar en el catálogo SAP
-                if codigo_clean in bodegas_sap_dict:
-                    bodega_info = bodegas_sap_dict[codigo_clean]
+                # Buscar en los resultados de validación
+                resultado_validacion = bodegas_validadas.get(codigo_clean.upper())
+                
+                if resultado_validacion and resultado_validacion.get("encontrado"):
+                    # Código encontrado (en caché o SAP)
                     detalle[codigo] = {
                         "existe": True,
-                        "info": bodega_info,
+                        "info": {
+                            "WhsCode": resultado_validacion["WhsCode"],
+                            "WhsName": resultado_validacion.get("WhsName"),
+                            "es_bodega": resultado_validacion.get("es_bodega")
+                        },
                         "error": None,
-                        "severity": None
+                        "severity": None,
+                        "fuente": resultado_validacion.get("fuente", "cache")
                     }
                     validas.append(codigo)
-                    logger.debug(f"✅ Bodega validada en SAP: {codigo_clean}")
+                    logger.debug(f"✅ Bodega validada: {codigo_clean} (fuente: {resultado_validacion.get('fuente', 'cache')})")
                 else:
+                    # Código no encontrado
                     detalle[codigo] = {
                         "existe": False,
                         "info": None,
@@ -677,31 +681,37 @@ class PedidoSAPValidator:
         warnings = []
         detalle = {}
         
-        sap_client = SAPClient()
+        # ⭐ NUEVO: Usar servicio con caché optimizado - solo consulta SAP para códigos nuevos
+        from ..services.bodega_sap_service import BodegaSAPService
+        bodega_sap_service = BodegaSAPService()
         
         try:
-            # Obtener TODAS las tiendas de SAP de una sola vez
-            logger.info("🔍 Obteniendo catálogo completo de tiendas desde SAP OWHS")
-            todas_tiendas_sap = sap_client.get_todas_bodegas()
+            # Validar códigos: consulta caché primero, SAP solo para los nuevos
+            logger.info(f"🔍 Validando {len(codigos_tiendas)} códigos de tiendas (caché primero, SAP solo si es necesario)")
+            tiendas_validadas = bodega_sap_service.validate_codigos_bodegas_tiendas(
+                codigos=codigos_tiendas,
+                force_refresh=False
+            )
             
-            if not todas_tiendas_sap:
-                logger.error("❌ No se pudo obtener el catálogo de tiendas desde SAP")
+            if tiendas_validadas is None:
+                logger.error("❌ No se pudo validar códigos de tiendas")
                 return self._crear_resultado_error_catalogo(
-                    codigos_tiendas, sap_obligatorio, "No se pudo obtener catálogo SAP"
+                    codigos_tiendas, sap_obligatorio, "No se pudo validar códigos"
                 )
             
-            # Crear diccionario de tiendas SAP para búsqueda rápida por código
-            # SAP usa WhsCode (ej: "ROL01", "ROL02") como clave
+            # Crear diccionario para búsqueda rápida
             tiendas_sap_dict = {}
-            for tienda in todas_tiendas_sap:
-                whscode = tienda.get("WhsCode")
-                if whscode:
-                    # Normalizar: SAP usa mayúsculas
-                    tiendas_sap_dict[whscode.upper()] = tienda
+            for codigo, resultado in tiendas_validadas.items():
+                if resultado.get("encontrado"):
+                    tiendas_sap_dict[codigo] = {
+                        "WhsCode": resultado["WhsCode"],
+                        "WhsName": resultado.get("WhsName"),
+                        "es_bodega": resultado.get("es_bodega")
+                    }
             
-            logger.info(f"📋 Catálogo SAP: {len(tiendas_sap_dict)} tiendas disponibles")
+            logger.info(f"📋 Validación completada: {len([t for t in tiendas_validadas.values() if t.get('encontrado')])} tiendas encontradas")
             
-            # Validar cada código contra el catálogo
+            # Procesar resultados de validación
             for codigo in codigos_tiendas:
                 codigo_clean = codigo.strip() if codigo else ""
                 
@@ -718,23 +728,31 @@ class PedidoSAPValidator:
                 # Normalizar para búsqueda
                 codigo_upper = codigo_clean.upper()
                 
-                # Buscar en el catálogo SAP
-                if codigo_upper in tiendas_sap_dict:
-                    tienda_info = tiendas_sap_dict[codigo_upper]
+                # Buscar en los resultados de validación
+                resultado_validacion = tiendas_validadas.get(codigo_upper)
+                
+                if resultado_validacion and resultado_validacion.get("encontrado"):
+                    # Código encontrado (en caché o SAP)
+                    tienda_info = {
+                        "WhsCode": resultado_validacion["WhsCode"],
+                        "WhsName": resultado_validacion.get("WhsName"),
+                        "es_bodega": resultado_validacion.get("es_bodega")
+                    }
                     detalle[codigo] = {
                         "existe": True,
                         "info": {
                             "codigo": tienda_info.get("WhsCode"),
                             "nombre": tienda_info.get("WhsName"),
-                            "ubicacion": tienda_info.get("Location"),
-                            "activa": tienda_info.get("Inactive", "N") != "Y"
+                            "es_bodega": tienda_info.get("es_bodega")
                         },
                         "error": None,
-                        "severity": None
+                        "severity": None,
+                        "fuente": resultado_validacion.get("fuente", "cache")
                     }
                     validas.append(codigo)
-                    logger.debug(f"✅ Tienda validada en SAP: {codigo_clean}")
+                    logger.debug(f"✅ Tienda validada: {codigo_clean} (fuente: {resultado_validacion.get('fuente', 'cache')})")
                 else:
+                    # Código no encontrado
                     detalle[codigo] = {
                         "existe": False,
                         "info": None,

@@ -425,7 +425,9 @@ class PedidoService:
                                     )
                                     distribuciones.append({
                                         "tienda_id": tienda_id,
-                                        "cantidad": cantidad
+                                        "cantidad": cantidad,
+                                        "fila_origen": dist.get("fila_origen"),
+                                        "es_bodega": dist.get("es_bodega", False)  # ⭐ NUEVO: Pasar flag de bodega
                                     })
                             
                             if distribuciones:
@@ -829,7 +831,8 @@ class PedidoService:
                         "tienda_codigo": item.get("idTienda"),
                         "tienda_nombre": item.get("nombreTienda"),  # ⭐ AGREGADO: Nombre de la tienda de la fila 1 del Excel
                         "cantidad": item.get("cantidad"),
-                        "fila_origen": item.get("filaOrigen")
+                        "fila_origen": item.get("filaOrigen"),
+                        "es_bodega": item.get("es_bodega", False)  # ⭐ NUEVO: Preservar flag de bodega
                     })
                 
                 detalles_con_tiendas = list(productos_agrupados.values())
@@ -869,17 +872,16 @@ class PedidoService:
                 
                 for detalle_item in detalles_con_tiendas:
                     if isinstance(detalle_item, dict):
-                        # Extraer tiendas de distribuciones
+                        # Extraer tiendas y bodegas de distribuciones
                         distribuciones = detalle_item.get("distribuciones", [])
                         for dist in distribuciones:
                             tienda_codigo = dist.get("tienda_codigo")
                             if tienda_codigo:
-                                codigos_tiendas_set.add(tienda_codigo)
-                        
-                        # Extraer bodegas de detalle (si existe campo bodega)
-                        bodega = detalle_item.get("detalle", {}).get("bodega")
-                        if bodega and bodega.strip():
-                            codigos_bodegas_set.add(bodega.strip())
+                                # Las bodegas ahora están en las distribuciones con es_bodega=True
+                                if dist.get("es_bodega", False):
+                                    codigos_bodegas_set.add(tienda_codigo.strip())
+                                else:
+                                    codigos_tiendas_set.add(tienda_codigo)
                 
                 # Extraer bodegas de cabecera (origen_traslado)
                 origen_traslado = cabecera.get("origen_traslado")
@@ -1185,7 +1187,6 @@ class PedidoService:
                     "pvp": articulo.get("pvp"),
                     "subtotal": articulo.get("subtotal"),
                     "total": articulo.get("total"),
-                    "bodega": articulo.get("bodega"),  # Campo bodega si existe en el request
                     "comentario": articulo.get("comentario")  # Campo comentario si existe en el request
                 }
                 
@@ -1195,7 +1196,6 @@ class PedidoService:
                            f"marca={detalle.get('marca')}, "
                            f"costo_doc_sin_iva={detalle.get('costo_doc_sin_iva')}, "
                            f"pvp={detalle.get('pvp')}, "
-                           f"bodega={detalle.get('bodega')}, "
                            f"comentario={detalle.get('comentario')}")
                 
                 distribuciones = []
@@ -1255,12 +1255,15 @@ class PedidoService:
                 # ✅ VALIDACIÓN SAP OBLIGATORIA (PRIMERO - fuente de verdad)
                 # Validar productos, tiendas y bodegas contra SAP antes que cualquier otra validación
                 
-                # Extraer códigos de bodegas
+                # Extraer códigos de bodegas de las distribuciones (es_bodega=True)
                 codigos_bodegas_set = set()
                 for det in detalles_con_tiendas:
-                    bodega = det.get("detalle", {}).get("bodega")
-                    if bodega and bodega.strip():
-                        codigos_bodegas_set.add(bodega.strip())
+                    distribuciones = det.get("distribuciones", [])
+                    for dist in distribuciones:
+                        if dist.get("es_bodega", False):
+                            tienda_codigo = dist.get("tienda_codigo")
+                            if tienda_codigo:
+                                codigos_bodegas_set.add(tienda_codigo.strip())
                 origen_traslado = cabecera.get("origen_traslado")
                 if origen_traslado and origen_traslado.strip():
                     codigos_bodegas_set.add(origen_traslado.strip())

@@ -1222,7 +1222,6 @@ class ArticuloRequest(BaseModel):
     pvp: Optional[float] = Field(None, ge=0, description="Precio de venta público")
     subtotal: Optional[float] = Field(None, ge=0, description="Subtotal del artículo")
     total: Optional[float] = Field(None, ge=0, description="Total del artículo")
-    bodega: Optional[int] = Field(None, description="Código de bodega/almacén")
     comentario: Optional[str] = Field(None, description="Comentario o nota adicional del artículo")
     cantidad_total: Optional[int] = Field(None, ge=0, description="Cantidad total del artículo (solo para validación, no se guarda en BD)")
     distribuciones: List[DistribucionTiendaRequest] = Field(..., min_length=1, description="Lista de distribuciones por tienda")

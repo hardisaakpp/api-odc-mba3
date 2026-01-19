@@ -223,10 +223,9 @@ class PedidoRepository:
                     pvp,
                     subtotal,
                     total,
-                    bodega,
                     comentario,
                     created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, GETDATE())
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, GETDATE())
                 """
                 
                 values = (
@@ -242,7 +241,6 @@ class PedidoRepository:
                     datos_detalle.get("pvp"),
                     datos_detalle.get("subtotal"),  # Calculado al guardar
                     datos_detalle.get("total"),     # Tal cual viene del Excel
-                    datos_detalle.get("bodega"),    # Bodega/almacén del producto
                     datos_detalle.get("comentario"),  # Comentario del artículo
                 )
             else:
@@ -261,9 +259,8 @@ class PedidoRepository:
                     pvp,
                     subtotal,
                     total,
-                    bodega,
                     created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, GETDATE())
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, GETDATE())
                 """
                 
                 values = (
@@ -279,7 +276,6 @@ class PedidoRepository:
                     datos_detalle.get("pvp"),
                     datos_detalle.get("subtotal"),  # Calculado al guardar
                     datos_detalle.get("total"),     # Tal cual viene del Excel
-                    datos_detalle.get("bodega"),    # Bodega/almacén del producto
                 )
             
             cursor.execute(sql, values)
@@ -298,14 +294,14 @@ class PedidoRepository:
     def insert_detalle_tiendas(
         self,
         pedido_detalle_id: str,
-        distribuciones: List[Dict[str, Any]]  # [{"tienda_id": "...", "cantidad": 10, "fila_origen": 2}, ...]
+        distribuciones: List[Dict[str, Any]]  # [{"tienda_id": "...", "cantidad": 10, "fila_origen": 2, "es_bodega": False}, ...]
     ) -> int:
         """
         Inserta distribuciones de un detalle por tiendas.
         
         Args:
             pedido_detalle_id: UUID del detalle
-            distribuciones: Lista de dicts con tienda_id, cantidad y opcionalmente fila_origen
+            distribuciones: Lista de dicts con tienda_id, cantidad y opcionalmente fila_origen, es_bodega
             
         Returns:
             Número de distribuciones insertadas
@@ -327,26 +323,35 @@ class PedidoRepository:
             row = cursor.fetchone()
             tiene_fila_origen = (row[0] if row else 0) > 0
             
+            # Verificar si existe columna es_bodega (para compatibilidad)
+            cursor.execute("""
+                SELECT COUNT(*) 
+                FROM INFORMATION_SCHEMA.COLUMNS 
+                WHERE TABLE_NAME = 'pedido_detalle_tienda' 
+                AND COLUMN_NAME = 'es_bodega'
+            """)
+            row = cursor.fetchone()
+            tiene_es_bodega = (row[0] if row else 0) > 0
+            
+            # Construir SQL dinámicamente según columnas disponibles
+            columnas = ["id", "pedido_detalle_id", "tienda_id", "cantidad"]
+            valores_placeholders = ["NEWID()", "?", "?", "?"]
+            
             if tiene_fila_origen:
-                sql = """
+                columnas.append("fila_origen")
+                valores_placeholders.append("?")
+            
+            if tiene_es_bodega:
+                columnas.append("es_bodega")
+                valores_placeholders.append("?")
+            
+            columnas.append("created_at")
+            valores_placeholders.append("GETDATE()")
+            
+            sql = f"""
                 INSERT INTO pedido_detalle_tienda (
-                    id,
-                    pedido_detalle_id,
-                    tienda_id,
-                    cantidad,
-                    fila_origen,
-                    created_at
-                ) VALUES (NEWID(), ?, ?, ?, ?, GETDATE())
-                """
-            else:
-                sql = """
-                INSERT INTO pedido_detalle_tienda (
-                    id,
-                    pedido_detalle_id,
-                    tienda_id,
-                    cantidad,
-                    created_at
-                ) VALUES (NEWID(), ?, ?, ?, GETDATE())
+                    {', '.join(columnas)}
+                ) VALUES ({', '.join(valores_placeholders)})
                 """
             
             for dist in distribuciones:
@@ -354,14 +359,22 @@ class PedidoRepository:
                     tienda_id = dist.get("tienda_id")
                     cantidad = dist.get("cantidad")
                     fila_origen = dist.get("fila_origen")
+                    es_bodega = dist.get("es_bodega", False)  # ⭐ NUEVO: Obtener flag de bodega
                     
                     if not tienda_id or not cantidad or cantidad <= 0:
                         continue
                     
+                    # Construir valores dinámicamente
+                    valores = [pedido_detalle_id, tienda_id, cantidad]
+                    
                     if tiene_fila_origen:
-                        cursor.execute(sql, (pedido_detalle_id, tienda_id, cantidad, fila_origen))
-                    else:
-                        cursor.execute(sql, (pedido_detalle_id, tienda_id, cantidad))
+                        valores.append(fila_origen)
+                    
+                    if tiene_es_bodega:
+                        # Convertir Python bool a SQL Server bit (0 o 1)
+                        valores.append(1 if es_bodega else 0)
+                    
+                    cursor.execute(sql, tuple(valores))
                     inserted_count += 1
                     
                 except pyodbc.IntegrityError:
@@ -399,18 +412,19 @@ class PedidoRepository:
         cursor = self.conn.cursor()
         
         try:
-            # ⭐ NUEVO: Si no se proporciona nombre y consultar_sap=True, obtenerlo desde SAP
+            # ⭐ NUEVO: Si no se proporciona nombre y consultar_sap=True, obtenerlo desde caché o SAP
             nombre_sap = None
             if (not nombre or nombre.strip() == "" or nombre.strip().upper() == codigo.strip().upper()) and consultar_sap:
                 try:
-                    from ..clients.sap_client import SAPClient
-                    sap_client = SAPClient()
-                    bodega_info = sap_client.get_bodega_info(codigo)
+                    # ⭐ Usar servicio con caché en lugar de consultar SAP directamente
+                    from ..services.bodega_sap_service import BodegaSAPService
+                    bodega_sap_service = BodegaSAPService()
+                    bodega_info = bodega_sap_service.get_or_fetch_bodega_info(codigo, force_refresh=False)
                     if bodega_info and bodega_info.get("WhsName"):
                         nombre_sap = bodega_info.get("WhsName").strip()
-                        logger.info(f"✅ Nombre de tienda obtenido desde SAP: {codigo} → '{nombre_sap}'")
+                        logger.info(f"✅ Nombre de tienda obtenido (caché o SAP): {codigo} → '{nombre_sap}'")
                 except Exception as e:
-                    logger.warning(f"⚠️ No se pudo consultar SAP para obtener nombre de tienda {codigo}: {e}")
+                    logger.warning(f"⚠️ No se pudo obtener nombre de tienda {codigo} (caché o SAP): {e}")
             
             # Usar el nombre de SAP si está disponible, sino usar el proporcionado
             nombre_final = nombre_sap if nombre_sap else nombre
@@ -596,7 +610,7 @@ class PedidoRepository:
                         pd.pedido_detalle_id,
                         pd.codigo_interno, pd.descripcion_sap, pd.marca, pd.codigo_barras,
                         pd.pack, pd.costo_doc_sin_iva, pd.descuento_1, pd.pvp,
-                        pd.subtotal, pd.total, pd.bodega, pd.comentario,
+                        pd.subtotal, pd.total, pd.comentario,
                         ISNULL(pd.costo_modificado_manual, 0) AS costo_modificado_manual,
                         ISNULL(pd.total_modificado_manual, 0) AS total_modificado_manual,
                         ISNULL(pd.comentario_modificado_manual, 0) AS comentario_modificado_manual
@@ -614,7 +628,7 @@ class PedidoRepository:
                             pd.pedido_detalle_id,
                             pd.codigo_interno, pd.descripcion_sap, pd.marca, pd.codigo_barras,
                             pd.pack, pd.costo_doc_sin_iva, pd.descuento_1, pd.pvp,
-                            pd.subtotal, pd.total, pd.bodega, pd.comentario
+                            pd.subtotal, pd.total, pd.comentario
                         FROM pedido_detalle pd
                         WHERE pd.pedido_id = ?
                         ORDER BY pd.created_at
@@ -628,7 +642,7 @@ class PedidoRepository:
                             pd.pedido_detalle_id,
                             pd.codigo_interno, pd.descripcion_sap, pd.marca, pd.codigo_barras,
                             pd.pack, pd.costo_doc_sin_iva, pd.descuento_1, pd.pvp,
-                            pd.subtotal, pd.total, pd.bodega
+                            pd.subtotal, pd.total
                         FROM pedido_detalle pd
                         WHERE pd.pedido_id = ?
                         ORDER BY pd.created_at
@@ -641,23 +655,53 @@ class PedidoRepository:
                 pedido_detalle_id = str(row[0])
                 
                 # Obtener distribuciones por tienda para este detalle
-                cursor.execute("""
-                    SELECT 
-                        pdt.cantidad,
-                        t.tienda_id, t.codigo, t.nombre
-                    FROM pedido_detalle_tienda pdt
-                    INNER JOIN tienda t ON pdt.tienda_id = t.tienda_id
-                    WHERE pdt.pedido_detalle_id = ?
-                """, (pedido_detalle_id,))
+                # Verificar si existe columna es_bodega (para compatibilidad)
+                if not hasattr(self, '_tiene_es_bodega_cache'):
+                    cursor.execute("""
+                        SELECT COUNT(*) 
+                        FROM INFORMATION_SCHEMA.COLUMNS 
+                        WHERE TABLE_NAME = 'pedido_detalle_tienda' 
+                        AND COLUMN_NAME = 'es_bodega'
+                    """)
+                    row_check = cursor.fetchone()
+                    self._tiene_es_bodega_cache = (row_check[0] if row_check else 0) > 0
+                
+                tiene_es_bodega = self._tiene_es_bodega_cache
+                
+                if tiene_es_bodega:
+                    cursor.execute("""
+                        SELECT 
+                            pdt.cantidad,
+                            t.tienda_id, t.codigo, t.nombre,
+                            pdt.es_bodega
+                        FROM pedido_detalle_tienda pdt
+                        INNER JOIN tienda t ON pdt.tienda_id = t.tienda_id
+                        WHERE pdt.pedido_detalle_id = ?
+                    """, (pedido_detalle_id,))
+                else:
+                    cursor.execute("""
+                        SELECT 
+                            pdt.cantidad,
+                            t.tienda_id, t.codigo, t.nombre
+                        FROM pedido_detalle_tienda pdt
+                        INNER JOIN tienda t ON pdt.tienda_id = t.tienda_id
+                        WHERE pdt.pedido_detalle_id = ?
+                    """, (pedido_detalle_id,))
                 
                 tiendas_distribucion = []
                 for dist_row in cursor.fetchall():
-                    tiendas_distribucion.append({
+                    dist_item = {
                         "tienda_id": str(dist_row[1]),
                         "codigo": dist_row[2],
                         "nombre": dist_row[3],
                         "cantidad": dist_row[0],
-                    })
+                    }
+                    if tiene_es_bodega:
+                        # Convertir SQL Server bit (0 o 1) a Python bool
+                        dist_item["es_bodega"] = bool(dist_row[4])
+                    else:
+                        dist_item["es_bodega"] = False  # Valor por defecto si no existe el campo
+                    tiendas_distribucion.append(dist_item)
                 
                 detalle_dict = {
                     "pedido_detalle_id": pedido_detalle_id,
@@ -671,21 +715,20 @@ class PedidoRepository:
                     "pvp": float(row[8]) if row[8] else None,
                     "subtotal": float(row[9]) if row[9] else None,  # Tal cual se guardó
                     "total": float(row[10]) if row[10] else None,   # Tal cual se guardó
-                    "bodega": int(row[11]) if row[11] else None,    # Bodega/almacén
                     "tiendas": tiendas_distribucion,
                 }
                 
                 # Agregar comentario si existe en la consulta
-                if tiene_comentario and len(row) > 12:
-                    detalle_dict["comentario"] = row[12] if row[12] else None
+                if tiene_comentario and len(row) > 11:
+                    detalle_dict["comentario"] = row[11] if row[11] else None
                 else:
                     detalle_dict["comentario"] = None
                 
                 # Agregar campos de modificación manual si existen en la consulta
-                if tiene_campos_modificados and len(row) > 15:
-                    detalle_dict["costo_modificado_manual"] = bool(row[13])
-                    detalle_dict["total_modificado_manual"] = bool(row[14])
-                    detalle_dict["comentario_modificado_manual"] = bool(row[15])
+                if tiene_campos_modificados and len(row) > 14:
+                    detalle_dict["costo_modificado_manual"] = bool(row[12])
+                    detalle_dict["total_modificado_manual"] = bool(row[13])
+                    detalle_dict["comentario_modificado_manual"] = bool(row[14])
                 else:
                     # Si los campos no existen en BD antigua, devolver False por defecto
                     detalle_dict["costo_modificado_manual"] = False
@@ -801,7 +844,7 @@ class PedidoRepository:
                         pd.pedido_detalle_id,
                         pd.codigo_interno, pd.descripcion_sap, pd.marca, pd.codigo_barras,
                         pd.pack, pd.costo_doc_sin_iva, pd.descuento_1, pd.pvp,
-                        pd.subtotal, pd.total, pd.bodega, pd.comentario,
+                        pd.subtotal, pd.total, pd.comentario,
                         ISNULL(pd.costo_modificado_manual, 0) AS costo_modificado_manual,
                         ISNULL(pd.total_modificado_manual, 0) AS total_modificado_manual,
                         ISNULL(pd.comentario_modificado_manual, 0) AS comentario_modificado_manual
@@ -819,7 +862,7 @@ class PedidoRepository:
                             pd.pedido_detalle_id,
                             pd.codigo_interno, pd.descripcion_sap, pd.marca, pd.codigo_barras,
                             pd.pack, pd.costo_doc_sin_iva, pd.descuento_1, pd.pvp,
-                            pd.subtotal, pd.total, pd.bodega, pd.comentario
+                            pd.subtotal, pd.total, pd.comentario
                         FROM pedido_detalle pd
                         WHERE pd.pedido_id = ?
                         ORDER BY pd.created_at
@@ -833,7 +876,7 @@ class PedidoRepository:
                             pd.pedido_detalle_id,
                             pd.codigo_interno, pd.descripcion_sap, pd.marca, pd.codigo_barras,
                             pd.pack, pd.costo_doc_sin_iva, pd.descuento_1, pd.pvp,
-                            pd.subtotal, pd.total, pd.bodega
+                            pd.subtotal, pd.total
                         FROM pedido_detalle pd
                         WHERE pd.pedido_id = ?
                         ORDER BY pd.created_at
@@ -846,23 +889,53 @@ class PedidoRepository:
                 pedido_detalle_id = str(row[0])
                 
                 # Obtener distribuciones por tienda para este detalle
-                cursor.execute("""
-                    SELECT 
-                        pdt.cantidad,
-                        t.tienda_id, t.codigo, t.nombre
-                    FROM pedido_detalle_tienda pdt
-                    INNER JOIN tienda t ON pdt.tienda_id = t.tienda_id
-                    WHERE pdt.pedido_detalle_id = ?
-                """, (pedido_detalle_id,))
+                # Verificar si existe columna es_bodega (para compatibilidad)
+                if not hasattr(self, '_tiene_es_bodega_cache'):
+                    cursor.execute("""
+                        SELECT COUNT(*) 
+                        FROM INFORMATION_SCHEMA.COLUMNS 
+                        WHERE TABLE_NAME = 'pedido_detalle_tienda' 
+                        AND COLUMN_NAME = 'es_bodega'
+                    """)
+                    row_check = cursor.fetchone()
+                    self._tiene_es_bodega_cache = (row_check[0] if row_check else 0) > 0
+                
+                tiene_es_bodega = self._tiene_es_bodega_cache
+                
+                if tiene_es_bodega:
+                    cursor.execute("""
+                        SELECT 
+                            pdt.cantidad,
+                            t.tienda_id, t.codigo, t.nombre,
+                            pdt.es_bodega
+                        FROM pedido_detalle_tienda pdt
+                        INNER JOIN tienda t ON pdt.tienda_id = t.tienda_id
+                        WHERE pdt.pedido_detalle_id = ?
+                    """, (pedido_detalle_id,))
+                else:
+                    cursor.execute("""
+                        SELECT 
+                            pdt.cantidad,
+                            t.tienda_id, t.codigo, t.nombre
+                        FROM pedido_detalle_tienda pdt
+                        INNER JOIN tienda t ON pdt.tienda_id = t.tienda_id
+                        WHERE pdt.pedido_detalle_id = ?
+                    """, (pedido_detalle_id,))
                 
                 tiendas_distribucion = []
                 for dist_row in cursor.fetchall():
-                    tiendas_distribucion.append({
+                    dist_item = {
                         "tienda_id": str(dist_row[1]),
                         "codigo": dist_row[2],
                         "nombre": dist_row[3],
                         "cantidad": dist_row[0],
-                    })
+                    }
+                    if tiene_es_bodega:
+                        # Convertir SQL Server bit (0 o 1) a Python bool
+                        dist_item["es_bodega"] = bool(dist_row[4])
+                    else:
+                        dist_item["es_bodega"] = False  # Valor por defecto si no existe el campo
+                    tiendas_distribucion.append(dist_item)
                 
                 detalle_dict = {
                     "pedido_detalle_id": pedido_detalle_id,
@@ -876,25 +949,24 @@ class PedidoRepository:
                     "pvp": float(row[8]) if row[8] else None,
                     "subtotal": float(row[9]) if row[9] else None,  # Tal cual se guardó
                     "total": float(row[10]) if row[10] else None,   # Tal cual se guardó
-                    "bodega": int(row[11]) if row[11] else None,    # Bodega/almacén
                     "tiendas": tiendas_distribucion,
                 }
                 
                 # Agregar comentario si existe en la consulta
                 # IMPORTANTE: Verificar que el campo existe y tiene valor
                 if tiene_comentario:
-                    if len(row) > 12:
-                        detalle_dict["comentario"] = row[12] if row[12] else None
+                    if len(row) > 11:
+                        detalle_dict["comentario"] = row[11] if row[11] else None
                     else:
                         detalle_dict["comentario"] = None
                 else:
                     detalle_dict["comentario"] = None
                 
                 # Agregar campos de modificación manual si existen en la consulta
-                if tiene_campos_modificados and len(row) > 15:
-                    detalle_dict["costo_modificado_manual"] = bool(row[13])
-                    detalle_dict["total_modificado_manual"] = bool(row[14])
-                    detalle_dict["comentario_modificado_manual"] = bool(row[15])
+                if tiene_campos_modificados and len(row) > 14:
+                    detalle_dict["costo_modificado_manual"] = bool(row[12])
+                    detalle_dict["total_modificado_manual"] = bool(row[13])
+                    detalle_dict["comentario_modificado_manual"] = bool(row[14])
                 else:
                     # Si los campos no existen en BD antigua, devolver False por defecto
                     detalle_dict["costo_modificado_manual"] = False

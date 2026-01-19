@@ -199,6 +199,7 @@ class PedidoConsolidator:
             id_tienda = item.get("idTienda")
             cantidad = item.get("cantidad")
             fila_origen = item.get("filaOrigen")
+            es_bodega = item.get("es_bodega", False)  # ⭐ NUEVO: Preservar flag de bodega
             
             if not codigo_producto or not id_tienda or not cantidad:
                 continue
@@ -237,7 +238,8 @@ class PedidoConsolidator:
                     "tienda_codigo": id_tienda.upper(),
                     "tienda_nombre": id_tienda,
                     "cantidad": cantidad,
-                    "fila_origen": fila_origen
+                    "fila_origen": fila_origen,
+                    "es_bodega": es_bodega  # ⭐ NUEVO: Preservar flag de bodega
                 })
             
             productos_agrupados[codigo_producto]["filas_origen"].append(fila_origen)
