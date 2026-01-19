@@ -1165,35 +1165,13 @@ def send_oc_ready_for_dispatch_notification(
                             <li><strong>DocEntry:</strong> {doc_entry or 'N/A'}</li>
                             <li><strong>Proveedor:</strong> {proveedor}</li>
                             <li><strong>Referencia:</strong> {referencia}</li>
-                            {f'<li><strong>Número de Pedido:</strong> {pedido_numero}</li>' if pedido_numero else ''}
+                            {("<li><strong>Número de Pedido:</strong> " + str(pedido_numero) + "</li>") if pedido_numero else ""}
                         </ul>
                     </div>
                     
-                    {f'''
-                    <div class="success-box">
-                        <h3>📦 Solicitudes de Transferencia Generadas</h3>
-                        <p><strong>Total:</strong> {transferencias_exitosas}/{total_transferencias} creadas exitosamente</p>
-                        {f'<p style="color: #f44336;"><strong>⚠️ Errores:</strong> {transferencias_fallidas} solicitud(es) fallaron</p>' if transferencias_fallidas > 0 else ''}
-                    </div>
+                    {('<div class="success-box"><h3>📦 Solicitudes de Transferencia Generadas</h3><p><strong>Total:</strong> ' + str(transferencias_exitosas) + '/' + str(total_transferencias) + ' creadas exitosamente</p>' + ('<p style="color: #f44336;"><strong>⚠️ Errores:</strong> ' + str(transferencias_fallidas) + ' solicitud(es) fallaron</p>' if transferencias_fallidas > 0 else '') + '</div>') if solicitudes_transferencia else ""}
                     
-                    {f'''
-                    <div class="table-container">
-                        <h3>📋 Detalle de Solicitudes de Transferencia</h3>
-                        <table>
-                            <thead>
-                                <tr>
-                                    <th>Tienda</th>
-                                    <th>Estado</th>
-                                    <th>Información</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                {transferencias_tabla}
-                            </tbody>
-                        </table>
-                    </div>
-                    ''' if transferencias_tabla else ''}
-                    ''' if solicitudes_transferencia else ''}
+                    {('<div class="table-container"><h3>📋 Detalle de Solicitudes de Transferencia</h3><table><thead><tr><th>Tienda</th><th>Estado</th><th>Información</th></tr></thead><tbody>' + transferencias_tabla + '</tbody></table></div>') if transferencias_tabla else ""}
                     
                     <div class="action-box">
                         <h3>🎯 Acción Requerida</h3>
