@@ -315,15 +315,50 @@ class PedidoParser:
         logger.info(f"   Campos: {list(cabecera.keys())}")
         return cabecera
     
+    def _es_codigo_valido(self, codigo: str) -> bool:
+        """
+        Valida si un código es válido para tienda/bodega.
+        
+        Filtra códigos que sean solo números simples (como "1", "2", "3")
+        que probablemente son índices o números de fila, no códigos reales.
+        
+        Args:
+            codigo: Código a validar
+            
+        Returns:
+            True si el código es válido, False si es solo un número simple
+        """
+        import re
+        codigo_clean = str(codigo).strip().upper()
+        
+        # Si es solo números (1-3 dígitos), probablemente no es un código válido
+        if re.match(r'^\d{1,3}$', codigo_clean):
+            return False
+        
+        # Códigos válidos deben tener al menos una letra o ser códigos conocidos
+        # Formato esperado: "ROL01", "RL-CD", "OUT-CD", "REG-CD", etc.
+        tiene_letras = bool(re.search(r'[A-Z]', codigo_clean))
+        
+        return tiene_letras
+    
     def _parsear_detalle_nuevo_formato_v1_0(self, excel_file: pd.ExcelFile, file_content: bytes, hoja_detalle: str) -> Dict[str, Any]:
         """
         Parsea la hoja de detalle en el nuevo formato v1.0.
         
         Estructura esperada:
-        - Columnas A-J: Información del producto (CODIGO PRODUCTO, MARCA, CODIGO BARRAS, etc.)
-        - Columnas K-M: Bodegas centrales (RL-CD, OUT-CD, REG-CD) - NO incluidas en SUBTOTAL
-        - Columnas N+: Tiendas individuales - SÍ incluidas en SUBTOTAL
-        - TOTAL = SUBTOTAL + RL-CD + OUT-CD + REG-CD
+        - Fila 1 (header nombres): Nombres de columnas
+          - Columnas A-J: Información del producto (CODIGO PRODUCTO, MARCA, CODIGO BARRAS, etc.)
+          - Columnas K-M: Nombres de bodegas centrales
+          - Columnas N+: Nombres de tiendas individuales
+        - Fila 2 (header códigos): Códigos de columnas
+          - Columnas A-J: (generalmente vacías o repetidas)
+          - Columnas K-M: Códigos de bodegas (RL-CD, OUT-CD, REG-CD)
+          - Columnas N+: Códigos de tiendas individuales
+        - Fila 3+: Datos de productos
+        
+        Las bodegas centrales NO se incluyen en SUBTOTAL.
+        Las tiendas individuales SÍ se incluyen en SUBTOTAL.
+        TOTAL = SUBTOTAL + RL-CD + OUT-CD + REG-CD
         """
         resultado = {
             "resumen": {
@@ -347,22 +382,28 @@ class PedidoParser:
             
             logger.info(f"📊 Excel nuevo formato v1.0: {len(df_detalle_raw)} filas, {len(df_detalle_raw.columns)} columnas")
             
-            # Buscar la fila que contiene los headers
+            # Buscar la fila que contiene los headers (fila 1 = nombres)
             header_row_idx: Optional[int] = None
             for idx, row in df_detalle_raw.iterrows():
                 row_values = [str(v).upper().strip() if v != "" and pd.notna(v) else "" for v in row.values]
                 row_str = " ".join(row_values)
-                # Buscar "CODIGO PRODUCTO" o "CODIGO PRODUCTO"
+                # Buscar "CODIGO PRODUCTO" o "CODIGOPRODUCTO"
                 if "CODIGOPRODUCTO" in row_str or "CODIGO PRODUCTO" in row_str:
                     header_row_idx = int(idx) if isinstance(idx, (int, float)) else 0
-                    logger.info(f"✅ Fila de header encontrada en índice: {header_row_idx}")
+                    logger.info(f"✅ Fila de header (nombres) encontrada en índice: {header_row_idx}")
                     break
             
             if header_row_idx is None:
                 header_row_idx = 0
                 logger.warning(f"⚠️ No se encontró fila de header, usando fila 0 como header")
             
-            # Leer con el header correcto
+            # Verificar que existe una segunda fila de header (fila 2 = códigos)
+            codigos_row_idx = header_row_idx + 1
+            if codigos_row_idx >= len(df_detalle_raw):
+                logger.warning(f"⚠️ No se encontró segunda fila de header (códigos), usando solo primera fila")
+                codigos_row_idx = None
+            
+            # Leer con el header de nombres (fila 1) para identificar estructura
             df_detalle = pd.read_excel(
                 io.BytesIO(file_content), 
                 sheet_name=hoja_detalle, 
@@ -371,9 +412,23 @@ class PedidoParser:
                 engine='openpyxl'
             )
             
-            # Normalizar nombres de columnas
+            # Normalizar nombres de columnas (de la fila 1 = nombres)
             df_detalle.columns = [str(col).strip() if pd.notna(col) else f"col_{i}" 
                                  for i, col in enumerate(df_detalle.columns)]
+            
+            # Si existe segunda fila de header (códigos), leer los códigos
+            codigos_columnas = {}
+            if codigos_row_idx is not None and codigos_row_idx < len(df_detalle_raw):
+                fila_codigos = df_detalle_raw.iloc[codigos_row_idx]
+                logger.info(f"✅ Leyendo códigos de la fila {codigos_row_idx + 1} (segunda fila de header)")
+                
+                # Crear mapeo de índices de columna a códigos
+                for col_idx in range(len(fila_codigos)):
+                    codigo_val = fila_codigos.iloc[col_idx]
+                    if codigo_val is not None and not pd.isna(codigo_val) and str(codigo_val).strip():
+                        codigo_str = str(codigo_val).strip().upper()
+                        codigos_columnas[col_idx] = codigo_str
+                        logger.debug(f"   Columna {col_idx}: código '{codigo_str}'")
             
             logger.info(f"📋 Columnas detectadas en nuevo formato: {list(df_detalle.columns)[:15]}...")
             
@@ -424,7 +479,7 @@ class PedidoParser:
             logger.info(f"✅ Columnas de producto detectadas: {list(columnas_producto.keys())}")
             
             # Identificar columnas de bodegas (K, L, M = índices 10, 11, 12)
-            # Buscar columnas RL-CD, OUT-CD, REG-CD
+            # Usar códigos de la fila 2 si están disponibles, sino usar nombres de la fila 1
             columnas_bodegas = {}
             bodegas_esperadas = {
                 'RL-CD': 'BODEGA ROLAND',
@@ -432,19 +487,38 @@ class PedidoParser:
                 'REG-CD': 'BODEGA REGIONS'
             }
             
-            for col_idx, col_name in enumerate(df_detalle.columns):
-                col_upper = str(col_name).upper().strip()
-                # Buscar por código de bodega o nombre
-                if col_upper in bodegas_esperadas:
-                    columnas_bodegas[col_upper] = col_name
-                    logger.info(f"✅ Bodega encontrada: '{col_name}' (índice {col_idx})")
-                elif 'BODEGA' in col_upper:
-                    # Buscar por nombre de bodega
-                    for codigo, nombre in bodegas_esperadas.items():
-                        if nombre.upper() in col_upper or codigo in col_upper:
-                            columnas_bodegas[codigo] = col_name
-                            logger.info(f"✅ Bodega encontrada por nombre: '{col_name}' → {codigo}")
-                            break
+            # Primero intentar identificar por códigos de la fila 2 (columnas K, L, M = índices 10, 11, 12)
+            for col_idx in [10, 11, 12]:
+                if col_idx < len(df_detalle.columns):
+                    # Si tenemos códigos de la segunda fila, usarlos
+                    if col_idx in codigos_columnas:
+                        codigo_bodega = codigos_columnas[col_idx]
+                        col_name = df_detalle.columns[col_idx]
+                        # Verificar si el código coincide con alguna bodega esperada
+                        if codigo_bodega in bodegas_esperadas:
+                            columnas_bodegas[codigo_bodega] = col_name
+                            logger.info(f"✅ Bodega encontrada por código: '{codigo_bodega}' (índice {col_idx}, nombre columna: '{col_name}')")
+                        else:
+                            # Si el código no coincide exactamente, buscar por coincidencia parcial
+                            for codigo_esperado, nombre_esperado in bodegas_esperadas.items():
+                                if codigo_esperado in codigo_bodega or codigo_bodega in codigo_esperado:
+                                    columnas_bodegas[codigo_esperado] = col_name
+                                    logger.info(f"✅ Bodega encontrada por código parcial: '{codigo_bodega}' → {codigo_esperado} (índice {col_idx})")
+                                    break
+                    else:
+                        # Fallback: usar nombres de la fila 1
+                        col_name = df_detalle.columns[col_idx]
+                        col_upper = str(col_name).upper().strip()
+                        if col_upper in bodegas_esperadas:
+                            columnas_bodegas[col_upper] = col_name
+                            logger.info(f"✅ Bodega encontrada por nombre: '{col_name}' (índice {col_idx})")
+                        elif 'BODEGA' in col_upper:
+                            # Buscar por nombre de bodega
+                            for codigo, nombre in bodegas_esperadas.items():
+                                if nombre.upper() in col_upper or codigo in col_upper:
+                                    columnas_bodegas[codigo] = col_name
+                                    logger.info(f"✅ Bodega encontrada por nombre: '{col_name}' → {codigo} (índice {col_idx})")
+                                    break
             
             # Identificar columnas de tiendas (desde columna N = índice 13 en adelante)
             # Las tiendas son todas las columnas que NO son:
@@ -486,9 +560,8 @@ class PedidoParser:
             logger.info(f"📊 Rango de columnas: Producto (0-9), Bodegas (10-12), Tiendas (13-{ultima_columna_idx})")
             
             # Procesar columnas desde N hasta la última con información
+            # Usar códigos de la fila 2 si están disponibles, sino usar nombres de la fila 1
             for col_idx, col_name in enumerate(df_detalle.columns):
-                col_upper = str(col_name).upper().strip()
-                
                 # Si está en el rango de tiendas (desde índice 13) y no supera la última columna con datos
                 if col_idx >= inicio_tiendas_idx and col_idx <= ultima_columna_idx:
                     # Verificar que no sea una columna de producto
@@ -500,19 +573,56 @@ class PedidoParser:
                         continue
                     
                     # Es una columna de tienda
-                    columnas_tiendas[col_name] = col_idx
-                    logger.debug(f"   Tienda detectada: '{col_name}' (índice {col_idx})")
+                    # Usar código de la fila 2 si está disponible, sino usar nombre de la fila 1
+                    if col_idx in codigos_columnas:
+                        codigo_tienda = codigos_columnas[col_idx]
+                        # ⭐ VALIDACIÓN: Filtrar códigos que sean solo números simples
+                        if self._es_codigo_valido(codigo_tienda):
+                            columnas_tiendas[codigo_tienda] = col_idx
+                            logger.debug(f"   Tienda detectada por código: '{codigo_tienda}' (índice {col_idx}, nombre columna: '{col_name}')")
+                        else:
+                            # Código inválido (solo números), usar nombre de columna como fallback
+                            logger.warning(f"⚠️ Código '{codigo_tienda}' en columna {col_idx} parece ser un número simple, usando nombre de columna '{col_name}' como fallback")
+                            col_upper = str(col_name).upper().strip()
+                            columnas_tiendas[col_upper] = col_idx
+                            logger.debug(f"   Tienda detectada por nombre (fallback): '{col_name}' (índice {col_idx})")
+                    else:
+                        # Fallback: usar nombre de la columna como código
+                        col_upper = str(col_name).upper().strip()
+                        columnas_tiendas[col_upper] = col_idx
+                        logger.debug(f"   Tienda detectada por nombre: '{col_name}' (índice {col_idx})")
             
             logger.info(f"📊 Columnas detectadas: {len(columnas_bodegas)} bodegas, {len(columnas_tiendas)} tiendas")
             
             # Eliminar filas vacías
             df_detalle = df_detalle.dropna(how='all')
+            
+            # Si hay dos filas de header, necesitamos eliminar la primera fila de datos que corresponde a la fila de códigos
+            # (porque pandas la incluyó como datos cuando usamos header=header_row_idx)
+            # Cuando usamos header=header_row_idx, pandas usa esa fila como header y los datos empiezan desde header_row_idx+1
+            # Entonces si codigos_row_idx = header_row_idx + 1, esa fila será la primera fila de datos y debemos eliminarla
+            if codigos_row_idx is not None and codigos_row_idx == header_row_idx + 1:
+                # La primera fila del DataFrame corresponde a la fila de códigos, eliminarla
+                if len(df_detalle) > 0:
+                    # Verificar si la primera fila parece ser la fila de códigos (no tiene código de producto válido)
+                    primera_fila = df_detalle.iloc[0]
+                    primer_codigo = primera_fila.get(col_producto)
+                    primer_codigo_str = str(primer_codigo).strip() if primer_codigo is not None and not pd.isna(primer_codigo) else ""
+                    # Si la primera fila no tiene código de producto válido, probablemente es la fila de códigos
+                    if not primer_codigo_str or len(primer_codigo_str) < 2:
+                        df_detalle = df_detalle.iloc[1:].reset_index(drop=True)
+                        logger.info(f"✅ Fila de códigos (fila {codigos_row_idx + 1}) eliminada del DataFrame de datos")
+            
             resultado["resumen"]["filasLeidas"] = len(df_detalle)
             
             # Procesar cada fila
             for idx, row in df_detalle.iterrows():
                 idx_int = int(idx) if isinstance(idx, (int, float)) else 0
-                row_num = idx_int + header_row_idx + 2  # +2 porque idx empieza en 0 y header_row_idx es relativo
+                # Calcular número de fila en Excel: header_row_idx (fila 1) + 1 (fila 2 códigos) + idx_int (datos) + 1 (Excel es 1-indexed)
+                if codigos_row_idx is not None:
+                    row_num = header_row_idx + 2 + idx_int + 1  # +2 por las dos filas de header, +1 porque Excel es 1-indexed
+                else:
+                    row_num = header_row_idx + idx_int + 2  # +2 porque idx empieza en 0 y header_row_idx es relativo
                 
                 codigo_producto_raw = row.get(col_producto)
                 codigo_producto = self._normalizar_codigo_producto(codigo_producto_raw)
@@ -608,45 +718,53 @@ class PedidoParser:
                         info_producto["total"] = None
                 
                 # Procesar bodegas
+                # columnas_bodegas ahora mapea código_bodega -> nombre_columna
                 for bodega_codigo, col_bodega_name in columnas_bodegas.items():
                     cantidad_raw = row.get(col_bodega_name)
                     if cantidad_raw is not None and not pd.isna(cantidad_raw):
                         try:
                             cantidad = int(float(str(cantidad_raw).strip().replace(",", ".")))
                             if cantidad > 0:
+                                # Usar código de bodega (ya viene de la fila 2 o nombre de columna)
+                                bodega_codigo_final = str(bodega_codigo).strip().upper()
+                                
                                 resultado["data"].append({
                                     "codigoProducto": codigo_producto,
-                                    "idTienda": bodega_codigo,  # Usar código de bodega como ID
+                                    "idTienda": bodega_codigo_final,  # Usar código de bodega como ID
                                     "cantidad": cantidad,
                                     "filaOrigen": row_num,
                                     "es_bodega": True,
                                     "info_producto": info_producto  # Incluir información completa del producto
                                 })
-                                logger.debug(f"   Fila {row_num}: {codigo_producto} → {bodega_codigo} x{cantidad} (bodega)")
+                                logger.debug(f"   Fila {row_num}: {codigo_producto} → {bodega_codigo_final} x{cantidad} (bodega)")
                         except (ValueError, TypeError):
                             logger.warning(f"⚠️ Fila {row_num}: Cantidad inválida en bodega {bodega_codigo}: {cantidad_raw}")
                 
                 # Procesar tiendas
-                for col_tienda_name, col_idx in columnas_tiendas.items():
-                    cantidad_raw = row.get(col_tienda_name)
-                    if cantidad_raw is not None and not pd.isna(cantidad_raw):
-                        try:
-                            cantidad = int(float(str(cantidad_raw).strip().replace(",", ".")))
-                            if cantidad > 0:
-                                # El nombre de la columna es el código de la tienda
-                                codigo_tienda = str(col_tienda_name).strip().upper()
-                                
-                                resultado["data"].append({
-                                    "codigoProducto": codigo_producto,
-                                    "idTienda": codigo_tienda,
-                                    "cantidad": cantidad,
-                                    "filaOrigen": row_num,
-                                    "es_bodega": False,
-                                    "info_producto": info_producto  # Incluir información completa del producto
-                                })
-                                logger.debug(f"   Fila {row_num}: {codigo_producto} → {codigo_tienda} x{cantidad} (tienda)")
-                        except (ValueError, TypeError):
-                            logger.warning(f"⚠️ Fila {row_num}: Cantidad inválida en tienda {col_tienda_name}: {cantidad_raw}")
+                # columnas_tiendas ahora mapea código_tienda -> índice_columna
+                for codigo_tienda, col_idx in columnas_tiendas.items():
+                    # Obtener el nombre de la columna para acceder a los datos
+                    if col_idx < len(df_detalle.columns):
+                        col_name = df_detalle.columns[col_idx]
+                        cantidad_raw = row.get(col_name)
+                        if cantidad_raw is not None and not pd.isna(cantidad_raw):
+                            try:
+                                cantidad = int(float(str(cantidad_raw).strip().replace(",", ".")))
+                                if cantidad > 0:
+                                    # Usar el código de la tienda (ya viene de la fila 2 o nombre de columna)
+                                    codigo_tienda_final = str(codigo_tienda).strip().upper()
+                                    
+                                    resultado["data"].append({
+                                        "codigoProducto": codigo_producto,
+                                        "idTienda": codigo_tienda_final,
+                                        "cantidad": cantidad,
+                                        "filaOrigen": row_num,
+                                        "es_bodega": False,
+                                        "info_producto": info_producto  # Incluir información completa del producto
+                                    })
+                                    logger.debug(f"   Fila {row_num}: {codigo_producto} → {codigo_tienda_final} x{cantidad} (tienda)")
+                            except (ValueError, TypeError):
+                                logger.warning(f"⚠️ Fila {row_num}: Cantidad inválida en tienda {codigo_tienda}: {cantidad_raw}")
                 
                 resultado["resumen"]["filasValidas"] += 1
             
