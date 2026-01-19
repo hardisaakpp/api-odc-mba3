@@ -585,7 +585,7 @@ def register_redistribucion_endpoints(app: FastAPI):
                     else:
                         pedido_id_real = None
                 
-                if not pedido_data:
+                if not pedido_data or pedido_id_real is None:
                     raise HTTPException(
                         status_code=status.HTTP_404_NOT_FOUND,
                         detail={
@@ -822,7 +822,8 @@ def register_redistribucion_endpoints(app: FastAPI):
                     FROM INFORMATION_SCHEMA.TABLES 
                     WHERE TABLE_NAME = 'redistribucion_borrador'
                 """)
-                existe_tabla = cursor.fetchone()[0] > 0
+                result = cursor.fetchone()
+                existe_tabla = result[0] > 0 if result else False
                 
                 if not existe_tabla:
                     # Crear tabla de borradores
