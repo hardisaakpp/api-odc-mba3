@@ -767,7 +767,7 @@ class RedistribucionProductoItem(BaseModel):
     """Modelo para redistribución de un producto específico."""
     
     pedido_detalle_id: str = Field(..., description="UUID del detalle del pedido (producto)")
-    distribuciones: List[DistribucionTiendaItem] = Field(..., min_items=1, description="Lista de distribuciones por tienda")
+    distribuciones: List[DistribucionTiendaItem] = Field(..., min_length=1, description="Lista de distribuciones por tienda")
     
     class Config:
         json_schema_extra = {
@@ -784,7 +784,7 @@ class RedistribucionProductoItem(BaseModel):
 class RedistribuirPedidoRequest(BaseModel):
     """Modelo para el request de redistribuir un pedido."""
     
-    productos: List[RedistribucionProductoItem] = Field(..., min_items=1, description="Lista de productos con sus redistribuciones")
+    productos: List[RedistribucionProductoItem] = Field(..., min_length=1, description="Lista de productos con sus redistribuciones")
     observaciones: Optional[str] = Field(None, max_length=1000, description="Observaciones generales de la redistribución")
     
     class Config:
@@ -957,7 +957,7 @@ class AjusteDetalle(BaseModel):
     cantidad_solicitada: int = Field(..., ge=0, description="Cantidad solicitada original")
     cantidad_confirmada: int = Field(..., ge=0, description="Cantidad confirmada por el proveedor")
     cantidad_ajustada: int = Field(..., ge=0, description="Cantidad ajustada/redistribuida")
-    distribucion_tiendas: List[DistribucionTiendaFrontend] = Field(..., min_items=1, description="Distribución por tienda")
+    distribucion_tiendas: List[DistribucionTiendaFrontend] = Field(..., min_length=1, description="Distribución por tienda")
     costo_original: Optional[float] = Field(None, ge=0, description="Costo unitario original")
     costo_ajustado: Optional[float] = Field(None, ge=0, description="Costo unitario ajustado")
     cambio_precio: bool = Field(default=False, description="Indica si hubo cambio de precio")
@@ -987,7 +987,7 @@ class AjusteDetalle(BaseModel):
 class RedistribucionConfirmarRequest(BaseModel):
     """Modelo para confirmar redistribución (compatible con frontend)."""
     
-    ajustes_detalle: List[AjusteDetalle] = Field(..., min_items=1, description="Lista de ajustes por producto")
+    ajustes_detalle: List[AjusteDetalle] = Field(..., min_length=1, description="Lista de ajustes por producto")
     
     class Config:
         json_schema_extra = {
@@ -1097,7 +1097,7 @@ class ConfirmarRedistribucionResponseFrontend(BaseModel):
 class GuardarBorradorRequest(BaseModel):
     """Modelo para guardar borrador de redistribución."""
     
-    ajustes_detalle: List[AjusteDetalle] = Field(..., min_items=1, description="Lista de ajustes por producto")
+    ajustes_detalle: List[AjusteDetalle] = Field(..., min_length=1, description="Lista de ajustes por producto")
     
     class Config:
         json_schema_extra = {
