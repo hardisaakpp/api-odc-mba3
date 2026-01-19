@@ -383,13 +383,15 @@ class PedidoRepository:
         finally:
             cursor.close()
     
-    def get_or_create_tienda(self, codigo: str, nombre: Optional[str] = None) -> str:
+    def get_or_create_tienda(self, codigo: str, nombre: Optional[str] = None, consultar_sap: bool = True) -> str:
         """
         Obtiene el ID de una tienda existente o la crea si no existe.
+        ⭐ NUEVO: Si no se proporciona nombre, lo consulta desde SAP automáticamente.
         
         Args:
             codigo: Código de la tienda
-            nombre: Nombre de la tienda (opcional)
+            nombre: Nombre de la tienda (opcional, si no se proporciona se consulta SAP)
+            consultar_sap: Si True, consulta SAP para obtener el nombre si no se proporciona
             
         Returns:
             tienda_id (UUID)
@@ -397,12 +399,54 @@ class PedidoRepository:
         cursor = self.conn.cursor()
         
         try:
-            # Intentar obtener tienda existente
-            cursor.execute("SELECT tienda_id FROM tienda WHERE codigo = ?", (codigo,))
+            # ⭐ NUEVO: Si no se proporciona nombre y consultar_sap=True, obtenerlo desde SAP
+            nombre_sap = None
+            if (not nombre or nombre.strip() == "" or nombre.strip().upper() == codigo.strip().upper()) and consultar_sap:
+                try:
+                    from ..clients.sap_client import SAPClient
+                    sap_client = SAPClient()
+                    bodega_info = sap_client.get_bodega_info(codigo)
+                    if bodega_info and bodega_info.get("WhsName"):
+                        nombre_sap = bodega_info.get("WhsName").strip()
+                        logger.info(f"✅ Nombre de tienda obtenido desde SAP: {codigo} → '{nombre_sap}'")
+                except Exception as e:
+                    logger.warning(f"⚠️ No se pudo consultar SAP para obtener nombre de tienda {codigo}: {e}")
+            
+            # Usar el nombre de SAP si está disponible, sino usar el proporcionado
+            nombre_final = nombre_sap if nombre_sap else nombre
+            
+            # Intentar obtener tienda existente (incluyendo nombre para verificar si necesita actualización)
+            cursor.execute("SELECT tienda_id, nombre FROM tienda WHERE codigo = ?", (codigo,))
             row = cursor.fetchone()
             
             if row:
                 tienda_id = str(row[0])
+                nombre_existente = row[1] if len(row) > 1 else None
+                
+                # ⭐ ACTUALIZAR: Si la tienda existe pero:
+                # 1. No tiene nombre, O
+                # 2. El nombre actual es igual al código (error), O
+                # 3. El nombre está vacío
+                # Y se proporciona un nombre válido, actualizarlo
+                codigo_upper = codigo.strip().upper()
+                nombre_existente_upper = str(nombre_existente).strip().upper() if nombre_existente else ""
+                
+                debe_actualizar = False
+                if nombre_final and nombre_final.strip():
+                    nombre_upper = nombre_final.strip().upper()
+                    # Actualizar si no hay nombre, está vacío, o el nombre actual es igual al código
+                    if (not nombre_existente or 
+                        nombre_existente.strip() == "" or 
+                        nombre_existente_upper == codigo_upper or
+                        (nombre_upper != codigo_upper and nombre_upper != nombre_existente_upper)):
+                        debe_actualizar = True
+                
+                if debe_actualizar:
+                    cursor.execute("UPDATE tienda SET nombre = ?, updated_at = GETDATE() WHERE codigo = ?", (nombre_final.strip(), codigo))
+                    self.conn.commit()
+                    origen = "SAP" if nombre_sap else "Excel"
+                    logger.info(f"✅ Nombre de tienda actualizado desde {origen}: {codigo} → '{nombre_final.strip()}' (anterior: '{nombre_existente}')")
+                
                 logger.debug(f"✅ Tienda existente encontrada: {codigo} ({tienda_id})")
                 return tienda_id
             
@@ -412,6 +456,20 @@ class PedidoRepository:
             if uuid_result is None:
                 raise ValueError("No se pudo generar UUID para tienda_id")
             tienda_id = str(uuid_result[0])
+            
+            # ⭐ CORRECCIÓN: Si el nombre es None, está vacío, o es igual al código, usar None
+            nombre_guardar = None
+            if nombre_final and nombre_final.strip():
+                nombre_stripped = nombre_final.strip()
+                # Solo guardar el nombre si es diferente del código
+                if nombre_stripped.upper() != codigo.strip().upper():
+                    nombre_guardar = nombre_stripped
+                    origen = "SAP" if nombre_sap else "Excel"
+                    logger.info(f"✅ Creando tienda con nombre desde {origen}: {codigo} → '{nombre_guardar}'")
+                else:
+                    logger.warning(f"⚠️ El nombre '{nombre_stripped}' es igual al código '{codigo}', guardando NULL")
+            else:
+                logger.warning(f"⚠️ No se pudo obtener nombre para tienda '{codigo}', guardando NULL")
             
             sql = """
             INSERT INTO tienda (
@@ -423,7 +481,7 @@ class PedidoRepository:
             ) VALUES (?, ?, ?, 1, GETDATE())
             """
             
-            cursor.execute(sql, (tienda_id, codigo, nombre))
+            cursor.execute(sql, (tienda_id, codigo, nombre_guardar))
             self.conn.commit()
             
             logger.debug(f"✅ Nueva tienda creada: {codigo} ({tienda_id})")

@@ -827,6 +827,7 @@ class PedidoService:
                     distribuciones = productos_agrupados[codigo_producto]["distribuciones"]
                     distribuciones.append({
                         "tienda_codigo": item.get("idTienda"),
+                        "tienda_nombre": item.get("nombreTienda"),  # ⭐ AGREGADO: Nombre de la tienda de la fila 1 del Excel
                         "cantidad": item.get("cantidad"),
                         "fila_origen": item.get("filaOrigen")
                     })

@@ -416,19 +416,66 @@ class PedidoParser:
             df_detalle.columns = [str(col).strip() if pd.notna(col) else f"col_{i}" 
                                  for i, col in enumerate(df_detalle.columns)]
             
+            # ⭐ LOG: Verificar que los nombres de columnas sean realmente nombres (fila 1)
+            logger.info(f"📋 Nombres de columnas (fila 1) detectados: {list(df_detalle.columns)[:15]}...")
+            
             # Si existe segunda fila de header (códigos), leer los códigos
             codigos_columnas = {}
+            nombres_columnas_fila1 = {}  # ⭐ IMPORTANTE: Guardar nombres de la fila 1 para referencia
+            
+            # ⭐ SIEMPRE leer nombres de la fila 1, incluso si no hay fila 2 de códigos
+            fila_nombres = df_detalle_raw.iloc[header_row_idx] if header_row_idx < len(df_detalle_raw) else None
+            if fila_nombres is not None:
+                # Guardar nombres de la fila 1 para todas las columnas
+                logger.info(f"📋 Leyendo nombres de la fila {header_row_idx + 1} (header_row_idx={header_row_idx})")
+                logger.info(f"📋 Total de columnas en df_detalle_raw: {len(fila_nombres)}")
+                
+                # ⭐ DEBUG: Imprimir algunas columnas específicas para verificar
+                if len(fila_nombres) > 57:
+                    logger.info(f"🔍 DEBUG - Columna 13 (N): '{fila_nombres.iloc[13]}'")
+                    logger.info(f"🔍 DEBUG - Columna 56 (BE, 0-based): '{fila_nombres.iloc[56]}'")
+                    logger.info(f"🔍 DEBUG - Columna 57 (BF, 0-based): '{fila_nombres.iloc[57]}'")
+                
+                for col_idx in range(len(fila_nombres)):
+                    nombre_val = fila_nombres.iloc[col_idx] if col_idx < len(fila_nombres) else None
+                    # ⭐ CORRECCIÓN: Guardar nombre de la fila 1 directamente desde df_detalle_raw
+                    if nombre_val is not None and not pd.isna(nombre_val):
+                        nombre_str = str(nombre_val).strip()
+                        if nombre_str:  # Solo guardar si no está vacío
+                            nombres_columnas_fila1[col_idx] = nombre_str
+                            # Log solo para columnas de tiendas (índice >= 13) para evitar spam
+                            if col_idx >= 13 and col_idx <= 15:  # Solo primeras columnas de tiendas
+                                logger.info(f"   🔍 Columna {col_idx}: nombre (fila 1): '{nombre_str}'")
+                            elif col_idx >= 56 and col_idx <= 58:  # Columnas problemáticas
+                                logger.info(f"   🔍 Columna {col_idx}: nombre (fila 1): '{nombre_str}'")
+                logger.info(f"✅ Leídos {len(nombres_columnas_fila1)} nombres de la fila 1 (columnas con datos)")
+            else:
+                logger.warning(f"⚠️ No se pudo leer la fila de nombres (header_row_idx={header_row_idx}, len={len(df_detalle_raw)})")
+            
+            # Leer códigos de la fila 2 si existe
             if codigos_row_idx is not None and codigos_row_idx < len(df_detalle_raw):
                 fila_codigos = df_detalle_raw.iloc[codigos_row_idx]
                 logger.info(f"✅ Leyendo códigos de la fila {codigos_row_idx + 1} (segunda fila de header)")
+                logger.info(f"📋 Total de columnas en fila de códigos: {len(fila_codigos)}")
+                
+                # ⭐ DEBUG: Imprimir algunas columnas específicas para verificar
+                if len(fila_codigos) > 57:
+                    logger.info(f"🔍 DEBUG - Código columna 13 (N): '{fila_codigos.iloc[13]}'")
+                    logger.info(f"🔍 DEBUG - Código columna 56 (BE, 0-based): '{fila_codigos.iloc[56]}'")
+                    logger.info(f"🔍 DEBUG - Código columna 57 (BF, 0-based): '{fila_codigos.iloc[57]}'")
                 
                 # Crear mapeo de índices de columna a códigos
                 for col_idx in range(len(fila_codigos)):
                     codigo_val = fila_codigos.iloc[col_idx]
+                    
                     if codigo_val is not None and not pd.isna(codigo_val) and str(codigo_val).strip():
                         codigo_str = str(codigo_val).strip().upper()
                         codigos_columnas[col_idx] = codigo_str
-                        logger.debug(f"   Columna {col_idx}: código '{codigo_str}'")
+                        # Log solo para columnas específicas
+                        if col_idx >= 13 and col_idx <= 15:  # Primeras columnas de tiendas
+                            logger.info(f"   🔍 Columna {col_idx}: código '{codigo_str}', nombre (fila 1): '{nombres_columnas_fila1.get(col_idx, 'N/A')}'")
+                        elif col_idx >= 56 and col_idx <= 58:  # Columnas problemáticas
+                            logger.info(f"   🔍 Columna {col_idx}: código '{codigo_str}', nombre (fila 1): '{nombres_columnas_fila1.get(col_idx, 'N/A')}'")
             
             logger.info(f"📋 Columnas detectadas en nuevo formato: {list(df_detalle.columns)[:15]}...")
             
@@ -524,6 +571,8 @@ class PedidoParser:
             # Las tiendas son todas las columnas que NO son:
             # - Columnas A-J (producto): índices 0-9
             # - Columnas K-M (bodegas): índices 10-12
+            # ⭐ ACTUALIZADO: Guardar tanto código como nombre de columna
+            # Estructura: {codigo_tienda: {"col_idx": int, "col_name": str}}
             columnas_tiendas = {}
             
             # Identificar índices de columnas de producto y bodegas para excluirlas
@@ -573,24 +622,50 @@ class PedidoParser:
                         continue
                     
                     # Es una columna de tienda
-                    # Usar código de la fila 2 si está disponible, sino usar nombre de la fila 1
+                    # ⭐ CORRECCIÓN: SIEMPRE usar el nombre de la fila 1 (nombres) para el nombre de la tienda
+                    # El código viene de la fila 2, pero el nombre SIEMPRE debe venir de la fila 1
+                    if col_idx in nombres_columnas_fila1:
+                        nombre_tienda_fila1 = nombres_columnas_fila1[col_idx]
+                        if nombre_tienda_fila1 and nombre_tienda_fila1.strip():
+                            nombre_columna = nombre_tienda_fila1
+                            # Log detallado para columnas específicas
+                            if col_idx >= 13 and col_idx <= 15:
+                                logger.info(f"   ✅ Col {col_idx}: Usando nombre fila 1: '{nombre_columna}'")
+                            elif col_idx >= 56 and col_idx <= 58:
+                                logger.info(f"   ✅ Col {col_idx}: Usando nombre fila 1: '{nombre_columna}'")
+                        else:
+                            nombre_columna = str(col_name).strip()
+                            logger.warning(f"⚠️ Nombre de fila 1 vacío para col_idx {col_idx}, usando nombre de columna: '{nombre_columna}'")
+                    else:
+                        nombre_columna = str(col_name).strip()
+                        logger.warning(f"⚠️ No se encontró nombre de fila 1 para col_idx {col_idx}, usando nombre de columna: '{nombre_columna}'")
+                    
                     if col_idx in codigos_columnas:
                         codigo_tienda = codigos_columnas[col_idx]
                         # ⭐ VALIDACIÓN: Filtrar códigos que sean solo números simples
                         if self._es_codigo_valido(codigo_tienda):
-                            columnas_tiendas[codigo_tienda] = col_idx
-                            logger.debug(f"   Tienda detectada por código: '{codigo_tienda}' (índice {col_idx}, nombre columna: '{col_name}')")
+                            columnas_tiendas[codigo_tienda] = {
+                                "col_idx": col_idx,
+                                "col_name": nombre_columna  # ⭐ SIEMPRE nombre de la fila 1
+                            }
+                            logger.debug(f"   Tienda detectada por código: '{codigo_tienda}' (índice {col_idx}, nombre fila 1: '{nombre_columna}')")
                         else:
                             # Código inválido (solo números), usar nombre de columna como fallback
-                            logger.warning(f"⚠️ Código '{codigo_tienda}' en columna {col_idx} parece ser un número simple, usando nombre de columna '{col_name}' como fallback")
-                            col_upper = str(col_name).upper().strip()
-                            columnas_tiendas[col_upper] = col_idx
-                            logger.debug(f"   Tienda detectada por nombre (fallback): '{col_name}' (índice {col_idx})")
+                            logger.warning(f"⚠️ Código '{codigo_tienda}' en columna {col_idx} parece ser un número simple, usando nombre de columna '{nombre_columna}' como fallback")
+                            col_upper = nombre_columna.upper().strip()
+                            columnas_tiendas[col_upper] = {
+                                "col_idx": col_idx,
+                                "col_name": nombre_columna  # ⭐ SIEMPRE nombre de la fila 1
+                            }
+                            logger.debug(f"   Tienda detectada por nombre (fallback): '{nombre_columna}' (índice {col_idx})")
                     else:
                         # Fallback: usar nombre de la columna como código
-                        col_upper = str(col_name).upper().strip()
-                        columnas_tiendas[col_upper] = col_idx
-                        logger.debug(f"   Tienda detectada por nombre: '{col_name}' (índice {col_idx})")
+                        col_upper = nombre_columna.upper().strip()
+                        columnas_tiendas[col_upper] = {
+                            "col_idx": col_idx,
+                            "col_name": nombre_columna  # ⭐ SIEMPRE nombre de la fila 1
+                        }
+                        logger.debug(f"   Tienda detectada por nombre: '{nombre_columna}' (índice {col_idx})")
             
             logger.info(f"📊 Columnas detectadas: {len(columnas_bodegas)} bodegas, {len(columnas_tiendas)} tiendas")
             
@@ -741,8 +816,29 @@ class PedidoParser:
                             logger.warning(f"⚠️ Fila {row_num}: Cantidad inválida en bodega {bodega_codigo}: {cantidad_raw}")
                 
                 # Procesar tiendas
-                # columnas_tiendas ahora mapea código_tienda -> índice_columna
-                for codigo_tienda, col_idx in columnas_tiendas.items():
+                # ⭐ ACTUALIZADO: columnas_tiendas ahora mapea código_tienda -> {"col_idx": int, "col_name": str}
+                for codigo_tienda, tienda_info in columnas_tiendas.items():
+                    col_idx = tienda_info["col_idx"]
+                    
+                    # ⭐ CORRECCIÓN: SIEMPRE usar el nombre de la fila 1 (nombres) de nombres_columnas_fila1
+                    # No usar tienda_info["col_name"] porque puede estar usando el código de la fila 2
+                    if col_idx in nombres_columnas_fila1:
+                        nombre_tienda = nombres_columnas_fila1[col_idx]
+                        logger.debug(f"   Usando nombre de fila 1 para tienda en col_idx {col_idx}: '{nombre_tienda}'")
+                    else:
+                        # Fallback: usar el nombre de la columna si no hay nombre en nombres_columnas_fila1
+                        nombre_tienda = tienda_info["col_name"]
+                        logger.warning(f"⚠️ No se encontró nombre de fila 1 para col_idx {col_idx}, usando nombre de columna: '{nombre_tienda}'")
+                    
+                    # ⭐ VALIDACIÓN: Verificar que nombre_tienda no sea el código
+                    # Si el nombre es igual al código, significa que se está usando el código como nombre
+                    codigo_tienda_upper = str(codigo_tienda).strip().upper()
+                    nombre_tienda_upper = str(nombre_tienda).strip().upper()
+                    
+                    if nombre_tienda_upper == codigo_tienda_upper:
+                        # El nombre es igual al código, esto no debería pasar si nombres_columnas_fila1 está bien poblado
+                        logger.warning(f"⚠️ Fila {row_num}: Nombre de tienda es igual al código '{codigo_tienda}', posible problema en la lectura de la fila 1")
+                    
                     # Obtener el nombre de la columna para acceder a los datos
                     if col_idx < len(df_detalle.columns):
                         col_name = df_detalle.columns[col_idx]
@@ -754,15 +850,19 @@ class PedidoParser:
                                     # Usar el código de la tienda (ya viene de la fila 2 o nombre de columna)
                                     codigo_tienda_final = str(codigo_tienda).strip().upper()
                                     
+                                    # ⭐ LOG DE DEPURACIÓN: Verificar qué se está guardando
+                                    logger.info(f"📝 Guardando tienda - Código: '{codigo_tienda_final}', Nombre: '{nombre_tienda}' (col_idx: {col_idx})")
+                                    
                                     resultado["data"].append({
                                         "codigoProducto": codigo_producto,
                                         "idTienda": codigo_tienda_final,
+                                        "nombreTienda": nombre_tienda,  # ⭐ AGREGADO: Nombre de la tienda de la fila 1
                                         "cantidad": cantidad,
                                         "filaOrigen": row_num,
                                         "es_bodega": False,
                                         "info_producto": info_producto  # Incluir información completa del producto
                                     })
-                                    logger.debug(f"   Fila {row_num}: {codigo_producto} → {codigo_tienda_final} x{cantidad} (tienda)")
+                                    logger.debug(f"   Fila {row_num}: {codigo_producto} → {codigo_tienda_final} ({nombre_tienda}) x{cantidad} (tienda)")
                             except (ValueError, TypeError):
                                 logger.warning(f"⚠️ Fila {row_num}: Cantidad inválida en tienda {codigo_tienda}: {cantidad_raw}")
                 
