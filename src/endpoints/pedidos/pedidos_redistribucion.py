@@ -1556,18 +1556,16 @@ def register_redistribucion_endpoints(app: FastAPI):
         _: None = Depends(require_permission('mba3-consultas.facturas.view'))
     ):
         """
-        Ajusta automáticamente las bodegas cuando se modifican las tiendas.
+        Retorna los datos de redistribución sin ajustar automáticamente las bodegas.
         
         **Funcionalidad:**
-        - Cuando aumentas la cantidad en una tienda, automáticamente disminuye de la bodega
-        - Cuando disminuyes la cantidad en una tienda, automáticamente aumenta en la bodega
-        - Mantiene el total confirmado constante
-        - Si hay múltiples bodegas, ajusta proporcionalmente
+        - Retorna los datos tal como se envían, sin modificar las bodegas
+        - Las bodegas mantienen sus valores originales cuando se redistribuye a tiendas
+        - No se resta automáticamente de las bodegas cuando se aumenta la cantidad en tiendas
         
-        **Lógica:**
-        - Calcula la suma actual de tiendas (sin bodegas)
-        - Calcula la diferencia con el total confirmado
-        - Ajusta automáticamente las bodegas para compensar la diferencia
+        **Nota:**
+        Esta funcionalidad fue modificada para NO restar automáticamente de las bodegas
+        cuando se redistribuye a las tiendas. Las bodegas permanecen con sus valores originales.
         """
         try:
             from src.database.connection import get_db_connection_context
@@ -1588,89 +1586,22 @@ def register_redistribucion_endpoints(app: FastAPI):
                         }
                     )
                 
-                # Ajustar bodegas automáticamente para cada producto
+                # Retornar los datos tal como se envían, sin ajustar bodegas
+                # Las bodegas mantienen sus valores originales
                 ajustes_ajustados = []
                 
                 for ajuste in request_body.ajustes_detalle:
-                    cantidad_confirmada = ajuste.cantidad_confirmada
+                    # Calcular cantidad_ajustada como la suma de todas las distribuciones (tiendas + bodegas)
+                    suma_total = sum(d.cantidad for d in ajuste.distribucion_tiendas)
                     
-                    # Separar bodegas y tiendas
-                    distribuciones_bodegas = []
-                    distribuciones_tiendas = []
-                    suma_tiendas = 0
-                    suma_bodegas_actual = 0
-                    
-                    for dist in ajuste.distribucion_tiendas:
-                        if dist.es_bodega:
-                            distribuciones_bodegas.append(dist)
-                            suma_bodegas_actual += dist.cantidad
-                        else:
-                            distribuciones_tiendas.append(dist)
-                            suma_tiendas += dist.cantidad
-                    
-                    # Calcular diferencia: total_confirmado - suma_tiendas
-                    # Esta diferencia debe distribuirse entre las bodegas
-                    diferencia_para_bodegas = cantidad_confirmada - suma_tiendas
-                    
-                    # Validar que la diferencia sea positiva (no se puede exceder el total confirmado)
-                    if diferencia_para_bodegas < 0:
-                        raise HTTPException(
-                            status_code=status.HTTP_400_BAD_REQUEST,
-                            detail={
-                                "error": "cantidad_excedida",
-                                "message": f"El producto {ajuste.codigo_producto}: La suma de tiendas ({suma_tiendas}) "
-                                          f"excede el total confirmado ({cantidad_confirmada}). "
-                                          f"Disminuye las tiendas o aumenta el total confirmado."
-                            }
-                        )
-                    
-                    # Si no hay bodegas, mantener la distribución tal cual
-                    if len(distribuciones_bodegas) == 0:
-                        distribuciones_ajustadas = list(ajuste.distribucion_tiendas)
-                    else:
-                        # Ajustar bodegas proporcionalmente
-                        distribuciones_ajustadas = list(distribuciones_tiendas)
-                        
-                        # Calcular factor de distribución para bodegas
-                        suma_bodegas_original = suma_bodegas_actual if suma_bodegas_actual > 0 else len(distribuciones_bodegas)
-                        
-                        # Distribuir diferencia_para_bodegas entre las bodegas proporcionalmente
-                        cantidad_asignada_bodegas = 0
-                        for i, bodega in enumerate(distribuciones_bodegas):
-                            if i == len(distribuciones_bodegas) - 1:
-                                # Última bodega: asignar el resto
-                                cantidad_bodega = diferencia_para_bodegas - cantidad_asignada_bodegas
-                            else:
-                                # Calcular proporcionalmente
-                                proporcion = bodega.cantidad / suma_bodegas_original if suma_bodegas_original > 0 else 1 / len(distribuciones_bodegas)
-                                cantidad_bodega = round(diferencia_para_bodegas * proporcion)
-                                cantidad_asignada_bodegas += cantidad_bodega
-                            
-                            # Asegurar que no sea negativa
-                            cantidad_bodega = max(0, cantidad_bodega)
-                            
-                            # Crear nueva distribución ajustada
-                            from src.models import DistribucionTiendaFrontend
-                            distribuciones_ajustadas.append(
-                                DistribucionTiendaFrontend(
-                                    tienda_codigo=bodega.tienda_codigo,
-                                    tienda_nombre=bodega.tienda_nombre,
-                                    cantidad=cantidad_bodega,
-                                    es_bodega=True
-                                )
-                            )
-                    
-                    # Actualizar cantidad_ajustada (debe ser igual a cantidad_confirmada después del ajuste)
-                    suma_total_ajustada = sum(d.cantidad for d in distribuciones_ajustadas)
-                    
-                    # Crear ajuste actualizado
+                    # Crear ajuste sin modificar las bodegas
                     ajuste_ajustado = AjusteDetalle(
                         codigo_producto=ajuste.codigo_producto,
                         descripcion=ajuste.descripcion,
                         cantidad_solicitada=ajuste.cantidad_solicitada,
-                        cantidad_confirmada=cantidad_confirmada,
-                        cantidad_ajustada=suma_total_ajustada,
-                        distribucion_tiendas=distribuciones_ajustadas,
+                        cantidad_confirmada=ajuste.cantidad_confirmada,
+                        cantidad_ajustada=suma_total,
+                        distribucion_tiendas=ajuste.distribucion_tiendas,  # Mantener distribución original sin cambios
                         costo_original=ajuste.costo_original,
                         costo_ajustado=ajuste.costo_ajustado,
                         cambio_precio=ajuste.cambio_precio,
@@ -1689,12 +1620,12 @@ def register_redistribucion_endpoints(app: FastAPI):
         except HTTPException:
             raise
         except Exception as e:
-            logger.error(f"❌ Error al ajustar bodegas automáticamente: {e}", exc_info=True)
+            logger.error(f"❌ Error al procesar redistribución: {e}", exc_info=True)
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail={
                     "error": "internal_error",
-                    "message": f"Error interno al ajustar bodegas: {str(e)}"
+                    "message": f"Error interno al procesar redistribución: {str(e)}"
                 }
             )
     
