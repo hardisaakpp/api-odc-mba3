@@ -341,6 +341,7 @@ def register_sap_endpoints(app: FastAPI):
                     error_code = resultado.get("error_code")  # Código de error de SAP
                     error_source = resultado.get("error_source")  # Origen del error (SAP, BACKEND, etc.)
                     sap_error_details = resultado.get("sap_error_details")  # Detalles completos del error de SAP
+                    resultado_st = resultado.get("solicitudes_transferencia")  # Resultado de Solicitudes de Transferencia
                     
                     # Guardar log de resultado
                     try:
@@ -389,7 +390,8 @@ def register_sap_endpoints(app: FastAPI):
                         "error_code": error_code,  # Código de error de SAP (ej: -4013)
                         "error_source": error_source,  # Origen: "SAP", "BACKEND", "SAP_CONNECTION", o None si éxito
                         "sap_response": sap_response,  # Respuesta completa de SAP (éxito)
-                        "sap_error_details": sap_error_details  # Detalles del error de SAP (si aplica)
+                        "sap_error_details": sap_error_details,  # Detalles del error de SAP (si aplica)
+                        "solicitudes_transferencia": resultado_st  # Resultado de ST (para evaluación de cierre)
                     }
                     
                     # Agregar referencia si está disponible
@@ -457,17 +459,44 @@ def register_sap_endpoints(app: FastAPI):
                 "pedidos_cerrados": []  # Se llenará si hay pedidos cerrados
             }
             
-            # Identificar pedidos únicos procesados
-            pedidos_procesados = set()
+            # Identificar pedidos únicos procesados y guardar resultados de ST
+            pedidos_procesados = {}
             for detalle in detalles:
                 if detalle.get("success"):
-                    # Obtener pedido_id de la OC exitosa
+                    # Obtener pedido_id de la OC exitosa y resultado de ST
                     try:
                         conn_temp = get_db_connection()
                         oc_repo_temp = OrdenCompraRepository(conn_temp)
                         oc_info = oc_repo_temp.get_existing_cabecera(detalle["oc_id"])
                         if oc_info and oc_info.get("pedido_id"):
-                            pedidos_procesados.add(oc_info["pedido_id"])
+                            pedido_id = oc_info["pedido_id"]
+                            # Obtener resultado de ST desde el detalle
+                            resultado_st = detalle.get("solicitudes_transferencia")
+                            
+                            # Si el pedido ya está en el diccionario, combinar resultados de ST
+                            # (un pedido puede tener múltiples OCs)
+                            if pedido_id in pedidos_procesados:
+                                # Si ya hay un resultado de ST, verificar si ambos son exitosos
+                                st_existente = pedidos_procesados[pedido_id].get("resultado_st")
+                                if st_existente and resultado_st:
+                                    # Combinar: éxito solo si ambos son exitosos
+                                    st_combinado = {
+                                        "success": st_existente.get("success", False) and resultado_st.get("success", False),
+                                        "transferencias_creadas": (st_existente.get("transferencias_creadas", 0) + 
+                                                                   resultado_st.get("transferencias_creadas", 0)),
+                                        "transferencias_errores": (st_existente.get("transferencias_errores", 0) + 
+                                                                   resultado_st.get("transferencias_errores", 0)),
+                                        "total_tiendas": max(st_existente.get("total_tiendas", 0), 
+                                                             resultado_st.get("total_tiendas", 0))
+                                    }
+                                    pedidos_procesados[pedido_id]["resultado_st"] = st_combinado
+                                elif resultado_st:
+                                    pedidos_procesados[pedido_id]["resultado_st"] = resultado_st
+                            else:
+                                pedidos_procesados[pedido_id] = {
+                                    "oc_id": detalle["oc_id"],
+                                    "resultado_st": resultado_st
+                                }
                         conn_temp.close()
                     except Exception:
                         pass
@@ -483,18 +512,31 @@ def register_sap_endpoints(app: FastAPI):
                     pedido_repo_temp = PedidoRepository(conn_temp)
                     cierre_service = PedidoCierreService()
                     
-                    for pedido_id in pedidos_procesados:
+                    for pedido_id, info_pedido in pedidos_procesados.items():
+                        # Obtener resultado de ST desde el resultado de enviar_oc_a_sap si está disponible
+                        resultado_st = info_pedido.get("resultado_st")
+                        
                         resultado = cierre_service.cerrar_pedido_si_corresponde(
                             pedido_id=pedido_id,
                             oc_repo=oc_repo_temp,
-                            pedido_repo=pedido_repo_temp
+                            pedido_repo=pedido_repo_temp,
+                            resultado_st=resultado_st  # Puede ser None si no está disponible
                         )
-                        if resultado["cerrado"]:
+                        if resultado.get("cerrado"):
                             resumen_cierre["pedidos_cerrados"].append({
                                 "pedido_id": pedido_id,
                                 "estado_anterior": resultado["estado_anterior"],
                                 "estado_nuevo": resultado["estado_nuevo"],
                                 "evaluacion": resultado["evaluacion"]
+                            })
+                        elif resultado.get("estado_nuevo"):
+                            # También registrar si se actualizó el estado (aunque no se cerró)
+                            resumen_cierre["pedidos_cerrados"].append({
+                                "pedido_id": pedido_id,
+                                "estado_anterior": resultado["estado_anterior"],
+                                "estado_nuevo": resultado["estado_nuevo"],
+                                "evaluacion": resultado["evaluacion"],
+                                "razon_estado": resultado.get("razon_estado")
                             })
                     
                     conn_temp.close()

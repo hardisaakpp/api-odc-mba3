@@ -24,6 +24,10 @@ class SAPStockTransferMapper:
         """
         Convierte la distribución por tienda en múltiples Stock Transfer Orders (una por tienda).
         
+        ⭐ IMPORTANTE: Este método recibe solo distribuciones de TIENDAS (es_bodega=False).
+        Las bodegas ya fueron excluidas en el servicio que llama a este método.
+        Las Solicitudes de Transferencia se crean desde bodega origen hacia tiendas.
+        
         Args:
             pedido_data: Datos del pedido (cabecera)
             distribucion_por_tienda: Diccionario agrupado por tienda_id:
@@ -35,12 +39,15 @@ class SAPStockTransferMapper:
                             "item_code_sap": "...",
                             "cantidad_asignada": 10,
                             "cantidad_sap": 120.0,  # Ya convertida a unidades SAP
+                            "warehouse_code": "TRL-QSN",  # Código de tienda (destino)
+                            "tienda_codigo": "TRL-QSN",
+                            "es_bodega": False,
                             ...
                         }
                     ],
                     "tienda_id_2": [...]
                 }
-            bodega_origen: Código de bodega origen (ej: "01", "RL-CD")
+            bodega_origen: Código de bodega origen (ej: "OUT-CD", "RL-CD", "RG-CD")
             oc_doc_num: Número de OC de SAP (DocNum) relacionada
             usuario_id: ID del usuario que genera la transferencia
             pedido_id: ID del pedido relacionado
@@ -84,6 +91,7 @@ class SAPStockTransferMapper:
         comentario_base += f" - Pedido {numero_pedido}"
         
         stock_transfers = []
+        bodega_origen_upper = bodega_origen.strip().upper()
         
         # Crear un Stock Transfer Order por cada tienda
         for tienda_id, productos in distribucion_por_tienda.items():
@@ -91,15 +99,33 @@ class SAPStockTransferMapper:
                 logger.warning(f"⚠️ Tienda {tienda_id} sin productos, omitiendo")
                 continue
             
-            # Obtener código de bodega destino desde la primera línea (debería estar en todos los productos de la tienda)
+            # Obtener código de tienda destino desde la primera línea (debería estar en todos los productos de la tienda)
             primera_linea = productos[0]
-            bodega_destino = primera_linea.get("warehouse_code") or primera_linea.get("tienda_codigo")
+            # ⭐ IMPORTANTE: Usar warehouse_code que ya contiene el código exacto de SAP (WhsCode)
+            tienda_destino = primera_linea.get("warehouse_code") or primera_linea.get("tienda_codigo")
             
-            if not bodega_destino:
-                logger.warning(f"⚠️ Tienda {tienda_id} sin código de bodega, omitiendo")
+            if not tienda_destino:
+                logger.warning(f"⚠️ Tienda {tienda_id} sin código de tienda, omitiendo")
                 continue
             
-            logger.debug(f"📦 Creando Stock Transfer: {bodega_origen} → {bodega_destino} ({len(productos)} productos)")
+            # ⭐ Usar código exacto de SAP sin normalizar (ya viene normalizado desde el servicio)
+            tienda_destino = tienda_destino.strip()
+            
+            # ⭐ LOGGING: Registrar el código exacto que se enviará a SAP
+            logger.debug(
+                f"📤 Preparando Stock Transfer: FromWarehouse='{bodega_origen_upper}', "
+                f"ToWarehouse='{tienda_destino}' (código exacto de SAP)"
+            )
+            
+            # ⚠️ VALIDACIÓN: No crear transferencia si origen == destino
+            if bodega_origen_upper == tienda_destino:
+                logger.warning(
+                    f"⚠️ Omitiendo Stock Transfer: origen y destino son iguales ({bodega_origen}). "
+                    f"No tiene sentido crear una transferencia de {bodega_origen} a {tienda_destino}"
+                )
+                continue
+            
+            logger.info(f"📦 Creando Stock Transfer: {bodega_origen} → {tienda_destino} ({len(productos)} productos)")
             
             # Construir líneas del documento
             stock_transfer_lines = []
@@ -129,8 +155,8 @@ class SAPStockTransferMapper:
             # Construir JSON completo del Stock Transfer Order
             stock_transfer = {
                 "DocDate": fecha,
-                "FromWarehouse": bodega_origen,
-                "ToWarehouse": bodega_destino,
+                "FromWarehouse": bodega_origen_upper,
+                "ToWarehouse": tienda_destino,
                 "Comments": comentario_base,
                 "StockTransferLines": stock_transfer_lines
             }

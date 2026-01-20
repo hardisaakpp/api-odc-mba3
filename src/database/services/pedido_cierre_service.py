@@ -114,15 +114,29 @@ class PedidoCierreService:
         self,
         pedido_id: str,
         oc_repo: OrdenCompraRepository,
-        pedido_repo: PedidoRepository
+        pedido_repo: PedidoRepository,
+        resultado_st: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
         """
-        Cierra un pedido si todas sus ODC están enviadas.
+        Evalúa y actualiza el estado del pedido según el resultado de OC y ST.
+        
+        ⭐ REGLA DE NEGOCIO:
+        - OC OK + ST OK → CONFIRMADO_ENVIADO (pedido completo)
+        - OC OK + ST ❌ → PENDIENTE_LOGISTICA (OC lista, pero ST falló)
+        - OC ❌ → No cambia estado (OC debe estar OK primero)
         
         Args:
             pedido_id: UUID del pedido
             oc_repo: Repositorio de órdenes de compra
             pedido_repo: Repositorio de pedidos
+            resultado_st: Resultado de creación de Solicitudes de Transferencia (opcional)
+                {
+                    "success": bool,
+                    "transferencias_creadas": int,
+                    "transferencias_errores": int,
+                    "total_tiendas": int,
+                    "error": Optional[str]
+                }
             
         Returns:
             {
@@ -132,37 +146,76 @@ class PedidoCierreService:
                 "evaluacion": Dict con detalles de la evaluación
             }
         """
-        # Evaluar si puede cerrar
+        # Evaluar si OC está OK
         evaluacion = self.evaluar_cierre_pedido(pedido_id, oc_repo, pedido_repo)
         
+        # Obtener estado actual del pedido
+        pedido = pedido_repo.get_pedido_completo(pedido_id)
+        estado_anterior = pedido.get("estado") if pedido else None
+        
+        # Si OC no está OK, no cambiar estado
         if not evaluacion["puede_cerrar"]:
             logger.debug(
                 f"Pedido {pedido_id} no puede cerrarse: {evaluacion['razon_no_cierre']}"
             )
             return {
                 "cerrado": False,
-                "estado_anterior": None,
+                "estado_anterior": estado_anterior,
                 "estado_nuevo": None,
                 "evaluacion": evaluacion
             }
         
-        # Obtener estado actual del pedido
-        pedido = pedido_repo.get_pedido_completo(pedido_id)
-        estado_anterior = pedido.get("estado") if pedido else None
+        # OC está OK, ahora verificar ST
+        estado_nuevo = None
+        razon_estado = None
         
-        # Actualizar estado a CONFIRMADO_ENVIADO
-        actualizado = pedido_repo.update_estado(pedido_id, "CONFIRMADO_ENVIADO")
+        if resultado_st is None:
+            # No se intentó crear ST (puede ser que no haya distribución o no se requiera)
+            # En este caso, si OC está OK, podemos cerrar como CONFIRMADO_ENVIADO
+            estado_nuevo = "CONFIRMADO_ENVIADO"
+            razon_estado = "OC enviada, no se requieren Solicitudes de Transferencia"
+        elif resultado_st.get("success", False):
+            # ST exitosas → CONFIRMADO_ENVIADO
+            estado_nuevo = "CONFIRMADO_ENVIADO"
+            razon_estado = (
+                f"OC y ST exitosas: {resultado_st.get('transferencias_creadas', 0)}/"
+                f"{resultado_st.get('total_tiendas', 0)} transferencias creadas"
+            )
+        else:
+            # ST fallaron → PENDIENTE_LOGISTICA
+            estado_nuevo = "PENDIENTE_LOGISTICA"
+            error_st = resultado_st.get("error", "Error desconocido")
+            transferencias_errores = resultado_st.get("transferencias_errores", 0)
+            razon_estado = (
+                f"OC enviada pero ST fallaron: {transferencias_errores} error(es). "
+                f"Error: {error_st}"
+            )
+            logger.warning(
+                f"⚠️ Pedido {pedido_id}: OC OK pero ST fallaron. "
+                f"Estado: {estado_anterior} → {estado_nuevo}"
+            )
+        
+        # Actualizar estado del pedido
+        actualizado = pedido_repo.update_estado(pedido_id, estado_nuevo)
         
         if actualizado:
-            logger.info(
-                f"✅ Pedido {pedido_id} cerrado: {estado_anterior} → CONFIRMADO_ENVIADO "
-                f"({evaluacion['odc_enviadas']}/{evaluacion['total_odc']} ODC enviadas)"
-            )
+            if estado_nuevo == "CONFIRMADO_ENVIADO":
+                logger.info(
+                    f"✅ Pedido {pedido_id} cerrado: {estado_anterior} → {estado_nuevo} "
+                    f"({evaluacion['odc_enviadas']}/{evaluacion['total_odc']} ODC enviadas). "
+                    f"{razon_estado}"
+                )
+            else:
+                logger.info(
+                    f"📋 Pedido {pedido_id} actualizado: {estado_anterior} → {estado_nuevo}. "
+                    f"{razon_estado}"
+                )
             return {
-                "cerrado": True,
+                "cerrado": (estado_nuevo == "CONFIRMADO_ENVIADO"),
                 "estado_anterior": estado_anterior,
-                "estado_nuevo": "CONFIRMADO_ENVIADO",
-                "evaluacion": evaluacion
+                "estado_nuevo": estado_nuevo,
+                "evaluacion": evaluacion,
+                "razon_estado": razon_estado
             }
         else:
             logger.warning(f"⚠️ No se pudo actualizar estado del pedido {pedido_id}")

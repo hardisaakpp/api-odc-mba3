@@ -357,7 +357,7 @@ class OCSAPService:
                     # NO fallar el proceso si la notificación falla
                     logger.warning(f"⚠️ Error al enviar notificación a El Rayo (no crítico): {e}")
                 
-                # 9. Evaluar y cerrar pedido si corresponde
+                # 9. Evaluar y actualizar estado del pedido según resultado de OC y ST
                 if pedido_id:
                     try:
                         from ..repositories.pedido_repository import PedidoRepository
@@ -366,15 +366,24 @@ class OCSAPService:
                         pedido_repo = PedidoRepository(oc_repo.conn)
                         cierre_service = PedidoCierreService()
                         
+                        # Obtener resultado de ST (puede ser None si no se intentó crear)
+                        resultado_st = result.get("solicitudes_transferencia")
+                        
                         resultado_cierre = cierre_service.cerrar_pedido_si_corresponde(
                             pedido_id=pedido_id,
                             oc_repo=oc_repo,
-                            pedido_repo=pedido_repo
+                            pedido_repo=pedido_repo,
+                            resultado_st=resultado_st
                         )
                         
-                        if resultado_cierre["cerrado"]:
+                        if resultado_cierre.get("cerrado"):
                             logger.info(
                                 f"✅ Pedido {pedido_id} cerrado automáticamente: "
+                                f"{resultado_cierre['estado_anterior']} → {resultado_cierre['estado_nuevo']}"
+                            )
+                        elif resultado_cierre.get("estado_nuevo"):
+                            logger.info(
+                                f"📋 Pedido {pedido_id} actualizado: "
                                 f"{resultado_cierre['estado_anterior']} → {resultado_cierre['estado_nuevo']}"
                             )
                     except Exception as e:
