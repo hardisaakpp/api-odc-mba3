@@ -1121,14 +1121,55 @@ def register_redistribucion_endpoints(app: FastAPI):
                     # Obtener costos actualizados del pedido (EL RAYO)
                     costo_actual = detalle.get("costo_doc_sin_iva")
                     
-                    # Preparar distribuciones de tienda
+                    # ⭐ NUEVO: Calcular distribución inicial proporcional basada en total confirmado
+                    # Esto incluye bodegas y permite redistribución desde bodega
                     distribucion_tiendas = []
-                    for tienda in detalle.get("tiendas", []):
-                        distribucion_tiendas.append({
-                            "tienda_codigo": tienda.get("codigo", ""),
-                            "tienda_nombre": tienda.get("nombre", ""),
-                            "cantidad": 0  # Inicialmente en 0, se debe distribuir
-                        })
+                    tiendas_del_detalle = detalle.get("tiendas", [])
+                    
+                    # Calcular cantidad total original (solicitada)
+                    cantidad_total_original = sum(t.get("cantidad", 0) for t in tiendas_del_detalle)
+                    
+                    # Si hay cantidad confirmada, calcular distribución proporcional
+                    if cantidad_confirmada > 0 and cantidad_total_original > 0:
+                        # Calcular factor de proporción
+                        factor_proporcion = cantidad_confirmada / cantidad_total_original
+                        
+                        # Redistribuir proporcionalmente, acumulando para redondeo
+                        cantidad_asignada_total = 0
+                        distribuciones_calculadas = []
+                        
+                        for i, tienda in enumerate(tiendas_del_detalle):
+                            cantidad_original = tienda.get("cantidad", 0)
+                            
+                            # Calcular cantidad proporcional
+                            if i == len(tiendas_del_detalle) - 1:
+                                # Última tienda: asignar el resto para que sume exactamente
+                                cantidad_calculada = cantidad_confirmada - cantidad_asignada_total
+                            else:
+                                # Calcular proporción y redondear
+                                cantidad_calculada = round(cantidad_original * factor_proporcion)
+                                cantidad_asignada_total += cantidad_calculada
+                            
+                            # Asegurar que no sea negativa
+                            cantidad_calculada = max(0, cantidad_calculada)
+                            
+                            distribuciones_calculadas.append({
+                                "tienda_codigo": tienda.get("codigo", ""),
+                                "tienda_nombre": tienda.get("nombre", ""),
+                                "cantidad": cantidad_calculada,
+                                "es_bodega": tienda.get("es_bodega", False)  # ⭐ Incluir flag de bodega
+                            })
+                        
+                        distribucion_tiendas = distribuciones_calculadas
+                    else:
+                        # Si no hay datos para calcular, inicializar en 0
+                        for tienda in tiendas_del_detalle:
+                            distribucion_tiendas.append({
+                                "tienda_codigo": tienda.get("codigo", ""),
+                                "tienda_nombre": tienda.get("nombre", ""),
+                                "cantidad": 0,
+                                "es_bodega": tienda.get("es_bodega", False)  # ⭐ Incluir flag de bodega
+                            })
                     
                     # Obtener flags de modificación manual del detalle
                     costo_modificado = detalle.get("costo_modificado_manual", False)
@@ -1502,6 +1543,158 @@ def register_redistribucion_endpoints(app: FastAPI):
                 detail={
                     "error": "internal_error",
                     "message": f"Error interno al confirmar redistribución: {str(e)}"
+                }
+            )
+    
+    @app.post("/api/pedidos/{numero_pedido}/redistribucion/ajustar-bodegas",
+             response_model=BorradorResponse,
+             tags=["Pedidos - Redistribución"])
+    async def ajustar_bodegas_automaticamente(
+        numero_pedido: str = Path(..., description="Número del pedido"),
+        request_body: RedistribucionConfirmarRequest = Body(..., description="Datos de redistribución para ajustar"),
+        user: Dict = Depends(verify_jwt_token),
+        _: None = Depends(require_permission('mba3-consultas.facturas.view'))
+    ):
+        """
+        Ajusta automáticamente las bodegas cuando se modifican las tiendas.
+        
+        **Funcionalidad:**
+        - Cuando aumentas la cantidad en una tienda, automáticamente disminuye de la bodega
+        - Cuando disminuyes la cantidad en una tienda, automáticamente aumenta en la bodega
+        - Mantiene el total confirmado constante
+        - Si hay múltiples bodegas, ajusta proporcionalmente
+        
+        **Lógica:**
+        - Calcula la suma actual de tiendas (sin bodegas)
+        - Calcula la diferencia con el total confirmado
+        - Ajusta automáticamente las bodegas para compensar la diferencia
+        """
+        try:
+            from src.database.connection import get_db_connection_context
+            from src.database.repositories.pedido_repository import PedidoRepository
+            
+            with get_db_connection_context() as conn:
+                repo_pedido = PedidoRepository(conn)
+                
+                # Obtener pedido por número
+                pedido_data = repo_pedido.get_pedido_completo_por_numero(numero_pedido)
+                
+                if not pedido_data:
+                    raise HTTPException(
+                        status_code=status.HTTP_404_NOT_FOUND,
+                        detail={
+                            "error": "pedido_not_found",
+                            "message": f"No se encontró el pedido con número: {numero_pedido}"
+                        }
+                    )
+                
+                # Ajustar bodegas automáticamente para cada producto
+                ajustes_ajustados = []
+                
+                for ajuste in request_body.ajustes_detalle:
+                    cantidad_confirmada = ajuste.cantidad_confirmada
+                    
+                    # Separar bodegas y tiendas
+                    distribuciones_bodegas = []
+                    distribuciones_tiendas = []
+                    suma_tiendas = 0
+                    suma_bodegas_actual = 0
+                    
+                    for dist in ajuste.distribucion_tiendas:
+                        if dist.es_bodega:
+                            distribuciones_bodegas.append(dist)
+                            suma_bodegas_actual += dist.cantidad
+                        else:
+                            distribuciones_tiendas.append(dist)
+                            suma_tiendas += dist.cantidad
+                    
+                    # Calcular diferencia: total_confirmado - suma_tiendas
+                    # Esta diferencia debe distribuirse entre las bodegas
+                    diferencia_para_bodegas = cantidad_confirmada - suma_tiendas
+                    
+                    # Validar que la diferencia sea positiva (no se puede exceder el total confirmado)
+                    if diferencia_para_bodegas < 0:
+                        raise HTTPException(
+                            status_code=status.HTTP_400_BAD_REQUEST,
+                            detail={
+                                "error": "cantidad_excedida",
+                                "message": f"El producto {ajuste.codigo_producto}: La suma de tiendas ({suma_tiendas}) "
+                                          f"excede el total confirmado ({cantidad_confirmada}). "
+                                          f"Disminuye las tiendas o aumenta el total confirmado."
+                            }
+                        )
+                    
+                    # Si no hay bodegas, mantener la distribución tal cual
+                    if len(distribuciones_bodegas) == 0:
+                        distribuciones_ajustadas = list(ajuste.distribucion_tiendas)
+                    else:
+                        # Ajustar bodegas proporcionalmente
+                        distribuciones_ajustadas = list(distribuciones_tiendas)
+                        
+                        # Calcular factor de distribución para bodegas
+                        suma_bodegas_original = suma_bodegas_actual if suma_bodegas_actual > 0 else len(distribuciones_bodegas)
+                        
+                        # Distribuir diferencia_para_bodegas entre las bodegas proporcionalmente
+                        cantidad_asignada_bodegas = 0
+                        for i, bodega in enumerate(distribuciones_bodegas):
+                            if i == len(distribuciones_bodegas) - 1:
+                                # Última bodega: asignar el resto
+                                cantidad_bodega = diferencia_para_bodegas - cantidad_asignada_bodegas
+                            else:
+                                # Calcular proporcionalmente
+                                proporcion = bodega.cantidad / suma_bodegas_original if suma_bodegas_original > 0 else 1 / len(distribuciones_bodegas)
+                                cantidad_bodega = round(diferencia_para_bodegas * proporcion)
+                                cantidad_asignada_bodegas += cantidad_bodega
+                            
+                            # Asegurar que no sea negativa
+                            cantidad_bodega = max(0, cantidad_bodega)
+                            
+                            # Crear nueva distribución ajustada
+                            from src.models import DistribucionTiendaFrontend
+                            distribuciones_ajustadas.append(
+                                DistribucionTiendaFrontend(
+                                    tienda_codigo=bodega.tienda_codigo,
+                                    tienda_nombre=bodega.tienda_nombre,
+                                    cantidad=cantidad_bodega,
+                                    es_bodega=True
+                                )
+                            )
+                    
+                    # Actualizar cantidad_ajustada (debe ser igual a cantidad_confirmada después del ajuste)
+                    suma_total_ajustada = sum(d.cantidad for d in distribuciones_ajustadas)
+                    
+                    # Crear ajuste actualizado
+                    ajuste_ajustado = AjusteDetalle(
+                        codigo_producto=ajuste.codigo_producto,
+                        descripcion=ajuste.descripcion,
+                        cantidad_solicitada=ajuste.cantidad_solicitada,
+                        cantidad_confirmada=cantidad_confirmada,
+                        cantidad_ajustada=suma_total_ajustada,
+                        distribucion_tiendas=distribuciones_ajustadas,
+                        costo_original=ajuste.costo_original,
+                        costo_ajustado=ajuste.costo_ajustado,
+                        cambio_precio=ajuste.cambio_precio,
+                        pedido_detalle_id=ajuste.pedido_detalle_id,
+                        costo_modificado_manual=ajuste.costo_modificado_manual,
+                        total_modificado_manual=ajuste.total_modificado_manual
+                    )
+                    
+                    ajustes_ajustados.append(ajuste_ajustado)
+                
+                return BorradorResponse(
+                    ajustes_detalle=ajustes_ajustados,
+                    fecha_guardado=datetime.now()
+                )
+                
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"❌ Error al ajustar bodegas automáticamente: {e}", exc_info=True)
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail={
+                    "error": "internal_error",
+                    "message": f"Error interno al ajustar bodegas: {str(e)}"
                 }
             )
     

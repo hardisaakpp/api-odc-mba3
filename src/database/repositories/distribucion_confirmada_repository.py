@@ -75,30 +75,70 @@ class DistribucionConfirmadaRepository:
                         "productos": []
                     }
             
-            # Obtener todas las distribuciones confirmadas
+            # Verificar si existe columna es_bodega en pedido_detalle_tienda para obtener info de bodegas
             cursor.execute("""
-                SELECT 
-                    dc.id,
-                    dc.pedido_detalle_id,
-                    dc.tienda_id,
-                    t.codigo AS tienda_codigo,
-                    t.nombre AS tienda_nombre,
-                    dc.cantidad_solicitada,
-                    dc.cantidad_confirmada,
-                    dc.cantidad_asignada,
-                    dc.costo_unitario_original,
-                    dc.costo_unitario_ajustado,
-                    dc.subtotal_original,
-                    dc.subtotal_ajustado,
-                    dc.version,
-                    dc.estado,
-                    dc.fecha_creacion,
-                    dc.fecha_modificacion
-                FROM distribucion_confirmada dc
-                INNER JOIN tienda t ON dc.tienda_id = t.tienda_id
-                WHERE dc.pedido_id = ? AND dc.version = ?
-                ORDER BY dc.pedido_detalle_id, t.codigo
-            """, (pedido_id, version))
+                SELECT COUNT(*) 
+                FROM INFORMATION_SCHEMA.COLUMNS 
+                WHERE TABLE_NAME = 'pedido_detalle_tienda' 
+                AND COLUMN_NAME = 'es_bodega'
+            """)
+            row_check = cursor.fetchone()
+            tiene_es_bodega = (row_check[0] if row_check else 0) > 0
+            
+            # Obtener todas las distribuciones confirmadas (con información de bodegas si existe)
+            if tiene_es_bodega:
+                cursor.execute("""
+                    SELECT 
+                        dc.id,
+                        dc.pedido_detalle_id,
+                        dc.tienda_id,
+                        t.codigo AS tienda_codigo,
+                        t.nombre AS tienda_nombre,
+                        dc.cantidad_solicitada,
+                        dc.cantidad_confirmada,
+                        dc.cantidad_asignada,
+                        dc.costo_unitario_original,
+                        dc.costo_unitario_ajustado,
+                        dc.subtotal_original,
+                        dc.subtotal_ajustado,
+                        dc.version,
+                        dc.estado,
+                        dc.fecha_creacion,
+                        dc.fecha_modificacion,
+                        ISNULL(pdt.es_bodega, 0) AS es_bodega
+                    FROM distribucion_confirmada dc
+                    INNER JOIN tienda t ON dc.tienda_id = t.tienda_id
+                    LEFT JOIN pedido_detalle_tienda pdt 
+                        ON dc.pedido_detalle_id = pdt.pedido_detalle_id 
+                        AND dc.tienda_id = pdt.tienda_id
+                    WHERE dc.pedido_id = ? AND dc.version = ?
+                    ORDER BY dc.pedido_detalle_id, t.codigo
+                """, (pedido_id, version))
+            else:
+                cursor.execute("""
+                    SELECT 
+                        dc.id,
+                        dc.pedido_detalle_id,
+                        dc.tienda_id,
+                        t.codigo AS tienda_codigo,
+                        t.nombre AS tienda_nombre,
+                        dc.cantidad_solicitada,
+                        dc.cantidad_confirmada,
+                        dc.cantidad_asignada,
+                        dc.costo_unitario_original,
+                        dc.costo_unitario_ajustado,
+                        dc.subtotal_original,
+                        dc.subtotal_ajustado,
+                        dc.version,
+                        dc.estado,
+                        dc.fecha_creacion,
+                        dc.fecha_modificacion,
+                        0 AS es_bodega
+                    FROM distribucion_confirmada dc
+                    INNER JOIN tienda t ON dc.tienda_id = t.tienda_id
+                    WHERE dc.pedido_id = ? AND dc.version = ?
+                    ORDER BY dc.pedido_detalle_id, t.codigo
+                """, (pedido_id, version))
             
             rows = cursor.fetchall()
             
@@ -118,6 +158,8 @@ class DistribucionConfirmadaRepository:
                 costo_unitario_ajustado = float(row[10]) if row[10] is not None else None
                 subtotal_original = float(row[11]) if row[11] is not None else None
                 subtotal_ajustado = float(row[12]) if row[12] is not None else None
+                # Convertir SQL Server bit (0 o 1) a Python bool
+                es_bodega = bool(row[16]) if tiene_es_bodega else False
                 
                 productos_dict[pedido_detalle_id]["distribuciones"].append({
                     "id": str(row[0]),
@@ -134,7 +176,8 @@ class DistribucionConfirmadaRepository:
                     "version": row[12],
                     "estado": row[13],
                     "fecha_creacion": row[14].isoformat() if row[14] else None,
-                    "fecha_modificacion": row[15].isoformat() if row[15] else None
+                    "fecha_modificacion": row[15].isoformat() if row[15] else None,
+                    "es_bodega": es_bodega  # ⭐ NUEVO: Incluir flag de bodega
                 })
             
             # Calcular totales por producto
@@ -208,17 +251,41 @@ class DistribucionConfirmadaRepository:
                     "cantidad_confirmada_total": row[2]
                 }
             
-            # Obtener distribuciones originales por producto y tienda
+            # Obtener distribuciones originales por producto y tienda (incluyendo es_bodega)
+            # Verificar si existe columna es_bodega
             cursor.execute("""
-                SELECT 
-                    pdt.pedido_detalle_id,
-                    pdt.tienda_id,
-                    pdt.cantidad AS cantidad_solicitada,
-                    pd.costo_doc_sin_iva
-                FROM pedido_detalle_tienda pdt
-                INNER JOIN pedido_detalle pd ON pdt.pedido_detalle_id = pd.pedido_detalle_id
-                WHERE pd.pedido_id = ?
-            """, (pedido_id,))
+                SELECT COUNT(*) 
+                FROM INFORMATION_SCHEMA.COLUMNS 
+                WHERE TABLE_NAME = 'pedido_detalle_tienda' 
+                AND COLUMN_NAME = 'es_bodega'
+            """)
+            row_check = cursor.fetchone()
+            tiene_es_bodega = (row_check[0] if row_check else 0) > 0
+            
+            if tiene_es_bodega:
+                cursor.execute("""
+                    SELECT 
+                        pdt.pedido_detalle_id,
+                        pdt.tienda_id,
+                        pdt.cantidad AS cantidad_solicitada,
+                        pd.costo_doc_sin_iva,
+                        pdt.es_bodega
+                    FROM pedido_detalle_tienda pdt
+                    INNER JOIN pedido_detalle pd ON pdt.pedido_detalle_id = pd.pedido_detalle_id
+                    WHERE pd.pedido_id = ?
+                """, (pedido_id,))
+            else:
+                cursor.execute("""
+                    SELECT 
+                        pdt.pedido_detalle_id,
+                        pdt.tienda_id,
+                        pdt.cantidad AS cantidad_solicitada,
+                        pd.costo_doc_sin_iva,
+                        0 AS es_bodega
+                    FROM pedido_detalle_tienda pdt
+                    INNER JOIN pedido_detalle pd ON pdt.pedido_detalle_id = pd.pedido_detalle_id
+                    WHERE pd.pedido_id = ?
+                """, (pedido_id,))
             
             distribuciones_originales = {}
             for row in cursor.fetchall():
@@ -226,9 +293,12 @@ class DistribucionConfirmadaRepository:
                 tienda_id = str(row[1])
                 if pedido_detalle_id not in distribuciones_originales:
                     distribuciones_originales[pedido_detalle_id] = {}
+                # Convertir SQL Server bit (0 o 1) a Python bool
+                es_bodega = bool(row[4]) if tiene_es_bodega else False
                 distribuciones_originales[pedido_detalle_id][tienda_id] = {
                     "cantidad_solicitada": row[2],
-                    "costo_unitario": float(row[3]) if row[3] is not None else None
+                    "costo_unitario": float(row[3]) if row[3] is not None else None,
+                    "es_bodega": es_bodega  # ⭐ NUEVO: Incluir flag de bodega
                 }
             
             # Insertar nuevas distribuciones confirmadas

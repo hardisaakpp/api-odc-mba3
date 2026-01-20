@@ -65,7 +65,8 @@ class RedistribucionValidator:
                         f"(tienda {distribucion['tienda_id']}: {cantidad_asignada}). Máximo permitido: 1,000,000"
                     )
         
-        # Validación 2: La suma por producto <= cantidad confirmada y debe ser entero
+        # Validación 2: La suma por producto DEBE SER IGUAL a cantidad confirmada y debe ser entero
+        # Esta es la "verdad única": el total confirmado es lo que EL RAYO ajustó manualmente
         for producto in productos_redistribucion:
             pedido_detalle_id = producto["pedido_detalle_id"]
             cantidad_asignada_total = sum(
@@ -82,14 +83,22 @@ class RedistribucionValidator:
                     f"(suma actual: {cantidad_asignada_total})"
                 )
             
-            # Validar que no exceda la cantidad confirmada
-            if cantidad_asignada_total > cantidad_confirmada_total:
-                diferencia = cantidad_asignada_total - cantidad_confirmada_total
-                errores.append(
-                    f"Producto {pedido_detalle_id}: La suma de cantidades asignadas ({cantidad_asignada_total}) "
-                    f"excede la cantidad confirmada por el proveedor ({cantidad_confirmada_total}) "
-                    f"por {diferencia} unidades"
-                )
+            # ⭐ NUEVO: Validar que la suma sea EXACTAMENTE igual al total confirmado
+            # El total confirmado es la "verdad única" modificada por EL RAYO
+            if cantidad_asignada_total != cantidad_confirmada_total:
+                diferencia = abs(cantidad_asignada_total - cantidad_confirmada_total)
+                if cantidad_asignada_total > cantidad_confirmada_total:
+                    errores.append(
+                        f"Producto {pedido_detalle_id}: La suma de cantidades asignadas ({cantidad_asignada_total}) "
+                        f"excede el total confirmado ({cantidad_confirmada_total}) "
+                        f"por {diferencia} unidades. La suma debe ser EXACTAMENTE igual al total confirmado."
+                    )
+                else:
+                    errores.append(
+                        f"Producto {pedido_detalle_id}: La suma de cantidades asignadas ({cantidad_asignada_total}) "
+                        f"es menor al total confirmado ({cantidad_confirmada_total}) "
+                        f"por {diferencia} unidades. La suma debe ser EXACTAMENTE igual al total confirmado."
+                    )
             
             # Validar que la cantidad confirmada sea válida
             if cantidad_confirmada_total < 0:
@@ -169,6 +178,40 @@ class RedistribucionValidator:
                 f"El estado del pedido ({estado_pedido}) no permite redistribución. "
                 f"Estados permitidos: {', '.join(estados_permitidos)}"
             )
+        
+        # Validación 7: Validar bodegas - las bodegas no pueden quedar negativas
+        # Cuando se redistribuye desde bodega a tiendas, la bodega debe tener suficiente inventario
+        # Para esto necesitamos obtener información de bodegas del pedido original
+        for detalle in pedido_data.get("detalles", []):
+            pedido_detalle_id = detalle.get("pedido_detalle_id")
+            
+            # Buscar si este producto tiene redistribución
+            producto_redistribucion = next(
+                (p for p in productos_redistribucion if p["pedido_detalle_id"] == pedido_detalle_id),
+                None
+            )
+            
+            if producto_redistribucion:
+                # Obtener bodegas originales de este producto
+                bodegas_originales = {}
+                for tienda in detalle.get("tiendas", []):
+                    if tienda.get("es_bodega", False):
+                        bodegas_originales[tienda["tienda_id"]] = tienda.get("cantidad", 0)
+                
+                # Verificar que las bodegas en la redistribución no queden negativas
+                for distribucion in producto_redistribucion["distribuciones"]:
+                    tienda_id = distribucion["tienda_id"]
+                    
+                    # Si esta tienda es una bodega, verificar que la cantidad no sea negativa
+                    if tienda_id in bodegas_originales:
+                        cantidad_asignada = distribucion["cantidad_asignada"]
+                        # Ya validamos que no sea negativa en la validación 1,
+                        # pero aquí podemos dar un mensaje más específico si es bodega
+                        if cantidad_asignada < 0:
+                            errores.append(
+                                f"Producto {pedido_detalle_id}: La bodega {tienda_id} no puede tener cantidad negativa "
+                                f"(cantidad asignada: {cantidad_asignada})"
+                            )
         
         es_valido = len(errores) == 0
         
