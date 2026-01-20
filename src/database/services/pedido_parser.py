@@ -534,38 +534,69 @@ class PedidoParser:
                 'REG-CD': 'BODEGA REGIONS'
             }
             
+            # Mapeo de variantes de códigos (ej: RG-CD -> REG-CD)
+            variantes_bodegas = {
+                'RG-CD': 'REG-CD',  # Variante común en Excel
+                'REG-CD': 'REG-CD',
+                'RL-CD': 'RL-CD',
+                'OUT-CD': 'OUT-CD'
+            }
+            
             # Primero intentar identificar por códigos de la fila 2 (columnas K, L, M = índices 10, 11, 12)
             for col_idx in [10, 11, 12]:
                 if col_idx < len(df_detalle.columns):
+                    col_name = df_detalle.columns[col_idx]
+                    col_upper = str(col_name).upper().strip()
+                    bodega_detectada = False
+                    
                     # Si tenemos códigos de la segunda fila, usarlos
                     if col_idx in codigos_columnas:
                         codigo_bodega = codigos_columnas[col_idx]
-                        col_name = df_detalle.columns[col_idx]
-                        # Verificar si el código coincide con alguna bodega esperada
-                        if codigo_bodega in bodegas_esperadas:
-                            columnas_bodegas[codigo_bodega] = col_name
+                        codigo_bodega_upper = str(codigo_bodega).upper().strip()
+                        
+                        # Normalizar código usando mapeo de variantes
+                        codigo_normalizado = variantes_bodegas.get(codigo_bodega_upper, codigo_bodega_upper)
+                        
+                        # Verificar si el código (normalizado o original) coincide con alguna bodega esperada
+                        if codigo_normalizado in bodegas_esperadas:
+                            columnas_bodegas[codigo_normalizado] = col_name
+                            logger.info(f"✅ Bodega encontrada por código: '{codigo_bodega}' → '{codigo_normalizado}' (índice {col_idx}, nombre columna: '{col_name}')")
+                            bodega_detectada = True
+                        elif codigo_bodega_upper in bodegas_esperadas:
+                            columnas_bodegas[codigo_bodega_upper] = col_name
                             logger.info(f"✅ Bodega encontrada por código: '{codigo_bodega}' (índice {col_idx}, nombre columna: '{col_name}')")
+                            bodega_detectada = True
                         else:
                             # Si el código no coincide exactamente, buscar por coincidencia parcial
                             for codigo_esperado, nombre_esperado in bodegas_esperadas.items():
-                                if codigo_esperado in codigo_bodega or codigo_bodega in codigo_esperado:
+                                if codigo_esperado in codigo_bodega_upper or codigo_bodega_upper in codigo_esperado:
                                     columnas_bodegas[codigo_esperado] = col_name
                                     logger.info(f"✅ Bodega encontrada por código parcial: '{codigo_bodega}' → {codigo_esperado} (índice {col_idx})")
+                                    bodega_detectada = True
                                     break
-                    else:
-                        # Fallback: usar nombres de la fila 1
-                        col_name = df_detalle.columns[col_idx]
-                        col_upper = str(col_name).upper().strip()
+                    
+                    # Si no se detectó por código, intentar por nombre de columna (fila 1)
+                    if not bodega_detectada:
                         if col_upper in bodegas_esperadas:
                             columnas_bodegas[col_upper] = col_name
                             logger.info(f"✅ Bodega encontrada por nombre: '{col_name}' (índice {col_idx})")
-                        elif 'BODEGA' in col_upper:
-                            # Buscar por nombre de bodega
+                            bodega_detectada = True
+                        elif 'BODEGA' in col_upper or col_upper in ['RL-CD', 'OUT-CD', 'RG-CD', 'REG-CD']:
+                            # Buscar por nombre de bodega o código en nombre
                             for codigo, nombre in bodegas_esperadas.items():
                                 if nombre.upper() in col_upper or codigo in col_upper:
                                     columnas_bodegas[codigo] = col_name
                                     logger.info(f"✅ Bodega encontrada por nombre: '{col_name}' → {codigo} (índice {col_idx})")
+                                    bodega_detectada = True
                                     break
+                            
+                            # Si no se encontró, verificar variantes
+                            if not bodega_detectada and col_upper in variantes_bodegas:
+                                codigo_normalizado = variantes_bodegas[col_upper]
+                                if codigo_normalizado in bodegas_esperadas:
+                                    columnas_bodegas[codigo_normalizado] = col_name
+                                    logger.info(f"✅ Bodega encontrada por variante: '{col_name}' → '{codigo_normalizado}' (índice {col_idx})")
+                                    bodega_detectada = True
             
             # Identificar columnas de tiendas (desde columna N = índice 13 en adelante)
             # Las tiendas son todas las columnas que NO son:

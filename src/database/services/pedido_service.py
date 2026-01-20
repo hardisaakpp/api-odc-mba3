@@ -1469,7 +1469,8 @@ class PedidoService:
                                     )
                                     distribuciones.append({
                                         "tienda_id": tienda_id,
-                                        "cantidad": int(cantidad)
+                                        "cantidad": int(cantidad),
+                                        "es_bodega": dist.get("es_bodega", False)  # ⭐ NUEVO: Preservar flag de bodega
                                     })
                             if distribuciones:
                                 resultado["distribuciones_cargadas"] += repository.insert_detalle_tiendas(pedido_detalle_id, distribuciones)
@@ -1616,15 +1617,21 @@ class PedidoService:
                             tienda_codigo = dist.get("tienda_codigo")
                             cantidad = dist.get("cantidad")
                             fila_origen = dist.get("fila_origen")  # Preservar fila origen si existe
+                            es_bodega = dist.get("es_bodega", False)
                             
                             if tienda_codigo and cantidad and cantidad > 0:
+                                # ⭐ LOG: Registrar bodegas para debugging
+                                if es_bodega:
+                                    logger.info(f"📦 Procesando bodega: {tienda_codigo}, cantidad: {cantidad}, producto: {detalle_data.get('detalle', {}).get('codigo_interno')}")
+                                
                                 tienda_id = repository.get_or_create_tienda(
                                     codigo=tienda_codigo,
                                     nombre=dist.get("tienda_nombre")
                                 )
                                 distribucion_item = {
                                     "tienda_id": tienda_id,
-                                    "cantidad": int(cantidad)
+                                    "cantidad": int(cantidad),
+                                    "es_bodega": es_bodega  # ⭐ NUEVO: Preservar flag de bodega
                                 }
                                 # Agregar fila_origen si está disponible
                                 if fila_origen is not None:

@@ -364,6 +364,10 @@ class PedidoRepository:
                     if not tienda_id or not cantidad or cantidad <= 0:
                         continue
                     
+                    # ⭐ LOG: Registrar bodegas al insertar
+                    if es_bodega:
+                        logger.info(f"📦 Insertando bodega en BD: pedido_detalle_id={pedido_detalle_id}, tienda_id={tienda_id}, cantidad={cantidad}, es_bodega={es_bodega}, tiene_es_bodega_col={tiene_es_bodega}")
+                    
                     # Construir valores dinámicamente
                     valores = [pedido_detalle_id, tienda_id, cantidad]
                     
