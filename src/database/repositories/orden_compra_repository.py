@@ -155,9 +155,10 @@ class OrdenCompraRepository:
                 proveedor,
                 fecha_generacion,
                 referencia_despacho,
+                codigo_bodega,
                 estado,
                 created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, GETDATE())
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, GETDATE())
             """
             
             values = (
@@ -167,6 +168,7 @@ class OrdenCompraRepository:
                 datos_cabecera.get("proveedor"),
                 datos_cabecera.get("fecha_generacion"),
                 datos_cabecera.get("referencia_despacho"),
+                datos_cabecera.get("codigo_bodega"),
                 estado,
             )
             
@@ -306,7 +308,7 @@ class OrdenCompraRepository:
             cursor.execute(
                 """
                 SELECT oc_id, despacho_id, pedido_id, proveedor, fecha_generacion,
-                       estado, numero_oc_sap, doc_entry, referencia_despacho, created_at,
+                       estado, numero_oc_sap, doc_entry, referencia_despacho, codigo_bodega, created_at,
                        respuesta_sap, fecha_procesado, error_message, error_code, error_source, updated_at
                 FROM orden_compra_cabecera
                 WHERE referencia_despacho = ?
@@ -327,13 +329,14 @@ class OrdenCompraRepository:
                 "numero_oc_sap": result[6],
                 "doc_entry": result[7],
                 "referencia_despacho": result[8],
-                "created_at": serialize_date(result[9]),
-                "respuesta_sap": result[10],
-                "fecha_procesado": serialize_date(result[11]),
-                "error_message": result[12],
-                "error_code": result[13],
-                "error_source": result[14],
-                "updated_at": serialize_date(result[15]),
+                "codigo_bodega": result[9],
+                "created_at": serialize_date(result[10]),
+                "respuesta_sap": result[11],
+                "fecha_procesado": serialize_date(result[12]),
+                "error_message": result[13],
+                "error_code": result[14],
+                "error_source": result[15],
+                "updated_at": serialize_date(result[16]),
             }
         finally:
             cursor.close()
@@ -353,7 +356,7 @@ class OrdenCompraRepository:
             cursor.execute(
                 """
                 SELECT oc_id, despacho_id, pedido_id, proveedor, fecha_generacion,
-                       estado, numero_oc_sap, doc_entry, referencia_despacho, created_at,
+                       estado, numero_oc_sap, doc_entry, referencia_despacho, codigo_bodega, created_at,
                        respuesta_sap, fecha_procesado, error_message, error_code, error_source, updated_at
                 FROM orden_compra_cabecera
                 WHERE pedido_id = ?
@@ -374,13 +377,14 @@ class OrdenCompraRepository:
                     "numero_oc_sap": row[6],
                     "doc_entry": row[7],
                     "referencia_despacho": row[8],
-                    "created_at": serialize_date(row[9]),
-                    "respuesta_sap": row[10],
-                    "fecha_procesado": serialize_date(row[11]),
-                    "error_message": row[12],
-                    "error_code": row[13],
-                    "error_source": row[14],
-                    "updated_at": serialize_date(row[15]),
+                    "codigo_bodega": row[9],
+                    "created_at": serialize_date(row[10]),
+                    "respuesta_sap": row[11],
+                    "fecha_procesado": serialize_date(row[12]),
+                    "error_message": row[13],
+                    "error_code": row[14],
+                    "error_source": row[15],
+                    "updated_at": serialize_date(row[16]),
                 }
                 for row in rows
             ]
@@ -404,7 +408,7 @@ class OrdenCompraRepository:
             cursor.execute(
                 """
                 SELECT oc_id, despacho_id, pedido_id, proveedor, fecha_generacion,
-                       estado, numero_oc_sap, doc_entry, referencia_despacho, created_at,
+                       estado, numero_oc_sap, doc_entry, referencia_despacho, codigo_bodega, created_at,
                        respuesta_sap, fecha_procesado, error_message, error_code, error_source, updated_at
                 FROM orden_compra_cabecera
                 WHERE estado = ?
@@ -426,13 +430,14 @@ class OrdenCompraRepository:
                     "numero_oc_sap": row[6],
                     "doc_entry": row[7],
                     "referencia_despacho": row[8],
-                    "created_at": serialize_date(row[9]),
-                    "respuesta_sap": row[10],
-                    "fecha_procesado": serialize_date(row[11]),
-                    "error_message": row[12],
-                    "error_code": row[13],
-                    "error_source": row[14],
-                    "updated_at": serialize_date(row[15]),
+                    "codigo_bodega": row[9],
+                    "created_at": serialize_date(row[10]),
+                    "respuesta_sap": row[11],
+                    "fecha_procesado": serialize_date(row[12]),
+                    "error_message": row[13],
+                    "error_code": row[14],
+                    "error_source": row[15],
+                    "updated_at": serialize_date(row[16]),
                 })
             
             return oc_list
@@ -453,7 +458,7 @@ class OrdenCompraRepository:
             cursor.execute(
                 """
                 SELECT oc_id, despacho_id, pedido_id, proveedor, fecha_generacion,
-                       estado, numero_oc_sap, doc_entry, referencia_despacho, created_at,
+                       estado, numero_oc_sap, doc_entry, referencia_despacho, codigo_bodega, created_at,
                        respuesta_sap, fecha_procesado, error_message, error_code, error_source, updated_at
                 FROM orden_compra_cabecera
                 ORDER BY created_at DESC
@@ -473,13 +478,14 @@ class OrdenCompraRepository:
                     "numero_oc_sap": row[6],
                     "doc_entry": row[7],
                     "referencia_despacho": row[8],
-                    "created_at": serialize_date(row[9]),
-                    "respuesta_sap": row[10],
-                    "fecha_procesado": serialize_date(row[11]),
-                    "error_message": row[12],
-                    "error_code": row[13],
-                    "error_source": row[14],
-                    "updated_at": serialize_date(row[15]),
+                    "codigo_bodega": row[9],
+                    "created_at": serialize_date(row[10]),
+                    "respuesta_sap": row[11],
+                    "fecha_procesado": serialize_date(row[12]),
+                    "error_message": row[13],
+                    "error_code": row[14],
+                    "error_source": row[15],
+                    "updated_at": serialize_date(row[16]),
                 })
             
             return oc_list
@@ -501,7 +507,7 @@ class OrdenCompraRepository:
             cursor.execute(
                 """
                 SELECT oc_id, despacho_id, pedido_id, proveedor, fecha_generacion,
-                       estado, numero_oc_sap, doc_entry, referencia_despacho, created_at,
+                       estado, numero_oc_sap, doc_entry, referencia_despacho, codigo_bodega, created_at,
                        respuesta_sap, fecha_procesado, error_message, error_code, error_source, updated_at
                 FROM orden_compra_cabecera
                 WHERE oc_id = ?
@@ -522,13 +528,14 @@ class OrdenCompraRepository:
                 "numero_oc_sap": result[6],
                 "doc_entry": result[7],
                 "referencia_despacho": result[8],
-                "created_at": serialize_date(result[9]),
-                "respuesta_sap": result[10],
-                "fecha_procesado": serialize_date(result[11]),
-                "error_message": result[12],
-                "error_code": result[13],
-                "error_source": result[14],
-                "updated_at": serialize_date(result[15]),
+                "codigo_bodega": result[9],
+                "created_at": serialize_date(result[10]),
+                "respuesta_sap": result[11],
+                "fecha_procesado": serialize_date(result[12]),
+                "error_message": result[13],
+                "error_code": result[14],
+                "error_source": result[15],
+                "updated_at": serialize_date(result[16]),
             }
         finally:
             cursor.close()
@@ -571,12 +578,13 @@ class OrdenCompraRepository:
                     merged[key] = existing[key]
             
             # SQL para actualizar (campos actualizables)
-            # Incluir estado, numero_oc_sap y nuevos campos de respuesta SAP si están presentes
+            # Incluir estado, numero_oc_sap, codigo_bodega y nuevos campos de respuesta SAP si están presentes
             sql = """
             UPDATE orden_compra_cabecera SET
                 proveedor = ?,
                 fecha_generacion = ?,
                 referencia_despacho = ?,
+                codigo_bodega = ?,
                 estado = ?,
                 numero_oc_sap = ?,
                 respuesta_sap = ?,
@@ -592,6 +600,7 @@ class OrdenCompraRepository:
                 merged.get("proveedor"),
                 merged.get("fecha_generacion"),
                 merged.get("referencia_despacho"),
+                merged.get("codigo_bodega"),  # Puede ser None
                 merged.get("estado"),  # Puede ser None, se preservará el existente
                 merged.get("numero_oc_sap"),  # Puede ser None
                 merged.get("respuesta_sap"),  # Puede ser None

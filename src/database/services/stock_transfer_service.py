@@ -194,7 +194,10 @@ class StockTransferService:
         Crea Solicitudes de Transferencia (Stock Transfer Orders) en SAP desde la distribución confirmada de un pedido.
         
         ⭐ IMPORTANTE: Las Solicitudes de Transferencia se crean desde bodega origen hacia TIENDAS.
-        - Origen: Bodega (del campo origen_traslado del pedido, ej: OUT-CD, RG-CD, RL-CD)
+        - Origen: Bodega (prioridad: bodega_origen proporcionada > origen_traslado del pedido > "01")
+          - Si se proporciona bodega_origen (ej: desde codigo_bodega de la OC), se usa esa
+          - Si no, se usa origen_traslado del pedido
+          - Si ninguno está disponible, se usa "01" como default
         - Destino: TIENDAS (es_bodega=False), NO bodegas
         - Las bodegas (OUT-CD, RG-CD, RL-CD) se excluyen como destino para evitar transferencias de bodega a bodega
         - Cada bodega tiene sus propias tiendas
@@ -215,6 +218,7 @@ class StockTransferService:
             pedido_id: UUID del pedido
             oc_doc_num: Número de OC de SAP (DocNum) relacionada (opcional)
             bodega_origen: Código de bodega origen (si None, usa origen_traslado del pedido)
+                          ⭐ Recomendado: pasar codigo_bodega de la OC para consistencia
             usuario_id: ID del usuario que genera las transferencias
         
         Returns:
@@ -259,12 +263,14 @@ class StockTransferService:
                 
                 pedido_cabecera = pedido_data.get("cabecera", {})
                 
-                # 2. Obtener bodega origen (del pedido o parámetro)
+                # 2. Obtener bodega origen (prioridad: parámetro > origen_traslado del pedido > default)
+                # ⭐ IMPORTANTE: Si bodega_origen viene de la OC (codigo_bodega), tiene prioridad
+                # sobre origen_traslado del pedido para asegurar consistencia
                 if not bodega_origen:
                     bodega_origen = pedido_cabecera.get("origen_traslado") or "01"  # Default a "01" si no hay
-                    logger.info(f"📍 Usando bodega origen del pedido: {bodega_origen}")
+                    logger.info(f"📍 Usando bodega origen del pedido (origen_traslado): {bodega_origen}")
                 else:
-                    logger.info(f"📍 Usando bodega origen proporcionada: {bodega_origen}")
+                    logger.info(f"📍 Usando bodega origen proporcionada (de la OC): {bodega_origen}")
                 
                 # Asegurar que bodega_origen nunca sea None
                 if bodega_origen is None:

@@ -327,10 +327,14 @@ def register_sap_endpoints(app: FastAPI):
                         logger.warning(f"No se pudo guardar log de OC: {e}")
                     
                     # Enviar ODC a SAP
+                    # ⭐ La bodega se determina automáticamente desde el pedido:
+                    # 1. Si hay distribuciones con es_bodega=True y cantidad > 0, usa la primera bodega encontrada
+                    # 2. Si no, usa origen_traslado del pedido
+                    # 3. Si no hay ninguno, se envía sin WarehouseCode (SAP usará su configuración por defecto)
                     resultado = oc_sap_service.enviar_oc_a_sap(
                         oc_repo=oc_repo,
                         oc_id=oc_id_item,
-                        warehouse_code=None  # Se puede agregar como parámetro opcional en el futuro
+                        warehouse_code=None  # Se determina automáticamente desde el pedido
                     )
                     
                     success = resultado.get("success", False)

@@ -26,7 +26,8 @@ class PedidoOCService:
     def _to_orden_compra_cabecera_from_pedido(
         self,
         pedido_cabecera: Dict[str, Any],
-        proveedor: str
+        proveedor: str,
+        codigo_bodega: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Transforma una cabecera de pedido a formato de orden_compra_cabecera.
@@ -38,10 +39,12 @@ class PedidoOCService:
         - numero_pedido → referencia_despacho (similar a numero_factura en despachos)
         - fecha_pedido → fecha_generacion
         - proveedor_nombre → proveedor (mapeado desde tabla cliente)
+        - codigo_bodega → codigo_bodega (determinado desde distribuciones o origen_traslado)
         
         Args:
             pedido_cabecera: Diccionario con datos de pedido (cabecera)
             proveedor: CardCode SAP (proveedor) obtenido desde tabla cliente
+            codigo_bodega: Código de bodega determinada (opcional)
             
         Returns:
             Diccionario con datos para insertar en orden_compra_cabecera
@@ -63,6 +66,7 @@ class PedidoOCService:
             "proveedor": proveedor,
             "fecha_generacion": fecha_pedido,
             "referencia_despacho": pedido_cabecera.get("numero_pedido"),  # Similar a numero_factura
+            "codigo_bodega": codigo_bodega,  # Bodega determinada
         }
     
     def _to_orden_compra_detalle_from_procesamiento(
@@ -266,10 +270,31 @@ class PedidoOCService:
             logger.debug(f"🔄 Mapeo proveedor: {proveedor_nombre} → {proveedor}")
             result["proveedor"] = proveedor
             
-            # 6. Transformar cabecera
+            # 6. Determinar bodega para la OC
+            codigo_bodega = None
+            try:
+                # Intentar determinar desde distribuciones o origen_traslado
+                from ..services.oc_sap_service import OCSAPService
+                oc_sap_service = OCSAPService()
+                
+                # Crear una cabecera temporal para usar el método estático
+                cabecera_temporal = {"pedido_id": pedido_id}
+                codigo_bodega = oc_sap_service.determinar_bodega_desde_pedido(
+                    cabecera_temporal,
+                    oc_repo
+                )
+                if codigo_bodega:
+                    logger.info(f"📍 Bodega determinada para OC: {codigo_bodega}")
+                else:
+                    logger.warning(f"⚠️ No se pudo determinar bodega para el pedido {pedido_id}")
+            except Exception as e:
+                logger.warning(f"⚠️ Error al determinar bodega: {e}")
+            
+            # 7. Transformar cabecera
             oc_cabecera_data = self._to_orden_compra_cabecera_from_pedido(
                 pedido_cabecera,
-                proveedor
+                proveedor,
+                codigo_bodega
             )
             oc_cabecera_data["estado"] = "PENDIENTE"
             
@@ -295,7 +320,7 @@ class PedidoOCService:
                 result["cabecera_actualizada"] = False
                 logger.info(f"✅ Orden de compra cabecera creada: {oc_id} para pedido {pedido_id}")
             
-            # 7. Transformar y preparar detalles (mapeo directo, sin conversiones)
+            # 8. Transformar y preparar detalles (mapeo directo, sin conversiones)
             oc_detalles = []
             for proc in procesamientos_validos:
                 oc_detalle = self._to_orden_compra_detalle_from_procesamiento(proc, oc_id)
@@ -313,7 +338,7 @@ class PedidoOCService:
             if not oc_detalles:
                 raise ValueError("No se pudo crear ninguna línea de detalle válida para la OC")
             
-            # 8. Insertar detalles (tanto para INSERT como UPDATE)
+            # 9. Insertar detalles (tanto para INSERT como UPDATE)
             detalles_insertados = oc_repo.insert_detalles(oc_id, oc_detalles)
             result["detalles_insertados"] = detalles_insertados
             result["total_lineas"] = len(oc_detalles)

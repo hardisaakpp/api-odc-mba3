@@ -22,6 +22,94 @@ class OCSAPService:
         """Inicializa el servicio."""
         self.sap_client = SAPServiceLayerClient()
     
+    @staticmethod
+    def determinar_bodega_desde_pedido(
+        oc_cabecera: Dict[str, Any],
+        oc_repo: 'OrdenCompraRepository'
+    ) -> Optional[str]:
+        """
+        Determina el código de bodega (WhsCode) a usar en la ODC.
+        
+        Prioridad:
+        1. Si hay distribuciones con es_bodega=True y cantidad > 0, usar la primera bodega encontrada
+        2. Si no hay bodegas en distribuciones, usar origen_traslado del pedido
+        3. Si no hay origen_traslado, retornar None
+        
+        Args:
+            oc_cabecera: Diccionario con datos de orden_compra_cabecera
+            oc_repo: Repositorio de órdenes de compra (para acceder a la conexión)
+            
+        Returns:
+            Código de bodega (ej: "RL-CD", "OUT-CD", "REG-CD") o None si no se puede determinar
+        """
+        pedido_id = oc_cabecera.get("pedido_id")
+        if not pedido_id:
+            # Si no hay pedido_id, intentar usar origen_traslado si existe en la cabecera
+            # (para compatibilidad con ODCs legacy que vienen de despachos)
+            logger.debug("⚠️ OC sin pedido_id, no se puede determinar bodega desde distribuciones")
+            return None
+        
+        try:
+            # Usar la conexión del repositorio existente
+            conn = oc_repo.conn
+            from ..repositories.pedido_repository import PedidoRepository
+            from ..repositories.distribucion_confirmada_repository import DistribucionConfirmadaRepository
+            
+            pedido_repo = PedidoRepository(conn)
+            dist_repo = DistribucionConfirmadaRepository(conn)
+            
+            # 1. Obtener pedido completo para acceder a origen_traslado
+            pedido_data = pedido_repo.get_pedido_completo(pedido_id)
+            if not pedido_data:
+                logger.warning(f"⚠️ No se encontró pedido {pedido_id} para determinar bodega")
+                return None
+            
+            pedido_cabecera = pedido_data.get("cabecera", {})
+            origen_traslado = pedido_cabecera.get("origen_traslado")
+            
+            # 2. Intentar obtener distribución confirmada para buscar bodegas con cantidad > 0
+            try:
+                version_actual = dist_repo.get_version_actual(pedido_id)
+                if version_actual > 0:
+                    distribucion_data = dist_repo.get_distribucion_completa(pedido_id, version_actual)
+                    productos_distribucion = distribucion_data.get("productos", [])
+                    
+                    # Buscar la primera bodega (es_bodega=True) con cantidad_asignada > 0
+                    bodegas_encontradas = set()
+                    for producto in productos_distribucion:
+                        distribuciones = producto.get("distribuciones", [])
+                        for dist in distribuciones:
+                            if dist.get("es_bodega", False):
+                                cantidad_asignada = dist.get("cantidad_asignada", 0)
+                                if cantidad_asignada and cantidad_asignada > 0:
+                                    tienda_codigo = dist.get("tienda_codigo")
+                                    if tienda_codigo:
+                                        bodegas_encontradas.add(tienda_codigo.strip().upper())
+                    
+                    # Si encontramos bodegas con cantidad > 0, usar la primera
+                    if bodegas_encontradas:
+                        bodega_seleccionada = list(bodegas_encontradas)[0]
+                        logger.info(
+                            f"📍 Bodega determinada desde distribuciones: {bodega_seleccionada} "
+                            f"(encontradas: {', '.join(bodegas_encontradas)})"
+                        )
+                        return bodega_seleccionada
+            except Exception as e:
+                logger.warning(f"⚠️ No se pudo obtener distribución confirmada: {e}")
+            
+            # 3. Fallback: usar origen_traslado del pedido
+            if origen_traslado and origen_traslado.strip():
+                bodega_fallback = origen_traslado.strip().upper()
+                logger.info(f"📍 Bodega determinada desde origen_traslado: {bodega_fallback}")
+                return bodega_fallback
+            
+            logger.warning(f"⚠️ No se pudo determinar bodega para pedido {pedido_id}")
+            return None
+                
+        except Exception as e:
+            logger.error(f"❌ Error al determinar bodega desde pedido: {e}", exc_info=True)
+            return None
+    
     def enviar_oc_a_sap(
         self,
         oc_repo: OrdenCompraRepository,
@@ -102,6 +190,26 @@ class OCSAPService:
                 return result
             
             logger.info(f"📦 Preparando envío de ODC {oc_id} a SAP ({len(oc_detalles)} líneas)")
+            
+            # 2.5. Determinar bodega si no se proporcionó
+            if not warehouse_code:
+                # Intentar obtener de la cabecera si ya está persistida
+                warehouse_code = oc_cabecera.get("codigo_bodega")
+                if warehouse_code:
+                    logger.info(f"📍 Bodega obtenida de la cabecera: {warehouse_code}")
+                else:
+                    # Determinar desde el pedido
+                    warehouse_code = self.determinar_bodega_desde_pedido(oc_cabecera, oc_repo)
+                    if warehouse_code:
+                        logger.info(f"📍 Bodega determinada automáticamente: {warehouse_code}")
+                        # Persistir la bodega determinada en la cabecera
+                        try:
+                            oc_repo.update_cabecera(oc_id, {"codigo_bodega": warehouse_code})
+                            logger.info(f"✅ Bodega persistida en orden_compra_cabecera: {warehouse_code}")
+                        except Exception as e:
+                            logger.warning(f"⚠️ No se pudo persistir bodega en la cabecera: {e}")
+                    else:
+                        logger.warning(f"⚠️ No se pudo determinar bodega para ODC {oc_id}. La ODC se enviará sin WarehouseCode.")
             
             # 3. Validar antes de crear OC
             validacion = self._validar_antes_de_crear_oc(oc_cabecera, oc_detalles)
@@ -298,11 +406,19 @@ class OCSAPService:
                     try:
                         from .stock_transfer_service import StockTransferService
                         
+                        # ⭐ Usar la bodega de la OC (codigo_bodega) en lugar de origen_traslado del pedido
+                        # Esto asegura consistencia: la misma bodega usada para la OC se usa para las ST
+                        bodega_oc = oc_cabecera.get("codigo_bodega")
+                        if bodega_oc:
+                            logger.info(f"📍 Usando bodega de la OC para ST: {bodega_oc}")
+                        else:
+                            logger.warning(f"⚠️ OC sin codigo_bodega, se usará origen_traslado del pedido")
+                        
                         stock_transfer_service = StockTransferService()
                         resultado_transferencias = stock_transfer_service.crear_solicitudes_transferencia_desde_pedido(
                             pedido_id=pedido_id,
                             oc_doc_num=doc_num,
-                            bodega_origen=None,  # Usará origen_traslado del pedido
+                            bodega_origen=bodega_oc,  # Usa codigo_bodega de la OC (prioridad sobre origen_traslado)
                             usuario_id=None
                         )
                         
