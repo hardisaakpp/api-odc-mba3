@@ -174,7 +174,7 @@ def register_redistribucion_endpoints(app: FastAPI):
         
         **Validaciones:**
         - No valores negativos
-        - La suma por producto ≤ cantidad confirmada
+        - ⭐ Las bodegas y tiendas son independientes: pueden modificarse libremente sin afectarse mutuamente
         - Todas las tiendas pertenecen al pedido
         - No duplicados de tienda por producto
         - El pedido debe tener respuesta del proveedor

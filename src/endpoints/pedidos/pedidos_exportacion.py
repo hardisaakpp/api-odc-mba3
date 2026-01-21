@@ -64,50 +64,70 @@ def register_exportacion_endpoints(app: FastAPI):
     @app.get("/api/pedidos/{pedido_id}/exportar-plano-mba", tags=["Pedidos - El Rayo"])
     async def exportar_pedido_plano_mba(
         pedido_id: str = Path(..., description="UUID del pedido o número de pedido"),
-        formato: str = Query("csv", description="Formato de salida: 'csv' o 'txt'"),
+        codigo_cliente: str = Query("", description="Código de cliente MBA (ej: CLI0495)"),
+        codigo_subcliente: str = Query("", description="Código de subcliente MBA (ej: GO05)"),
+        moneda: str = Query("US", description="Código de moneda (ej: US, DOP)"),
+        bodega: str = Query("", description="Código de bodega MBA (si vacío, usa origen_traslado del pedido)"),
+        vendedor: str = Query("", description="Código de vendedor MBA (ej: JPC)"),
+        numero_pedido_mba: int = Query(1, ge=1, description="Número de pedido temporal para agrupar líneas en MBA"),
+        consolidado: bool = Query(False, description="Si True, consolida cantidades por producto; si False, genera una línea por tienda/sucursal"),
+        incluir_encabezado: bool = Query(True, description="Incluir las 19 líneas de encabezado del formato MBA"),
         user: Dict = Depends(verify_jwt_token),
         _: None = Depends(require_permission('mba3-consultas.facturas.view'))
     ):
         """
-        Exporta un pedido en formato plano (CSV o TXT) para subir en MBA.
+        Exporta un pedido en formato plano (.txt) para importar en MBA.
         
         **HU-08**: Permite a usuarios de El Rayo descargar el pedido en archivo plano
         para subirlo en el sistema MBA.
         
-        ⚠️ **NOTA IMPORTANTE**: Este es un formato temporal. Cuando se proporcione 
-        el formato exacto requerido por MBA, este endpoint debe ser actualizado.
+        ## Formato de archivo
         
-        **Formato temporal:**
-        - CSV: Separado por comas, con encabezado
-        - TXT: Separado por pipes (|), sin encabezado
+        Genera un archivo .txt compatible con el formato de importación de 
+        **Pedidos de Clientes** de MBA (ENTERPRISE SOFTWARE SOLUTIONS):
         
-        **Columnas incluidas:**
-        - Código Producto
-        - Descripción
-        - Cantidad Total
-        - Costo Unitario
-        - Marca
+        - **35 columnas** separadas por TAB
+        - **19 líneas de encabezado** (se eliminan automáticamente al importar en MBA)
+        - Una línea por cada combinación producto-tienda (o consolidado por producto)
+        
+        ## Parámetros de configuración
+        
+        Los siguientes campos deben configurarse según los datos del cliente en MBA:
+        
+        | Parámetro | Ejemplo | Descripción |
+        |-----------|---------|-------------|
+        | codigo_cliente | CLI0495 | Código del cliente en MBA |
+        | codigo_subcliente | GO05 | Subcategoría del cliente (opcional) |
+        | moneda | US | Código de moneda (US, DOP, etc.) |
+        | bodega | BPT | Código de bodega en MBA |
+        | vendedor | JPC | Código del vendedor |
+        
+        ## Modos de exportación
+        
+        - **consolidado=False** (predeterminado): Genera una línea por cada tienda/sucursal.
+          Útil cuando el pedido tiene distribución por tiendas.
+        - **consolidado=True**: Consolida las cantidades y genera una línea por producto.
+          Útil cuando no se necesita distinguir por tienda.
+        
+        ## Ejemplo de línea generada
+        
+        ```
+        91	3	CLI0495	GO05	29/10/2025	31/10/2025	US	BPT	JPC			CQ287341						TRUE	FALSE	PRI	R469.911.CCL	6	FALSE	6.16	TRUE								0	FALSE	91
+        ```
         
         Returns:
-            Archivo plano descargable (CSV o TXT)
+            Archivo .txt descargable en formato MBA
         """
         try:
-            from src.database.services.pedido_proveedor_service import PedidoProveedorService
+            from src.database.services.mba_pedido_exporter import MBAPedidoExporter, MBAExportConfig
             from src.database.repositories.pedido_repository import PedidoRepository
             from src.database.connection import get_db_connection_context
             import uuid
-            
-            if formato.lower() not in ["csv", "txt"]:
-                raise HTTPException(
-                    status_code=400,
-                    detail="Formato no válido. Use 'csv' o 'txt'"
-                )
             
             # Determinar si es UUID o numero_pedido
             with get_db_connection_context() as conn:
                 repo = PedidoRepository(conn)
                 
-                # Intentar determinar si es UUID o numero_pedido
                 try:
                     # Si es un UUID válido, intentar obtener por pedido_id
                     uuid.UUID(pedido_id)
@@ -122,27 +142,45 @@ def register_exportacion_endpoints(app: FastAPI):
                     if not pedido:
                         raise ValueError(f"Pedido no encontrado: {pedido_id}")
                     pedido_id_real = pedido["cabecera"]["pedido_id"]
-                    numero_pedido = pedido_id  # El parámetro ya es el numero_pedido
+                    numero_pedido = pedido_id
             
-            service = PedidoProveedorService()
-            file_bytes = service.exportar_pedido_plano_mba(pedido_id_real, formato)
+            # Configurar exportación
+            config = MBAExportConfig(
+                codigo_cliente=codigo_cliente,
+                codigo_subcliente=codigo_subcliente,
+                moneda=moneda,
+                bodega=bodega,
+                vendedor=vendedor,
+                numero_pedido_temporal=numero_pedido_mba,
+            )
             
-            # Determinar media type y extensión
-            if formato.lower() == "csv":
-                media_type = "text/csv; charset=utf-8"
-                extension = "csv"
+            # Exportar según el modo seleccionado
+            exporter = MBAPedidoExporter()
+            
+            if consolidado:
+                file_bytes = exporter.exportar_pedido_formato_mba_consolidado(
+                    pedido_id=pedido_id_real,
+                    config=config,
+                    incluir_encabezado=incluir_encabezado
+                )
             else:
-                media_type = "text/plain; charset=utf-8"
-                extension = "txt"
+                file_bytes = exporter.exportar_pedido_formato_mba(
+                    pedido_id=pedido_id_real,
+                    config=config,
+                    incluir_encabezado=incluir_encabezado
+                )
             
             # Limpiar número de pedido para nombre de archivo
             numero_pedido_limpio = numero_pedido.replace(" ", "_").replace("-", "_").replace("/", "_")
+            filename = f"pedido_mba_{numero_pedido_limpio}_{datetime.now().strftime('%Y%m%d')}.txt"
+            
+            logger.info(f"✅ Pedido {numero_pedido} exportado a formato MBA: {filename}")
             
             return Response(
                 content=file_bytes,
-                media_type=media_type,
+                media_type="text/plain; charset=utf-8",
                 headers={
-                    "Content-Disposition": f'attachment; filename="pedido_mba_{numero_pedido_limpio}_{datetime.now().strftime("%Y%m%d")}.{extension}"'
+                    "Content-Disposition": f'attachment; filename="{filename}"'
                 }
             )
             

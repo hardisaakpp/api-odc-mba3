@@ -65,8 +65,10 @@ class RedistribucionValidator:
                         f"(tienda {distribucion['tienda_id']}: {cantidad_asignada}). Máximo permitido: 1,000,000"
                     )
         
-        # Validación 2: La suma por producto DEBE SER IGUAL a cantidad confirmada y debe ser entero
-        # Esta es la "verdad única": el total confirmado es lo que EL RAYO ajustó manualmente
+        # Validación 2: Validar que la suma total sea un entero (pero NO forzar que sea igual a cantidad confirmada)
+        # ⭐ MODIFICADO: Las bodegas y tiendas son independientes. El usuario puede modificar
+        # las cantidades en bodega y tiendas libremente sin que una afecte a la otra.
+        # Solo validamos que la suma sea un entero, pero no requerimos que coincida con cantidad confirmada.
         for producto in productos_redistribucion:
             pedido_detalle_id = producto["pedido_detalle_id"]
             cantidad_asignada_total = sum(
@@ -83,24 +85,10 @@ class RedistribucionValidator:
                     f"(suma actual: {cantidad_asignada_total})"
                 )
             
-            # ⭐ NUEVO: Validar que la suma sea EXACTAMENTE igual al total confirmado
-            # El total confirmado es la "verdad única" modificada por EL RAYO
-            if cantidad_asignada_total != cantidad_confirmada_total:
-                diferencia = abs(cantidad_asignada_total - cantidad_confirmada_total)
-                if cantidad_asignada_total > cantidad_confirmada_total:
-                    errores.append(
-                        f"Producto {pedido_detalle_id}: La suma de cantidades asignadas ({cantidad_asignada_total}) "
-                        f"excede el total confirmado ({cantidad_confirmada_total}) "
-                        f"por {diferencia} unidades. La suma debe ser EXACTAMENTE igual al total confirmado."
-                    )
-                else:
-                    errores.append(
-                        f"Producto {pedido_detalle_id}: La suma de cantidades asignadas ({cantidad_asignada_total}) "
-                        f"es menor al total confirmado ({cantidad_confirmada_total}) "
-                        f"por {diferencia} unidades. La suma debe ser EXACTAMENTE igual al total confirmado."
-                    )
+            # ⭐ ELIMINADO: Ya no se valida que la suma sea igual a cantidad confirmada
+            # Las bodegas y tiendas son independientes y pueden modificarse libremente
             
-            # Validar que la cantidad confirmada sea válida
+            # Validar que la cantidad confirmada sea válida (solo para referencia, no afecta la validación)
             if cantidad_confirmada_total < 0:
                 errores.append(
                     f"Producto {pedido_detalle_id}: La cantidad confirmada no puede ser negativa "
