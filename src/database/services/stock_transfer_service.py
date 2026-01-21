@@ -6,6 +6,7 @@ FASE 5: Generación de Solicitudes de Transferencia desde distribución confirma
 import logging
 from typing import Dict, Any, List, Optional
 from datetime import datetime
+from collections import defaultdict
 
 from ..connection import get_db_connection_context
 from ..repositories.pedido_repository import PedidoRepository
@@ -61,6 +62,126 @@ class StockTransferService:
         
         # Si no coincide con ningún patrón, retornar None
         return None
+    
+    def _validate_stock_before_st(
+        self, 
+        stock_transfers_json: List[Dict[str, Any]], 
+        source_warehouse: str
+    ) -> None:
+        """
+        Valida que haya stock suficiente en la bodega origen antes de crear las STs.
+        
+        ⭐ IMPORTANTE: Esta validación previene el error "Quantity falls into negative inventory"
+        que ocurre cuando SAP evalúa el stock disponible considerando las transacciones previas
+        en el mismo proceso. Al validar ANTES de crear cualquier ST, evitamos crear STs parciales
+        y estados inconsistentes.
+        
+        Args:
+            stock_transfers_json: Lista de STs a crear (formato SAP Service Layer)
+            source_warehouse: Código de bodega origen (ej: "RL-CD", "OUT-CD", "RG-CD")
+        
+        Raises:
+            ValueError: Si no hay stock suficiente para algún producto.
+                El mensaje incluye detalles de qué productos faltan y cuánto stock falta.
+        """
+        # 1. Agrupar cantidades requeridas por ItemCode
+        total_required = defaultdict(float)
+        
+        for st in stock_transfers_json:
+            lines = st.get("StockTransferLines", [])
+            for line in lines:
+                item_code = line.get("ItemCode")
+                quantity = float(line.get("Quantity", 0))
+                if item_code and quantity > 0:
+                    total_required[item_code] += quantity
+        
+        if not total_required:
+            logger.warning("⚠️ No hay productos para validar stock")
+            return
+        
+        logger.info(
+            f"🔍 Validando stock total en {source_warehouse} para {len(total_required)} producto(s)..."
+        )
+        
+        # 2. Consultar stock disponible en SAP para cada producto
+        productos_insuficientes = []
+        
+        for item_code, required_qty in total_required.items():
+            stock_info = self.sap_client.get_stock_by_warehouse(item_code, source_warehouse)
+            
+            if stock_info is None:
+                # Error al consultar - registrar pero no fallar (podría ser temporal)
+                logger.warning(
+                    f"⚠️ No se pudo consultar stock de {item_code} en {source_warehouse}. "
+                    f"Se continuará con la creación de STs (validación omitida para este producto)."
+                )
+                continue
+            
+            available = stock_info.get("InStock", 0.0)
+            uom_code = stock_info.get("UomCode")
+            
+            # ⭐ VALIDACIÓN CRÍTICA: Si UomCode es NULL, SAP solo conoce unidad base
+            # La conversión (ej: X12) existe solo en lógica externa, por lo que debemos
+            # validar que el stock en unidades base alcance para la cantidad ya convertida
+            if uom_code is None:
+                logger.debug(
+                    f"ℹ️ {item_code}: UomCode=NULL en SAP. "
+                    f"Validando stock en unidades base (InStock={available}) vs cantidad convertida ({required_qty})"
+                )
+                # Si UomCode es NULL, el stock está en unidades base y debemos comparar
+                # directamente con la cantidad requerida (que ya está convertida a unidades SAP)
+                if available < required_qty:
+                    productos_insuficientes.append({
+                        "item_code": item_code,
+                        "disponible": available,
+                        "requerido": required_qty,
+                        "faltante": required_qty - available,
+                        "uom_code": None,
+                        "nota": "UomCode=NULL: validación en unidades base"
+                    })
+                    logger.error(
+                        f"❌ Stock insuficiente: {item_code} en {source_warehouse}. "
+                        f"Disponible (unidades base): {available}, Requerido (convertido): {required_qty}, "
+                        f"Faltante: {required_qty - available}"
+                    )
+            else:
+                # UomCode existe, validación normal
+                if available < required_qty:
+                    productos_insuficientes.append({
+                        "item_code": item_code,
+                        "disponible": available,
+                        "requerido": required_qty,
+                        "faltante": required_qty - available,
+                        "uom_code": uom_code
+                    })
+                    logger.error(
+                        f"❌ Stock insuficiente: {item_code} en {source_warehouse}. "
+                        f"Disponible: {available}, Requerido: {required_qty}, Faltante: {required_qty - available} "
+                        f"(UomCode={uom_code})"
+                    )
+        
+        # 3. Si hay productos con stock insuficiente, lanzar excepción
+        if productos_insuficientes:
+            error_msg = (
+                f"Stock insuficiente en {source_warehouse} para crear Solicitudes de Transferencia:\n"
+            )
+            for prod in productos_insuficientes:
+                uom_note = ""
+                if prod.get("uom_code") is None:
+                    uom_note = " (UomCode=NULL: validación en unidades base)"
+                elif prod.get("uom_code"):
+                    uom_note = f" (UomCode={prod['uom_code']})"
+                
+                error_msg += (
+                    f"  - {prod['item_code']}: Disponible={prod['disponible']}, "
+                    f"Requerido={prod['requerido']}, Faltante={prod['faltante']}{uom_note}\n"
+                )
+            
+            raise ValueError(error_msg.strip())
+        
+        logger.info(
+            f"✅ Stock suficiente validado: todos los productos tienen disponibilidad en {source_warehouse}"
+        )
     
     def crear_solicitudes_transferencia_desde_pedido(
         self,
@@ -373,6 +494,21 @@ class StockTransferService:
                     usuario_id=usuario_id,
                     pedido_id=pedido_id
                 )
+                
+                # ⭐ VALIDACIÓN PREVIA: Validar stock antes de crear STs
+                # Esto previene el error "Quantity falls into negative inventory" que ocurre
+                # cuando SAP evalúa el stock disponible considerando transacciones previas
+                # en el mismo proceso. Al validar ANTES, evitamos crear STs parciales.
+                try:
+                    self._validate_stock_before_st(stock_transfers_json, bodega_origen)
+                except ValueError as e:
+                    # Stock insuficiente - no crear ninguna ST
+                    error_msg = str(e)
+                    logger.error(f"❌ {error_msg}")
+                    result["error"] = error_msg
+                    result["success"] = False
+                    # Retornar resultado con error claro
+                    return result
                 
                 # 7. Crear cada Stock Transfer Order en SAP
                 for idx, stock_transfer_json in enumerate(stock_transfers_json):

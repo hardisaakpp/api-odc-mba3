@@ -650,6 +650,162 @@ class SAPServiceLayerClient:
                 "error": f"Error inesperado: {str(e)}"
             }
     
+    def get_stock_by_warehouse(
+        self, 
+        item_code: str, 
+        warehouse_code: str
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Consulta el stock disponible (InStock) y UomCode de un artículo en una bodega específica.
+        
+        ⭐ CORRECCIÓN: Usa navegación desde Items ya que el endpoint independiente no existe.
+        SAP no permite filtrar dentro de la navegación, por lo que se filtra en el cliente.
+        
+        Usa el endpoint de SAP Service Layer:
+        GET /Items('ITEM_CODE')/ItemWarehouseInfoCollection
+        
+        Args:
+            item_code: Código del artículo en SAP (ej: "R5000.1012-3")
+            warehouse_code: Código de la bodega (ej: "RL-CD", "OUT-CD", "RG-CD")
+        
+        Returns:
+            Diccionario con información de stock:
+            {
+                "InStock": float,  # Stock disponible (descontando comprometido)
+                "UomCode": str o None,  # Código de unidad de medida (NULL si solo conoce unidad base)
+                "WarehouseCode": str,
+                "Locked": str o None,  # Estado de bloqueo (tYES/tNO)
+                "IsCommited": float  # Stock comprometido
+            }
+            O None si hay error.
+            Retorna {"InStock": 0.0, "UomCode": None} si no existe información de bodega.
+        """
+        if not self.enabled:
+            logger.debug("⏭️ Consulta de stock deshabilitada")
+            return None
+        
+        if not self._ensure_session():
+            logger.error("❌ No se pudo establecer sesión con SAP Service Layer")
+            return None
+        
+        try:
+            # Escapar caracteres especiales para OData
+            # SAP Service Layer requiere escapar comillas simples duplicándolas
+            item_code_escaped = item_code.replace("'", "''")
+            
+            # ⭐ CORRECCIÓN: Usar navegación desde Items (el endpoint independiente no existe)
+            # Endpoint correcto: /Items('ITEM_CODE')/ItemWarehouseInfoCollection
+            # Nota: SAP no permite filtrar dentro de la navegación, por lo que filtramos en el cliente
+            url = (
+                f"{self.base_url}/Items('{item_code_escaped}')/ItemWarehouseInfoCollection"
+            )
+            
+            headers = {
+                "Content-Type": "application/json",
+                "Cookie": f"B1SESSION={self.session_id}"
+            }
+            
+            logger.debug(f"🔍 Consultando stock de {item_code} en {warehouse_code}...")
+            
+            # Usar el sistema de fallback TLS existente
+            if self.working_session:
+                response = self.working_session.get(url, headers=headers, timeout=self.timeout)
+            else:
+                response, _ = self._try_request_with_fallback("GET", url, headers=headers)
+                if response is None:
+                    logger.error("❌ No se pudo consultar stock en SAP")
+                    return None
+            
+            if response.status_code == 200:
+                data = response.json()
+                # ⭐ AJUSTE: Service Layer SIEMPRE retorna objeto con "value" (array)
+                warehouses = data.get("value", [])
+                
+                if not warehouses:
+                    logger.warning(
+                        f"⚠️ No se encontró información de bodega para {item_code}. "
+                        f"Retornando stock 0.0"
+                    )
+                    return {
+                        "InStock": 0.0,
+                        "UomCode": None,
+                        "WarehouseCode": warehouse_code,
+                        "Locked": None,
+                        "IsCommited": 0.0
+                    }
+                
+                # ⭐ Filtrar en el cliente por WarehouseCode (SAP no permite filtro en navegación)
+                warehouse_info = None
+                for wh in warehouses:
+                    if wh.get("WarehouseCode", "").upper() == warehouse_code.upper():
+                        warehouse_info = wh
+                        break
+                
+                if not warehouse_info:
+                    logger.warning(
+                        f"⚠️ No se encontró información de bodega {warehouse_code} para {item_code}. "
+                        f"Retornando stock 0.0"
+                    )
+                    return {
+                        "InStock": 0.0,
+                        "UomCode": None,
+                        "WarehouseCode": warehouse_code,
+                        "Locked": None,
+                        "IsCommited": 0.0
+                    }
+                
+                # ⭐ AJUSTE: Calcular stock disponible descontando comprometido
+                in_stock_raw = float(warehouse_info.get("InStock", 0))
+                is_committed = float(warehouse_info.get("IsCommited", 0))
+                in_stock = in_stock_raw - is_committed
+                
+                uom_code = warehouse_info.get("UomCode")  # Puede ser None
+                locked = warehouse_info.get("Locked")  # tYES/tNO
+                
+                # ⭐ VALIDACIÓN: Verificar si está bloqueado
+                if locked == "tYES":
+                    logger.warning(
+                        f"⚠️ {item_code} en {warehouse_code} está BLOQUEADO (Locked=tYES). "
+                        f"Stock disponible: {in_stock} (InStock={in_stock_raw}, Comprometido={is_committed})"
+                    )
+                
+                logger.debug(
+                    f"✅ Stock disponible: {item_code} en {warehouse_code} = {in_stock} "
+                    f"(InStock={in_stock_raw}, Comprometido={is_committed}, "
+                    f"UomCode={uom_code if uom_code else 'NULL'}, "
+                    f"Locked={locked if locked else 'NULL'})"
+                )
+                
+                return {
+                    "InStock": in_stock,  # Stock disponible (descontando comprometido)
+                    "UomCode": uom_code,
+                    "WarehouseCode": warehouse_code,
+                    "Locked": locked,
+                    "IsCommited": is_committed
+                }
+            else:
+                # Procesar error de SAP
+                error_msg = f"Error al consultar stock: {response.status_code}"
+                try:
+                    error_body = response.json()
+                    error_detail = error_body.get("error", {})
+                    if isinstance(error_detail.get("message"), dict):
+                        error_msg = error_detail.get("message", {}).get("value", error_msg)
+                    elif isinstance(error_detail.get("message"), str):
+                        error_msg = error_detail.get("message", error_msg)
+                except:
+                    error_msg = f"{error_msg} - {response.text[:200]}"
+                
+                logger.error(f"❌ {error_msg}")
+                return None
+                
+        except requests.exceptions.RequestException as e:
+            logger.error(f"❌ Error de conexión al consultar stock: {e}")
+            return None
+        except Exception as e:
+            logger.error(f"❌ Error inesperado al consultar stock de {item_code} en {warehouse_code}: {e}", exc_info=True)
+            return None
+    
     def logout(self) -> bool:
         """
         Cierra la sesión en SAP Service Layer.
