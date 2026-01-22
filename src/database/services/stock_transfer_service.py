@@ -28,6 +28,110 @@ class StockTransferService:
         """Inicializa el servicio."""
         self.sap_client = SAPServiceLayerClient()
     
+    def _validate_articulos_habilitados_en_bodega_origen(
+        self,
+        distribucion_por_tienda: Dict[str, List[Dict[str, Any]]],
+        bodega_origen: str
+    ) -> None:
+        """
+        Valida PREVENTIVAMENTE que todos los artículos estén habilitados en la bodega origen.
+        
+        Esta validación se hace ANTES de crear las ST para detectar problemas de datos maestros
+        de forma temprana y dar un mensaje claro al usuario.
+        
+        Args:
+            distribucion_por_tienda: Distribución agrupada por tienda
+            bodega_origen: Código de bodega origen (ej: "RL-CD", "OUT-CD", "RG-CD")
+            
+        Raises:
+            SAPDataMasterError: Si algún artículo no está habilitado en la bodega origen
+        """
+        # Recopilar todos los item_code_sap únicos
+        items_unicos = set()
+        for tienda_id, productos in distribucion_por_tienda.items():
+            for producto in productos:
+                item_code_sap = producto.get("item_code_sap")
+                if item_code_sap:
+                    items_unicos.add(item_code_sap)
+        
+        if not items_unicos:
+            logger.warning("⚠️ No hay artículos para validar habilitación en bodega origen")
+            return
+        
+        logger.info(
+            f"🔍 Validando que {len(items_unicos)} artículo(s) estén habilitados en bodega origen {bodega_origen}..."
+        )
+        
+        # Validar cada artículo
+        articulos_no_habilitados = []
+        
+        for item_code in items_unicos:
+            try:
+                # Intentar obtener stock - si lanza SAPDataMasterError, el artículo no está habilitado
+                stock_info = self.sap_client.get_stock_by_warehouse(item_code, bodega_origen)
+                
+                # Si stock_info es None, es un error de conexión (no debería pasar)
+                if stock_info is None:
+                    logger.warning(
+                        f"⚠️ No se pudo verificar habilitación de {item_code} en {bodega_origen}. "
+                        f"Se continuará con la validación."
+                    )
+                    continue
+                
+                # Si llegamos aquí, el artículo SÍ está habilitado (no lanzó excepción)
+                logger.debug(f"✅ {item_code} habilitado en {bodega_origen}")
+                
+            except SAPDataMasterError as e:
+                # El artículo NO está habilitado en la bodega origen
+                articulos_no_habilitados.append({
+                    "item_code": item_code,
+                    "error_type": e.error_type,
+                    "available_warehouses": e.available_warehouses
+                })
+                logger.warning(
+                    f"⚠️ {item_code} NO habilitado en bodega origen {bodega_origen}"
+                )
+        
+        # Si hay artículos no habilitados, lanzar error preventivo
+        if articulos_no_habilitados:
+            items_list = [a["item_code"] for a in articulos_no_habilitados]
+            
+            # Construir mensaje claro para el negocio
+            if len(articulos_no_habilitados) == 1:
+                primer_error = articulos_no_habilitados[0]
+                warehouses_str = ", ".join(primer_error["available_warehouses"]) if primer_error["available_warehouses"] else "NINGUNA"
+                mensaje = (
+                    f"El artículo {items_list[0]} no está habilitado en la bodega origen {bodega_origen} en SAP. "
+                    f"Bodegas donde SÍ está habilitado: {warehouses_str}. "
+                    f"Contacte a logística o maestros de artículos para habilitar el artículo en la bodega {bodega_origen}."
+                )
+            else:
+                mensaje = (
+                    f"{len(articulos_no_habilitados)} artículos no están habilitados en la bodega origen {bodega_origen} en SAP. "
+                    f"Artículos: {', '.join(items_list[:5])}"
+                    f"{' y ' + str(len(items_list) - 5) + ' más' if len(items_list) > 5 else ''}. "
+                    f"Contacte a logística o maestros de artículos para habilitar estos artículos en la bodega {bodega_origen}."
+                )
+            
+            logger.error(
+                f"❌ VALIDACIÓN PREVENTIVA: {len(articulos_no_habilitados)} artículo(s) no habilitados en bodega origen {bodega_origen}: "
+                f"{', '.join(items_list)}"
+            )
+            
+            # Lanzar excepción con el primer artículo
+            primer_error = articulos_no_habilitados[0]
+            raise SAPDataMasterError(
+                item_code=primer_error["item_code"],
+                warehouse_code=bodega_origen,
+                error_type=primer_error["error_type"],
+                message=mensaje,
+                available_warehouses=primer_error.get("available_warehouses", [])
+            )
+        
+        logger.info(
+            f"✅ Validación preventiva: todos los {len(items_unicos)} artículo(s) están habilitados en bodega origen {bodega_origen}"
+        )
+    
     @staticmethod
     def obtener_bodega_de_tienda(tienda_codigo: str) -> Optional[str]:
         """
@@ -551,6 +655,24 @@ class StockTransferService:
                     f"{len(distribucion_por_tienda)} tienda(s) desde bodega {bodega_origen}..."
                 )
                 
+                # ⭐ VALIDACIÓN PREVENTIVA #1: Verificar que artículos estén habilitados en bodega origen
+                # Esto se hace ANTES de crear los JSON y validar stock para detectar problemas temprano
+                try:
+                    self._validate_articulos_habilitados_en_bodega_origen(
+                        distribucion_por_tienda=distribucion_por_tienda,
+                        bodega_origen=bodega_origen
+                    )
+                except SAPDataMasterError as e:
+                    # ❌ ERROR DE DATOS MAESTROS: Artículos no habilitados en bodega origen
+                    error_msg = str(e)
+                    logger.error(f"❌ {error_msg}")
+                    result["error"] = error_msg
+                    result["success"] = False
+                    result["error_type"] = "datos_maestros"  # Flag para identificar tipo de error
+                    result["error_code"] = e.error_code
+                    # Retornar resultado con error claro
+                    return result
+                
                 # 6. Convertir a formato SAP usando mapper
                 stock_transfers_json = SAPStockTransferMapper.to_sap_stock_transfer(
                     pedido_data=pedido_cabecera,
@@ -561,7 +683,7 @@ class StockTransferService:
                     pedido_id=pedido_id
                 )
                 
-                # ⭐ VALIDACIÓN PREVIA: Validar stock antes de crear STs
+                # ⭐ VALIDACIÓN PREVIA #2: Validar stock antes de crear STs
                 # Esto previene el error "Quantity falls into negative inventory" que ocurre
                 # cuando SAP evalúa el stock disponible considerando transacciones previas
                 # en el mismo proceso. Al validar ANTES, evitamos crear STs parciales.
