@@ -32,3 +32,6 @@ celery>=5.3.4  # Sistema de colas de tareas distribuidas
 redis>=5.0.1  # Broker y backend para Celery
 flower>=2.0.1  # Dashboard de monitoreo para Celery (opcional)
 
+# Dependencias para Fuzzy Matching (sistema híbrido de homologaciones)
+rapidfuzz>=3.0.0  # Librería rápida para fuzzy string matching
+

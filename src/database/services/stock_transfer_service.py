@@ -16,6 +16,7 @@ from ..repositories.pedido_sap_procesamiento_repository import PedidoSAPProcesam
 from ..clients.sap_service_layer_client import SAPServiceLayerClient
 from ..mappers.sap_stock_transfer_mapper import SAPStockTransferMapper
 from ..services.bodega_sap_service import BodegaSAPService
+from src.exceptions import SAPDataMasterError
 
 logger = logging.getLogger(__name__)
 
@@ -105,17 +106,37 @@ class StockTransferService:
         
         # 2. Consultar stock disponible en SAP para cada producto
         productos_insuficientes = []
+        productos_error_datos_maestros = []  # Errores de configuración, NO stock insuficiente
         
         for item_code, required_qty in total_required.items():
-            stock_info = self.sap_client.get_stock_by_warehouse(item_code, source_warehouse)
+            try:
+                stock_info = self.sap_client.get_stock_by_warehouse(item_code, source_warehouse)
+            except SAPDataMasterError as e:
+                # ❌ CORTAR FLUJO: Error de datos maestros - NO continuar
+                productos_error_datos_maestros.append({
+                    "item_code": e.item_code,
+                    "error_type": e.error_type,
+                    "available_warehouses": e.available_warehouses,
+                    "required_warehouse": e.warehouse_code
+                })
+                continue  # No agregar a productos_insuficientes, es otro tipo de error
             
             if stock_info is None:
-                # Error al consultar - registrar pero no fallar (podría ser temporal)
-                logger.warning(
-                    f"⚠️ No se pudo consultar stock de {item_code} en {source_warehouse}. "
-                    f"Se continuará con la creación de STs (validación omitida para este producto)."
+                # Error al consultar - esto NO debería pasar si SAPDataMasterError se lanza correctamente
+                # Si llegamos aquí, es un error de conexión o respuesta inesperada
+                # Pero para el negocio, el mensaje debe ser claro y accionable
+                logger.error(
+                    f"❌ No se pudo consultar stock de {item_code} en {source_warehouse}. "
+                    f"Error de conexión o respuesta inesperada de SAP. "
+                    f"NO se puede validar stock - ABORTANDO validación."
                 )
-                continue
+                # ❌ HARD STOP: Sin información de stock, NO podemos crear STs
+                # Mensaje claro para el negocio
+                raise ValueError(
+                    f"El artículo {item_code} no está asociado a la bodega {source_warehouse} en SAP, "
+                    f"o hay un problema de conexión con SAP. "
+                    f"Contacte a logística o maestros de artículos para verificar la configuración del artículo en SAP."
+                )
             
             available = stock_info.get("InStock", 0.0)
             uom_code = stock_info.get("UomCode")
@@ -140,7 +161,7 @@ class StockTransferService:
                         "nota": "UomCode=NULL: validación en unidades base"
                     })
                     logger.error(
-                        f"❌ Stock insuficiente: {item_code} en {source_warehouse}. "
+                        f"❌ Stock insuficiente REAL: {item_code} en {source_warehouse}. "
                         f"Disponible (unidades base): {available}, Requerido (convertido): {required_qty}, "
                         f"Faltante: {required_qty - available}"
                     )
@@ -155,16 +176,52 @@ class StockTransferService:
                         "uom_code": uom_code
                     })
                     logger.error(
-                        f"❌ Stock insuficiente: {item_code} en {source_warehouse}. "
+                        f"❌ Stock insuficiente REAL: {item_code} en {source_warehouse}. "
                         f"Disponible: {available}, Requerido: {required_qty}, Faltante: {required_qty - available} "
                         f"(UomCode={uom_code})"
                     )
         
-        # 3. Si hay productos con stock insuficiente, lanzar excepción
-        if productos_insuficientes:
-            error_msg = (
-                f"Stock insuficiente en {source_warehouse} para crear Solicitudes de Transferencia:\n"
+        # 3. Manejar errores: CORTAR FLUJO inmediatamente si hay errores de datos maestros
+        if productos_error_datos_maestros:
+            # ❌ CORTAR FLUJO: Errores de datos maestros - lanzar excepción de dominio
+            items_list = [p['item_code'] for p in productos_error_datos_maestros]
+            
+            # ❌ LOG ÚNICO AGRUPADO: No repetir el mismo error 9 veces
+            logger.error(
+                f"❌ ERRORES DE DATOS MAESTROS: {len(productos_error_datos_maestros)} artículo(s) "
+                f"sin configuración de bodega {source_warehouse} en SAP. "
+                f"Artículos: {', '.join(items_list)}. "
+                f"NO se puede validar stock - ABORTANDO validación."
             )
+            
+            # Lanzar excepción con el primer artículo (todos tienen el mismo problema)
+            primer_error = productos_error_datos_maestros[0]
+            
+            # Mensaje claro para el negocio
+            if len(productos_error_datos_maestros) == 1:
+                mensaje_negocio = (
+                    f"El artículo {items_list[0]} no está asociado a la bodega {source_warehouse} en SAP. "
+                    f"Contacte a logística o maestros de artículos para verificar la configuración del artículo."
+                )
+            else:
+                mensaje_negocio = (
+                    f"{len(productos_error_datos_maestros)} artículos no están asociados a la bodega {source_warehouse} en SAP. "
+                    f"Artículos: {', '.join(items_list[:5])}"
+                    f"{' y ' + str(len(items_list) - 5) + ' más' if len(items_list) > 5 else ''}. "
+                    f"Contacte a logística o maestros de artículos para verificar la configuración de estos artículos."
+                )
+            
+            raise SAPDataMasterError(
+                item_code=primer_error['item_code'],
+                warehouse_code=source_warehouse,
+                error_type=primer_error['error_type'],
+                message=mensaje_negocio,
+                available_warehouses=primer_error.get('available_warehouses', [])
+            )
+        
+        # 4. Stock insuficiente real (solo si no hay errores de datos maestros)
+        if productos_insuficientes:
+            error_msg = f"Stock insuficiente en {source_warehouse} para crear Solicitudes de Transferencia:\n"
             for prod in productos_insuficientes:
                 uom_note = ""
                 if prod.get("uom_code") is None:
@@ -179,9 +236,12 @@ class StockTransferService:
             
             raise ValueError(error_msg.strip())
         
-        logger.info(
-            f"✅ Stock suficiente validado: todos los productos tienen disponibilidad en {source_warehouse}"
-        )
+        # ✅ Solo loguear éxito si REALMENTE se validó TODO correctamente
+        # (no se lanzó ninguna excepción, no hay errores de datos maestros, y todos los productos tienen stock)
+        if not productos_error_datos_maestros and not productos_insuficientes:
+            logger.info(
+                f"✅ Stock suficiente validado: todos los {len(total_required)} producto(s) tienen disponibilidad en {source_warehouse}"
+            )
     
     def crear_solicitudes_transferencia_desde_pedido(
         self,
@@ -507,12 +567,23 @@ class StockTransferService:
                 # en el mismo proceso. Al validar ANTES, evitamos crear STs parciales.
                 try:
                     self._validate_stock_before_st(stock_transfers_json, bodega_origen)
-                except ValueError as e:
-                    # Stock insuficiente - no crear ninguna ST
+                except SAPDataMasterError as e:
+                    # ❌ ERROR DE DATOS MAESTROS: Cortar flujo inmediatamente
                     error_msg = str(e)
                     logger.error(f"❌ {error_msg}")
                     result["error"] = error_msg
                     result["success"] = False
+                    result["error_type"] = "datos_maestros"  # Flag para identificar tipo de error
+                    result["error_code"] = e.error_code
+                    # Retornar resultado con error claro
+                    return result
+                except ValueError as e:
+                    # Stock insuficiente REAL - no crear ninguna ST
+                    error_msg = str(e)
+                    logger.error(f"❌ {error_msg}")
+                    result["error"] = error_msg
+                    result["success"] = False
+                    result["error_type"] = "stock_insuficiente"  # Flag para identificar tipo de error
                     # Retornar resultado con error claro
                     return result
                 

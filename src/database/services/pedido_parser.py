@@ -336,7 +336,7 @@ class PedidoParser:
             return False
         
         # Códigos válidos deben tener al menos una letra o ser códigos conocidos
-        # Formato esperado: "ROL01", "RL-CD", "OUT-CD", "REG-CD", etc.
+        # Formato esperado: "ROL01", "RL-CD", "OUT-CD", "RG-CD", etc.
         tiene_letras = bool(re.search(r'[A-Z]', codigo_clean))
         
         return tiene_letras
@@ -352,13 +352,13 @@ class PedidoParser:
           - Columnas N+: Nombres de tiendas individuales
         - Fila 2 (header códigos): Códigos de columnas
           - Columnas A-J: (generalmente vacías o repetidas)
-          - Columnas K-M: Códigos de bodegas (RL-CD, OUT-CD, REG-CD)
+          - Columnas K-M: Códigos de bodegas (RL-CD, OUT-CD, RG-CD)
           - Columnas N+: Códigos de tiendas individuales
         - Fila 3+: Datos de productos
         
         Las bodegas centrales NO se incluyen en SUBTOTAL.
         Las tiendas individuales SÍ se incluyen en SUBTOTAL.
-        TOTAL = SUBTOTAL + RL-CD + OUT-CD + REG-CD
+        TOTAL = SUBTOTAL + RL-CD + OUT-CD + RG-CD
         """
         resultado = {
             "resumen": {
@@ -531,13 +531,14 @@ class PedidoParser:
             bodegas_esperadas = {
                 'RL-CD': 'BODEGA ROLAND',
                 'OUT-CD': 'BODEGA DESCUENTON', 
-                'REG-CD': 'BODEGA REGIONS'
+                'RG-CD': 'BODEGA REGIONS'  # ⚠️ CORREGIDO: Código correcto es RG-CD, no REG-CD
             }
             
-            # Mapeo de variantes de códigos (ej: RG-CD -> REG-CD)
+            # Mapeo de variantes de códigos
+            # ⚠️ IMPORTANTE: RG-CD es el código correcto en SAP, NO debe convertirse a REG-CD
             variantes_bodegas = {
-                'RG-CD': 'REG-CD',  # Variante común en Excel
-                'REG-CD': 'REG-CD',
+                'RG-CD': 'RG-CD',  # Código correcto en SAP - NO cambiar
+                'REG-CD': 'RG-CD',  # Si Excel tiene REG-CD, convertir a RG-CD (código correcto)
                 'RL-CD': 'RL-CD',
                 'OUT-CD': 'OUT-CD'
             }

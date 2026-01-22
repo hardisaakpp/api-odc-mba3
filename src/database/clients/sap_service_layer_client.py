@@ -26,6 +26,7 @@ from src.config import (
     SAP_SERVICE_LAYER_TIMEOUT,
     SAP_SERVICE_LAYER_VERIFY_SSL
 )
+from src.exceptions import SAPDataMasterError
 
 logger = logging.getLogger(__name__)
 
@@ -718,41 +719,70 @@ class SAPServiceLayerClient:
             
             if response.status_code == 200:
                 data = response.json()
+                
                 # ⭐ AJUSTE: Service Layer SIEMPRE retorna objeto con "value" (array)
                 warehouses = data.get("value", [])
                 
+                # 🔍 LOGGING COMPACTO: Solo información esencial
+                bodegas_codes = [wh.get('WarehouseCode', 'N/A') for wh in warehouses] if warehouses else []
+                logger.info(
+                    f"🔍 {item_code} → ItemWarehouseInfoCollection: "
+                    f"{'VACÍO' if not warehouses else f'{len(warehouses)} bodega(s)'} | "
+                    f"WhsCodes: {bodegas_codes if bodegas_codes else 'NINGUNO'}"
+                )
+                
+                # 🔍 LOGGING DETALLADO: Solo en modo DEBUG
+                logger.debug(
+                    f"📦 RESPUESTA CRUDA SAP para {item_code}: URL={url}, "
+                    f"Keys={list(data.keys()) if isinstance(data, dict) else 'N/A'}, "
+                    f"Respuesta completa={data}"
+                )
+                
                 if not warehouses:
-                    logger.warning(
-                        f"⚠️ No se encontró información de bodega para {item_code}. "
-                        f"Retornando stock 0.0"
+                    # ❌ CORTAR FLUJO: Lanzar excepción de dominio en lugar de retornar stock 0.0
+                    # ❌ NO loguear aquí - se logueará una sola vez agrupado en el servicio
+                    raise SAPDataMasterError(
+                        item_code=item_code,
+                        warehouse_code=warehouse_code,
+                        error_type="no_warehouse_info",
+                        available_warehouses=[]
                     )
-                    return {
-                        "InStock": 0.0,
-                        "UomCode": None,
-                        "WarehouseCode": warehouse_code,
-                        "Locked": None,
-                        "IsCommited": 0.0
-                    }
                 
                 # ⭐ Filtrar en el cliente por WarehouseCode (SAP no permite filtro en navegación)
                 warehouse_info = None
+                bodegas_encontradas = []
                 for wh in warehouses:
-                    if wh.get("WarehouseCode", "").upper() == warehouse_code.upper():
+                    whs_code = wh.get("WarehouseCode", "")
+                    bodegas_encontradas.append(whs_code)
+                    if whs_code.upper() == warehouse_code.upper():
                         warehouse_info = wh
                         break
                 
+                # 🔍 LOGGING COMPACTO: Búsqueda de bodega específica
+                logger.info(
+                    f"🔍 {item_code} → Búsqueda {warehouse_code}: "
+                    f"{'ENCONTRADA' if warehouse_info else 'NO ENCONTRADA'} | "
+                    f"Disponibles: {bodegas_encontradas if bodegas_encontradas else 'NINGUNA'}"
+                )
+                
                 if not warehouse_info:
-                    logger.warning(
-                        f"⚠️ No se encontró información de bodega {warehouse_code} para {item_code}. "
-                        f"Retornando stock 0.0"
+                    # ❌ CORTAR FLUJO: Lanzar excepción de dominio en lugar de retornar stock 0.0
+                    # ❌ NO loguear aquí - se logueará una sola vez agrupado en el servicio
+                    raise SAPDataMasterError(
+                        item_code=item_code,
+                        warehouse_code=warehouse_code,
+                        error_type="warehouse_not_found",
+                        available_warehouses=bodegas_encontradas
                     )
-                    return {
-                        "InStock": 0.0,
-                        "UomCode": None,
-                        "WarehouseCode": warehouse_code,
-                        "Locked": None,
-                        "IsCommited": 0.0
-                    }
+                
+                # 🔍 LOGGING COMPACTO: Información de bodega encontrada
+                logger.info(
+                    f"✅ {item_code} en {warehouse_code}: "
+                    f"InStock={warehouse_info.get('InStock', 'N/A')}, "
+                    f"Comprometido={warehouse_info.get('IsCommited', 'N/A')}, "
+                    f"UomCode={warehouse_info.get('UomCode', 'NULL')}, "
+                    f"Locked={warehouse_info.get('Locked', 'NULL')}"
+                )
                 
                 # ⭐ AJUSTE: Calcular stock disponible descontando comprometido
                 in_stock_raw = float(warehouse_info.get("InStock", 0))
@@ -762,6 +792,12 @@ class SAPServiceLayerClient:
                 uom_code = warehouse_info.get("UomCode")  # Puede ser None
                 locked = warehouse_info.get("Locked")  # tYES/tNO
                 
+                # 🔍 DIAGNÓSTICO: Análisis de UomCode (solo si es NULL)
+                if uom_code is None:
+                    logger.warning(
+                        f"⚠️ {item_code}: UomCode=NULL - validación en unidades base"
+                    )
+                
                 # ⭐ VALIDACIÓN: Verificar si está bloqueado
                 if locked == "tYES":
                     logger.warning(
@@ -769,8 +805,8 @@ class SAPServiceLayerClient:
                         f"Stock disponible: {in_stock} (InStock={in_stock_raw}, Comprometido={is_committed})"
                     )
                 
-                logger.debug(
-                    f"✅ Stock disponible: {item_code} en {warehouse_code} = {in_stock} "
+                logger.info(
+                    f"✅ Stock disponible calculado: {item_code} en {warehouse_code} = {in_stock} "
                     f"(InStock={in_stock_raw}, Comprometido={is_committed}, "
                     f"UomCode={uom_code if uom_code else 'NULL'}, "
                     f"Locked={locked if locked else 'NULL'})"
@@ -784,19 +820,36 @@ class SAPServiceLayerClient:
                     "IsCommited": is_committed
                 }
             else:
+                # 🔍 LOGGING DIAGNÓSTICO: Error HTTP de SAP
+                logger.error(
+                    f"❌ ERROR HTTP de SAP al consultar stock de {item_code}:\n"
+                    f"   URL consultada: {url}\n"
+                    f"   Status Code: {response.status_code}\n"
+                    f"   Headers de respuesta: {dict(response.headers)}\n"
+                    f"   Texto de respuesta (primeros 500 chars): {response.text[:500]}"
+                )
+                
                 # Procesar error de SAP
                 error_msg = f"Error al consultar stock: {response.status_code}"
                 try:
                     error_body = response.json()
+                    logger.error(
+                        f"❌ RESPUESTA CRUDA DE ERROR de SAP (JSON):\n"
+                        f"   {error_body}"
+                    )
                     error_detail = error_body.get("error", {})
                     if isinstance(error_detail.get("message"), dict):
                         error_msg = error_detail.get("message", {}).get("value", error_msg)
                     elif isinstance(error_detail.get("message"), str):
                         error_msg = error_detail.get("message", error_msg)
-                except:
+                except Exception as json_error:
+                    logger.error(
+                        f"❌ No se pudo parsear respuesta de error como JSON: {json_error}\n"
+                        f"   Respuesta completa (primeros 1000 chars): {response.text[:1000]}"
+                    )
                     error_msg = f"{error_msg} - {response.text[:200]}"
                 
-                logger.error(f"❌ {error_msg}")
+                logger.error(f"❌ Error procesado: {error_msg}")
                 return None
                 
         except requests.exceptions.RequestException as e:

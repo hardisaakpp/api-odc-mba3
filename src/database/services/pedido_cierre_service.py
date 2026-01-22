@@ -182,18 +182,33 @@ class PedidoCierreService:
                 f"{resultado_st.get('total_tiendas', 0)} transferencias creadas"
             )
         else:
-            # ST fallaron → PENDIENTE_LOGISTICA
-            estado_nuevo = "PENDIENTE_LOGISTICA"
+            # ST fallaron - determinar estado según tipo de error
+            error_type = resultado_st.get("error_type")
             error_st = resultado_st.get("error", "Error desconocido")
             transferencias_errores = resultado_st.get("transferencias_errores", 0)
-            razon_estado = (
-                f"OC enviada pero ST fallaron: {transferencias_errores} error(es). "
-                f"Error: {error_st}"
-            )
-            logger.warning(
-                f"⚠️ Pedido {pedido_id}: OC OK pero ST fallaron. "
-                f"Estado: {estado_anterior} → {estado_nuevo}"
-            )
+            
+            if error_type == "datos_maestros":
+                # ❌ ERROR DE DATOS MAESTROS: No es problema de logística
+                estado_nuevo = "ERROR_DATOS_MAESTROS"
+                razon_estado = (
+                    f"OC enviada pero ST fallaron por errores de datos maestros en SAP. "
+                    f"Error: {error_st}"
+                )
+                logger.error(
+                    f"❌ Pedido {pedido_id}: OC OK pero ST fallaron por datos maestros. "
+                    f"Estado: {estado_anterior} → {estado_nuevo}"
+                )
+            else:
+                # Stock insuficiente u otro error → PENDIENTE_LOGISTICA
+                estado_nuevo = "PENDIENTE_LOGISTICA"
+                razon_estado = (
+                    f"OC enviada pero ST fallaron: {transferencias_errores} error(es). "
+                    f"Error: {error_st}"
+                )
+                logger.warning(
+                    f"⚠️ Pedido {pedido_id}: OC OK pero ST fallaron. "
+                    f"Estado: {estado_anterior} → {estado_nuevo}"
+                )
         
         # Actualizar estado del pedido
         actualizado = pedido_repo.update_estado(pedido_id, estado_nuevo)

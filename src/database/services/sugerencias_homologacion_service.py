@@ -4,9 +4,16 @@ Servicio para generar sugerencias de homologación entre productos MBA3 y SAP.
 
 import logging
 import re
-from typing import List, Dict, Any, Tuple
+from typing import List, Dict, Any, Tuple, Optional
 
 logger = logging.getLogger(__name__)
+
+try:
+    from rapidfuzz import fuzz
+    RAPIDFUZZ_AVAILABLE = True
+except ImportError:
+    RAPIDFUZZ_AVAILABLE = False
+    logger.warning("⚠️ rapidfuzz no está disponible. El fuzzy matching estará deshabilitado.")
 
 
 class SugerenciasHomologacionService:
@@ -28,9 +35,25 @@ class SugerenciasHomologacionService:
     MIN_SCORE_SUGERENCIA = 0.5  # Umbral mínimo de score
     SCORE_MAX_TEORICO = 2.7  # Score máximo teórico (1.0 + 0.7 + 0.6 + 0.4)
     
-    def __init__(self):
-        """Inicializa el servicio."""
-        pass
+    # Configuración para fuzzy matching híbrido
+    UMBRAL_SCORE_ALTA_CONFIANZA = 0.7  # Si el sistema actual encuentra score >= 0.7, no usar fuzzy
+    UMBRAL_FUZZY_MATCHING = 0.85  # Umbral mínimo para sugerencias fuzzy (muy alto para evitar falsos positivos)
+    MAX_SUGERENCIAS_FUZZY = 3  # Máximo de sugerencias fuzzy por producto
+    
+    def __init__(self, usar_fuzzy_matching: bool = True):
+        """
+        Inicializa el servicio.
+        
+        Args:
+            usar_fuzzy_matching: Si True, habilita fuzzy matching como respaldo.
+                                Requiere que rapidfuzz esté instalado.
+        """
+        self.usar_fuzzy_matching = usar_fuzzy_matching and RAPIDFUZZ_AVAILABLE
+        if usar_fuzzy_matching and not RAPIDFUZZ_AVAILABLE:
+            logger.warning(
+                "⚠️ Fuzzy matching solicitado pero rapidfuzz no está disponible. "
+                "Instale con: pip install rapidfuzz"
+            )
     
     def normalizar_codigo_avanzado(self, codigo: str) -> str:
         """
@@ -152,10 +175,76 @@ class SugerenciasHomologacionService:
         self,
         producto_mba3: Dict[str, Any],
         productos_sap: List[Dict[str, Any]],
+        productos_ya_homologados: set,
+        usar_fuzzy: Optional[bool] = None
+    ) -> List[Dict[str, Any]]:
+        """
+        Busca sugerencias de homologación para un producto MBA3 usando sistema híbrido.
+        
+        ESTRATEGIA HÍBRIDA:
+        1. PRIMERA PASADA: Sistema actual (scoring por reglas)
+           - Si encuentra sugerencias con score >= 0.7 → Retornar (alta confianza)
+        2. SEGUNDA PASADA: Fuzzy matching (solo si primera pasada no encontró buenos resultados)
+           - Si score actual < 0.7 o no hay sugerencias
+           - Aplicar fuzzy matching con umbral alto (0.85+)
+           - Combinar resultados y re-ordenar
+        
+        Args:
+            producto_mba3: Producto MBA3 para el cual buscar sugerencias
+            productos_sap: Lista completa de productos SAP
+            productos_ya_homologados: Set de códigos SAP ya homologados
+            usar_fuzzy: Si True, habilita fuzzy matching como respaldo.
+                       Si None, usa la configuración del servicio (self.usar_fuzzy_matching)
+            
+        Returns:
+            Lista de sugerencias ordenadas por score (máx 5)
+        """
+        # Determinar si usar fuzzy matching
+        usar_fuzzy_final = usar_fuzzy if usar_fuzzy is not None else self.usar_fuzzy_matching
+        
+        # 1. PRIMERA PASADA: Sistema actual (scoring por reglas)
+        sugerencias_actuales = self._buscar_sugerencias_sistema_actual(
+            producto_mba3, productos_sap, productos_ya_homologados
+        )
+        
+        # Si hay sugerencias con alta confianza, retornar directamente
+        if sugerencias_actuales and sugerencias_actuales[0]["score"] >= self.UMBRAL_SCORE_ALTA_CONFIANZA:
+            logger.debug(
+                f"✅ Sugerencias con alta confianza encontradas (score: {sugerencias_actuales[0]['score']:.2f}). "
+                f"Omitiendo fuzzy matching."
+            )
+            return sugerencias_actuales
+        
+        # 2. SEGUNDA PASADA: Fuzzy matching (solo si es necesario y está habilitado)
+        if usar_fuzzy_final and (not sugerencias_actuales or len(sugerencias_actuales) < 3):
+            logger.debug(
+                f"🔍 Aplicando fuzzy matching como respaldo. "
+                f"Sugerencias actuales: {len(sugerencias_actuales)}"
+            )
+            sugerencias_fuzzy = self._buscar_con_fuzzy_matching(
+                producto_mba3, productos_sap, productos_ya_homologados
+            )
+            
+            # Combinar y deduplicar sugerencias
+            sugerencias_combinadas = self._combinar_sugerencias(
+                sugerencias_actuales, sugerencias_fuzzy
+            )
+            
+            return sugerencias_combinadas[:self.MAX_SUGERENCIAS_POR_PRODUCTO]
+        
+        # Retornar sugerencias del sistema actual (sin fuzzy)
+        return sugerencias_actuales
+    
+    def _buscar_sugerencias_sistema_actual(
+        self,
+        producto_mba3: Dict[str, Any],
+        productos_sap: List[Dict[str, Any]],
         productos_ya_homologados: set
     ) -> List[Dict[str, Any]]:
         """
-        Busca sugerencias de homologación para un producto MBA3.
+        Busca sugerencias usando el sistema actual (scoring por reglas).
+        
+        Este es el método original, extraído para mantener la lógica separada.
         
         Args:
             producto_mba3: Producto MBA3 para el cual buscar sugerencias
@@ -163,7 +252,7 @@ class SugerenciasHomologacionService:
             productos_ya_homologados: Set de códigos SAP ya homologados
             
         Returns:
-            Lista de sugerencias ordenadas por score (máx 5)
+            Lista de sugerencias ordenadas por score
         """
         codigo_mba3 = producto_mba3.get("codigo_mba3", "")
         nombre_mba3 = producto_mba3.get("nombre_mba3", "")
@@ -265,6 +354,136 @@ class SugerenciasHomologacionService:
         # Ordenar por score descendente y limitar
         sugerencias.sort(key=lambda x: x["score"], reverse=True)
         return sugerencias[:self.MAX_SUGERENCIAS_POR_PRODUCTO]
+    
+    def _buscar_con_fuzzy_matching(
+        self,
+        producto_mba3: Dict[str, Any],
+        productos_sap: List[Dict[str, Any]],
+        productos_ya_homologados: set
+    ) -> List[Dict[str, Any]]:
+        """
+        Busca sugerencias usando fuzzy matching como respaldo.
+        
+        Solo se ejecuta si el sistema actual no encontró buenas coincidencias.
+        Usa umbral alto (0.85+) para evitar falsos positivos.
+        
+        Args:
+            producto_mba3: Producto MBA3 para el cual buscar sugerencias
+            productos_sap: Lista completa de productos SAP
+            productos_ya_homologados: Set de códigos SAP ya homologados
+            
+        Returns:
+            Lista de sugerencias fuzzy ordenadas por score (máx 3)
+        """
+        if not RAPIDFUZZ_AVAILABLE:
+            return []
+        
+        codigo_mba3 = producto_mba3.get("codigo_mba3", "")
+        nombre_mba3 = producto_mba3.get("nombre_mba3", "")
+        
+        if not codigo_mba3:
+            return []
+        
+        sugerencias_fuzzy = []
+        
+        for producto_sap in productos_sap:
+            codigo_sap = producto_sap.get("item_code", "")
+            nombre_sap = producto_sap.get("item_name", "")
+            active = producto_sap.get("active", True)
+            
+            # REGLA: No sugerir productos SAP inactivos
+            if not active:
+                continue
+            
+            # REGLA: No sugerir productos ya homologados
+            if codigo_sap in productos_ya_homologados:
+                continue
+            
+            if not codigo_sap:
+                continue
+            
+            # Fuzzy matching en código (prioritario)
+            ratio_codigo = fuzz.ratio(codigo_mba3.upper(), codigo_sap.upper())
+            partial_ratio_codigo = fuzz.partial_ratio(codigo_mba3.upper(), codigo_sap.upper())
+            token_sort_ratio = fuzz.token_sort_ratio(codigo_mba3.upper(), codigo_sap.upper())
+            
+            # Fuzzy matching en nombre (si existe)
+            ratio_nombre = 0.0
+            if nombre_mba3 and nombre_sap:
+                ratio_nombre = fuzz.ratio(nombre_mba3.upper(), nombre_sap.upper())
+            
+            # Score combinado (priorizar código sobre nombre)
+            # Usar el máximo de los ratios de código para capturar diferentes tipos de similitud
+            score_codigo = max(ratio_codigo, partial_ratio_codigo, token_sort_ratio) / 100.0
+            score_nombre = ratio_nombre / 100.0
+            
+            # Score final: 70% código, 30% nombre
+            score_fuzzy = (score_codigo * 0.7) + (score_nombre * 0.3)
+            
+            # Solo incluir si supera umbral alto (0.85) para evitar falsos positivos
+            if score_fuzzy >= self.UMBRAL_FUZZY_MATCHING:
+                motivos = []
+                if ratio_codigo >= 85:
+                    motivos.append(f"Similitud de código: {ratio_codigo:.0f}%")
+                if partial_ratio_codigo >= 85 and partial_ratio_codigo != ratio_codigo:
+                    motivos.append(f"Similitud parcial: {partial_ratio_codigo:.0f}%")
+                if ratio_nombre >= 70:
+                    motivos.append(f"Similitud de nombre: {ratio_nombre:.0f}%")
+                
+                # Si no hay motivos específicos, usar genérico
+                if not motivos:
+                    motivos.append(f"Similitud fuzzy: {score_fuzzy*100:.0f}%")
+                
+                sugerencias_fuzzy.append({
+                    "codigo_sap": codigo_sap,
+                    "nombre_sap": nombre_sap,
+                    "pack_sap": producto_sap.get("pack", ""),
+                    "score": score_fuzzy,  # Ya está en rango 0-1
+                    "score_original": round(score_fuzzy, 2),
+                    "motivos": motivos
+                })
+        
+        # Ordenar por score descendente y limitar
+        sugerencias_fuzzy.sort(key=lambda x: x["score"], reverse=True)
+        return sugerencias_fuzzy[:self.MAX_SUGERENCIAS_FUZZY]
+    
+    def _combinar_sugerencias(
+        self,
+        sugerencias_actuales: List[Dict[str, Any]],
+        sugerencias_fuzzy: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        """
+        Combina sugerencias del sistema actual y fuzzy matching, deduplicando.
+        
+        Args:
+            sugerencias_actuales: Sugerencias del sistema actual (scoring por reglas)
+            sugerencias_fuzzy: Sugerencias de fuzzy matching
+            
+        Returns:
+            Lista combinada y ordenada por score, sin duplicados
+        """
+        # Diccionario para deduplicar por código SAP
+        sugerencias_dict: Dict[str, Dict[str, Any]] = {}
+        
+        # Agregar sugerencias actuales (tienen prioridad)
+        for sug in sugerencias_actuales:
+            codigo_sap = sug.get("codigo_sap", "")
+            if codigo_sap:
+                sugerencias_dict[codigo_sap] = sug
+        
+        # Agregar sugerencias fuzzy (solo si no están ya en el dict)
+        for sug in sugerencias_fuzzy:
+            codigo_sap = sug.get("codigo_sap", "")
+            if codigo_sap and codigo_sap not in sugerencias_dict:
+                # Marcar como sugerencia fuzzy para referencia
+                sug["es_fuzzy"] = True
+                sugerencias_dict[codigo_sap] = sug
+        
+        # Convertir a lista y ordenar por score
+        sugerencias_combinadas = list(sugerencias_dict.values())
+        sugerencias_combinadas.sort(key=lambda x: x["score"], reverse=True)
+        
+        return sugerencias_combinadas
     
     def obtener_sugerencias(
         self,
