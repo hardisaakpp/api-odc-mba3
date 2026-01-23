@@ -101,76 +101,6 @@ class StockTransferService:
             f"✅ Validación mínima ITR: {len(stock_transfers_json)} documento(s) con formato correcto"
         )
     
-    def _log_articulos_info_optional(
-        self,
-        distribucion_por_tienda: Dict[str, List[Dict[str, Any]]],
-        bodega_origen: str
-    ) -> None:
-        """
-        Logging informativo (NO bloqueante) sobre artículos y bodega origen.
-        
-        ⚠️ IMPORTANTE: Este método solo genera logs informativos para visibilidad operativa.
-        NO lanza excepciones ni bloquea el flujo. Es útil para detectar posibles problemas
-        de configuración, pero no es requerido para crear ITR en SAP.
-        
-        Args:
-            distribucion_por_tienda: Distribución agrupada por tienda
-            bodega_origen: Código de bodega origen (ej: "RL-CD", "OUT-CD", "RG-CD")
-        """
-        # Recopilar todos los item_code_sap únicos
-        items_unicos = set()
-        for tienda_id, productos in distribucion_por_tienda.items():
-            for producto in productos:
-                item_code_sap = producto.get("item_code_sap")
-                if item_code_sap:
-                    items_unicos.add(item_code_sap)
-        
-        if not items_unicos:
-            logger.debug("ℹ️ No hay artículos para logging informativo")
-            return
-        
-        logger.info(
-            f"ℹ️ Logging informativo: {len(items_unicos)} artículo(s) en ITR hacia bodega origen {bodega_origen}..."
-        )
-        
-        # Logging informativo (no bloqueante)
-        articulos_sin_info = []
-        articulos_con_info = []
-        
-        for item_code in items_unicos:
-            try:
-                stock_info = self.sap_client.get_stock_by_warehouse(item_code, bodega_origen)
-                if stock_info:
-                    articulos_con_info.append(item_code)
-                    logger.debug(
-                        f"ℹ️ {item_code} tiene información en {bodega_origen} "
-                        f"(InStock={stock_info.get('InStock', 'N/A')}, "
-                        f"UomCode={stock_info.get('UomCode', 'NULL')})"
-                    )
-                else:
-                    articulos_sin_info.append(item_code)
-            except SAPDataMasterError as e:
-                # ⚠️ WARNING INFORMATIVO: No bloquea el flujo
-                articulos_sin_info.append(item_code)
-                logger.warning(
-                    f"ℹ️ {item_code} no tiene relación previa con {bodega_origen} "
-                    f"(ItemWarehouseInfoCollection vacío o bodega no encontrada). "
-                    f"ITR permitida - SAP creará la solicitud sin validar stock."
-                )
-        
-        if articulos_sin_info:
-            logger.info(
-                f"ℹ️ {len(articulos_sin_info)} artículo(s) sin información previa en {bodega_origen}: "
-                f"{', '.join(articulos_sin_info[:5])}"
-                f"{' y ' + str(len(articulos_sin_info) - 5) + ' más' if len(articulos_sin_info) > 5 else ''}. "
-                f"Esto es normal para ITR - SAP permitirá crear la solicitud."
-            )
-        
-        if articulos_con_info:
-            logger.debug(
-                f"ℹ️ {len(articulos_con_info)} artículo(s) con información previa en {bodega_origen}"
-            )
-    
     def _validate_articulos_habilitados_en_bodega_origen(
         self,
         distribucion_por_tienda: Dict[str, List[Dict[str, Any]]],
@@ -182,7 +112,7 @@ class StockTransferService:
         SAP NO requiere que los artículos estén habilitados en la bodega origen para crear ITR.
         Esta validación solo debería usarse para Inventory Transfer real (movimientos de stock).
         
-        Para ITR, usar `_validate_itr_minimal()` y `_log_articulos_info_optional()`.
+        Para ITR, usar `_validate_itr_minimal()` únicamente.
         
         Valida PREVENTIVAMENTE que todos los artículos estén habilitados en la bodega origen.
         
@@ -817,20 +747,6 @@ class StockTransferService:
                     f"📦 Creando {result['total_tiendas']} Solicitud(es) de Transferencia para "
                     f"{len(distribucion_por_tienda)} tienda(s) desde bodega {bodega_origen}..."
                 )
-                
-                # ⭐ LOGGING INFORMATIVO (NO bloqueante): Información sobre artículos y bodega origen
-                # Esto es solo para visibilidad operativa - NO bloquea el flujo
-                # SAP NO requiere que los artículos estén habilitados en bodega origen para ITR
-                try:
-                    self._log_articulos_info_optional(
-                        distribucion_por_tienda=distribucion_por_tienda,
-                        bodega_origen=bodega_origen
-                    )
-                except Exception as e:
-                    # Si falla el logging informativo, solo loguear warning y continuar
-                    logger.warning(
-                        f"⚠️ No se pudo obtener información informativa de artículos (no crítico): {e}"
-                    )
                 
                 # 6. Convertir a formato SAP usando mapper
                 stock_transfers_json = SAPStockTransferMapper.to_sap_stock_transfer(
