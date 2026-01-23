@@ -49,7 +49,8 @@ from .email_notifier import (
     send_migration_notification,
     send_error_notification,
     send_homologacion_notification,
-    send_oc_ready_for_dispatch_notification
+    send_oc_ready_for_dispatch_notification,
+    send_plantilla_upload_notification
 )
 
 __all__ = [
@@ -64,5 +65,6 @@ __all__ = [
     "send_migration_notification",
     "send_error_notification",
     "send_homologacion_notification",
-    "send_oc_ready_for_dispatch_notification"
+    "send_oc_ready_for_dispatch_notification",
+    "send_plantilla_upload_notification"
 ]

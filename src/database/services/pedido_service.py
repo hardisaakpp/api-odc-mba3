@@ -290,9 +290,9 @@ class PedidoService:
             
             # Paso 1: Extraer cabecera usando método que soporta formato horizontal y vertical
             try:
-                # Usar _parsear_cabecera que soporta ambos formatos
+                # Usar parsear_cabecera que soporta ambos formatos
                 excel_file = pd.ExcelFile(io.BytesIO(file_content))
-                cabecera_parseada = self.parser._parsear_cabecera(excel_file, "cabecera")
+                cabecera_parseada = self.parser.parsear_cabecera(excel_file, "cabecera")
                 
                 # Convertir a formato BD (mapear campos del Excel a campos de BD)
                 cabecera = {

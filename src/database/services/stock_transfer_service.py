@@ -569,9 +569,10 @@ class StockTransferService:
                             codigos_tiendas_unicos.add(tienda_codigo.strip().upper())
                 
                 # Validar que todas las tiendas existan en SAP
-                # ⭐ IMPORTANTE: Guardar código exacto de SAP (WhsCode) para usar en las STs
+                # ⭐ IMPORTANTE: Guardar código exacto de SAP (WhsCode) y nombre para usar en las STs
                 tiendas_validas_en_sap = set()  # Códigos normalizados para validación
                 mapeo_codigo_exacto_sap = {}  # Mapeo: código_normalizado → código_exacto_SAP (WhsCode)
+                mapeo_nombre_tienda = {}  # Mapeo: código_normalizado → nombre_tienda (WhsName)
                 
                 if codigos_tiendas_unicos:
                     logger.info(f"🔍 Validando {len(codigos_tiendas_unicos)} tienda(s) en SAP antes de crear STs...")
@@ -586,13 +587,16 @@ class StockTransferService:
                         if info.get("encontrado", False):
                             codigo_normalizado = codigo.upper()
                             codigo_exacto_sap = info.get("WhsCode", codigo_normalizado)  # Usar código exacto de SAP
+                            nombre_tienda = info.get("WhsName", None)  # Obtener nombre de la tienda
                             
                             tiendas_validas_en_sap.add(codigo_normalizado)
                             mapeo_codigo_exacto_sap[codigo_normalizado] = codigo_exacto_sap
+                            if nombre_tienda:
+                                mapeo_nombre_tienda[codigo_normalizado] = nombre_tienda
                             
                             logger.info(
                                 f"✅ Tienda validada en SAP: '{codigo}' → WhsCode='{codigo_exacto_sap}', "
-                                f"Nombre='{info.get('WhsName', 'N/A')}'"
+                                f"Nombre='{nombre_tienda or 'N/A'}'"
                             )
                         else:
                             logger.warning(
@@ -802,9 +806,14 @@ class StockTransferService:
                     
                     sap_response = self.sap_client.create_stock_transfer(stock_transfer_json)
                     
+                    # Obtener nombre de la tienda desde el mapeo
+                    tienda_codigo_upper = tienda_codigo.strip().upper() if tienda_codigo else ""
+                    tienda_nombre = mapeo_nombre_tienda.get(tienda_codigo_upper, None)
+                    
                     resultado_tienda = {
                         "tienda_id": tienda_id,
                         "tienda_codigo": tienda_codigo,
+                        "tienda_nombre": tienda_nombre,  # ⭐ Incluir nombre de la tienda
                         "success": False,
                         "doc_entry": None,
                         "doc_num": None,

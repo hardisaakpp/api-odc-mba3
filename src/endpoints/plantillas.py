@@ -196,6 +196,28 @@ def register_plantillas_endpoints(app: FastAPI):
                     detail=f"Error al procesar plantilla: {resultado.get('errores', ['Error desconocido'])}"
                 )
             
+            # Enviar notificación por correo electrónico a El Rayo cuando se procesa exitosamente
+            if resultado["status"] == "success":
+                try:
+                    from src.utils.email_notifier import send_plantilla_upload_notification
+                    
+                    email_enviado = send_plantilla_upload_notification(
+                        pedido_id=resultado.get("pedido_id"),
+                        numero_pedido=resultado.get("numero_pedido"),
+                        filename=file.filename,
+                        usuario_id=user_id,
+                        articulos_cargados=resultado.get("articulos_cargados", 0),
+                        distribuciones_cargadas=resultado.get("distribuciones_cargadas", 0),
+                        formato_detectado=resultado.get("formato_detectado")
+                    )
+                    if email_enviado:
+                        logger.info(f"📧 Email de notificación de plantilla enviado a El Rayo (Pedido: {resultado.get('numero_pedido', 'N/A')})")
+                    else:
+                        logger.warning(f"⚠️ No se pudo enviar email de notificación de plantilla (no crítico)")
+                except Exception as e:
+                    # NO fallar el proceso si el email falla
+                    logger.warning(f"⚠️ Error al enviar email de notificación de plantilla (no crítico): {e}")
+            
             return JSONResponse(status_code=200, content=response_data)
             
         except HTTPException:

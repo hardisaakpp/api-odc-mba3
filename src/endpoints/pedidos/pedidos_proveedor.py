@@ -162,6 +162,55 @@ def register_proveedor_endpoints(app: FastAPI):
             
             logger.info(f"✅ Cambios guardados y respuesta creada para pedido {pedido_id}. Estado: RESPUESTA_PROVEEDOR_CARGADA")
             
+            # Enviar notificación por correo electrónico a MABEL TRADING cuando El Rayo confirma el pedido
+            if resultado.get("status") == "success" and resultado.get("confirmacion_registrada", False):
+                try:
+                    from src.utils.email_notifier_pedido import send_rayo_confirmacion_notification
+                    from src.database.connection import get_db_connection_context
+                    from src.database.repositories.pedido_repository import PedidoRepository
+                    from src.database.repositories.pedido_confirmacion_rayo_repository import PedidoConfirmacionRayoRepository
+                    
+                    # Obtener número de pedido y detalles modificados
+                    with get_db_connection_context() as conn:
+                        repo_pedido = PedidoRepository(conn)
+                        pedido_completo = repo_pedido.get_pedido_completo(pedido_id)
+                        
+                        if pedido_completo:
+                            numero_pedido = pedido_completo["cabecera"].get("numero_pedido", "N/A")
+                            
+                            # Obtener cantidad de detalles modificados desde la confirmación más reciente
+                            detalles_modificados = 0
+                            try:
+                                repo_confirmacion = PedidoConfirmacionRayoRepository(conn)
+                                confirmaciones = repo_confirmacion.obtener_confirmaciones_por_pedido(
+                                    pedido_id=pedido_id, limit=1
+                                )
+                                if confirmaciones:
+                                    confirmacion_id = confirmaciones[0]["confirmacion_id"]
+                                    confirmacion_completa = repo_confirmacion.obtener_confirmacion(confirmacion_id)
+                                    if confirmacion_completa:
+                                        detalles_modificados = confirmacion_completa.get("total_detalles_modificados", 0)
+                            except Exception as e:
+                                logger.warning(f"⚠️ No se pudo obtener detalles modificados de la confirmación: {e}")
+                                # Usar un valor aproximado basado en las cantidades y precios guardados
+                                detalles_modificados = resultado.get("cantidades_guardadas", 0) + resultado.get("precios_guardados", 0)
+                            
+                            email_enviado = send_rayo_confirmacion_notification(
+                                pedido_id=pedido_id,
+                                numero_pedido=numero_pedido,
+                                usuario_rayo=usuario_id,
+                                detalles_modificados=detalles_modificados
+                            )
+                            if email_enviado:
+                                logger.info(f"📧 Email de confirmación de El Rayo enviado a MABEL TRADING (Pedido: {numero_pedido})")
+                            else:
+                                logger.warning(f"⚠️ No se pudo enviar email de confirmación de El Rayo (no crítico)")
+                        else:
+                            logger.warning(f"⚠️ No se pudo obtener información del pedido para enviar notificación (no crítico)")
+                except Exception as e:
+                    # NO fallar el proceso si el email falla
+                    logger.warning(f"⚠️ Error al enviar email de confirmación de El Rayo (no crítico): {e}")
+            
             return JSONResponse(status_code=200, content=resultado)
             
         except ValueError as e:

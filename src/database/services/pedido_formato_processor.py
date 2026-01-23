@@ -43,7 +43,7 @@ class PedidoFormatoProcessor:
             (cabecera_dict, detalles_list) o (None, None) si error
         """
         # Extraer datos de cabecera
-        cabecera_parseada = self.parser._parsear_cabecera(excel_file, str(hoja_cabecera_encontrada))
+        cabecera_parseada = self.parser.parsear_cabecera(excel_file, str(hoja_cabecera_encontrada))
         cabecera = self.consolidator.normalizar_cabecera_para_bd(
             cabecera_parseada=cabecera_parseada,
             filename=filename,

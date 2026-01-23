@@ -1524,6 +1524,26 @@ def register_redistribucion_endpoints(app: FastAPI):
                 
                 logger.info("=" * 70)
                 
+                # Enviar notificación por correo electrónico a El Rayo cuando MABEL TRADING confirma la redistribución
+                try:
+                    from src.utils.email_notifier import send_mabel_redistribucion_confirmacion_notification
+                    
+                    email_enviado = send_mabel_redistribucion_confirmacion_notification(
+                        pedido_id=pedido_id,
+                        numero_pedido=numero_pedido,
+                        usuario_mabel=user_id,
+                        version_confirmada=resultado.get("version"),
+                        total_productos=total_productos,
+                        total_cantidad_ajustada=resumen.total_cantidad_ajustada if resumen else 0
+                    )
+                    if email_enviado:
+                        logger.info(f"📧 Email de confirmación de redistribución enviado a El Rayo (Pedido: {numero_pedido})")
+                    else:
+                        logger.warning(f"⚠️ No se pudo enviar email de confirmación de redistribución (no crítico)")
+                except Exception as e:
+                    # NO fallar el proceso si el email falla
+                    logger.warning(f"⚠️ Error al enviar email de confirmación de redistribución (no crítico): {e}")
+                
                 return ConfirmarRedistribucionResponseFrontend(
                     pedido_id=pedido_id,
                     numero_pedido=numero_pedido,
