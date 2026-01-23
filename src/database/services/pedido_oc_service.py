@@ -5,10 +5,14 @@ Similar a copy_despacho_to_orden_compra() pero para pedidos.
 """
 
 import logging
+import json
+import pyodbc
+from pathlib import Path
 from typing import Dict, Any, List, Optional
 from datetime import datetime
 
 from ..connection import get_db_connection_context
+from src.config import PROJECT_ROOT
 from ..repositories.pedido_repository import PedidoRepository
 from ..repositories.pedido_sap_procesamiento_repository import PedidoSAPProcesamientoRepository
 from ..repositories.orden_compra_repository import OrdenCompraRepository
@@ -72,7 +76,9 @@ class PedidoOCService:
     def _to_orden_compra_detalle_from_procesamiento(
         self,
         procesamiento_detalle: Dict[str, Any],
-        oc_id: str
+        oc_id: str,
+        conn: Optional[pyodbc.Connection] = None,
+        pedido_id: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Transforma un detalle de pedido_sap_procesamiento_detalle a formato de orden_compra_detalle.
@@ -87,14 +93,55 @@ class PedidoOCService:
         - total_linea_sap → total_linea (ya calculado)
         - cantidad_original → cantidad_origen (para auditoría)
         - pedido_detalle_id → referencia_detalle
+        - codigo_bodega → obtenido desde distribuciones confirmadas (es_bodega=True, cantidad_asignada > 0)
         
         Args:
             procesamiento_detalle: Diccionario con datos de pedido_sap_procesamiento_detalle
             oc_id: UUID de la cabecera de orden de compra
+            conn: Conexión a la base de datos (opcional, para obtener bodega desde distribuciones)
+            pedido_id: UUID del pedido (opcional, para obtener bodega desde distribuciones)
             
         Returns:
             Diccionario con datos para insertar en orden_compra_detalle
         """
+        import pyodbc
+        
+        codigo_bodega = None
+        
+        # Intentar obtener bodega desde distribuciones confirmadas
+        if conn and pedido_id:
+            pedido_detalle_id = procesamiento_detalle.get("pedido_detalle_id")
+            if pedido_detalle_id:
+                try:
+                    from ..repositories.distribucion_confirmada_repository import DistribucionConfirmadaRepository
+                    dist_repo = DistribucionConfirmadaRepository(conn)
+                    
+                    # Obtener versión actual de distribución confirmada
+                    version_actual = dist_repo.get_version_actual(pedido_id)
+                    if version_actual > 0:
+                        distribucion_data = dist_repo.get_distribucion_completa(pedido_id, version_actual)
+                        productos_distribucion = distribucion_data.get("productos", [])
+                        
+                        # Buscar bodega para este pedido_detalle_id específico
+                        for producto in productos_distribucion:
+                            if producto.get("pedido_detalle_id") == pedido_detalle_id:
+                                distribuciones = producto.get("distribuciones", [])
+                                for dist in distribuciones:
+                                    if dist.get("es_bodega", False):
+                                        cantidad_asignada = dist.get("cantidad_asignada", 0)
+                                        if cantidad_asignada and cantidad_asignada > 0:
+                                            tienda_codigo = dist.get("tienda_codigo")
+                                            if tienda_codigo:
+                                                codigo_bodega = tienda_codigo.strip().upper()
+                                                logger.debug(
+                                                    f"📍 Bodega obtenida desde distribución para detalle {pedido_detalle_id}: {codigo_bodega}"
+                                                )
+                                                break
+                                if codigo_bodega:
+                                    break
+                except Exception as e:
+                    logger.warning(f"⚠️ No se pudo obtener bodega desde distribuciones para detalle {pedido_detalle_id}: {e}")
+        
         return {
             "sku_sap": procesamiento_detalle.get("item_code_sap"),
             "cantidad_sap": procesamiento_detalle.get("cantidad_sap"),
@@ -103,6 +150,7 @@ class PedidoOCService:
             "precio_unitario": procesamiento_detalle.get("precio_unitario_sap"),
             "total_linea": procesamiento_detalle.get("total_linea_sap"),
             "cantidad_origen": procesamiento_detalle.get("cantidad_original"),
+            "codigo_bodega": codigo_bodega,  # ⭐ NUEVO: Bodega por línea desde distribuciones
         }
     
     def crear_oc_desde_pedido_confirmado(
@@ -323,7 +371,12 @@ class PedidoOCService:
             # 8. Transformar y preparar detalles (mapeo directo, sin conversiones)
             oc_detalles = []
             for proc in procesamientos_validos:
-                oc_detalle = self._to_orden_compra_detalle_from_procesamiento(proc, oc_id)
+                oc_detalle = self._to_orden_compra_detalle_from_procesamiento(
+                    proc, 
+                    oc_id,
+                    conn=conn,  # ⭐ Pasar conexión para obtener bodega
+                    pedido_id=pedido_id  # ⭐ Pasar pedido_id para obtener bodega
+                )
                 
                 # Validar campos mínimos requeridos
                 if oc_detalle.get("sku_sap") and oc_detalle.get("cantidad_sap") is not None:
@@ -348,5 +401,38 @@ class PedidoOCService:
                 f"✅ OC {accion}: {oc_id} para pedido {pedido_id} "
                 f"(detalles: {detalles_insertados}/{len(procesamientos_validos)})"
             )
+            
+            # ⭐ GUARDAR JSON DE LA OC CREADA EN ARCHIVO (para auditoría/debugging)
+            try:
+                oc_completa_json = {
+                    "oc_id": oc_id,
+                    "pedido_id": pedido_id,
+                    "fecha_generacion": datetime.now().isoformat(),
+                    "cabecera": oc_cabecera_data,
+                    "detalles": oc_detalles,
+                    "resultado": {
+                        "detalles_insertados": detalles_insertados,
+                        "total_lineas": len(oc_detalles),
+                        "cabecera_insertada": result.get("cabecera_insertada"),
+                        "cabecera_actualizada": result.get("cabecera_actualizada"),
+                    }
+                }
+                
+                # Crear directorio si no existe
+                output_dir = PROJECT_ROOT / "output" / "orden_compra_json"
+                output_dir.mkdir(parents=True, exist_ok=True)
+                
+                # Nombre de archivo: oc_generada_{oc_id}_{timestamp}.json
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                filename = f"oc_generada_{oc_id}_{timestamp}.json"
+                filepath = output_dir / filename
+                
+                # Guardar JSON
+                with open(filepath, 'w', encoding='utf-8') as f:
+                    json.dump(oc_completa_json, f, indent=2, ensure_ascii=False, default=str)
+                
+                logger.info(f"📄 JSON de OC generada guardado en: {filepath}")
+            except Exception as e:
+                logger.warning(f"⚠️ No se pudo guardar JSON de OC (no crítico): {e}")
             
             return result

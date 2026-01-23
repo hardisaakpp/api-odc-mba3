@@ -1,9 +1,15 @@
 """
-Servicio para crear Solicitudes de Transferencia (Stock Transfer Orders) en SAP.
+Servicio para crear Solicitudes de Transferencia (Inventory Transfer Requests) en SAP.
 FASE 5: Generación de Solicitudes de Transferencia desde distribución confirmada por tienda.
+
+⚠️ IMPORTANTE: Este servicio crea Inventory Transfer Requests (POST /InventoryTransferRequests),
+NO Stock Transfer Orders. Las Inventory Transfer Requests son solicitudes que NO mueven stock,
+solo crean una solicitud que debe ser procesada posteriormente.
 """
 
 import logging
+import json
+from pathlib import Path
 from typing import Dict, Any, List, Optional
 from datetime import datetime
 from collections import defaultdict
@@ -17,6 +23,7 @@ from ..clients.sap_service_layer_client import SAPServiceLayerClient
 from ..mappers.sap_stock_transfer_mapper import SAPStockTransferMapper
 from ..services.bodega_sap_service import BodegaSAPService
 from src.exceptions import SAPDataMasterError
+from src.config import PROJECT_ROOT
 
 logger = logging.getLogger(__name__)
 
@@ -28,12 +35,155 @@ class StockTransferService:
         """Inicializa el servicio."""
         self.sap_client = SAPServiceLayerClient()
     
+    def _validate_itr_minimal(
+        self,
+        stock_transfers_json: List[Dict[str, Any]]
+    ) -> None:
+        """
+        Valida mínimamente los Inventory Transfer Requests antes de enviarlos a SAP.
+        
+        ⚠️ IMPORTANTE: Para ITR, SAP NO requiere:
+        - Artículo asociado a bodega origen (ItemWarehouseInfoCollection puede estar vacío)
+        - Stock disponible
+        - Artículo habilitado en bodega origen
+        
+        SAP solo valida:
+        - ItemCode existe
+        - FromWarehouse != ToWarehouse
+        - Quantity > 0
+        - Formato JSON correcto
+        
+        Esta validación solo verifica lo esencial antes de enviar a SAP.
+        
+        Args:
+            stock_transfers_json: Lista de ITRs a crear (formato SAP Service Layer)
+            
+        Raises:
+            ValueError: Si hay errores de formato básico (FromWarehouse == ToWarehouse, Quantity <= 0)
+        """
+        for idx, itr in enumerate(stock_transfers_json):
+            from_wh = itr.get("FromWarehouse", "").strip()
+            to_wh = itr.get("ToWarehouse", "").strip()
+            lines = itr.get("StockTransferLines", [])
+            
+            # Validar FromWarehouse != ToWarehouse
+            if not from_wh or not to_wh:
+                raise ValueError(
+                    f"ITR {idx+1}: FromWarehouse y ToWarehouse son requeridos"
+                )
+            
+            if from_wh.upper() == to_wh.upper():
+                raise ValueError(
+                    f"ITR {idx+1}: FromWarehouse ({from_wh}) no puede ser igual a ToWarehouse ({to_wh})"
+                )
+            
+            # Validar que haya líneas y que todas tengan Quantity > 0
+            if not lines:
+                raise ValueError(
+                    f"ITR {idx+1}: Debe tener al menos una línea en StockTransferLines"
+                )
+            
+            for line_idx, line in enumerate(lines):
+                item_code = line.get("ItemCode", "").strip()
+                quantity = float(line.get("Quantity", 0))
+                
+                if not item_code:
+                    raise ValueError(
+                        f"ITR {idx+1}, línea {line_idx+1}: ItemCode es requerido"
+                    )
+                
+                if quantity <= 0:
+                    raise ValueError(
+                        f"ITR {idx+1}, línea {line_idx+1}: Quantity debe ser mayor que 0 (actual: {quantity})"
+                    )
+        
+        logger.info(
+            f"✅ Validación mínima ITR: {len(stock_transfers_json)} documento(s) con formato correcto"
+        )
+    
+    def _log_articulos_info_optional(
+        self,
+        distribucion_por_tienda: Dict[str, List[Dict[str, Any]]],
+        bodega_origen: str
+    ) -> None:
+        """
+        Logging informativo (NO bloqueante) sobre artículos y bodega origen.
+        
+        ⚠️ IMPORTANTE: Este método solo genera logs informativos para visibilidad operativa.
+        NO lanza excepciones ni bloquea el flujo. Es útil para detectar posibles problemas
+        de configuración, pero no es requerido para crear ITR en SAP.
+        
+        Args:
+            distribucion_por_tienda: Distribución agrupada por tienda
+            bodega_origen: Código de bodega origen (ej: "RL-CD", "OUT-CD", "RG-CD")
+        """
+        # Recopilar todos los item_code_sap únicos
+        items_unicos = set()
+        for tienda_id, productos in distribucion_por_tienda.items():
+            for producto in productos:
+                item_code_sap = producto.get("item_code_sap")
+                if item_code_sap:
+                    items_unicos.add(item_code_sap)
+        
+        if not items_unicos:
+            logger.debug("ℹ️ No hay artículos para logging informativo")
+            return
+        
+        logger.info(
+            f"ℹ️ Logging informativo: {len(items_unicos)} artículo(s) en ITR hacia bodega origen {bodega_origen}..."
+        )
+        
+        # Logging informativo (no bloqueante)
+        articulos_sin_info = []
+        articulos_con_info = []
+        
+        for item_code in items_unicos:
+            try:
+                stock_info = self.sap_client.get_stock_by_warehouse(item_code, bodega_origen)
+                if stock_info:
+                    articulos_con_info.append(item_code)
+                    logger.debug(
+                        f"ℹ️ {item_code} tiene información en {bodega_origen} "
+                        f"(InStock={stock_info.get('InStock', 'N/A')}, "
+                        f"UomCode={stock_info.get('UomCode', 'NULL')})"
+                    )
+                else:
+                    articulos_sin_info.append(item_code)
+            except SAPDataMasterError as e:
+                # ⚠️ WARNING INFORMATIVO: No bloquea el flujo
+                articulos_sin_info.append(item_code)
+                logger.warning(
+                    f"ℹ️ {item_code} no tiene relación previa con {bodega_origen} "
+                    f"(ItemWarehouseInfoCollection vacío o bodega no encontrada). "
+                    f"ITR permitida - SAP creará la solicitud sin validar stock."
+                )
+        
+        if articulos_sin_info:
+            logger.info(
+                f"ℹ️ {len(articulos_sin_info)} artículo(s) sin información previa en {bodega_origen}: "
+                f"{', '.join(articulos_sin_info[:5])}"
+                f"{' y ' + str(len(articulos_sin_info) - 5) + ' más' if len(articulos_sin_info) > 5 else ''}. "
+                f"Esto es normal para ITR - SAP permitirá crear la solicitud."
+            )
+        
+        if articulos_con_info:
+            logger.debug(
+                f"ℹ️ {len(articulos_con_info)} artículo(s) con información previa en {bodega_origen}"
+            )
+    
     def _validate_articulos_habilitados_en_bodega_origen(
         self,
         distribucion_por_tienda: Dict[str, List[Dict[str, Any]]],
         bodega_origen: str
     ) -> None:
         """
+        ⚠️ DEPRECADO PARA ITR: Esta validación es demasiado estricta para Inventory Transfer Requests.
+        
+        SAP NO requiere que los artículos estén habilitados en la bodega origen para crear ITR.
+        Esta validación solo debería usarse para Inventory Transfer real (movimientos de stock).
+        
+        Para ITR, usar `_validate_itr_minimal()` y `_log_articulos_info_optional()`.
+        
         Valida PREVENTIVAMENTE que todos los artículos estén habilitados en la bodega origen.
         
         Esta validación se hace ANTES de crear las ST para detectar problemas de datos maestros
@@ -72,9 +222,10 @@ class StockTransferService:
                 
                 # Si stock_info es None, es un error de conexión (no debería pasar)
                 if stock_info is None:
+                    # ⚠️ WARNING funcional: problema de conexión, no bloqueante para validación preventiva
                     logger.warning(
-                        f"⚠️ No se pudo verificar habilitación de {item_code} en {bodega_origen}. "
-                        f"Se continuará con la validación."
+                        f"⚠️ No se pudo verificar habilitación de {item_code} en {bodega_origen} "
+                        f"(error de conexión). Se continuará con la validación."
                     )
                     continue
                 
@@ -174,6 +325,13 @@ class StockTransferService:
         source_warehouse: str
     ) -> None:
         """
+        ⚠️ DEPRECADO PARA ITR: Esta validación es demasiado estricta para Inventory Transfer Requests.
+        
+        SAP NO requiere validación de stock para crear ITR (solo para Inventory Transfer real).
+        Esta validación solo debería usarse para Inventory Transfer real (movimientos de stock).
+        
+        Para ITR, usar `_validate_itr_minimal()` y `_log_articulos_info_optional()`.
+        
         Valida que haya stock suficiente en la bodega origen antes de crear las STs.
         
         ⭐ IMPORTANTE: Esta validación previene el error "Quantity falls into negative inventory"
@@ -228,9 +386,9 @@ class StockTransferService:
             if stock_info is None:
                 # Error al consultar - esto NO debería pasar si SAPDataMasterError se lanza correctamente
                 # Si llegamos aquí, es un error de conexión o respuesta inesperada
-                # Pero para el negocio, el mensaje debe ser claro y accionable
-                logger.error(
-                    f"❌ No se pudo consultar stock de {item_code} en {source_warehouse}. "
+                # ⚠️ WARNING funcional: problema de conexión, no de datos maestros
+                logger.warning(
+                    f"⚠️ No se pudo consultar stock de {item_code} en {source_warehouse}. "
                     f"Error de conexión o respuesta inesperada de SAP. "
                     f"NO se puede validar stock - ABORTANDO validación."
                 )
@@ -290,12 +448,13 @@ class StockTransferService:
             # ❌ CORTAR FLUJO: Errores de datos maestros - lanzar excepción de dominio
             items_list = [p['item_code'] for p in productos_error_datos_maestros]
             
-            # ❌ LOG ÚNICO AGRUPADO: No repetir el mismo error 9 veces
-            logger.error(
-                f"❌ ERRORES DE DATOS MAESTROS: {len(productos_error_datos_maestros)} artículo(s) "
-                f"sin configuración de bodega {source_warehouse} en SAP. "
+            # ⚠️ WARNING funcional: ItemWarehouseInfoCollection vacío es esperado para algunos tipos de artículos
+            # pero impide validar stock, por lo que abortamos la creación de ITRs
+            logger.warning(
+                f"⚠️ VALIDACIÓN DE STOCK ABORTADA: {len(productos_error_datos_maestros)} artículo(s) "
+                f"sin información de bodega {source_warehouse} en SAP (ItemWarehouseInfoCollection vacío). "
                 f"Artículos: {', '.join(items_list)}. "
-                f"NO se puede validar stock - ABORTANDO validación."
+                f"NO se pueden crear Inventory Transfer Requests sin validación de stock."
             )
             
             # Lanzar excepción con el primer artículo (todos tienen el mismo problema)
@@ -355,7 +514,11 @@ class StockTransferService:
         usuario_id: Optional[str] = None
     ) -> Dict[str, Any]:
         """
-        Crea Solicitudes de Transferencia (Stock Transfer Orders) en SAP desde la distribución confirmada de un pedido.
+        Crea Solicitudes de Transferencia (Inventory Transfer Requests) en SAP desde la distribución confirmada de un pedido.
+        
+        ⚠️ IMPORTANTE: Este método crea Inventory Transfer Requests (POST /InventoryTransferRequests),
+        NO Stock Transfer Orders. Las Inventory Transfer Requests son solicitudes que NO mueven stock,
+        solo crean una solicitud que debe ser procesada posteriormente.
         
         ⭐ IMPORTANTE: Las Solicitudes de Transferencia se crean desde bodega origen hacia TIENDAS.
         - Origen: Bodega (prioridad: bodega_origen proporcionada > origen_traslado del pedido > "01")
@@ -375,7 +538,7 @@ class StockTransferService:
         6. Valida que destino no sea la misma bodega origen
         7. Valida que cada tienda pertenezca a la bodega origen (basado en prefijos: TRL-→RL-CD, TOUT-→OUT-CD, RG-→RG-CD)
         8. Agrupa por tienda
-        9. Crea un Stock Transfer Order por tienda en SAP
+        9. Crea un Inventory Transfer Request por tienda en SAP (POST /InventoryTransferRequests)
         10. Registra los resultados
         
         Args:
@@ -655,23 +818,19 @@ class StockTransferService:
                     f"{len(distribucion_por_tienda)} tienda(s) desde bodega {bodega_origen}..."
                 )
                 
-                # ⭐ VALIDACIÓN PREVENTIVA #1: Verificar que artículos estén habilitados en bodega origen
-                # Esto se hace ANTES de crear los JSON y validar stock para detectar problemas temprano
+                # ⭐ LOGGING INFORMATIVO (NO bloqueante): Información sobre artículos y bodega origen
+                # Esto es solo para visibilidad operativa - NO bloquea el flujo
+                # SAP NO requiere que los artículos estén habilitados en bodega origen para ITR
                 try:
-                    self._validate_articulos_habilitados_en_bodega_origen(
+                    self._log_articulos_info_optional(
                         distribucion_por_tienda=distribucion_por_tienda,
                         bodega_origen=bodega_origen
                     )
-                except SAPDataMasterError as e:
-                    # ❌ ERROR DE DATOS MAESTROS: Artículos no habilitados en bodega origen
-                    error_msg = str(e)
-                    logger.error(f"❌ {error_msg}")
-                    result["error"] = error_msg
-                    result["success"] = False
-                    result["error_type"] = "datos_maestros"  # Flag para identificar tipo de error
-                    result["error_code"] = e.error_code
-                    # Retornar resultado con error claro
-                    return result
+                except Exception as e:
+                    # Si falla el logging informativo, solo loguear warning y continuar
+                    logger.warning(
+                        f"⚠️ No se pudo obtener información informativa de artículos (no crítico): {e}"
+                    )
                 
                 # 6. Convertir a formato SAP usando mapper
                 stock_transfers_json = SAPStockTransferMapper.to_sap_stock_transfer(
@@ -683,41 +842,47 @@ class StockTransferService:
                     pedido_id=pedido_id
                 )
                 
-                # ⭐ VALIDACIÓN PREVIA #2: Validar stock antes de crear STs
-                # Esto previene el error "Quantity falls into negative inventory" que ocurre
-                # cuando SAP evalúa el stock disponible considerando transacciones previas
-                # en el mismo proceso. Al validar ANTES, evitamos crear STs parciales.
+                # ⭐ VALIDACIÓN MÍNIMA PARA ITR: Solo validar formato básico
+                # SAP NO requiere validación de stock ni de artículos habilitados en bodega origen para ITR
+                # Las ITR son solo solicitudes, no mueven stock, por lo que SAP permite crearlas
+                # aunque el artículo no esté dado de alta en la bodega origen
                 try:
-                    self._validate_stock_before_st(stock_transfers_json, bodega_origen)
-                except SAPDataMasterError as e:
-                    # ❌ ERROR DE DATOS MAESTROS: Cortar flujo inmediatamente
-                    error_msg = str(e)
-                    logger.error(f"❌ {error_msg}")
-                    result["error"] = error_msg
-                    result["success"] = False
-                    result["error_type"] = "datos_maestros"  # Flag para identificar tipo de error
-                    result["error_code"] = e.error_code
-                    # Retornar resultado con error claro
-                    return result
+                    self._validate_itr_minimal(stock_transfers_json)
                 except ValueError as e:
-                    # Stock insuficiente REAL - no crear ninguna ST
+                    # Error de formato básico - esto SÍ debe bloquear el flujo
                     error_msg = str(e)
                     logger.error(f"❌ {error_msg}")
                     result["error"] = error_msg
                     result["success"] = False
-                    result["error_type"] = "stock_insuficiente"  # Flag para identificar tipo de error
+                    result["error_type"] = "validacion_formato"  # Flag para identificar tipo de error
                     # Retornar resultado con error claro
                     return result
                 
-                # 7. Crear cada Stock Transfer Order en SAP
+                # 7. Crear cada Inventory Transfer Request en SAP (POST /InventoryTransferRequests)
+                logger.info(
+                    f"📤 Enviando {len(stock_transfers_json)} Inventory Transfer Request(s) a SAP..."
+                )
                 for idx, stock_transfer_json in enumerate(stock_transfers_json):
                     tienda_codigo = stock_transfer_json.get("ToWarehouse", "N/A")
                     tienda_id = list(distribucion_por_tienda.keys())[idx]
                     
-                    logger.info(
-                        f"🔄 Creando Solicitud de Transferencia {idx+1}/{len(stock_transfers_json)}: "
+                    logger.debug(
+                        f"🔄 Enviando ITR {idx+1}/{len(stock_transfers_json)} a SAP: "
                         f"{bodega_origen} → {tienda_codigo}..."
                     )
+                    
+                    # ⭐ GUARDAR JSON DEL ITR EN ARCHIVO (para auditoría/debugging)
+                    try:
+                        output_dir = PROJECT_ROOT / "output" / "orden_compra_json"
+                        output_dir.mkdir(parents=True, exist_ok=True)
+                        timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+                        filename = f"itr_tienda_{pedido_id}_{tienda_codigo}_{timestamp}_{idx+1}.json"
+                        filepath = output_dir / filename
+                        with open(filepath, 'w', encoding='utf-8') as f:
+                            json.dump(stock_transfer_json, f, indent=2, ensure_ascii=False, default=str)
+                        logger.info(f"📄 JSON de ITR (por tienda) guardado en: {filepath}")
+                    except Exception as e:
+                        logger.warning(f"⚠️ No se pudo guardar JSON de ITR (no crítico): {e}")
                     
                     sap_response = self.sap_client.create_stock_transfer(stock_transfer_json)
                     
@@ -730,39 +895,43 @@ class StockTransferService:
                         "error": None
                     }
                     
-                    if sap_response and sap_response.get("success"):
+                    if sap_response and sap_response.get("success") and sap_response.get("doc_entry"):
+                        # ✅ SOLO AQUÍ se considera que el ITR fue creado realmente en SAP
                         resultado_tienda["success"] = True
                         resultado_tienda["doc_entry"] = sap_response.get("doc_entry")
                         resultado_tienda["doc_num"] = sap_response.get("doc_num")
                         result["transferencias_creadas"] += 1
                         logger.info(
-                            f"✅ Solicitud de Transferencia creada: {bodega_origen} → {tienda_codigo} "
+                            f"✅ Inventory Transfer Request CREADO en SAP: {bodega_origen} → {tienda_codigo} "
                             f"(DocEntry={resultado_tienda['doc_entry']}, DocNum={resultado_tienda['doc_num']})"
                         )
                     else:
                         error_msg = sap_response.get("error", "Error desconocido") if sap_response else "No se recibió respuesta de SAP"
                         resultado_tienda["error"] = error_msg
                         result["transferencias_errores"] += 1
-                        logger.error(
-                            f"❌ Error al crear Solicitud de Transferencia: {bodega_origen} → {tienda_codigo}: {error_msg}"
+                        logger.warning(
+                            f"⚠️ Inventory Transfer Request NO creado: {bodega_origen} → {tienda_codigo}: {error_msg}"
                         )
                     
                     result["resultados"].append(resultado_tienda)
                 
-                # 8. Determinar éxito general
+                # 8. Determinar éxito general y loguear resultado REAL
                 result["success"] = result["transferencias_creadas"] > 0
                 
                 if result["success"]:
                     logger.info(
-                        f"✅ Proceso completado: {result['transferencias_creadas']}/{result['total_tiendas']} "
-                        f"Solicitud(es) de Transferencia creada(s)"
+                        f"✅ Inventory Transfer Requests creados en SAP: {result['transferencias_creadas']}/{result['total_tiendas']} "
+                        f"(DocEntry confirmado para cada uno)"
                     )
                     if result["transferencias_errores"] > 0:
                         logger.warning(
-                            f"⚠️ {result['transferencias_errores']} Solicitud(es) de Transferencia con errores"
+                            f"⚠️ {result['transferencias_errores']} Inventory Transfer Request(s) NO se pudieron crear en SAP"
                         )
                 else:
-                    logger.error(f"❌ No se pudo crear ninguna Solicitud de Transferencia")
+                    logger.warning(
+                        f"⚠️ No se creó ningún Inventory Transfer Request en SAP "
+                        f"(0/{result['total_tiendas']} exitosos)"
+                    )
                 
                 return result
                 

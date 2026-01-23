@@ -100,15 +100,20 @@ SAP_CACHE_DAYS = int(os.getenv("SAP_CACHE_DAYS", "30"))
 # ============================================================================
 # Configuración de SAP Service Layer (API REST)
 # ============================================================================
-# Configuración para enviar órdenes de compra a SAP Business One usando Service Layer
+# Contrato validado con Postman: Login, PurchaseOrders, InventoryTransferRequests (puerto 50001).
+# No hardcodear credenciales en servicios; usar variables de entorno.
 
-# URL base del Service Layer (ej: http://localhost:50000/b1s/v1)
-SAP_SERVICE_LAYER_URL = os.getenv("SAP_SERVICE_LAYER_URL", "http://localhost:50000/b1s/v1")
+# URL base (sin /Login). Prioridad: SAP_SL_BASE_URL > SAP_SERVICE_LAYER_URL
+_sl_url = os.getenv("SAP_SL_BASE_URL") or os.getenv("SAP_SERVICE_LAYER_URL", "http://localhost:50001/b1s/v1")
+SAP_SERVICE_LAYER_URL = _sl_url.rstrip("/").replace("/Login", "").replace("/login", "")
 
-# Credenciales de autenticación
-SAP_SERVICE_LAYER_USERNAME = os.getenv("SAP_SERVICE_LAYER_USERNAME", "")
-SAP_SERVICE_LAYER_PASSWORD = os.getenv("SAP_SERVICE_LAYER_PASSWORD", "")
-SAP_SERVICE_LAYER_DATABASE = os.getenv("SAP_SERVICE_LAYER_DATABASE", "")
+# CompanyDB, UserName, Password (Login). Compatibilidad con vars legacy.
+SAP_COMPANY_DB = os.getenv("SAP_COMPANY_DB") or os.getenv("SAP_SERVICE_LAYER_DATABASE", "")
+SAP_USER = os.getenv("SAP_USER") or os.getenv("SAP_SERVICE_LAYER_USERNAME", "")
+SAP_PASSWORD = os.getenv("SAP_PASSWORD") or os.getenv("SAP_SERVICE_LAYER_PASSWORD", "")
+SAP_SERVICE_LAYER_USERNAME = SAP_USER
+SAP_SERVICE_LAYER_PASSWORD = SAP_PASSWORD
+SAP_SERVICE_LAYER_DATABASE = SAP_COMPANY_DB
 
 # Habilitar envío de ODC a SAP Service Layer
 ENABLE_SAP_SERVICE_LAYER = os.getenv("ENABLE_SAP_SERVICE_LAYER", "false").lower() == "true"
@@ -119,6 +124,12 @@ SAP_SERVICE_LAYER_TIMEOUT = int(os.getenv("SAP_SERVICE_LAYER_TIMEOUT", "30"))
 # Verificación SSL (deshabilitar solo para desarrollo/pruebas con certificados autofirmados)
 # ⚠️ ADVERTENCIA: Deshabilitar verificación SSL es inseguro. Solo usar en desarrollo/pruebas.
 SAP_SERVICE_LAYER_VERIFY_SSL = os.getenv("SAP_SERVICE_LAYER_VERIFY_SSL", "true").lower() == "true"
+
+# Bodega origen para InventoryTransferRequests (FromWarehouse).
+# ⚠️ REGLA: Solo se usa como FALLBACK si no hay codigo_bodega en la OC (que viene de Excel).
+# Prioridad: 1) codigo_bodega de la OC (desde Excel), 2) SAP_ST_FROM_WAREHOUSE (fallback).
+# Si está vacío y no hay bodega en la OC, las ITR no se crearán.
+SAP_ST_FROM_WAREHOUSE = os.getenv("SAP_ST_FROM_WAREHOUSE", "")
 
 # ============================================================================
 # Configuración de Seguridad (Opcional)

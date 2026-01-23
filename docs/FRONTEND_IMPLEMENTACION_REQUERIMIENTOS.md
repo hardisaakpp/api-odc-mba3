@@ -27,7 +27,7 @@ Cuando se genera una Orden de Compra en SAP, el sistema ahora **automáticamente
 **Comportamiento Nuevo:**
 - Después de crear la OC exitosamente en SAP, el sistema automáticamente:
   1. Obtiene la distribución confirmada del pedido (por tienda)
-  2. Crea un Stock Transfer Order por cada tienda en SAP
+  2. Crea un Inventory Transfer Request por cada tienda en SAP (POST /InventoryTransferRequests)
   3. Retorna información detallada de cada transferencia creada
 
 **Respuesta Actualizada:**

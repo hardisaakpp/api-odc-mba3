@@ -430,12 +430,10 @@ class SAPServiceLayerClient:
             url = f"{self.base_url}/PurchaseOrders"
             headers = {
                 "Content-Type": "application/json",
-                "Cookie": f"B1SESSION={self.session_id}"
+                "Cookie": f"B1SESSION={self.session_id}",
             }
-            
-            logger.info(f"📤 Enviando Purchase Order a SAP Service Layer...")
-            logger.debug(f"   URL: {url}")
-            logger.debug(f"   Datos: {purchase_order_data}")
+            logger.info(f"📤 POST {url} (Purchase Orders)")
+            logger.debug(f"   Request: {json.dumps(purchase_order_data, ensure_ascii=False, default=str)[:2500]}")
             
             # Usar sesión existente si está disponible, sino usar fallback
             if self.working_session:
@@ -465,12 +463,18 @@ class SAPServiceLayerClient:
                 result = response.json()
                 doc_entry = result.get("DocEntry")
                 doc_num = result.get("DocNum")
-                logger.info(f"✅ Purchase Order creada exitosamente en SAP: DocEntry={doc_entry}, DocNum={doc_num}")
+                doc_date = result.get("DocDate")
+                logger.info(
+                    f"✅ Purchase Order creada en SAP: DocEntry={doc_entry}, DocNum={doc_num}"
+                    + (f", DocDate={doc_date}" if doc_date else "")
+                )
+                logger.debug(f"   Response: {json.dumps(result, ensure_ascii=False, default=str)[:1500]}")
                 return {
                     "success": True,
                     "doc_entry": doc_entry,
                     "doc_num": doc_num,
-                    "data": result
+                    "doc_date": doc_date,
+                    "data": result,
                 }
             else:
                 # Procesar error de SAP
@@ -495,18 +499,20 @@ class SAPServiceLayerClient:
                     error_details = error_body
                     
                     logger.error(f"❌ {error_msg} (Código: {error_code})")
+                    logger.debug(f"   Response error: {json.dumps(error_body, ensure_ascii=False)[:1000]}")
                 except Exception as e:
-                    # Si no se puede parsear JSON, usar texto de respuesta
-                    error_msg = f"{error_msg} - {response.text[:500]}"  # Limitar a 500 caracteres
+                    error_msg = f"{error_msg} - {response.text[:500]}"
                     logger.error(f"❌ {error_msg}")
-                    logger.debug(f"Error al parsear respuesta de error: {e}")
+                    logger.debug(f"   Response text: {response.text[:500]}; parse error: {e}")
+                    error_details = {"raw": response.text[:1000]}
+                    error_code = None
                 
                 return {
                     "success": False,
                     "error": error_msg,
-                    "error_code": error_code,  # Código de error de SAP (ej: -4013)
+                    "error_code": error_code,
                     "status_code": response.status_code,
-                    "sap_error_details": error_details  # Respuesta completa de SAP para debugging
+                    "sap_error_details": error_details,
                 }
                 
         except requests.exceptions.RequestException as e:
@@ -524,7 +530,10 @@ class SAPServiceLayerClient:
     
     def create_stock_transfer(self, stock_transfer_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """
-        Crea una solicitud de transferencia de stock (Stock Transfer Order) en SAP.
+        Crea una solicitud de transferencia de stock en SAP usando InventoryTransferRequests.
+        
+        ⚠️ IMPORTANTE: Este método usa el endpoint correcto de Service Layer:
+           POST /InventoryTransferRequests
         
         Args:
             stock_transfer_data: Diccionario con los datos de la solicitud de transferencia en formato SAP
@@ -535,20 +544,20 @@ class SAPServiceLayerClient:
         Ejemplo de stock_transfer_data:
         {
             "DocDate": "2025-01-21",
-            "FromWarehouse": "WH01",
-            "ToWarehouse": "WH02",
-            "Comments": "Transferencia desde OC 12345",
+            "DueDate": "2025-01-21",
+            "FromWarehouse": "OUT-CON",
+            "ToWarehouse": "RG-CD",
+            "Comments": "Transferencia desde OC 12345 - Pedido P-12.48",
             "StockTransferLines": [
                 {
-                    "LineNum": 0,
-                    "ItemCode": "5-0012.9",
-                    "Quantity": 100.0
+                    "ItemCode": "R5082-15.1012",
+                    "Quantity": 10.0
                 }
             ]
         }
         """
         if not self.enabled:
-            logger.debug("⏭️ Creación de Stock Transfer deshabilitada")
+            logger.debug("⏭️ Creación de Inventory Transfer Request deshabilitada")
             return None
         
         if not self._ensure_session():
@@ -556,15 +565,15 @@ class SAPServiceLayerClient:
             return None
         
         try:
-            url = f"{self.base_url}/StockTransfers"
+            # ⚠️ CORRECCIÓN CRÍTICA: Usar endpoint correcto de Service Layer
+            url = f"{self.base_url}/InventoryTransferRequests"
             headers = {
                 "Content-Type": "application/json",
                 "Cookie": f"B1SESSION={self.session_id}"
             }
             
-            logger.info(f"📤 Enviando Stock Transfer Order a SAP Service Layer...")
-            logger.debug(f"   URL: {url}")
-            logger.debug(f"   Datos: {stock_transfer_data}")
+            logger.info(f"📤 POST {url} (Inventory Transfer Requests)")
+            logger.debug(f"   Request: {json.dumps(stock_transfer_data, ensure_ascii=False, default=str)[:1500]}")
             
             # Usar sesión existente si está disponible, sino usar fallback
             if self.working_session:
@@ -594,58 +603,51 @@ class SAPServiceLayerClient:
                 result = response.json()
                 doc_entry = result.get("DocEntry")
                 doc_num = result.get("DocNum")
-                logger.info(f"✅ Stock Transfer Order creada exitosamente en SAP: DocEntry={doc_entry}, DocNum={doc_num}")
+                logger.info(f"✅ Inventory Transfer Request creada en SAP: DocEntry={doc_entry}, DocNum={doc_num}")
+                logger.debug(f"   Response: {json.dumps(result, ensure_ascii=False, default=str)[:1000]}")
                 return {
                     "success": True,
                     "doc_entry": doc_entry,
                     "doc_num": doc_num,
-                    "data": result
+                    "data": result,
                 }
             else:
-                # Procesar error de SAP
-                error_msg = f"Error al crear Stock Transfer Order: {response.status_code}"
+                error_msg = f"Error al crear Inventory Transfer Request: {response.status_code}"
                 error_code = None
                 error_details = None
-                
                 try:
                     error_body = response.json()
                     error_detail = error_body.get("error", {})
-                    
-                    # Extraer mensaje de error de SAP
                     if isinstance(error_detail.get("message"), dict):
                         error_msg = error_detail.get("message", {}).get("value", error_msg)
                     elif isinstance(error_detail.get("message"), str):
                         error_msg = error_detail.get("message", error_msg)
-                    
-                    # Extraer código de error de SAP
                     error_code = error_detail.get("code", "")
-                    
-                    # Guardar detalles completos del error para debugging
                     error_details = error_body
-                    
                     logger.error(f"❌ {error_msg} (Código: {error_code})")
+                    logger.debug(f"   Response error: {json.dumps(error_body, ensure_ascii=False)[:1000]}")
                 except Exception as e:
-                    # Si no se puede parsear JSON, usar texto de respuesta
                     error_msg = f"{error_msg} - {response.text[:500]}"
                     logger.error(f"❌ {error_msg}")
-                    logger.debug(f"Error al parsear respuesta de error: {e}")
-                
+                    logger.debug(f"   Response text: {response.text[:500]}; parse error: {e}")
+                    error_details = {"raw": response.text[:1000]}
+                    error_code = None
                 return {
                     "success": False,
                     "error": error_msg,
                     "error_code": error_code,
                     "status_code": response.status_code,
-                    "sap_error_details": error_details
+                    "sap_error_details": error_details,
                 }
                 
         except requests.exceptions.RequestException as e:
-            logger.error(f"❌ Error de conexión al crear Stock Transfer Order: {e}")
+            logger.error(f"❌ Error de conexión al crear Inventory Transfer Request: {e}")
             return {
                 "success": False,
                 "error": f"Error de conexión: {str(e)}"
             }
         except Exception as e:
-            logger.error(f"❌ Error inesperado al crear Stock Transfer Order: {e}", exc_info=True)
+            logger.error(f"❌ Error inesperado al crear Inventory Transfer Request: {e}", exc_info=True)
             return {
                 "success": False,
                 "error": f"Error inesperado: {str(e)}"

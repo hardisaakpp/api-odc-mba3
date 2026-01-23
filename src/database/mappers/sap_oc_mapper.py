@@ -21,39 +21,20 @@ class SAPOCMapper:
         pedido_id: Optional[str] = None
     ) -> Dict[str, Any]:
         """
-        Convierte una orden de compra de las tablas a formato JSON de SAP Service Layer.
+        Convierte una orden de compra a formato JSON para POST /PurchaseOrders (Postman-validado).
+        
+        Regla: WarehouseCode por línea SOLO desde detalle.codigo_bodega. NO usar bodega de cabecera.
+        Si un detalle no tiene codigo_bodega → ValueError (error funcional).
         
         Args:
             oc_cabecera: Datos de orden_compra_cabecera
-            oc_detalles: Lista de datos de orden_compra_detalle
-            warehouse_code: Código de bodega (opcional, si no se proporciona se omite)
-            usuario_id: ID del usuario que genera la OC (para U_USUARIO)
-            pedido_id: ID del pedido relacionado (para U_LOTE)
+            oc_detalles: Lista de orden_compra_detalle (cada uno debe tener codigo_bodega)
+            warehouse_code: No se usa para WarehouseCode; se mantiene por compatibilidad de firma
+            usuario_id: Para U_USUARIO
+            pedido_id: Para U_LOTE
             
         Returns:
-            Diccionario con estructura JSON para SAP Service Layer
-            
-        Ejemplo de salida:
-        {
-            "CardCode": "PROVEEDOR001",
-            "DocDate": "2025-01-21",
-            "DocDueDate": "2025-01-21",
-            "TaxDate": "2025-01-21",
-            "Comments": "Ref: 900125351",
-            "U_ORIGEN": "C",
-            "U_USUARIO": "user123",
-            "U_FECHA": "2025-01-21",
-            "U_LOTE": "pedido-uuid",
-            "DocumentLines": [
-                {
-                    "ItemCode": "5-0012.9",
-                    "Quantity": 1824.0,
-                    "UnitPrice": 1.1625,
-                    "LineTotal": 2120.4,
-                    "WarehouseCode": "01"
-                }
-            ]
-        }
+            JSON para SAP (CardCode, DocDate, DocDueDate, TaxDate, Comments, DocumentLines con WarehouseCode).
         """
         # Formatear fecha
         fecha = oc_cabecera.get("fecha_generacion")
@@ -71,32 +52,35 @@ class SAPOCMapper:
         elif fecha is None:
             fecha = datetime.now().strftime("%Y-%m-%d")
         
-        # Construir líneas del documento
+        # Construir DocumentLines. WarehouseCode SOLO desde detalle.codigo_bodega (contrato Postman).
         document_lines = []
         for idx, detalle in enumerate(oc_detalles, start=1):
+            sku = detalle.get("sku_sap")
+            qty = float(detalle.get("cantidad_sap", 0))
+            if not sku or qty <= 0:
+                logger.warning(f"⚠️ Línea {idx} omitida: ItemCode={sku}, Quantity={qty}")
+                continue
+
+            bodega = detalle.get("codigo_bodega") or detalle.get("warehouse_code")
+            if not bodega or not str(bodega).strip():
+                raise ValueError(
+                    f"Línea {idx} (SKU={sku}) sin codigo_bodega. "
+                    "Cada detalle debe tener codigo_bodega; no se usa bodega de cabecera."
+                )
+            bodega = str(bodega).strip()
+
             line = {
-                "LineNum": idx - 1,  # SAP usa índice base 0
-                "ItemCode": detalle.get("sku_sap"),
-                "Quantity": float(detalle.get("cantidad_sap", 0)),
+                "LineNum": idx - 1,
+                "ItemCode": sku,
+                "Quantity": qty,
                 "UnitPrice": float(detalle.get("precio_unitario", 0)),
                 "LineTotal": float(detalle.get("total_linea", 0)),
-                "DiscountPercent": 0.0
+                "DiscountPercent": 0.0,
+                "WarehouseCode": bodega,
             }
-            
-            # Agregar código de bodega si está disponible
-            if warehouse_code:
-                line["WarehouseCode"] = warehouse_code
-            
-            # Validar que los campos requeridos estén presentes
-            if not line.get("ItemCode") or line.get("Quantity", 0) <= 0:
-                logger.warning(
-                    f"⚠️ Línea {idx} omitida: ItemCode={line.get('ItemCode')}, "
-                    f"Quantity={line.get('Quantity')}"
-                )
-                continue
-            
             document_lines.append(line)
-        
+            logger.debug(f"   Línea {idx}: ItemCode={sku}, WarehouseCode={bodega}")
+
         if not document_lines:
             raise ValueError("No hay líneas válidas para la orden de compra")
         
@@ -120,10 +104,11 @@ class SAPOCMapper:
         fecha_actual = datetime.utcnow().strftime("%Y-%m-%d")
         
         # Construir JSON completo con UDFs de trazabilidad
+        # ⚠️ NOTA: Purchase Orders usa DocDueDate (no DueDate), que es correcto para este endpoint
         purchase_order = {
             "CardCode": proveedor,
             "DocDate": fecha,
-            "DocDueDate": fecha,  # Por defecto igual a DocDate, se puede calcular según lógica
+            "DocDueDate": fecha,  # ⚠️ Correcto para Purchase Orders (POST /PurchaseOrders)
             "TaxDate": fecha,
             "Comments": f"Ref: {oc_cabecera.get('referencia_despacho', 'N/A')}",
             

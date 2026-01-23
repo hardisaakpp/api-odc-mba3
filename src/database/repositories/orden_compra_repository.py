@@ -214,8 +214,9 @@ class OrdenCompraRepository:
                 referencia_detalle,
                 precio_unitario,
                 total_linea,
-                cantidad_origen
-            ) VALUES (NEWID(), ?, ?, ?, ?, ?, ?, ?, ?)
+                cantidad_origen,
+                codigo_bodega
+            ) VALUES (NEWID(), ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """
             
             for detalle in detalles:
@@ -229,6 +230,7 @@ class OrdenCompraRepository:
                         detalle.get("precio_unitario"),
                         detalle.get("total_linea"),
                         detalle.get("cantidad_origen"),
+                        detalle.get("codigo_bodega"),  # ⭐ NUEVO: Persistir bodega por línea
                     )
                     
                     cursor.execute(sql, values)
@@ -810,7 +812,7 @@ class OrdenCompraRepository:
             cursor.execute(
                 """
                 SELECT oc_detalle_id, oc_id, sku_sap, cantidad_sap, unidad_sap,
-                       referencia_detalle, precio_unitario, total_linea, cantidad_origen
+                       referencia_detalle, precio_unitario, total_linea, cantidad_origen, codigo_bodega
                 FROM orden_compra_detalle
                 WHERE oc_id = ?
                 ORDER BY oc_detalle_id ASC
@@ -831,6 +833,7 @@ class OrdenCompraRepository:
                     "precio_unitario": float(row[6]) if row[6] is not None else 0.0,
                     "total_linea": float(row[7]) if row[7] is not None else 0.0,
                     "cantidad_origen": float(row[8]) if row[8] is not None else None,
+                    "codigo_bodega": row[9] if len(row) > 9 and row[9] else None,  # ⭐ NUEVO: Devolver bodega por línea
                     # created_at y updated_at no existen en la tabla, se omiten
                 })
             

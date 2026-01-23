@@ -6,11 +6,14 @@ Este servicio orquesta la construcción del JSON y el envío de ODC a SAP.
 
 import logging
 import json
+from pathlib import Path
+from datetime import datetime
 from typing import Optional, Dict, Any, List
 
 from ..repositories.orden_compra_repository import OrdenCompraRepository
 from ..clients.sap_service_layer_client import SAPServiceLayerClient
 from ..mappers.sap_oc_mapper import SAPOCMapper
+from src.config import PROJECT_ROOT
 
 logger = logging.getLogger(__name__)
 
@@ -246,6 +249,33 @@ class OCSAPService:
                     usuario_id=oc_cabecera.get("creado_por"),  # Usuario de la cabecera
                     pedido_id=oc_cabecera.get("pedido_id")     # Pedido relacionado
                 )
+                
+                # ⭐ GUARDAR JSON QUE SE ENVIARÁ A SAP EN ARCHIVO (para auditoría/debugging)
+                try:
+                    # Crear directorio si no existe
+                    output_dir = PROJECT_ROOT / "output" / "orden_compra_json"
+                    output_dir.mkdir(parents=True, exist_ok=True)
+                    
+                    # Nombre de archivo: oc_sap_{oc_id}_{timestamp}.json
+                    timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+                    filename = f"oc_sap_{oc_id}_{timestamp}.json"
+                    filepath = output_dir / filename
+                    
+                    # JSON completo con metadata
+                    sap_json_completo = {
+                        "oc_id": oc_id,
+                        "fecha_envio": datetime.utcnow().isoformat(),
+                        "warehouse_code": warehouse_code,
+                        "purchase_order_json": purchase_order_json
+                    }
+                    
+                    # Guardar JSON
+                    with open(filepath, 'w', encoding='utf-8') as f:
+                        json.dump(sap_json_completo, f, indent=2, ensure_ascii=False, default=str)
+                    
+                    logger.info(f"📤 JSON que se enviará a SAP guardado en: {filepath}")
+                except Exception as e:
+                    logger.warning(f"⚠️ No se pudo guardar JSON de SAP (no crítico): {e}")
             except ValueError as e:
                 error_msg = f"Error al construir JSON de SAP: {str(e)}"
                 result["error"] = error_msg
@@ -363,15 +393,123 @@ class OCSAPService:
                 result["success"] = True
                 result["doc_entry"] = doc_entry
                 result["doc_num"] = doc_num
-                result["sap_response"] = sap_response_data  # Agregar respuesta completa de SAP
-                result["error_source"] = None  # Sin error
-                result["message"] = mensaje_sap  # Agregar mensaje para frontend
-                
+                result["doc_date"] = sap_response.get("doc_date")
+                result["sap_response"] = sap_response_data
+                result["error_source"] = None
+                result["message"] = mensaje_sap
+
+                doc_date_str = f", DocDate={result['doc_date']}" if result.get("doc_date") else ""
                 logger.info(
                     f"✅ ODC {oc_id} enviada exitosamente: "
-                    f"DocEntry={doc_entry}, DocNum={doc_num}"
+                    f"DocEntry={doc_entry}, DocNum={doc_num}{doc_date_str}"
                 )
+
+                # 6.1. Inventory Transfer Requests (1 por bodega destino) — POST /InventoryTransferRequests
+                doc_date_val = sap_response.get("doc_date")
+                doc_date_itr = None
+                if isinstance(doc_date_val, str) and len(doc_date_val) >= 10:
+                    doc_date_itr = doc_date_val[:10]
+                if not doc_date_itr:
+                    doc_date_itr = datetime.utcnow().strftime("%Y-%m-%d")
                 
+                # ⭐ REGLA CLARA: FromWarehouse prioridad
+                # 1. codigo_bodega de la OC (viene de Excel) → prioridad
+                # 2. SAP_ST_FROM_WAREHOUSE (config) → fallback solo si no hay bodega en OC
+                # 3. Si ninguno → error (no crear ITR)
+                from_wh = None
+                try:
+                    from src.config import SAP_ST_FROM_WAREHOUSE
+                    # Prioridad 1: bodega de la OC (viene de Excel)
+                    from_wh = (oc_cabecera.get("codigo_bodega") or "").strip()
+                    # Prioridad 2: SAP_ST_FROM_WAREHOUSE solo como fallback
+                    if not from_wh:
+                        from_wh = (SAP_ST_FROM_WAREHOUSE or "").strip()
+                        if from_wh:
+                            logger.info(f"📍 Usando SAP_ST_FROM_WAREHOUSE como fallback: {from_wh}")
+                except Exception:
+                    from_wh = (oc_cabecera.get("codigo_bodega") or "").strip()
+                
+                if from_wh and oc_detalles:
+                    try:
+                        from ..mappers.sap_stock_transfer_mapper import SAPStockTransferMapper
+                        itr_payloads = SAPStockTransferMapper.to_sap_inventory_transfer_requests_by_bodega(
+                            oc_detalles=oc_detalles,
+                            from_warehouse=from_wh,
+                            doc_date=doc_date_itr,
+                            due_date=doc_date_itr,
+                            oc_doc_num=doc_num,
+                        )
+                        itr_created = 0
+                        itr_errors = 0
+                        itr_results = []
+                        logger.info(f"📤 Enviando {len(itr_payloads)} Inventory Transfer Request(s) por bodega a SAP...")
+                        for idx, pl in enumerate(itr_payloads):
+                            to_warehouse = pl.get("ToWarehouse", "UNKNOWN")
+                            
+                            # ⭐ GUARDAR JSON DEL ITR EN ARCHIVO (para auditoría/debugging)
+                            try:
+                                output_dir = PROJECT_ROOT / "output" / "orden_compra_json"
+                                output_dir.mkdir(parents=True, exist_ok=True)
+                                timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+                                filename = f"itr_bodega_{oc_id}_{to_warehouse}_{timestamp}_{idx+1}.json"
+                                filepath = output_dir / filename
+                                with open(filepath, 'w', encoding='utf-8') as f:
+                                    json.dump(pl, f, indent=2, ensure_ascii=False, default=str)
+                                logger.debug(f"📄 JSON de ITR (por bodega) guardado en: {filepath}")
+                            except Exception as e:
+                                logger.warning(f"⚠️ No se pudo guardar JSON de ITR (no crítico): {e}")
+                            
+                            logger.debug(f"🔄 Enviando ITR {idx+1}/{len(itr_payloads)} a SAP: {from_wh} → {to_warehouse}...")
+                            resp = self.sap_client.create_stock_transfer(pl)
+                            
+                            # ✅ SOLO considerar creado si hay DocEntry confirmado
+                            if resp and resp.get("success") and resp.get("doc_entry"):
+                                itr_created += 1
+                                itr_results.append({
+                                    "ToWarehouse": to_warehouse,
+                                    "doc_entry": resp.get("doc_entry"),
+                                    "doc_num": resp.get("doc_num"),
+                                    "success": True,
+                                })
+                                logger.info(
+                                    f"✅ Inventory Transfer Request CREADO en SAP: {from_wh} → {to_warehouse} "
+                                    f"(DocEntry={resp.get('doc_entry')}, DocNum={resp.get('doc_num')})"
+                                )
+                            else:
+                                itr_errors += 1
+                                error_msg = resp.get("error") if resp else "Sin respuesta de SAP"
+                                itr_results.append({
+                                    "ToWarehouse": to_warehouse,
+                                    "success": False,
+                                    "error": error_msg,
+                                })
+                                logger.warning(
+                                    f"⚠️ Inventory Transfer Request NO creado: {from_wh} → {to_warehouse}: {error_msg}"
+                                )
+                        result["inventory_transfer_requests"] = {
+                            "created": itr_created,
+                            "errors": itr_errors,
+                            "total": len(itr_payloads),
+                            "resultados": itr_results,
+                        }
+                        if itr_created:
+                            logger.info(
+                                f"✅ Inventory Transfer Requests creados en SAP: {itr_created}/{len(itr_payloads)} "
+                                f"(DocEntry confirmado para cada uno)"
+                            )
+                        if itr_errors:
+                            logger.warning(
+                                f"⚠️ {itr_errors} Inventory Transfer Request(s) NO se pudieron crear en SAP"
+                            )
+                        if itr_created == 0:
+                            logger.warning(
+                                f"⚠️ No se creó ningún Inventory Transfer Request en SAP "
+                                f"(0/{len(itr_payloads)} exitosos)"
+                            )
+                    except Exception as e:
+                        logger.warning(f"⚠️ No se pudieron crear Inventory Transfer Requests (no crítico): {e}")
+                        result["inventory_transfer_requests_error"] = str(e)
+
                 # ============================================================
                 # FASE 6: Notificación y cierre
                 # ============================================================
@@ -424,15 +562,28 @@ class OCSAPService:
                         
                         if resultado_transferencias.get("success"):
                             logger.info(
-                                f"✅ {resultado_transferencias['transferencias_creadas']}/{resultado_transferencias['total_tiendas']} "
-                                f"Solicitud(es) de Transferencia creada(s) para pedido {pedido_id}"
+                                f"✅ Inventory Transfer Requests creados en SAP: "
+                                f"{resultado_transferencias['transferencias_creadas']}/{resultado_transferencias['total_tiendas']} "
+                                f"para pedido {pedido_id} (DocEntry confirmado para cada uno)"
                             )
                             result["solicitudes_transferencia"] = resultado_transferencias
                         else:
-                            logger.warning(
-                                f"⚠️ No se pudieron crear Solicitudes de Transferencia para pedido {pedido_id}: "
-                                f"{resultado_transferencias.get('error', 'Error desconocido')}"
-                            )
+                            error_type = resultado_transferencias.get("error_type", "desconocido")
+                            error_msg = resultado_transferencias.get("error", "Error desconocido")
+                            if error_type == "datos_maestros":
+                                logger.warning(
+                                    f"⚠️ Inventory Transfer Requests NO creados para pedido {pedido_id}: "
+                                    f"validación de datos maestros fallida - {error_msg}"
+                                )
+                            elif error_type == "stock_insuficiente":
+                                logger.warning(
+                                    f"⚠️ Inventory Transfer Requests NO creados para pedido {pedido_id}: "
+                                    f"validación de stock fallida - {error_msg}"
+                                )
+                            else:
+                                logger.warning(
+                                    f"⚠️ Inventory Transfer Requests NO creados para pedido {pedido_id}: {error_msg}"
+                                )
                             result["solicitudes_transferencia"] = resultado_transferencias
                     except Exception as e:
                         # NO fallar el proceso si las solicitudes de transferencia fallan
@@ -591,8 +742,22 @@ class OCSAPService:
         # Validación 4: Debe tener proveedor (CardCode)
         if not oc_cabecera.get("proveedor"):
             errors.append("La OC no tiene proveedor (CardCode)")
+
+        # Validación 5: codigo_bodega obligatorio por línea (solo detalle). No usar cabecera.
+        lineas_sin_bodega = []
+        for d in oc_detalles:
+            if d.get("cantidad_sap", 0) <= 0:
+                continue
+            b = d.get("codigo_bodega") or d.get("warehouse_code")
+            if not b or not str(b).strip():
+                lineas_sin_bodega.append(d.get("sku_sap", "SKU desconocido"))
+        if lineas_sin_bodega:
+            errors.append(
+                f"Líneas sin codigo_bodega en detalle: {', '.join(lineas_sin_bodega)}. "
+                "Cada línea debe tener codigo_bodega; no se usa bodega de cabecera."
+            )
         
-        # Validación 5: Advertencia si viene de despacho (legacy)
+        # Validación 6: Advertencia si viene de despacho (legacy)
         if oc_cabecera.get("despacho_id") and not oc_cabecera.get("pedido_id"):
             warnings.append(
                 "⚠️ OC basada en despacho (legacy). "

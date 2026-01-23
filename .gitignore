@@ -8,6 +8,9 @@ resultado_api.json
 ultima_consulta.json
 src/resultado_api.json
 
+# Directorio de salida (JSONs de OC, etc.)
+output/
+
 # Archivos de debugging
 debug/
 *.log

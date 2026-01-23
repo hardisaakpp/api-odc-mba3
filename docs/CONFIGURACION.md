@@ -61,18 +61,28 @@ SAP_CACHE_DAYS=30
 
 **Requisito:** El servidor vinculado `[MYHANADB]` debe estar configurado en SQL Server. Ver sección [Configurar Servidor Vinculado](#configurar-servidor-vinculado-para-sap).
 
-### SAP Service Layer (Envío de Purchase Orders)
+### SAP Service Layer (Purchase Orders e Inventory Transfer Requests)
+
+Contrato validado con Postman (puerto 50001): `Login`, `PurchaseOrders`, `InventoryTransferRequests`.
+
+**Variables recomendadas (sin `/Login` en la URL):**
 
 ```env
-SAP_SERVICE_LAYER_URL=http://tu-servidor-sap:50000/b1s/v1
-SAP_SERVICE_LAYER_USERNAME=tu_usuario
-SAP_SERVICE_LAYER_PASSWORD=tu_contraseña
-SAP_SERVICE_LAYER_DATABASE=SBO_MABEL_PROD
+SAP_SL_BASE_URL=http://10.128.240.4:50001/b1s/v1
+SAP_COMPANY_DB=TEST_MABEL
+SAP_USER=MZ-SIS-05
+SAP_PASSWORD=***REMOVED***
 ENABLE_SAP_SERVICE_LAYER=true
 SAP_SERVICE_LAYER_TIMEOUT=30
+SAP_SERVICE_LAYER_VERIFY_SSL=false
+SAP_ST_FROM_WAREHOUSE=OUT-CON
 ```
 
-**Nota:** Estas variables son necesarias para el endpoint `POST /integrar-sap` que envía órdenes de compra a SAP.
+**Compatibilidad:** También se aceptan `SAP_SERVICE_LAYER_URL`, `SAP_SERVICE_LAYER_DATABASE`, `SAP_SERVICE_LAYER_USERNAME`, `SAP_SERVICE_LAYER_PASSWORD`. La URL base no debe incluir `/Login`.
+
+`SAP_ST_FROM_WAREHOUSE`: bodega origen para Inventory Transfer Requests (1 por bodega destino). Si no se define, se usa `codigo_bodega` de la cabecera de la OC.
+
+**Nota:** Necesarias para `POST /integrar-sap` (OC con `WarehouseCode` por línea e ITR agrupadas por bodega).
 
 ### Notificaciones por Email
 
