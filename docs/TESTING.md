@@ -100,6 +100,97 @@ def test_con_fixture(self, client: TestClient, api_key: str):
     assert response.status_code == 200
 ```
 
+---
+
+## 🧪 Testing Manual - Comandos PowerShell
+
+### Requisitos Previos
+
+1. **Servidor API corriendo:**
+   ```powershell
+   python src/api_server.py
+   ```
+
+2. **Variables de entorno configuradas** en `.env`
+
+3. **SQL Server accesible** (para pruebas de guardado)
+
+4. **SAP configurado** (para pruebas de integración SAP)
+
+### Orden Recomendada de Pruebas
+
+1. **Health Check** - Verificar que el servidor esté funcionando
+2. **Consultar Despachos** - Consultar sin guardar
+3. **Migrar Despachos** - Consultar y guardar en BD
+4. **Procesar Orden de Compra** - Copiar a OC
+5. **Proceso Completo** - Flujo completo end-to-end
+6. **Consultar SAP** - Consultar productos en SAP
+7. **Integrar con SAP** - Enviar ODCs a SAP
+
+### Comandos Individuales
+
+#### 1. Health Check
+
+```powershell
+Invoke-RestMethod -Uri "http://localhost:8000/health" -Method Get
+```
+
+#### 2. Consultar Despachos (GET /consultar)
+
+```powershell
+Invoke-RestMethod -Uri "http://localhost:8000/consultar" -Method Get
+```
+
+#### 3. Migrar Despachos (GET /migrar)
+
+```powershell
+Invoke-RestMethod -Uri "http://localhost:8000/migrar" -Method Get
+```
+
+#### 4. Procesar Orden de Compra (GET /procesar-oc)
+
+```powershell
+Invoke-RestMethod -Uri "http://localhost:8000/procesar-oc" -Method Get
+```
+
+#### 5. Proceso Completo (GET /pruebas)
+
+```powershell
+Invoke-RestMethod -Uri "http://localhost:8000/pruebas" -Method Get
+```
+
+#### 6. Consultar SAP
+
+```powershell
+# Con cache
+Invoke-RestMethod -Uri "http://localhost:8000/sap/test?sku=5-0012.9" -Method Get
+
+# Directo (sin cache)
+Invoke-RestMethod -Uri "http://localhost:8000/sap/test/direct?sku=5-0012.9" -Method Get
+```
+
+#### 7. Integrar con SAP (POST /integrar-sap)
+
+```powershell
+Invoke-RestMethod -Uri "http://localhost:8000/integrar-sap" -Method Post
+```
+
+### Ver Resultados Formateados
+
+```powershell
+$result = Invoke-RestMethod -Uri "http://localhost:8000/health" -Method Get
+$result | ConvertTo-Json -Depth 10
+```
+
+### Testing Automatizado
+
+Un script de prueba automatizado está disponible en `scripts/test_endpoints.ps1`. Este script prueba todos los endpoints en orden y muestra los resultados formateados:
+
+```powershell
+# Ejecutar desde la raíz del proyecto
+.\scripts\test_endpoints.ps1
+```
+
 ### Tests con Mocking
 
 ```python

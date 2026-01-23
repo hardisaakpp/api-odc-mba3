@@ -14,27 +14,29 @@ Modificar el endpoint `/integrar-sap` (POST) para que **persista automáticament
 
 Se creó un script SQL que agrega los siguientes campos a la tabla `orden_compra_cabecera`:
 
-| Campo | Tipo | Descripción |
-|-------|------|-------------|
-| `respuesta_sap` | NVARCHAR(MAX) | Mensaje o respuesta completa de SAP (éxito o error) |
-| `fecha_procesado` | DATETIME | Timestamp cuando se procesó la orden con SAP |
-| `error_message` | NVARCHAR(MAX) | Mensaje de error detallado (si aplica) |
-| `error_code` | VARCHAR(50) | Código de error de SAP (ej: -4013) |
-| `error_source` | VARCHAR(50) | Origen del error: 'SAP', 'BACKEND', 'SAP_CONNECTION' |
-| `updated_at` | DATETIME | Timestamp de última actualización |
+| Campo             | Tipo          | Descripción                                          |
+| ----------------- | ------------- | ---------------------------------------------------- |
+| `respuesta_sap`   | NVARCHAR(MAX) | Mensaje o respuesta completa de SAP (éxito o error)  |
+| `fecha_procesado` | DATETIME      | Timestamp cuando se procesó la orden con SAP         |
+| `error_message`   | NVARCHAR(MAX) | Mensaje de error detallado (si aplica)               |
+| `error_code`      | VARCHAR(50)   | Código de error de SAP (ej: -4013)                   |
+| `error_source`    | VARCHAR(50)   | Origen del error: 'SAP', 'BACKEND', 'SAP_CONNECTION' |
+| `updated_at`      | DATETIME      | Timestamp de última actualización                    |
 
 **Índices creados:**
+
 - `IX_orden_compra_cabecera_estado` - Para búsquedas por estado
 - `IX_orden_compra_cabecera_referencia_despacho` - Para búsquedas por referencia
 
 ### 2. Repositorio: `src/database/repositories/orden_compra_repository.py`
 
 #### Método `update_estado` actualizado:
+
 ```python
 def update_estado(
-    self, 
-    oc_id: str, 
-    estado: str, 
+    self,
+    oc_id: str,
+    estado: str,
     numero_oc_sap: Optional[str] = None,
     respuesta_sap: Optional[str] = None,      # ⭐ NUEVO
     error_message: Optional[str] = None,       # ⭐ NUEVO
@@ -44,13 +46,16 @@ def update_estado(
 ```
 
 **Comportamiento:**
+
 - Actualiza `fecha_procesado` automáticamente con `GETDATE()`
 - Actualiza `updated_at` automáticamente con `GETDATE()`
 - Si el estado es `ENVIADA`, limpia los campos de error (los pone en NULL)
 - Construye SQL dinámicamente solo con los campos proporcionados
 
 #### Métodos de consulta actualizados:
+
 Todos los métodos que consultan `orden_compra_cabecera` ahora incluyen los nuevos campos:
+
 - ✅ `get_existing_cabecera()`
 - ✅ `get_by_estado()`
 - ✅ `get_all()`
@@ -62,6 +67,7 @@ Todos los métodos que consultan `orden_compra_cabecera` ahora incluyen los nuev
 #### Método `enviar_oc_a_sap` actualizado:
 
 **Caso exitoso:**
+
 ```python
 oc_repo.update_estado(
     oc_id,
@@ -75,9 +81,10 @@ oc_repo.update_estado(
 ```
 
 **Caso de error:**
+
 ```python
 oc_repo.update_estado(
-    oc_id, 
+    oc_id,
     "ERROR",
     respuesta_sap=error_final,        # ⭐ Mensaje de error
     error_message=error_final,
@@ -87,6 +94,7 @@ oc_repo.update_estado(
 ```
 
 Todos los puntos de error en el servicio ahora persisten información detallada:
+
 - ✅ Error al obtener detalles de la OC
 - ✅ Error al construir JSON de SAP
 - ✅ Error de conexión con SAP
@@ -123,6 +131,7 @@ POST /integrar-sap?referencia_despacho=900125353&referencia_despacho=900125354
 El endpoint `/integrar-sap` ahora retorna:
 
 **Éxito:**
+
 ```json
 {
   "status": "success",
@@ -137,7 +146,9 @@ El endpoint `/integrar-sap` ahora retorna:
         "doc_num": 12345,
         "doc_entry": 67890,
         "message": "Orden creada exitosamente. DocNum: 12345",
-        "sap_response": { /* respuesta completa de SAP */ }
+        "sap_response": {
+          /* respuesta completa de SAP */
+        }
       }
     ],
     "total": 1,
@@ -148,6 +159,7 @@ El endpoint `/integrar-sap` ahora retorna:
 ```
 
 **Error:**
+
 ```json
 {
   "status": "partial",
@@ -162,7 +174,9 @@ El endpoint `/integrar-sap` ahora retorna:
         "error_message": "El proveedor no existe en SAP (Código SAP: -4013)",
         "error_code": "-4013",
         "error_source": "SAP",
-        "sap_error_details": { /* detalles completos del error */ }
+        "sap_error_details": {
+          /* detalles completos del error */
+        }
       }
     ],
     "total": 1,
@@ -196,7 +210,7 @@ El endpoint `/integrar-sap` ahora retorna:
 
 ```sql
 -- Ver órdenes procesadas recientemente con sus respuestas
-SELECT 
+SELECT
     oc_id,
     referencia_despacho,
     proveedor,
@@ -208,29 +222,29 @@ SELECT
     error_code,
     error_source,
     updated_at
-FROM orden_compra_cabecera 
+FROM orden_compra_cabecera
 WHERE fecha_procesado > DATEADD(hour, -1, GETDATE())
 ORDER BY fecha_procesado DESC;
 
 -- Ver solo órdenes con error
-SELECT 
+SELECT
     referencia_despacho,
     proveedor,
     respuesta_sap,
     error_code,
     error_source,
     fecha_procesado
-FROM orden_compra_cabecera 
+FROM orden_compra_cabecera
 WHERE estado = 'ERROR'
 ORDER BY fecha_procesado DESC;
 
 -- Ver solo órdenes enviadas exitosamente
-SELECT 
+SELECT
     referencia_despacho,
     numero_oc_sap,
     respuesta_sap,
     fecha_procesado
-FROM orden_compra_cabecera 
+FROM orden_compra_cabecera
 WHERE estado = 'ENVIADA'
 ORDER BY fecha_procesado DESC;
 ```
@@ -238,6 +252,7 @@ ORDER BY fecha_procesado DESC;
 ## ⚠️ Compatibilidad
 
 ### Sistema de Logs
+
 Los cambios **NO afectan** el sistema de logs existente. El sistema continúa guardando logs detallados en `sap_integration_logs` con información completa de cada integración.
 
 **Ahora tienes dos formas de consultar respuestas SAP:**
@@ -246,7 +261,9 @@ Los cambios **NO afectan** el sistema de logs existente. El sistema continúa gu
 2. **`sap_integration_logs`** - Para logs detallados, auditoría y troubleshooting
 
 ### Endpoints Existentes
+
 Todos los endpoints existentes siguen funcionando sin cambios:
+
 - ✅ `GET /ordenes-compra` - Ahora incluye los nuevos campos
 - ✅ `GET /ordenes-compra/logs` - Sin cambios, sigue funcionando igual
 - ✅ `POST /integrar-sap` - Ahora persiste respuestas automáticamente
@@ -255,7 +272,7 @@ Todos los endpoints existentes siguen funcionando sin cambios:
 
 1. **Retrocompatibilidad**: Los nuevos campos son `NULL` por defecto, así que las órdenes antiguas no se ven afectadas.
 
-2. **Timestamps automáticos**: 
+2. **Timestamps automáticos**:
    - `fecha_procesado` se actualiza cuando cambia el estado
    - `updated_at` se actualiza en cada modificación
 
@@ -285,13 +302,14 @@ Todos los endpoints existentes siguen funcionando sin cambios:
 ## 📞 Soporte
 
 Si hay algún problema con la implementación:
+
 1. Verificar que el script SQL se ejecutó correctamente
 2. Revisar logs del servidor FastAPI
 3. Consultar `sap_integration_logs` para detalles de errores
 4. Verificar estructura de la tabla con:
    ```sql
-   SELECT COLUMN_NAME, DATA_TYPE, CHARACTER_MAXIMUM_LENGTH 
-   FROM INFORMATION_SCHEMA.COLUMNS 
+   SELECT COLUMN_NAME, DATA_TYPE, CHARACTER_MAXIMUM_LENGTH
+   FROM INFORMATION_SCHEMA.COLUMNS
    WHERE TABLE_NAME = 'orden_compra_cabecera';
    ```
 
@@ -300,21 +318,3 @@ Si hay algún problema con la implementación:
 **Fecha de implementación:** 2025-12-16
 **Versión:** 1.0
 **Responsable:** Backend Team
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

@@ -192,6 +192,3 @@ def save_mba3_remisiones_to_sql_server(
                 conn.close()
             except Exception:
                 pass
-
-
-

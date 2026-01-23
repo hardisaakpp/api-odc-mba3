@@ -336,5 +336,3 @@ class FacturaMapper:
             "confirmado": 1 if factura.get("CONFIRMADO") else 0,
             "fecha_factura": fecha_factura,
         }
-
-

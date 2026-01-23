@@ -77,14 +77,14 @@ El módulo de **Homologaciones SKU** permite gestionar las correspondencias entr
 CREATE TABLE [dbo].[sku_homologacion] (
     -- Primary Key
     homologacion_id UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
-    
+
     -- Datos de MBA3 (requeridos)
     sku_mba3 VARCHAR(100) NOT NULL,
     nombre_producto_mba3 NVARCHAR(255) NULL,
     precio_unitario_mba3 DECIMAL(18, 2) NULL,
     cantidad_docena_mba3 DECIMAL(18, 2) NULL,
     total_linea_mba3 DECIMAL(18, 2) NULL,
-    
+
     -- Datos de SAP (opcionales)
     sku_sap VARCHAR(100) NULL,
     nombre_producto_sap NVARCHAR(255) NULL,
@@ -92,22 +92,22 @@ CREATE TABLE [dbo].[sku_homologacion] (
     cantidad_pack_sap DECIMAL(18, 2) NULL,
     unidad_sap VARCHAR(20) NULL,
     subtotal_sap DECIMAL(18, 2) NULL,
-    
+
     -- Estado y flags
     estado VARCHAR(20) NOT NULL DEFAULT 'PENDIENTE',
     tiene_diferencias BIT NOT NULL DEFAULT 0,
     tiene_datos_sap BIT NOT NULL DEFAULT 0,
-    
+
     -- Relaciones
     detalle_id UNIQUEIDENTIFIER NULL,
     despacho_id UNIQUEIDENTIFIER NULL,
-    
+
     -- Metadata
     created_at DATETIME DEFAULT GETDATE(),
     updated_at DATETIME DEFAULT GETDATE(),
     ultima_modificacion DATETIME NULL,
     modificado_por VARCHAR(100) NULL,
-    
+
     CONSTRAINT CK_sku_homologacion_estado CHECK (estado IN ('PENDIENTE', 'HOMOLOGADO', 'ERROR'))
 );
 ```
@@ -137,6 +137,7 @@ sqlcmd -S tu_servidor -d mba3_consultas -i scripts/create_sku_homologacion_table
 Obtiene lista paginada de homologaciones con filtros.
 
 **Query Parameters:**
+
 - `page` (int, default: 1) - Número de página
 - `pageSize` (int, default: 10) - Tamaño de página
 - `estado` (string, optional) - PENDIENTE | HOMOLOGADO | ERROR
@@ -145,6 +146,7 @@ Obtiene lista paginada de homologaciones con filtros.
 - `sku` (string, optional) - Búsqueda por SKU (MBA3 o SAP)
 
 **Response:**
+
 ```json
 {
   "status": "success",
@@ -167,22 +169,25 @@ Obtiene lista paginada de homologaciones con filtros.
 Actualiza una homologación específica.
 
 **Path Parameters:**
+
 - `homologacion_id` (string) - UUID de la homologación
 
 **Request Body:**
+
 ```json
 {
   "sku_sap": "SKU001-SAP",
   "nombre_producto_sap": "Producto SAP",
-  "precio_unitario_sap": 105.00,
+  "precio_unitario_sap": 105.0,
   "cantidad_pack_sap": 12,
   "unidad_sap": "UN",
-  "subtotal_sap": 1260.00,
+  "subtotal_sap": 1260.0,
   "estado": "HOMOLOGADO"
 }
 ```
 
 **Response:**
+
 ```json
 {
   "status": "success",
@@ -196,6 +201,7 @@ Actualiza una homologación específica.
 Actualiza múltiples homologaciones en lote.
 
 **Request Body:**
+
 ```json
 {
   "updates": [
@@ -218,6 +224,7 @@ Actualiza múltiples homologaciones en lote.
 ```
 
 **Response:**
+
 ```json
 {
   "status": "success",
@@ -236,6 +243,7 @@ Sincroniza homologaciones desde los despachos.
 **Request Body:** vacío
 
 **Response:**
+
 ```json
 {
   "status": "success",
@@ -257,14 +265,14 @@ Sincroniza homologaciones desde los despachos.
 ```python
 class SkuHomologacion(BaseModel):
     homologacion_id: str
-    
+
     # Datos MBA3
     sku_mba3: str
     nombre_producto_mba3: Optional[str]
     precio_unitario_mba3: Optional[float]
     cantidad_docena_mba3: Optional[float]
     total_linea_mba3: Optional[float]
-    
+
     # Datos SAP
     sku_sap: Optional[str]
     nombre_producto_sap: Optional[str]
@@ -272,16 +280,16 @@ class SkuHomologacion(BaseModel):
     cantidad_pack_sap: Optional[float]
     unidad_sap: Optional[str]
     subtotal_sap: Optional[float]
-    
+
     # Estado y flags
     estado: str  # PENDIENTE | HOMOLOGADO | ERROR
     tiene_diferencias: bool
     tiene_datos_sap: bool
-    
+
     # Relaciones
     detalle_id: Optional[str]
     despacho_id: Optional[str]
-    
+
     # Metadata
     created_at: Optional[str]
     updated_at: Optional[str]
@@ -311,6 +319,7 @@ class HomologacionSkuUpdateRequest(BaseModel):
 #### `tiene_datos_sap`
 
 Se marca como `true` si al menos uno de estos campos tiene valor:
+
 - `sku_sap`
 - `nombre_producto_sap`
 - `precio_unitario_sap`
@@ -321,6 +330,7 @@ Se marca como `true` si al menos uno de estos campos tiene valor:
 #### `tiene_diferencias`
 
 Se marca como `true` si hay diferencias entre MBA3 y SAP en:
+
 - SKU diferente
 - Precio unitario diferente (tolerancia: 0.01)
 - Cantidad diferente
@@ -500,6 +510,7 @@ curl -X GET "http://localhost:8000/api/homologaciones-sku?page=1&pageSize=10" \
 ## Soporte
 
 Para reportar bugs o solicitar features:
+
 - **Email**: soporte@empresa.com
 - **Documentación**: `/docs/HOMOLOGACIONES_SKU.md`
 - **API Docs**: `http://localhost:8000/docs` (Swagger UI)
@@ -508,21 +519,3 @@ Para reportar bugs o solicitar features:
 
 **Última actualización**: Diciembre 2024
 **Versión**: 1.0.0
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

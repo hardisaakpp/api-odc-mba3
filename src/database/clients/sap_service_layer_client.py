@@ -901,5 +901,3 @@ class SAPServiceLayerClient:
         finally:
             self.session_id = None
             self.session_expires = None
-
-

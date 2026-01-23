@@ -292,9 +292,3 @@ class SyncControlRepository:
             raise
         finally:
             cursor.close()
-
-
-
-
-
-

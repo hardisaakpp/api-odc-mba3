@@ -885,5 +885,3 @@ class ProductoStagingSyncService:
             "sap": sap_result,
             "timestamp": datetime.now().isoformat()
         }
-
-

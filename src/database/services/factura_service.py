@@ -323,6 +323,3 @@ def save_mba3_data_to_sql_server(
         }
     
     return stats
-
-
-

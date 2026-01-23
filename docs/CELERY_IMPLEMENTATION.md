@@ -7,6 +7,7 @@ Implementación de Celery para ejecutar el proceso de migración automática en 
 ## 🎯 Problema Resuelto
 
 ### Antes (con asyncio):
+
 ```
 ┌─────────────────────────────────────────────────┐
 │         FastAPI (UN SOLO PROCESO)               │
@@ -29,6 +30,7 @@ Implementación de Celery para ejecutar el proceso de migración automática en 
 ```
 
 ### Después (con Celery):
+
 ```
 ┌──────────────────────────────────────────────────────────┐
 │              PROCESO 1: FastAPI                          │
@@ -70,6 +72,7 @@ Implementación de Celery para ejecutar el proceso de migración automática en 
 Redis se usa como broker y backend para Celery.
 
 **Windows:**
+
 ```powershell
 # Opción 1: Usando Chocolatey
 choco install redis-64
@@ -83,6 +86,7 @@ redis-server
 ```
 
 **Linux/Mac:**
+
 ```bash
 # Ubuntu/Debian
 sudo apt-get install redis-server
@@ -94,6 +98,7 @@ brew services start redis
 ```
 
 **Verificar que Redis está corriendo:**
+
 ```bash
 redis-cli ping
 # Debería responder: PONG
@@ -134,12 +139,14 @@ SQL_SERVER_DATABASE=tu_base_datos
 ### Opción recomendada: 3 terminales separadas
 
 **Terminal 1: FastAPI (proceso manual)**
+
 ```bash
 cd C:\Users\cortiz\PycharmProjects\mba3-consultas
 python src/api_server.py
 ```
 
 **Terminal 2: Celery Worker (proceso automático)**
+
 ```bash
 cd C:\Users\cortiz\PycharmProjects\mba3-consultas
 
@@ -151,12 +158,14 @@ celery -A src.celery_app worker --loglevel=info --concurrency=2
 ```
 
 **Terminal 3: Celery Beat (scheduler)**
+
 ```bash
 cd C:\Users\cortiz\PycharmProjects\mba3-consultas
 celery -A src.celery_app beat --loglevel=info
 ```
 
 **Terminal 4 (opcional): Flower (dashboard de monitoreo)**
+
 ```bash
 cd C:\Users\cortiz\PycharmProjects\mba3-consultas
 celery -A src.celery_app flower
@@ -177,6 +186,7 @@ celery -A src.celery_app flower
 ### Ver tareas en ejecución (Flower)
 
 Abrir http://localhost:5555 en el navegador:
+
 - **Tasks**: Ver todas las tareas ejecutadas, en progreso y pendientes
 - **Workers**: Ver el estado de los workers
 - **Monitor**: Ver gráficas de rendimiento en tiempo real
@@ -184,6 +194,7 @@ Abrir http://localhost:5555 en el navegador:
 ### Ver logs
 
 Los logs se muestran en las terminales correspondientes:
+
 - **FastAPI**: Peticiones HTTP del proceso manual
 - **Celery Worker**: Ejecución de tareas automáticas
 - **Celery Beat**: Programación de tareas
@@ -249,6 +260,7 @@ graph TD
 ### Cambiar intervalo de migración
 
 Editar `.env`:
+
 ```bash
 # Ejecutar cada 30 minutos (en lugar de 15)
 AUTO_MIGRATE_INTERVAL_MINUTES=30
@@ -257,6 +269,7 @@ AUTO_MIGRATE_INTERVAL_MINUTES=30
 ### Cambiar filtro de fecha
 
 Editar `.env`:
+
 ```bash
 # Migrar últimos 180 días (en lugar de 365)
 MIGRATE_DATE_FILTER_DAYS=180
@@ -288,6 +301,7 @@ python -c "from src.tasks.celery_auto_migrate import execute_auto_migration; exe
 **Error**: `No module named 'celery_app'`
 
 **Solución**:
+
 ```bash
 # Asegurar que estás en el directorio correcto
 cd C:\Users\cortiz\PycharmProjects\mba3-consultas
@@ -302,6 +316,7 @@ export PYTHONPATH="${PYTHONPATH}:$(pwd)/src"  # Linux/Mac
 **Error**: `Error connecting to Redis`
 
 **Solución**:
+
 ```bash
 # Verificar que Redis está corriendo
 redis-cli ping
@@ -315,6 +330,7 @@ redis-server  # Windows/Linux/Mac
 **Error**: Beat está corriendo pero no se ejecutan tareas
 
 **Solución**:
+
 ```bash
 # Verificar que el worker está corriendo
 # En otra terminal debe estar ejecutándose:
@@ -329,6 +345,7 @@ celery -A src.celery_app worker --loglevel=info --pool=solo
 **Error**: `Connection pool exhausted`
 
 **Solución**:
+
 - El context manager debería cerrar las conexiones automáticamente
 - Verificar logs: debe mostrar `[Context Manager] ✅ Conexión cerrada correctamente`
 - Si persiste, verificar que `save_to_database` usa `get_db_connection_context()`
@@ -338,6 +355,7 @@ celery -A src.celery_app worker --loglevel=info --pool=solo
 **Error**: `/migrar/completo` tarda mucho o se bloquea
 
 **Solución**:
+
 - Verificar que Celery Worker está corriendo (proceso separado)
 - Si no está corriendo, el proceso manual NO se ve afectado
 - El proceso manual **NO usa Celery**, corre directamente en FastAPI
@@ -347,6 +365,7 @@ celery -A src.celery_app worker --loglevel=info --pool=solo
 ### ⚠️ El proceso manual NO cambió
 
 El endpoint `/migrar/completo` funciona **exactamente igual** que antes:
+
 - Síncrono
 - Respuesta inmediata
 - NO usa Celery
@@ -355,6 +374,7 @@ El endpoint `/migrar/completo` funciona **exactamente igual** que antes:
 ### ⚠️ Context manager es crítico
 
 El context manager en `connection.py` garantiza que:
+
 - Las conexiones se cierren siempre
 - No queden transacciones pendientes
 - No se agote el pool de conexiones
@@ -363,11 +383,13 @@ El context manager en `connection.py` garantiza que:
 ### ⚠️ Windows requiere `--pool=solo`
 
 En Windows, usar:
+
 ```bash
 celery -A src.celery_app worker --loglevel=info --pool=solo
 ```
 
 En Linux/Mac, usar:
+
 ```bash
 celery -A src.celery_app worker --loglevel=info --concurrency=4
 ```
@@ -377,12 +399,14 @@ celery -A src.celery_app worker --loglevel=info --concurrency=4
 Con esta implementación:
 
 ✅ **Proceso manual** (`/migrar/completo`):
+
 - Responde inmediatamente
 - No se bloquea nunca
 - Pool de conexiones dedicado
 - Cliente MBA3 dedicado
 
 ✅ **Proceso automático** (Celery):
+
 - Corre en proceso separado
 - No afecta a FastAPI
 - Pool de conexiones propio
@@ -391,12 +415,14 @@ Con esta implementación:
 - Monitoreable con Flower
 
 ✅ **Base de datos**:
+
 - Sin conexiones huérfanas
 - Sin deadlocks
 - Sin agotamiento del pool
 - Context managers garantizan limpieza
 
 ✅ **Escalabilidad**:
+
 - Puedes agregar más workers
 - Puedes cambiar el intervalo
 - Puedes monitorear con Flower
@@ -408,19 +434,3 @@ Con esta implementación:
 - [Flower - Monitoring tool](https://flower.readthedocs.io/en/latest/)
 - [Redis Documentation](https://redis.io/documentation)
 - [Context Managers en Python](https://docs.python.org/3/library/contextlib.html)
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

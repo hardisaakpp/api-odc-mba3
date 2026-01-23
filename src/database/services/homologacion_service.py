@@ -610,5 +610,3 @@ class HomologacionService:
                     conn.close()
                 except:
                     pass
-
-

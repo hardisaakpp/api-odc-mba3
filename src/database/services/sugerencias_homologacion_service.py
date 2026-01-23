@@ -9,7 +9,7 @@ from typing import List, Dict, Any, Tuple, Optional
 logger = logging.getLogger(__name__)
 
 try:
-    from rapidfuzz import fuzz
+    from rapidfuzz import fuzz  # type: ignore[reportMissingImports]
     RAPIDFUZZ_AVAILABLE = True
 except ImportError:
     RAPIDFUZZ_AVAILABLE = False
@@ -533,9 +533,3 @@ class SugerenciasHomologacionService:
         )
         
         return resultado
-
-
-
-
-
-

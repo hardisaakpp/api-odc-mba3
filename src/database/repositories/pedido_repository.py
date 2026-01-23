@@ -15,6 +15,10 @@ logger = logging.getLogger(__name__)
 class PedidoRepository:
     """Repositorio para operaciones de pedido."""
     
+    # Cache para verificación de columnas
+    _tiene_estado_cache: Optional[bool] = None
+    _tiene_es_bodega_cache: Optional[bool] = None
+    
     def __init__(self, conn: pyodbc.Connection):
         """
         Inicializa el repositorio con una conexión a SQL Server.
@@ -23,6 +27,318 @@ class PedidoRepository:
             conn: Conexión a SQL Server
         """
         self.conn = conn
+        # Resetear cache al crear nueva instancia
+        self._tiene_estado_cache = None
+        self._tiene_es_bodega_cache = None
+    
+    def _tiene_columna_estado(self, cursor: pyodbc.Cursor) -> bool:
+        """
+        Verifica si la tabla pedido tiene la columna estado.
+        
+        Args:
+            cursor: Cursor de la base de datos
+            
+        Returns:
+            True si existe la columna estado, False en caso contrario
+        """
+        if self._tiene_estado_cache is not None:
+            return self._tiene_estado_cache
+        
+        cursor.execute("""
+            SELECT COUNT(*) 
+            FROM INFORMATION_SCHEMA.COLUMNS 
+            WHERE TABLE_NAME = 'pedido' 
+            AND COLUMN_NAME = 'estado'
+        """)
+        row = cursor.fetchone()
+        resultado = (row[0] if row else 0) > 0
+        self._tiene_estado_cache = resultado
+        return resultado
+    
+    def _tiene_columna_es_bodega(self, cursor: pyodbc.Cursor) -> bool:
+        """
+        Verifica si la tabla pedido_detalle_tienda tiene la columna es_bodega.
+        
+        Args:
+            cursor: Cursor de la base de datos
+            
+        Returns:
+            True si existe la columna es_bodega, False en caso contrario
+        """
+        if self._tiene_es_bodega_cache is not None:
+            return self._tiene_es_bodega_cache
+        
+        cursor.execute("""
+            SELECT COUNT(*) 
+            FROM INFORMATION_SCHEMA.COLUMNS 
+            WHERE TABLE_NAME = 'pedido_detalle_tienda' 
+            AND COLUMN_NAME = 'es_bodega'
+        """)
+        row = cursor.fetchone()
+        resultado = (row[0] if row else 0) > 0
+        self._tiene_es_bodega_cache = resultado
+        return resultado
+    
+    def _normalizar_fecha(self, fecha: Any) -> Optional[str]:
+        """
+        Normaliza una fecha a string ISO format.
+        
+        Args:
+            fecha: Fecha en cualquier formato (date, datetime, Timestamp, str)
+            
+        Returns:
+            Fecha en formato ISO string o None
+        """
+        if fecha is None:
+            return None
+        
+        from datetime import date
+        import pandas as pd
+        
+        if isinstance(fecha, str):
+            return fecha
+        elif isinstance(fecha, date):
+            return fecha.isoformat() if hasattr(fecha, 'isoformat') else str(fecha)
+        elif isinstance(fecha, pd.Timestamp):
+            return fecha.date().isoformat()
+        elif isinstance(fecha, datetime):
+            return fecha.date().isoformat() if hasattr(fecha, 'date') else fecha.isoformat()
+        
+        return str(fecha)
+    
+    def _construir_cabecera_desde_row(self, row: Any, tiene_estado: bool) -> Dict[str, Any]:
+        """
+        Construye un diccionario de cabecera desde una fila de resultado SQL.
+        
+        Args:
+            row: Tupla con los valores de la fila
+            tiene_estado: Si True, incluye el campo estado
+            
+        Returns:
+            Diccionario con los datos de la cabecera
+        """
+        if tiene_estado:
+            return {
+                "pedido_id": str(row[0]),
+                "numero_pedido": row[1],
+                "fecha_pedido": row[2].isoformat() if row[2] else None,
+                "fecha_entrega": row[3],
+                "forma_pago": row[4],
+                "odc": row[5],
+                "proveedor_nombre": row[6],
+                "comprador_nombre": row[7],
+                "comprador_codigo": row[8],
+                "origen_traslado": row[9],
+                "serie": row[10],
+                "archivo_nombre": row[11],
+                "creado_por": row[12],
+                "estado": row[13],
+                "creado_en": row[14].isoformat() if row[14] else None,
+            }
+        else:
+            return {
+                "pedido_id": str(row[0]),
+                "numero_pedido": row[1],
+                "fecha_pedido": row[2].isoformat() if row[2] else None,
+                "fecha_entrega": row[3],
+                "forma_pago": row[4],
+                "odc": row[5],
+                "proveedor_nombre": row[6],
+                "comprador_nombre": row[7],
+                "comprador_codigo": row[8],
+                "origen_traslado": row[9],
+                "serie": row[10],
+                "archivo_nombre": row[11],
+                "creado_por": row[12],
+                "creado_en": row[13].isoformat() if row[13] else None,
+            }
+    
+    def _obtener_distribuciones_tienda(
+        self, 
+        cursor: pyodbc.Cursor, 
+        pedido_detalle_id: str
+    ) -> List[Dict[str, Any]]:
+        """
+        Obtiene las distribuciones por tienda para un detalle de pedido.
+        
+        Args:
+            cursor: Cursor de la base de datos
+            pedido_detalle_id: ID del detalle de pedido
+            
+        Returns:
+            Lista de diccionarios con información de tiendas y cantidades
+        """
+        tiene_es_bodega = self._tiene_columna_es_bodega(cursor)
+        
+        if tiene_es_bodega:
+            cursor.execute("""
+                SELECT 
+                    pdt.cantidad,
+                    t.tienda_id, t.codigo, t.nombre,
+                    pdt.es_bodega
+                FROM pedido_detalle_tienda pdt
+                INNER JOIN tienda t ON pdt.tienda_id = t.tienda_id
+                WHERE pdt.pedido_detalle_id = ?
+            """, (pedido_detalle_id,))
+        else:
+            cursor.execute("""
+                SELECT 
+                    pdt.cantidad,
+                    t.tienda_id, t.codigo, t.nombre
+                FROM pedido_detalle_tienda pdt
+                INNER JOIN tienda t ON pdt.tienda_id = t.tienda_id
+                WHERE pdt.pedido_detalle_id = ?
+            """, (pedido_detalle_id,))
+        
+        tiendas_distribucion = []
+        for dist_row in cursor.fetchall():
+            dist_item = {
+                "tienda_id": str(dist_row[1]),
+                "codigo": dist_row[2],
+                "nombre": dist_row[3],
+                "cantidad": dist_row[0],
+            }
+            if tiene_es_bodega:
+                # Convertir SQL Server bit (0 o 1) a Python bool
+                dist_item["es_bodega"] = bool(dist_row[4])
+            else:
+                dist_item["es_bodega"] = False  # Valor por defecto si no existe el campo
+            tiendas_distribucion.append(dist_item)
+        
+        return tiendas_distribucion
+    
+    def _construir_detalle_desde_row(
+        self,
+        row: Any,
+        tiene_comentario: bool,
+        tiene_campos_modificados: bool,
+        tiendas_distribucion: List[Dict[str, Any]]
+    ) -> Dict[str, Any]:
+        """
+        Construye un diccionario de detalle desde una fila de resultado SQL.
+        
+        Args:
+            row: Tupla con los valores de la fila
+            tiene_comentario: Si True, incluye el campo comentario
+            tiene_campos_modificados: Si True, incluye campos de modificación manual
+            tiendas_distribucion: Lista de distribuciones por tienda
+            
+        Returns:
+            Diccionario con los datos del detalle
+        """
+        pedido_detalle_id = str(row[0])
+        
+        detalle_dict = {
+            "pedido_detalle_id": pedido_detalle_id,
+            "codigo_interno": row[1],
+            "descripcion_sap": row[2],
+            "marca": row[3],
+            "codigo_barras": row[4],
+            "pack": row[5],
+            "costo_doc_sin_iva": float(row[6]) if row[6] else None,
+            "descuento_1": float(row[7]) if row[7] else None,
+            "pvp": float(row[8]) if row[8] else None,
+            "subtotal": float(row[9]) if row[9] else None,
+            "total": float(row[10]) if row[10] else None,
+            "tiendas": tiendas_distribucion,
+        }
+        
+        # Agregar comentario si existe en la consulta
+        if tiene_comentario and len(row) > 11:
+            detalle_dict["comentario"] = row[11] if row[11] else None
+        else:
+            detalle_dict["comentario"] = None
+        
+        # Agregar campos de modificación manual si existen en la consulta
+        if tiene_campos_modificados and len(row) > 14:
+            detalle_dict["costo_modificado_manual"] = bool(row[12])
+            detalle_dict["total_modificado_manual"] = bool(row[13])
+            detalle_dict["comentario_modificado_manual"] = bool(row[14])
+        else:
+            # Si los campos no existen en BD antigua, devolver False por defecto
+            detalle_dict["costo_modificado_manual"] = False
+            detalle_dict["total_modificado_manual"] = False
+            detalle_dict["comentario_modificado_manual"] = False
+        
+        return detalle_dict
+    
+    def _obtener_detalles_pedido(
+        self,
+        cursor: pyodbc.Cursor,
+        pedido_id: str
+    ) -> List[Dict[str, Any]]:
+        """
+        Obtiene todos los detalles de un pedido con sus distribuciones.
+        
+        Args:
+            cursor: Cursor de la base de datos
+            pedido_id: ID del pedido
+            
+        Returns:
+            Lista de diccionarios con los detalles del pedido
+        """
+        # Intentar obtener detalles con todos los campos
+        try:
+            cursor.execute("""
+                SELECT 
+                    pd.pedido_detalle_id,
+                    pd.codigo_interno, pd.descripcion_sap, pd.marca, pd.codigo_barras,
+                    pd.pack, pd.costo_doc_sin_iva, pd.descuento_1, pd.pvp,
+                    pd.subtotal, pd.total, pd.comentario,
+                    ISNULL(pd.costo_modificado_manual, 0) AS costo_modificado_manual,
+                    ISNULL(pd.total_modificado_manual, 0) AS total_modificado_manual,
+                    ISNULL(pd.comentario_modificado_manual, 0) AS comentario_modificado_manual
+                FROM pedido_detalle pd
+                WHERE pd.pedido_id = ?
+                ORDER BY pd.created_at
+            """, (pedido_id,))
+            tiene_comentario = True
+            tiene_campos_modificados = True
+        except Exception:
+            # Si algún campo no existe, intentar sin ellos
+            try:
+                cursor.execute("""
+                    SELECT 
+                        pd.pedido_detalle_id,
+                        pd.codigo_interno, pd.descripcion_sap, pd.marca, pd.codigo_barras,
+                        pd.pack, pd.costo_doc_sin_iva, pd.descuento_1, pd.pvp,
+                        pd.subtotal, pd.total, pd.comentario
+                    FROM pedido_detalle pd
+                    WHERE pd.pedido_id = ?
+                    ORDER BY pd.created_at
+                """, (pedido_id,))
+                tiene_comentario = True
+                tiene_campos_modificados = False
+            except Exception:
+                # Si el campo comentario no existe, usar consulta sin él
+                cursor.execute("""
+                    SELECT 
+                        pd.pedido_detalle_id,
+                        pd.codigo_interno, pd.descripcion_sap, pd.marca, pd.codigo_barras,
+                        pd.pack, pd.costo_doc_sin_iva, pd.descuento_1, pd.pvp,
+                        pd.subtotal, pd.total
+                    FROM pedido_detalle pd
+                    WHERE pd.pedido_id = ?
+                    ORDER BY pd.created_at
+                """, (pedido_id,))
+                tiene_comentario = False
+                tiene_campos_modificados = False
+        
+        detalles = []
+        for row in cursor.fetchall():
+            pedido_detalle_id = str(row[0])
+            
+            # Obtener distribuciones por tienda para este detalle
+            tiendas_distribucion = self._obtener_distribuciones_tienda(cursor, pedido_detalle_id)
+            
+            # Construir detalle
+            detalle_dict = self._construir_detalle_desde_row(
+                row, tiene_comentario, tiene_campos_modificados, tiendas_distribucion
+            )
+            
+            detalles.append(detalle_dict)
+        
+        return detalles
     
     def insert_cabecera(self, datos_cabecera: Dict[str, Any]) -> str:
         """
@@ -38,26 +354,17 @@ class PedidoRepository:
             Exception: Si falla la inserción
         """
         # Normalizar fechas: convertir date/datetime/Timestamp a string ISO
-        from datetime import date
-        import pandas as pd
-        
         datos_cabecera_normalizado = dict(datos_cabecera)
         
         if "fecha_pedido" in datos_cabecera_normalizado:
-            fp = datos_cabecera_normalizado["fecha_pedido"]
-            if fp is not None:
-                if isinstance(fp, date):
-                    datos_cabecera_normalizado["fecha_pedido"] = fp.isoformat() if hasattr(fp, 'isoformat') else str(fp)
-                elif isinstance(fp, pd.Timestamp):
-                    datos_cabecera_normalizado["fecha_pedido"] = fp.date().isoformat()
+            datos_cabecera_normalizado["fecha_pedido"] = self._normalizar_fecha(
+                datos_cabecera_normalizado["fecha_pedido"]
+            )
         
         if "fecha_entrega" in datos_cabecera_normalizado:
-            fe = datos_cabecera_normalizado["fecha_entrega"]
-            if fe is not None and not isinstance(fe, str):
-                if isinstance(fe, date):
-                    datos_cabecera_normalizado["fecha_entrega"] = fe.isoformat() if hasattr(fe, 'isoformat') else str(fe)
-                elif isinstance(fe, pd.Timestamp):
-                    datos_cabecera_normalizado["fecha_entrega"] = fe.date().isoformat()
+            fecha_entrega = datos_cabecera_normalizado["fecha_entrega"]
+            if fecha_entrega is not None and not isinstance(fecha_entrega, str):
+                datos_cabecera_normalizado["fecha_entrega"] = self._normalizar_fecha(fecha_entrega)
         
         cursor = self.conn.cursor()
         
@@ -70,14 +377,7 @@ class PedidoRepository:
             pedido_id = str(uuid_result[0])
             
             # Verificar si existe columna estado (para compatibilidad)
-            cursor.execute("""
-                SELECT COUNT(*) 
-                FROM INFORMATION_SCHEMA.COLUMNS 
-                WHERE TABLE_NAME = 'pedido' 
-                AND COLUMN_NAME = 'estado'
-            """)
-            row = cursor.fetchone()
-            tiene_estado = (row[0] if row else 0) > 0
+            tiene_estado = self._tiene_columna_estado(cursor)
             
             if tiene_estado:
                 sql = """
@@ -424,9 +724,11 @@ class PedidoRepository:
                     from ..services.bodega_sap_service import BodegaSAPService
                     bodega_sap_service = BodegaSAPService()
                     bodega_info = bodega_sap_service.get_or_fetch_bodega_info(codigo, force_refresh=False)
-                    if bodega_info and bodega_info.get("WhsName"):
-                        nombre_sap = bodega_info.get("WhsName").strip()
-                        logger.info(f"✅ Nombre de tienda obtenido (caché o SAP): {codigo} → '{nombre_sap}'")
+                    if bodega_info:
+                        whs_name = bodega_info.get("WhsName")
+                        if whs_name:
+                            nombre_sap = whs_name.strip()
+                            logger.info(f"✅ Nombre de tienda obtenido (caché o SAP): {codigo} → '{nombre_sap}'")
                 except Exception as e:
                     logger.warning(f"⚠️ No se pudo obtener nombre de tienda {codigo} (caché o SAP): {e}")
             
@@ -459,11 +761,12 @@ class PedidoRepository:
                         (nombre_upper != codigo_upper and nombre_upper != nombre_existente_upper)):
                         debe_actualizar = True
                 
-                if debe_actualizar:
-                    cursor.execute("UPDATE tienda SET nombre = ?, updated_at = GETDATE() WHERE codigo = ?", (nombre_final.strip(), codigo))
+                if debe_actualizar and nombre_final:
+                    nombre_final_stripped = nombre_final.strip()
+                    cursor.execute("UPDATE tienda SET nombre = ?, updated_at = GETDATE() WHERE codigo = ?", (nombre_final_stripped, codigo))
                     self.conn.commit()
                     origen = "SAP" if nombre_sap else "Excel"
-                    logger.info(f"✅ Nombre de tienda actualizado desde {origen}: {codigo} → '{nombre_final.strip()}' (anterior: '{nombre_existente}')")
+                    logger.info(f"✅ Nombre de tienda actualizado desde {origen}: {codigo} → '{nombre_final_stripped}' (anterior: '{nombre_existente}')")
                 
                 logger.debug(f"✅ Tienda existente encontrada: {codigo} ({tienda_id})")
                 return tienda_id
@@ -570,176 +873,10 @@ class PedidoRepository:
                 return None
             
             # Construir cabecera
-            if tiene_estado:
-                cabecera = {
-                    "pedido_id": str(row[0]),
-                    "numero_pedido": row[1],
-                    "fecha_pedido": row[2].isoformat() if row[2] else None,
-                    "fecha_entrega": row[3],
-                    "forma_pago": row[4],
-                    "odc": row[5],
-                    "proveedor_nombre": row[6],
-                    "comprador_nombre": row[7],
-                    "comprador_codigo": row[8],
-                    "origen_traslado": row[9],
-                    "serie": row[10],
-                    "archivo_nombre": row[11],
-                    "creado_por": row[12],
-                    "estado": row[13],
-                    "creado_en": row[14].isoformat() if row[14] else None,
-                }
-            else:
-                cabecera = {
-                    "pedido_id": str(row[0]),
-                    "numero_pedido": row[1],
-                    "fecha_pedido": row[2].isoformat() if row[2] else None,
-                    "fecha_entrega": row[3],
-                    "forma_pago": row[4],
-                    "odc": row[5],
-                    "proveedor_nombre": row[6],
-                    "comprador_nombre": row[7],
-                    "comprador_codigo": row[8],
-                    "origen_traslado": row[9],
-                    "serie": row[10],
-                    "archivo_nombre": row[11],
-                    "creado_por": row[12],
-                    "creado_en": row[13].isoformat() if row[13] else None,
-                }
+            cabecera = self._construir_cabecera_desde_row(row, tiene_estado)
             
             # Obtener detalles con sus distribuciones
-            # Nota: comentario y campos de modificación manual pueden no existir en BD antigua, se maneja con try/except
-            try:
-                cursor.execute("""
-                    SELECT 
-                        pd.pedido_detalle_id,
-                        pd.codigo_interno, pd.descripcion_sap, pd.marca, pd.codigo_barras,
-                        pd.pack, pd.costo_doc_sin_iva, pd.descuento_1, pd.pvp,
-                        pd.subtotal, pd.total, pd.comentario,
-                        ISNULL(pd.costo_modificado_manual, 0) AS costo_modificado_manual,
-                        ISNULL(pd.total_modificado_manual, 0) AS total_modificado_manual,
-                        ISNULL(pd.comentario_modificado_manual, 0) AS comentario_modificado_manual
-                    FROM pedido_detalle pd
-                    WHERE pd.pedido_id = ?
-                    ORDER BY pd.created_at
-                """, (pedido_id,))
-                tiene_comentario = True
-                tiene_campos_modificados = True
-            except Exception as e:
-                # Si algún campo no existe, intentar sin ellos
-                try:
-                    cursor.execute("""
-                        SELECT 
-                            pd.pedido_detalle_id,
-                            pd.codigo_interno, pd.descripcion_sap, pd.marca, pd.codigo_barras,
-                            pd.pack, pd.costo_doc_sin_iva, pd.descuento_1, pd.pvp,
-                            pd.subtotal, pd.total, pd.comentario
-                        FROM pedido_detalle pd
-                        WHERE pd.pedido_id = ?
-                        ORDER BY pd.created_at
-                    """, (pedido_id,))
-                    tiene_comentario = True
-                    tiene_campos_modificados = False
-                except Exception:
-                    # Si el campo comentario no existe, usar consulta sin él
-                    cursor.execute("""
-                        SELECT 
-                            pd.pedido_detalle_id,
-                            pd.codigo_interno, pd.descripcion_sap, pd.marca, pd.codigo_barras,
-                            pd.pack, pd.costo_doc_sin_iva, pd.descuento_1, pd.pvp,
-                            pd.subtotal, pd.total
-                        FROM pedido_detalle pd
-                        WHERE pd.pedido_id = ?
-                        ORDER BY pd.created_at
-                    """, (pedido_id,))
-                    tiene_comentario = False
-                    tiene_campos_modificados = False
-            
-            detalles = []
-            for row in cursor.fetchall():
-                pedido_detalle_id = str(row[0])
-                
-                # Obtener distribuciones por tienda para este detalle
-                # Verificar si existe columna es_bodega (para compatibilidad)
-                if not hasattr(self, '_tiene_es_bodega_cache'):
-                    cursor.execute("""
-                        SELECT COUNT(*) 
-                        FROM INFORMATION_SCHEMA.COLUMNS 
-                        WHERE TABLE_NAME = 'pedido_detalle_tienda' 
-                        AND COLUMN_NAME = 'es_bodega'
-                    """)
-                    row_check = cursor.fetchone()
-                    self._tiene_es_bodega_cache = (row_check[0] if row_check else 0) > 0
-                
-                tiene_es_bodega = self._tiene_es_bodega_cache
-                
-                if tiene_es_bodega:
-                    cursor.execute("""
-                        SELECT 
-                            pdt.cantidad,
-                            t.tienda_id, t.codigo, t.nombre,
-                            pdt.es_bodega
-                        FROM pedido_detalle_tienda pdt
-                        INNER JOIN tienda t ON pdt.tienda_id = t.tienda_id
-                        WHERE pdt.pedido_detalle_id = ?
-                    """, (pedido_detalle_id,))
-                else:
-                    cursor.execute("""
-                        SELECT 
-                            pdt.cantidad,
-                            t.tienda_id, t.codigo, t.nombre
-                        FROM pedido_detalle_tienda pdt
-                        INNER JOIN tienda t ON pdt.tienda_id = t.tienda_id
-                        WHERE pdt.pedido_detalle_id = ?
-                    """, (pedido_detalle_id,))
-                
-                tiendas_distribucion = []
-                for dist_row in cursor.fetchall():
-                    dist_item = {
-                        "tienda_id": str(dist_row[1]),
-                        "codigo": dist_row[2],
-                        "nombre": dist_row[3],
-                        "cantidad": dist_row[0],
-                    }
-                    if tiene_es_bodega:
-                        # Convertir SQL Server bit (0 o 1) a Python bool
-                        dist_item["es_bodega"] = bool(dist_row[4])
-                    else:
-                        dist_item["es_bodega"] = False  # Valor por defecto si no existe el campo
-                    tiendas_distribucion.append(dist_item)
-                
-                detalle_dict = {
-                    "pedido_detalle_id": pedido_detalle_id,
-                    "codigo_interno": row[1],
-                    "descripcion_sap": row[2],
-                    "marca": row[3],
-                    "codigo_barras": row[4],
-                    "pack": row[5],
-                    "costo_doc_sin_iva": float(row[6]) if row[6] else None,
-                    "descuento_1": float(row[7]) if row[7] else None,
-                    "pvp": float(row[8]) if row[8] else None,
-                    "subtotal": float(row[9]) if row[9] else None,  # Tal cual se guardó
-                    "total": float(row[10]) if row[10] else None,   # Tal cual se guardó
-                    "tiendas": tiendas_distribucion,
-                }
-                
-                # Agregar comentario si existe en la consulta
-                if tiene_comentario and len(row) > 11:
-                    detalle_dict["comentario"] = row[11] if row[11] else None
-                else:
-                    detalle_dict["comentario"] = None
-                
-                # Agregar campos de modificación manual si existen en la consulta
-                if tiene_campos_modificados and len(row) > 14:
-                    detalle_dict["costo_modificado_manual"] = bool(row[12])
-                    detalle_dict["total_modificado_manual"] = bool(row[13])
-                    detalle_dict["comentario_modificado_manual"] = bool(row[14])
-                else:
-                    # Si los campos no existen en BD antigua, devolver False por defecto
-                    detalle_dict["costo_modificado_manual"] = False
-                    detalle_dict["total_modificado_manual"] = False
-                    detalle_dict["comentario_modificado_manual"] = False
-                
-                detalles.append(detalle_dict)
+            detalles = self._obtener_detalles_pedido(cursor, pedido_id)
             
             return {
                 "cabecera": cabecera,
@@ -766,14 +903,7 @@ class PedidoRepository:
         
         try:
             # Verificar si existe columna estado
-            cursor.execute("""
-                SELECT COUNT(*) 
-                FROM INFORMATION_SCHEMA.COLUMNS 
-                WHERE TABLE_NAME = 'pedido' 
-                AND COLUMN_NAME = 'estado'
-            """)
-            row_check = cursor.fetchone()
-            tiene_estado = (row_check[0] if row_check else 0) > 0
+            tiene_estado = self._tiene_columna_estado(cursor)
             
             # Obtener cabecera por numero_pedido
             if tiene_estado:
@@ -804,180 +934,10 @@ class PedidoRepository:
             pedido_id = str(row[0])
             
             # Construir cabecera
-            if tiene_estado:
-                cabecera = {
-                    "pedido_id": pedido_id,
-                    "numero_pedido": row[1],
-                    "fecha_pedido": row[2].isoformat() if row[2] else None,
-                    "fecha_entrega": row[3],
-                    "forma_pago": row[4],
-                    "odc": row[5],
-                    "proveedor_nombre": row[6],
-                    "comprador_nombre": row[7],
-                    "comprador_codigo": row[8],
-                    "origen_traslado": row[9],
-                    "serie": row[10],
-                    "archivo_nombre": row[11],
-                    "creado_por": row[12],
-                    "estado": row[13],
-                    "creado_en": row[14].isoformat() if row[14] else None,
-                }
-            else:
-                cabecera = {
-                    "pedido_id": pedido_id,
-                    "numero_pedido": row[1],
-                    "fecha_pedido": row[2].isoformat() if row[2] else None,
-                    "fecha_entrega": row[3],
-                    "forma_pago": row[4],
-                    "odc": row[5],
-                    "proveedor_nombre": row[6],
-                    "comprador_nombre": row[7],
-                    "comprador_codigo": row[8],
-                    "origen_traslado": row[9],
-                    "serie": row[10],
-                    "archivo_nombre": row[11],
-                    "creado_por": row[12],
-                    "creado_en": row[13].isoformat() if row[13] else None,
-                }
+            cabecera = self._construir_cabecera_desde_row(row, tiene_estado)
             
             # Obtener detalles con sus distribuciones (usando pedido_id obtenido)
-            # Nota: comentario y campos de modificación manual pueden no existir en BD antigua, se maneja con try/except
-            try:
-                cursor.execute("""
-                    SELECT 
-                        pd.pedido_detalle_id,
-                        pd.codigo_interno, pd.descripcion_sap, pd.marca, pd.codigo_barras,
-                        pd.pack, pd.costo_doc_sin_iva, pd.descuento_1, pd.pvp,
-                        pd.subtotal, pd.total, pd.comentario,
-                        ISNULL(pd.costo_modificado_manual, 0) AS costo_modificado_manual,
-                        ISNULL(pd.total_modificado_manual, 0) AS total_modificado_manual,
-                        ISNULL(pd.comentario_modificado_manual, 0) AS comentario_modificado_manual
-                    FROM pedido_detalle pd
-                    WHERE pd.pedido_id = ?
-                    ORDER BY pd.created_at
-                """, (pedido_id,))
-                tiene_comentario = True
-                tiene_campos_modificados = True
-            except Exception as e:
-                # Si algún campo no existe, intentar sin ellos
-                try:
-                    cursor.execute("""
-                        SELECT 
-                            pd.pedido_detalle_id,
-                            pd.codigo_interno, pd.descripcion_sap, pd.marca, pd.codigo_barras,
-                            pd.pack, pd.costo_doc_sin_iva, pd.descuento_1, pd.pvp,
-                            pd.subtotal, pd.total, pd.comentario
-                        FROM pedido_detalle pd
-                        WHERE pd.pedido_id = ?
-                        ORDER BY pd.created_at
-                    """, (pedido_id,))
-                    tiene_comentario = True
-                    tiene_campos_modificados = False
-                except Exception:
-                    # Si el campo comentario no existe, usar consulta sin él
-                    cursor.execute("""
-                        SELECT 
-                            pd.pedido_detalle_id,
-                            pd.codigo_interno, pd.descripcion_sap, pd.marca, pd.codigo_barras,
-                            pd.pack, pd.costo_doc_sin_iva, pd.descuento_1, pd.pvp,
-                            pd.subtotal, pd.total
-                        FROM pedido_detalle pd
-                        WHERE pd.pedido_id = ?
-                        ORDER BY pd.created_at
-                    """, (pedido_id,))
-                    tiene_comentario = False
-                    tiene_campos_modificados = False
-            
-            detalles = []
-            for row in cursor.fetchall():
-                pedido_detalle_id = str(row[0])
-                
-                # Obtener distribuciones por tienda para este detalle
-                # Verificar si existe columna es_bodega (para compatibilidad)
-                if not hasattr(self, '_tiene_es_bodega_cache'):
-                    cursor.execute("""
-                        SELECT COUNT(*) 
-                        FROM INFORMATION_SCHEMA.COLUMNS 
-                        WHERE TABLE_NAME = 'pedido_detalle_tienda' 
-                        AND COLUMN_NAME = 'es_bodega'
-                    """)
-                    row_check = cursor.fetchone()
-                    self._tiene_es_bodega_cache = (row_check[0] if row_check else 0) > 0
-                
-                tiene_es_bodega = self._tiene_es_bodega_cache
-                
-                if tiene_es_bodega:
-                    cursor.execute("""
-                        SELECT 
-                            pdt.cantidad,
-                            t.tienda_id, t.codigo, t.nombre,
-                            pdt.es_bodega
-                        FROM pedido_detalle_tienda pdt
-                        INNER JOIN tienda t ON pdt.tienda_id = t.tienda_id
-                        WHERE pdt.pedido_detalle_id = ?
-                    """, (pedido_detalle_id,))
-                else:
-                    cursor.execute("""
-                        SELECT 
-                            pdt.cantidad,
-                            t.tienda_id, t.codigo, t.nombre
-                        FROM pedido_detalle_tienda pdt
-                        INNER JOIN tienda t ON pdt.tienda_id = t.tienda_id
-                        WHERE pdt.pedido_detalle_id = ?
-                    """, (pedido_detalle_id,))
-                
-                tiendas_distribucion = []
-                for dist_row in cursor.fetchall():
-                    dist_item = {
-                        "tienda_id": str(dist_row[1]),
-                        "codigo": dist_row[2],
-                        "nombre": dist_row[3],
-                        "cantidad": dist_row[0],
-                    }
-                    if tiene_es_bodega:
-                        # Convertir SQL Server bit (0 o 1) a Python bool
-                        dist_item["es_bodega"] = bool(dist_row[4])
-                    else:
-                        dist_item["es_bodega"] = False  # Valor por defecto si no existe el campo
-                    tiendas_distribucion.append(dist_item)
-                
-                detalle_dict = {
-                    "pedido_detalle_id": pedido_detalle_id,
-                    "codigo_interno": row[1],
-                    "descripcion_sap": row[2],
-                    "marca": row[3],
-                    "codigo_barras": row[4],
-                    "pack": row[5],
-                    "costo_doc_sin_iva": float(row[6]) if row[6] else None,
-                    "descuento_1": float(row[7]) if row[7] else None,
-                    "pvp": float(row[8]) if row[8] else None,
-                    "subtotal": float(row[9]) if row[9] else None,  # Tal cual se guardó
-                    "total": float(row[10]) if row[10] else None,   # Tal cual se guardó
-                    "tiendas": tiendas_distribucion,
-                }
-                
-                # Agregar comentario si existe en la consulta
-                # IMPORTANTE: Verificar que el campo existe y tiene valor
-                if tiene_comentario:
-                    if len(row) > 11:
-                        detalle_dict["comentario"] = row[11] if row[11] else None
-                    else:
-                        detalle_dict["comentario"] = None
-                else:
-                    detalle_dict["comentario"] = None
-                
-                # Agregar campos de modificación manual si existen en la consulta
-                if tiene_campos_modificados and len(row) > 14:
-                    detalle_dict["costo_modificado_manual"] = bool(row[12])
-                    detalle_dict["total_modificado_manual"] = bool(row[13])
-                    detalle_dict["comentario_modificado_manual"] = bool(row[14])
-                else:
-                    # Si los campos no existen en BD antigua, devolver False por defecto
-                    detalle_dict["costo_modificado_manual"] = False
-                    detalle_dict["total_modificado_manual"] = False
-                    detalle_dict["comentario_modificado_manual"] = False
-                
-                detalles.append(detalle_dict)
+            detalles = self._obtener_detalles_pedido(cursor, pedido_id)
             
             return {
                 "cabecera": cabecera,
@@ -1701,14 +1661,7 @@ class PedidoRepository:
         
         try:
             # Verificar si existe columna estado
-            cursor.execute("""
-                SELECT COUNT(*) 
-                FROM INFORMATION_SCHEMA.COLUMNS 
-                WHERE TABLE_NAME = 'pedido' 
-                AND COLUMN_NAME = 'estado'
-            """)
-            row = cursor.fetchone()
-            tiene_estado = (row[0] if row else 0) > 0
+            tiene_estado = self._tiene_columna_estado(cursor)
             
             # Construir WHERE conditions
             where_conditions = []
