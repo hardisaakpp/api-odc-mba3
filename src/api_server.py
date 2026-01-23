@@ -95,6 +95,10 @@ app = FastAPI(
         {
             "name": "Plantillas",
             "description": "Endpoints para gestión de plantillas Excel"
+        },
+        {
+            "name": "Autenticación",
+            "description": "Endpoints de autenticación y autorización"
         }
     ]
 )

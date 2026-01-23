@@ -48,7 +48,10 @@ def register_plantillas_endpoints(app: FastAPI):
             description="JSON con mapa de correcciones de códigos: {\"codigo_original\": \"codigo_sap_corregido\"}"
         ),
         user: Dict = Depends(verify_jwt_token),
-        _: None = Depends(require_permission('mba3-consultas.proceso.execute'))
+        _: None = Depends(require_permission(
+            'mba3-consultas.plantillas.upload',
+            legacy_permission='mba3-consultas.proceso.execute'
+        ))
     ):
         """
         Sube y valida una plantilla Excel para procesamiento.
@@ -235,7 +238,10 @@ def register_plantillas_endpoints(app: FastAPI):
     async def get_ultimo_pedido(
         incluir_respuesta: bool = Query(False, description="Incluir respuesta del proveedor si existe"),
         user: Dict = Depends(verify_jwt_token),
-        _: None = Depends(require_permission('mba3-consultas.facturas.view'))
+        _: None = Depends(require_permission(
+            'mba3-consultas.plantillas.view',
+            legacy_permission='mba3-consultas.facturas.view'
+        ))
     ):
         """
         Obtiene el último pedido cargado por el usuario autenticado.

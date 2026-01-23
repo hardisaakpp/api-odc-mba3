@@ -204,20 +204,25 @@ async def optional_jwt_auth(
         return None
 
 
-def require_permission(permission_key: str):
+def require_permission(permission_key: str, legacy_permission: Optional[str] = None):
     """
     Dependency factory para validar permisos específicos.
+    
+    Soporta backward compatibility: si el usuario no tiene el permiso específico,
+    puede usar un permiso legacy (temporal durante la transición).
     
     Uso:
         @app.get("/endpoint")
         async def my_endpoint(
             user: Dict = Depends(verify_jwt_token),
-            _: None = Depends(require_permission('mba3_consultas.migrar'))
+            _: None = Depends(require_permission('mba3-consultas.plantillas.upload', 
+                                                  legacy_permission='mba3-consultas.proceso.execute'))
         ):
             ...
     
     Args:
-        permission_key: Clave del permiso requerido
+        permission_key: Clave del permiso requerido (específico)
+        legacy_permission: Permiso legacy para backward compatibility (opcional)
         
     Returns:
         Dependency que valida el permiso
@@ -241,6 +246,8 @@ def require_permission(permission_key: str):
             logger.debug("=" * 80)
             logger.debug(f"🔍 [DEBUG PERMISSION] Validando permiso para usuario: {username}")
             logger.debug(f"🔍 [DEBUG PERMISSION] Permiso requerido: '{permission_key}'")
+            if legacy_permission:
+                logger.debug(f"🔍 [DEBUG PERMISSION] Permiso legacy (backward compat): '{legacy_permission}'")
             logger.debug(f"🔍 [DEBUG PERMISSION] Roles del usuario: {roles}")
             logger.debug(f"🔍 [DEBUG PERMISSION] Permisos disponibles en el token: {permissions}")
             logger.debug(f"🔍 [DEBUG PERMISSION] Tipo de permisos: {type(permissions)}")
@@ -253,13 +260,29 @@ def require_permission(permission_key: str):
                 logger.debug("=" * 80)
             return
         
-        if ENVIRONMENT == "development":
-            logger.debug(f"🔍 [DEBUG PERMISSION] ¿Permiso encontrado? {permission_key in permissions}")
+        # Verificar permiso específico primero
+        has_specific = permission_key in permissions
         
-        if permission_key not in permissions:
+        # Si no tiene el específico y hay legacy, verificar legacy
+        has_legacy = False
+        if not has_specific and legacy_permission:
+            has_legacy = legacy_permission in permissions
+            if has_legacy:
+                logger.warning(
+                    f"⚠️ [BACKWARD COMPAT] Usuario {username} tiene permiso legacy '{legacy_permission}' "
+                    f"pero no tiene '{permission_key}'. Considerar migrar permisos en el Core."
+                )
+        
+        if ENVIRONMENT == "development":
+            logger.debug(f"🔍 [DEBUG PERMISSION] ¿Permiso específico encontrado? {has_specific}")
+            if legacy_permission:
+                logger.debug(f"🔍 [DEBUG PERMISSION] ¿Permiso legacy encontrado? {has_legacy}")
+        
+        if not (has_specific or has_legacy):
             logger.warning(
                 f"❌ Permiso denegado: usuario {username} "
                 f"intentó acceder sin permiso '{permission_key}'"
+                + (f" ni '{legacy_permission}'" if legacy_permission else "")
             )
             if ENVIRONMENT == "development":
                 logger.debug(f"🔍 [DEBUG PERMISSION] Permisos disponibles: {permissions}")
@@ -271,7 +294,8 @@ def require_permission(permission_key: str):
             )
         
         if ENVIRONMENT == "development":
-            logger.debug(f"✅ [DEBUG PERMISSION] Permiso '{permission_key}' validado correctamente")
+            permiso_usado = permission_key if has_specific else legacy_permission
+            logger.debug(f"✅ [DEBUG PERMISSION] Permiso '{permiso_usado}' validado correctamente")
             logger.debug("=" * 80)
     
     return permission_checker

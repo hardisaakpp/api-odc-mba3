@@ -7,6 +7,7 @@ Mantiene compatibilidad con la funci?n create_endpoints() original.
 
 from fastapi import FastAPI
 from .health import register_health_endpoints
+from .auth import register_auth_endpoints
 from .despachos import register_despachos_endpoints
 from .sap import register_sap_endpoints
 from .ordenes_compra import register_ordenes_compra_endpoints
@@ -31,6 +32,9 @@ def create_endpoints(app: FastAPI):
     """
     # Registrar endpoints de health check (migrado)
     register_health_endpoints(app)
+    
+    # Registrar endpoints de autenticación
+    register_auth_endpoints(app)
     
     # Registrar endpoints de despachos (migrado)
     register_despachos_endpoints(app)
