@@ -186,6 +186,24 @@ Para identificar y eliminar código legacy en el frontend, buscar:
 | `permissions.includes('mba3-consultas.facturas.view')` | `capabilities.can_view_templates` |
 | `usuario.tipo === 'EL_RAYO'` → operar pedidos | `capabilities.can_operate_pedidos` |
 
+### 0.5.8 Pantalla "Detalle del Pedido - EL RAYO" (`/mba3-consultas/pedidos/{id}`)
+
+**Ruta:** `http://localhost:3000/mba3-consultas/pedidos/{numero_pedido}` (ej. `P-12.21 - 12 - 2025`).
+
+**Botón "Confirmar":**
+
+- **Obligatorio:** Mostrar el botón **solo** si `capabilities.can_confirm_pedido === true`.
+- **Usuarios con `odcsap.view`:** El backend devuelve `can_confirm_pedido: false` → el botón **no debe mostrarse**.
+- **Implementación:**
+
+```tsx
+{capabilities?.can_confirm_pedido && (
+  <Button onClick={handleConfirmar}>Confirmar</Button>
+)}
+```
+
+No usar `modo === 'el-rayo'`, `permissions.includes(...)` ni ninguna lógica distinta a `can_confirm_pedido` para este botón.
+
 ---
 
 ## 1. Guía de Implementación - Requerimientos
@@ -207,22 +225,115 @@ Se han implementado **2 funcionalidades de alta prioridad**:
 
 **Endpoint:** `POST /integrar-sap`
 
+**Autenticación:** JWT token requerido  
+**Permiso:** `mba3-consultas.proceso.execute`
+
+**Query Parameters:**
+- `oc_id` (opcional, múltiple): UUID de la orden de compra. Puede especificarse múltiples veces.
+- `referencia_despacho` (opcional, múltiple): Número de factura/despacho. Puede especificarse múltiples veces.
+- Si no se proporciona ningún parámetro, procesa la primera OC pendiente.
+
 **Comportamiento:**
 1. Obtiene distribución confirmada del pedido (por tienda)
 2. Crea Inventory Transfer Request por cada tienda en SAP
 3. Retorna información detallada de cada transferencia
 
-**Respuesta:**
+**Estructura de Respuesta:**
+```json
+{
+  "status": "success" | "partial" | "error",
+  "message": "ODC enviada exitosamente a SAP (DocNum: 17098)",
+  "metadata": {
+    "enviadas": 1,
+    "errores": 0,
+    "total_procesadas": 1,
+    "detalles": [
+      {
+        "oc_id": "uuid-de-oc",
+        "proveedor": "P1790389219001",
+        "success": true,
+        "doc_entry": 123,
+        "doc_num": 17098,
+        "referencia_despacho": "900125353",
+        "error": null,
+        "error_message": null,
+        "error_code": null,
+        "error_source": null,
+        "sap_response": { /* respuesta completa de SAP */ },
+        "solicitudes_transferencia": {
+          "success": true,
+          "total_tiendas": 3,
+          "transferencias_creadas": 3,
+          "transferencias_errores": 0,
+          "resultados": [
+            {
+              "tienda_id": "uuid-tienda",
+              "tienda_codigo": "TOUT-CEN",
+              "tienda_nombre": "TRANSITORIA DESCUENTON CENTRO HISTORICO",
+              "success": true,
+              "doc_entry": 456,
+              "doc_num": 17100,
+              "error": null
+            }
+          ]
+        }
+      }
+    ]
+  }
+}
+```
+
+**Notas importantes:**
+- El campo `solicitudes_transferencia` está dentro de cada elemento del array `metadata.detalles[]`
+- Si se procesan múltiples OCs, `detalles` tendrá un elemento por cada OC
+- El campo `tienda_nombre` puede ser `null` si no se pudo obtener de SAP
+
+### 1.2 Listado de Pedidos con Filtros (HU-02, HU-07)
+
+**Descripción:** Pantalla de visualización y seguimiento de pedidos con múltiples filtros y paginación.
+
+**Endpoint:** `GET /api/pedidos`
+
+**Autenticación:** JWT token requerido  
+**Permiso:** `mba3-consultas.facturas.view`
+
+**Query Parameters:**
+- `estado` (string, opcional) - Filtrar por estado (ej: "PENDIENTE_CONFIRMACION_PROVEEDOR", "CONFIRMADO_PROVEEDOR")
+- `fecha_desde` (string, opcional) - Filtrar desde fecha (YYYY-MM-DD)
+- `fecha_hasta` (string, opcional) - Filtrar hasta fecha (YYYY-MM-DD)
+- `proveedor_nombre` (string, opcional) - Búsqueda parcial por nombre de proveedor
+- `numero_pedido` (string, opcional) - Búsqueda parcial por número de pedido
+- `creado_por` (string, opcional) - Filtrar por usuario que creó el pedido
+- `limit` (int, default: 50) - Límite de registros por página
+- `offset` (int, default: 0) - Offset para paginación
+
+**Ejemplos:**
+```
+GET /api/pedidos?estado=PENDIENTE_CONFIRMACION_PROVEEDOR&limit=20&offset=0
+GET /api/pedidos?fecha_desde=2025-01-01&fecha_hasta=2025-01-31&proveedor_nombre=RAYO
+```
+
+**Estructura de Respuesta:**
 ```json
 {
   "status": "success",
-  "oc_id": "uuid-de-oc",
-  "doc_entry": 123,
-  "solicitudes_transferencia": {
-    "success": true,
-    "total_tiendas": 3,
-    "transferencias_creadas": 3,
-    "resultados": [...]
+  "data": [
+    {
+      "pedido_id": "uuid-del-pedido",
+      "numero_pedido": "P-12.48 - 12 - 2025",
+      "fecha_pedido": "2025-01-21",
+      "proveedor_nombre": "TEXTILES EL RAYO S.A.",
+      "estado": "PENDIENTE_CONFIRMACION_PROVEEDOR",
+      "creado_por": "usuario@example.com",
+      "fecha_creacion": "2025-01-21T10:30:00",
+      /* ... otros campos del pedido ... */
+    }
+  ],
+  "metadata": {
+    "total": 150,
+    "limit": 50,
+    "offset": 0,
+    "has_more": true
   }
 }
 ```
@@ -253,11 +364,13 @@ interface ProcesamientoSAPResponse {
 
 interface ProductoSAPProcesamientoItem {
   procesamiento_detalle_id: string;
+  pedido_detalle_id: string;
   codigo_interno: string;
-  descripcion_producto: string | null;  // ⭐ NUEVO CAMPO
+  descripcion_producto: string | null;  // ⭐ Descripción del producto desde SAP
   item_code_sap: string | null;
   pack_sap: string | null;
   unidad_conversion: number | null;
+  unidad_sap: string | null;  // ⭐ Unidad SAP (ej: "PACK", "UN")
   cantidad_original: number | null;
   cantidad_sap: number | null;
   precio_unitario_original: number | null;
@@ -265,6 +378,22 @@ interface ProductoSAPProcesamientoItem {
   total_linea_original: number | null;
   total_linea_sap: number | null;
   producto_homologado: boolean;
+  tipo_problema: string | null;  // ⭐ "no_existe", "mismatch", "error", o null
+  item_code_sap_encontrado: string | null;  // ⭐ ItemCode encontrado en SAP (para mismatch)
+  mensaje_error: string | null;  // ⭐ Mensaje de error si hubo problema
+  fecha_procesamiento: string | null;  // ⭐ Fecha de procesamiento (ISO 8601)
+  procesado_por: string | null;  // ⭐ Usuario que procesó
+}
+
+interface EstadisticasProcesamientoSAP {
+  total_productos: number;
+  productos_homologados: number;
+  productos_no_homologados: number;
+  productos_con_error: number;
+  total_cantidad_original: number | null;
+  total_cantidad_sap: number | null;
+  total_precio_original: number | null;
+  total_precio_sap: number | null;
 }
 ```
 
