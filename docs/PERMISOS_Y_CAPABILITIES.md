@@ -189,9 +189,11 @@ Endpoint único que retorna información del usuario autenticado, incluyendo cap
 ### Uso en Frontend
 
 El frontend debe:
-1. Llamar a `/api/auth/me` al iniciar la app
-2. Guardar `capabilities` en el contexto de autenticación
-3. Usar capabilities para renderizar botones condicionalmente
+1. **Llamar a `GET /api/auth/me` al iniciar la app** (p. ej. en `initializeAuth`) y al restaurar sesión (token en localStorage).
+2. Guardar `capabilities` en el store/contexto de autenticación.
+3. Usar capabilities para renderizar botones condicionalmente.
+
+**⚠️ Si no se llama `/api/auth/me`** (o falla 401), `capabilities` queda `null` → botones como "Cargar Plantilla Excel" no se muestran aunque el backend los permita. Es imprescindible invocar este endpoint al arranque y en rutas protegidas cuando se accede directo por URL.
 
 **Ejemplo (React/TypeScript):**
 ```tsx

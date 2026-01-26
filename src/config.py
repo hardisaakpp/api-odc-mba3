@@ -148,6 +148,15 @@ JWT_SECRET = os.getenv('JWT_SECRET', 'clave_super_secreta_para_jwt_12345')
 JWT_ISSUER = os.getenv('JWT_ISSUER', 'SCNexus.Core')
 JWT_AUDIENCE = os.getenv('JWT_AUDIENCE', 'SCNexus.Users')
 
+# ============================================================================
+# Configuración de SCNexus.Core API (Active Directory)
+# ============================================================================
+# URL base del Core para llamadas a la API de permisos y otros servicios
+# El Core gestiona la integración con Active Directory y asigna permisos
+# a usuarios y roles de AD según las páginas a las que pueden tener acceso
+CORE_API_URL = os.getenv("CORE_API_URL", "http://192.168.2.12:8080")
+CORE_API_TIMEOUT = int(os.getenv("CORE_API_TIMEOUT", "30"))  # Timeout en segundos
+
 # Habilitar autenticación JWT (requiere token válido del Core)
 # Cuando está habilitado, los endpoints protegidos requerirán JWT válido
 ENABLE_JWT_AUTH = os.getenv("ENABLE_JWT_AUTH", "false").lower() == "true"
