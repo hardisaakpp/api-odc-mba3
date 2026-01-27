@@ -60,8 +60,9 @@ Si eliminaste modo MABEL TRADING/EL RAYO y los botones dependen solo de capabili
   - `can_view_odc_sap`
   - `can_manage_order`
   - `can_view_order_list`
+  - `mabel_view`
   - `can_confirm_pedido`
-- Los valores dependen de los permisos del usuario. **`can_view_odc_sap`** es `true` **solo** si tiene `odc.view` (0.5.7.1). **`can_manage_order`** y **`can_view_order_list`** son `true` **solo** si tiene `odcsap.view` (0.5.7.2).
+- Los valores dependen de los permisos del usuario. **`can_view_odc_sap`** es `true` **solo** si tiene `odc.view` (0.5.7.1). **`can_manage_order`** y **`can_view_order_list`** son `true` **solo** si tiene `odcsap.view` (0.5.7.2). **`mabel_view`** es `true` **solo** si tiene `mabel.view` (0.5.7.3).
 - Si las claves vienen en otro formato (ej. camelCase) o no existen, el backend no las envía así; habría que revisar si hay una capa intermedia que transforma la respuesta.
 
 #### 3. ¿Los getters leen **solo** de `capabilities`?
@@ -73,6 +74,7 @@ Si eliminaste modo MABEL TRADING/EL RAYO y los botones dependen solo de capabili
   - `canViewOdcSap` → `state.auth.capabilities?.can_view_odc_sap === true`
   - `canManageOrder` → `state.auth.capabilities?.can_manage_order === true`
   - `canViewOrderList` → `state.auth.capabilities?.can_view_order_list === true`
+  - `canViewMabel` → `state.auth.capabilities?.mabel_view === true`
   - `canConfirmPedido` → `state.auth.capabilities?.can_confirm_pedido === true`
 - **Evitar:** que los getters usen `modo`, `esModoMabelTrading`, `esModoElRayo`, `empresa`, etc. para derivar estos valores. Cualquier condición extra puede hacer que sigan en `false` aunque el backend envíe `true`.
 
@@ -311,6 +313,43 @@ No usar `permissions.includes('odcsap.view')` ni lógica distinta a las capabili
 - Usuario con `odcsap.view` → ve "Gestionar Pedido" y "Listado de Pedidos".
 - Usuario sin `odcsap.view` → no ve ninguno de los dos.
 - El sidebar **no cambia** por este permiso.
+
+#### 0.5.7.3 Botones del módulo MABEL — permiso `mabel.view`
+
+Los botones del **módulo MABEL** dependen **únicamente** del permiso `mabel.view`.
+
+**Reglas exactas:**
+
+- La capability `mabel_view` es `true` **solo** si el usuario tiene el permiso `mabel.view` (sin admin override).
+- Cuando `capabilities.mabel_view === true`, el usuario **puede visualizar únicamente** los siguientes botones:
+  - **Cargar Plantilla**
+  - **Redistribución**
+  - **Procesamiento SAP**
+  - **Procesos**
+  - **Homologaciones**
+- Cuando `capabilities.mabel_view !== true`, **ninguno** de esos botones debe mostrarse.
+- El frontend **no** debe deducir permisos; el backend es la única autoridad sobre capabilities.
+
+**Implementación en frontend:**
+
+```tsx
+{capabilities.mabel_view && <Button to="...">Cargar Plantilla</Button>}
+{capabilities.mabel_view && <Button to="...">Redistribución</Button>}
+{capabilities.mabel_view && <Button to="...">Procesamiento SAP</Button>}
+{capabilities.mabel_view && <Button to="...">Procesos</Button>}
+{capabilities.mabel_view && <Button to="...">Homologaciones</Button>}
+```
+
+O mediante getter: `canViewMabel` → `state.auth.capabilities?.mabel_view === true`.
+
+No usar `permissions.includes('mabel.view')` ni lógica distinta a la capability.
+
+**Comportamiento esperado:**
+
+- Usuario con `mabel.view` → ve Cargar Plantilla, Redistribución, Procesamiento SAP, Procesos y Homologaciones.
+- Usuario sin `mabel.view` → no ve ninguno de esos botones.
+
+**Regla de oro:** Frontend NO deduce permisos. Backend es la única autoridad sobre capabilities.
 
 ### 0.5.8 Pantalla "Detalle del Pedido - EL RAYO" (`/mba3-consultas/pedidos/{id}`)
 

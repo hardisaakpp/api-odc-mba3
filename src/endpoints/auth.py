@@ -105,6 +105,10 @@ def _map_permissions_to_capabilities(permissions: list, roles: list) -> Dict[str
         # Capability: Ver botón/link "Listado de Pedidos". Solo permiso odcsap.view.
         # No afecta al sidebar ni a otros botones.
         "can_view_order_list": has_permission('odcsap.view'),
+        # Capability: Ver botones del módulo MABEL (Cargar Plantilla, Redistribución,
+        # Procesamiento SAP, Procesos, Homologaciones). Solo permiso mabel.view.
+        # Sin admin override ni inferencia de otros permisos.
+        "mabel_view": has_permission('mabel.view'),
         # Capability: Ver órdenes de compra (ODC). Solo admin.
         "can_view_odc": is_admin,
         # Capability: Revisar pedido (no hay botón en UI; se mantiene por compatibilidad).
@@ -183,6 +187,7 @@ def register_auth_endpoints(app: FastAPI):
             "can_view_odc_sap": false,
             "can_manage_order": false,
             "can_view_order_list": false,
+            "mabel_view": false,
             "can_view_odc": false,
             "can_review_pedido": true,
             "can_confirm_pedido": true
@@ -223,6 +228,9 @@ def register_auth_endpoints(app: FastAPI):
         **Botones "Gestionar Pedido" y "Listado de Pedidos":**
         - "Gestionar Pedido": `capabilities.can_manage_order` (true solo si permiso `odcsap.view`)
         - "Listado de Pedidos": `capabilities.can_view_order_list` (true solo si permiso `odcsap.view`)
+
+        **Botones del módulo MABEL** (Cargar Plantilla, Redistribución, Procesamiento SAP, Procesos, Homologaciones):
+        - Todos visibles **solo si** `capabilities.mabel_view === true` (permiso `mabel.view`; sin admin override).
         """
         try:
             # Extraer roles y permisos

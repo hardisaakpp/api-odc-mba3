@@ -62,6 +62,10 @@ Las capabilities son booleanos simples que el frontend usa para decidir qué UI 
 | `can_upload_templates` | `mba3-consultas.plantillas.upload` | Puede subir plantillas Excel |
 | `can_view_templates` | `mba3-consultas.plantillas.view` | Puede ver plantillas y pedidos |
 | `can_operate_pedidos` | `mba3-consultas.pedidos.operate` | Puede operar pedidos (redistribuir, confirmar, exportar) |
+| `can_view_odc_sap` | `odc.view` | Ver botón sidebar "Gestión ODC SAP" (sin admin override) |
+| `can_manage_order` | `odcsap.view` | Ver botón "Gestionar Pedido" |
+| `can_view_order_list` | `odcsap.view` | Ver botón/link "Listado de Pedidos" |
+| `mabel_view` | `mabel.view` | Ver botones del módulo MABEL (Cargar Plantilla, Redistribución, Procesamiento SAP, Procesos, Homologaciones). Sin admin override. |
 
 ### Mapeo de Permisos a Capabilities
 
@@ -181,10 +185,16 @@ Endpoint único que retorna información del usuario autenticado, incluyendo cap
   "capabilities": {
     "can_upload_templates": false,
     "can_view_templates": true,
-    "can_operate_pedidos": true
+    "can_operate_pedidos": true,
+    "can_view_odc_sap": false,
+    "can_manage_order": false,
+    "can_view_order_list": false,
+    "mabel_view": false
   }
 }
 ```
+
+**Regla de oro:** Frontend NO deduce permisos. Backend es la única autoridad sobre capabilities.
 
 ### Uso en Frontend
 
