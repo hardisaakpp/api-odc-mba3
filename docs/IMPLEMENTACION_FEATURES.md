@@ -4,11 +4,11 @@ Documentación de funcionalidades implementadas en el sistema.
 
 ---
 
-## 1. Cargar Último Pedido al Entrar a "Cargar Plantillas"
+## 1. Cargar Último Pedido al Entrar a "Gestionar Pedido"
 
 ### 🎯 Objetivo
 
-Cuando el usuario entra a la pantalla de "Cargar Plantillas", debe mostrarse automáticamente el último pedido creado, independientemente de si fue:
+Cuando el usuario entra a la pantalla de "Gestionar Pedido" (ruta: `/mba3-consultas/gestionar-pedido`), debe mostrarse automáticamente el último pedido creado, independientemente de si fue:
 - ✅ Creado manualmente (`POST /api/pedidos`)
 - ✅ Cargado desde Excel (`POST /api/plantillas/upload`)
 

@@ -6,7 +6,7 @@ Guías de implementación y requerimientos para el sistema frontend.
 
 ## 0. Auth y Capabilities (obligatorio para botones por permiso)
 
-**Problema:** Si el botón "Cargar Plantilla Excel" (u otros gated por capabilities) no se muestra en pantallas como `/mba3-consultas/pedidos/{id}`, suele deberse a que **las capabilities no se cargan**, no a la configuración del backend.
+**Problema:** Si el botón "Cargar Plantilla Excel" (u otros gated por capabilities) no se muestra en pantallas como `/mba3-consultas/pedidos/{id}`, suele deberse a que **las capabilities no se cargan** o **los getters no las usan bien**, no a la configuración del backend. Si ya dependen solo de capabilities y siguen sin verse → **0.4.1 Diagnóstico**.
 
 ### 0.1 Fuente de verdad: `GET /api/auth/me`
 
@@ -37,6 +37,66 @@ Si **nunca** se llama `/api/auth/me` (o falla con 401), `capabilities` queda `nu
 3. **Store:** En el store de auth, ¿`state.capabilities` tiene esos campos en `true`?
 
 Si falla alguno de estos puntos, corregir el flujo de auth (cuándo y cómo se llama `/api/auth/me`) antes de ajustar lógica de UI.
+
+### 0.4.1 Diagnóstico: botones siguen sin mostrarse (ya solo dependen de capabilities)
+
+Si eliminaste modo MABEL TRADING/EL RAYO y los botones dependen solo de capabilities pero **aún no se ven** (Cargar Plantilla Excel, Gestión ODC SAP, Descargar para MBA, etc.), revisar en este orden:
+
+#### 1. ¿Se llama `/api/auth/me` y responde 200?
+
+- Abrir DevTools → **Network**. Ir a `/mba3-consultas/pedidos/{id}` (o hacer **refresh** en esa ruta).
+- Filtrar por `auth` o `me`. Debe existir `GET .../api/auth/me` con **200**.
+- Si **no hay petición** o hay **401**: las capabilities nunca se cargan → todos los getters serán `false` → no se muestra nada.
+- **Causas típicas:** no se llama auth/me al iniciar, al restaurar sesión o al entrar por URL directa; token ausente o inválido en el `Authorization` header.
+
+#### 2. ¿La respuesta incluye las capabilities esperadas?
+
+- En la petición `GET /api/auth/me` → **Response**.
+- Debe existir `capabilities` con las claves en **snake_case** (el backend siempre usa snake_case):
+  - `can_cargar_plantilla_excel`
+  - `can_operate_pedidos`
+  - `can_view_odc_sap`
+  - `can_confirm_pedido`
+- Para usuario con `odcsap.view`: `can_cargar_plantilla_excel`, `can_operate_pedidos`, `can_view_odc_sap` en `true`; `can_confirm_pedido` en `false`.
+- Si las claves vienen en otro formato (ej. camelCase) o no existen, el backend no las envía así; habría que revisar si hay una capa intermedia que transforma la respuesta.
+
+#### 3. ¿Los getters leen **solo** de `capabilities`?
+
+- Los nombres usados en el template (ej. `canOperatePedidos`, `canCargarPlantillaExcel`) suelen venir de **getters** o **computed**.
+- Cada uno debe mapear **directamente** desde `capabilities`:
+  - `canOperatePedidos` → `state.auth.capabilities?.can_operate_pedidos === true`
+  - `canCargarPlantillaExcel` → `state.auth.capabilities?.can_cargar_plantilla_excel === true`
+  - `canViewOdcSap` → `state.auth.capabilities?.can_view_odc_sap === true`
+  - `canConfirmPedido` → `state.auth.capabilities?.can_confirm_pedido === true`
+- **Evitar:** que los getters usen `modo`, `esModoMabelTrading`, `esModoElRayo`, `empresa`, etc. para derivar estos valores. Cualquier condición extra puede hacer que sigan en `false` aunque el backend envíe `true`.
+
+#### 4. ¿El store se actualiza con la respuesta de `/api/auth/me`?
+
+- Tras `GET /api/auth/me` exitoso, debe guardarse `response.capabilities` en el store (ej. `state.auth.capabilities = data.capabilities`).
+- Comprobar en DevTools (Vue Devtools / Redux DevTools, etc.) que, tras cargar la app o hacer login, `state.auth.capabilities` contiene las claves anteriores con los valores esperados.
+
+#### 5. Acceso directo por URL o refresh en `/mba3-consultas/pedidos/{id}`
+
+- Si el usuario entra **directo** por enlace o **refresh** en esa ruta, la app puede renderizar la vista **antes** de que se llame `/api/auth/me`.
+- En ese caso, `capabilities` sigue vacío o sin cargar → getters en `false` → botones no se muestran.
+- **Solución:** Asegurar que en rutas que usan capabilities (p. ej. detalle de pedido) se espere a que auth/me haya terminado antes de renderizar, o que se dispare auth/me al entrar a la ruta si aún no se ha hecho.
+
+#### 6. Vue: `v-if` y reactiveidad
+
+- Si usas `v-if="canOperatePedidos"` (u otros), asegurarse de que `canOperatePedidos` sea **reactivo** (computed o getter del store). Si se toma una copia “en frío” al montar y el store se actualiza después, el `v-if` no se re-evalúa.
+- Los getters del store (Pinia/Vuex) son reactivos; usarlos directamente en el template o en un computed que los use evita este problema.
+
+#### Checklist rápido
+
+| Paso | Comprobar |
+|------|-----------|
+| 1 | Hay `GET /api/auth/me` con 200 al abrir o refrescar la pantalla de detalle |
+| 2 | La respuesta tiene `capabilities` con `can_cargar_plantilla_excel`, `can_operate_pedidos`, `can_view_odc_sap` en `true` (usuario con `odcsap.view`) |
+| 3 | El store guarda `capabilities` y los getters leen solo de ahí (sin modo/empresa) |
+| 4 | En la vista de detalle, auth/me ya se ejecutó antes de renderizar |
+| 5 | Los `v-if` usan getters/computed reactivos que mapean esas capabilities |
+
+Si todo lo anterior es correcto y los botones siguen sin mostrarse, revisar si algún **componente padre** o **ruta** oculta por completo la sección donde están los botones (p. ej. otro `v-if` con modo o permisos).
 
 ### 0.5 Migración desde Configuraciones Antiguas
 
@@ -186,23 +246,484 @@ Para identificar y eliminar código legacy en el frontend, buscar:
 | `permissions.includes('mba3-consultas.facturas.view')` | `capabilities.can_view_templates` |
 | `usuario.tipo === 'EL_RAYO'` → operar pedidos | `capabilities.can_operate_pedidos` |
 
-### 0.5.8 Pantalla "Detalle del Pedido - EL RAYO" (`/mba3-consultas/pedidos/{id}`)
+### 0.5.8 Usuarios con `odcsap.view`: MOSTRAR vs OCULTAR
 
-**Ruta:** `http://localhost:3000/mba3-consultas/pedidos/{numero_pedido}` (ej. `P-12.21 - 12 - 2025`).
+**Con `odcsap.view` el backend devuelve:**
 
-**Botón "Confirmar":**
+| Capability | Valor | Acción en frontend |
+|------------|--------|---------------------|
+| `can_cargar_plantilla_excel` | **true** | **MOSTRAR** botón "Cargar Plantilla Excel" |
+| `can_view_odc_sap` | **true** | **MOSTRAR** ítem "Gestión ODC SAP" en el sidebar |
+| `can_operate_pedidos` | **true** | **MOSTRAR** Redistribuir, Exportar, Descargar para MBA |
+| `can_confirm_pedido` | **false** | **OCULTAR** botón "Confirmar" |
 
-- **Obligatorio:** Mostrar el botón **solo** si `capabilities.can_confirm_pedido === true`.
-- **Usuarios con `odcsap.view`:** El backend devuelve `can_confirm_pedido: false` → el botón **no debe mostrarse**.
-- **Implementación:**
+No existe el botón "Revisar"; no usarlo para lógica de UI.
+
+**Implementación obligatoria:**
 
 ```tsx
+{/* MOSTRAR con odcsap.view */}
+{capabilities?.can_cargar_plantilla_excel && (
+  <Button onClick={handleCargarPlantilla}>Cargar Plantilla Excel</Button>
+)}
+{capabilities?.can_view_odc_sap && (
+  <SidebarItem to="/mba3-consultas/gestion-odc-sap">Gestión ODC SAP</SidebarItem>
+)}
+
+{/* OCULTAR solo "Confirmar" con odcsap.view */}
 {capabilities?.can_confirm_pedido && (
   <Button onClick={handleConfirmar}>Confirmar</Button>
 )}
 ```
 
-No usar `modo === 'el-rayo'`, `permissions.includes(...)` ni ninguna lógica distinta a `can_confirm_pedido` para este botón.
+No usar `modo === 'el-rayo'`, `permissions.includes('odcsap.view')` ni lógica distinta a las capabilities.
+
+### 0.5.9 Pantalla "Detalle del Pedido - EL RAYO" (`/mba3-consultas/pedidos/{id}`)
+
+**Ruta:** `http://localhost:3000/mba3-consultas/pedidos/{numero_pedido}` (ej. `P-12.21 - 12 - 2025`).
+
+- **MOSTRAR** "Cargar Plantilla Excel" si `capabilities.can_cargar_plantilla_excel`.
+- **MOSTRAR** Redistribuir, Exportar, Descargar para MBA si `capabilities.can_operate_pedidos`.
+- **OCULTAR** solo el botón "Confirmar" si `capabilities.can_confirm_pedido === false` (usuarios con `odcsap.view`).
+
+### 0.5.10 Cambio de Ruta: Cargar Plantillas → Gestionar Pedido
+
+**⚠️ CAMBIO DE RUTA IMPLEMENTADO**
+
+La ruta para cargar plantillas Excel ha sido renombrada:
+
+- **❌ Ruta antigua:** `/mba3-consultas/cargar-plantillas`
+- **✅ Ruta nueva:** `/mba3-consultas/gestionar-pedido`
+
+#### Cambios Requeridos en el Frontend
+
+**1. Actualizar el Router:**
+
+```tsx
+// React Router
+// ❌ ANTES
+<Route path="/mba3-consultas/cargar-plantillas" component={CargarPlantillas} />
+
+// ✅ DESPUÉS
+<Route path="/mba3-consultas/gestionar-pedido" component={CargarPlantillas} />
+```
+
+```ts
+// Vue Router
+// ❌ ANTES
+{ path: '/mba3-consultas/cargar-plantillas', component: CargarPlantillas }
+
+// ✅ DESPUÉS
+{ path: '/mba3-consultas/gestionar-pedido', component: CargarPlantillas }
+```
+
+**2. Actualizar Enlaces y Navegación:**
+
+```tsx
+// ❌ ANTES
+<Link to="/mba3-consultas/cargar-plantillas">Cargar Plantillas</Link>
+<router-link to="/mba3-consultas/cargar-plantillas">Cargar Plantillas</router-link>
+
+// ✅ DESPUÉS
+<Link to="/mba3-consultas/gestionar-pedido">Gestionar Pedido</Link>
+<router-link to="/mba3-consultas/gestionar-pedido">Gestionar Pedido</router-link>
+```
+
+**3. Actualizar Redirecciones:**
+
+```tsx
+// ❌ ANTES
+navigate('/mba3-consultas/cargar-plantillas');
+router.push('/mba3-consultas/cargar-plantillas');
+
+// ✅ DESPUÉS
+navigate('/mba3-consultas/gestionar-pedido');
+router.push('/mba3-consultas/gestionar-pedido');
+```
+
+**4. (Opcional) Mantener Compatibilidad con Redirect:**
+
+Para que la ruta antigua redirija automáticamente a la nueva:
+
+```tsx
+// React Router
+<Route 
+  path="/mba3-consultas/cargar-plantillas" 
+  element={<Navigate to="/mba3-consultas/gestionar-pedido" replace />} 
+/>
+
+// Vue Router
+{
+  path: '/mba3-consultas/cargar-plantillas',
+  redirect: '/mba3-consultas/gestionar-pedido'
+}
+```
+
+**5. Checklist de Cambios:**
+
+- [ ] Actualizar ruta en el router principal
+- [ ] Buscar y actualizar todos los `<Link>` o `<router-link>`
+- [ ] Buscar y actualizar todos los `navigate()` o `router.push()`
+- [ ] Actualizar referencias en sidebar/menú de navegación
+- [ ] Actualizar breadcrumbs si existen
+- [ ] Actualizar títulos de página si mencionan "Cargar Plantillas"
+- [ ] (Opcional) Agregar redirect de ruta antigua a nueva
+- [ ] Actualizar documentación interna del frontend
+
+**Nota:** El backend no requiere cambios. Los endpoints API (ej. `POST /api/plantillas/upload`) siguen funcionando igual. Solo cambia la ruta del frontend.
+
+---
+
+## 0.6 Bloqueo de Interfaz Durante Carga de Plantilla Excel
+
+**Requerimiento:** Mientras se carga y procesa una plantilla Excel, se debe bloquear toda la interfaz con un modal de carga que impida cualquier interacción del usuario.
+
+### 0.6.1 Comportamiento Requerido
+
+Cuando el usuario hace clic en "Cargar Plantilla Excel" y selecciona un archivo:
+
+1. **Inmediatamente** mostrar un modal/overlay que bloquee toda la interfaz
+2. **Deshabilitar** todos los botones y acciones de la página
+3. **Mostrar** un indicador de carga con mensaje descriptivo
+4. **Mantener** el bloqueo durante todo el proceso (upload + validación + procesamiento)
+5. **Ocultar** el modal solo cuando la respuesta del backend llegue (éxito o error)
+
+### 0.6.2 Implementación Recomendada
+
+#### Opción A: Modal de Carga Global (Recomendado)
+
+```tsx
+// Componente: LoadingOverlay.tsx
+import React from 'react';
+import './LoadingOverlay.css';
+
+interface LoadingOverlayProps {
+  isVisible: boolean;
+  message?: string;
+}
+
+export const LoadingOverlay: React.FC<LoadingOverlayProps> = ({ 
+  isVisible, 
+  message = "Procesando plantilla Excel..." 
+}) => {
+  if (!isVisible) return null;
+
+  return (
+    <div className="loading-overlay">
+      <div className="loading-modal">
+        <div className="loading-spinner"></div>
+        <p className="loading-message">{message}</p>
+        <p className="loading-subtitle">Por favor, no cierre esta ventana</p>
+      </div>
+    </div>
+  );
+};
+```
+
+```css
+/* LoadingOverlay.css */
+.loading-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: rgba(0, 0, 0, 0.7);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  z-index: 9999; /* Máxima prioridad */
+  backdrop-filter: blur(4px);
+}
+
+.loading-modal {
+  background: white;
+  border-radius: 12px;
+  padding: 2rem;
+  min-width: 300px;
+  text-align: center;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+}
+
+.loading-spinner {
+  width: 48px;
+  height: 48px;
+  border: 4px solid #f3f3f3;
+  border-top: 4px solid #3498db;
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+  margin: 0 auto 1rem;
+}
+
+@keyframes spin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+.loading-message {
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: #333;
+  margin: 0.5rem 0;
+}
+
+.loading-subtitle {
+  font-size: 0.9rem;
+  color: #666;
+  margin: 0.5rem 0 0;
+}
+```
+
+#### Opción B: Usando un Store/Context Global
+
+```tsx
+// Store: useLoadingStore.ts (Pinia/Zustand/Context)
+import { create } from 'zustand';
+
+interface LoadingState {
+  isUploading: boolean;
+  uploadMessage: string;
+  setUploading: (isUploading: boolean, message?: string) => void;
+}
+
+export const useLoadingStore = create<LoadingState>((set) => ({
+  isUploading: false,
+  uploadMessage: '',
+  setUploading: (isUploading, message = '') => 
+    set({ isUploading, uploadMessage: message }),
+}));
+```
+
+#### Uso en el Componente de Carga
+
+```tsx
+// Componente: PedidoHeaderActions.vue o equivalente
+import { useState } from 'react';
+import { LoadingOverlay } from '@/components/LoadingOverlay';
+import { useLoadingStore } from '@/stores/useLoadingStore';
+
+export const PedidoHeaderActions = () => {
+  const [file, setFile] = useState<File | null>(null);
+  const { isUploading, setUploading } = useLoadingStore();
+
+  const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const selectedFile = event.target.files?.[0];
+    if (selectedFile) {
+      setFile(selectedFile);
+    }
+  };
+
+  const handleUpload = async () => {
+    if (!file) return;
+
+    try {
+      // 1. ACTIVAR BLOQUEO INMEDIATAMENTE
+      setUploading(true, 'Cargando plantilla Excel...');
+
+      const formData = new FormData();
+      formData.append('file', file);
+
+      // 2. Realizar petición
+      const response = await fetch('/api/plantillas/upload', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`
+        },
+        body: formData
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.detail || 'Error al cargar plantilla');
+      }
+
+      // 3. ÉXITO: Ocultar modal y mostrar mensaje
+      setUploading(false);
+      // Mostrar notificación de éxito
+      showSuccessNotification('Plantilla cargada exitosamente');
+
+    } catch (error) {
+      // 4. ERROR: Ocultar modal y mostrar error
+      setUploading(false);
+      showErrorNotification(error.message || 'Error al procesar plantilla');
+    }
+  };
+
+  return (
+    <>
+      {/* Modal de carga - se muestra sobre TODO */}
+      <LoadingOverlay 
+        isVisible={isUploading} 
+        message="Procesando plantilla Excel..."
+      />
+
+      {/* Resto de la interfaz */}
+      <div className="pedido-header-actions">
+        <input
+          type="file"
+          accept=".xlsx,.xls"
+          onChange={handleFileChange}
+          disabled={isUploading} // Deshabilitar input durante carga
+        />
+        <button 
+          onClick={handleUpload}
+          disabled={!file || isUploading} // Deshabilitar botón durante carga
+        >
+          Cargar Plantilla Excel
+        </button>
+        
+        {/* Otros botones también deshabilitados */}
+        <button disabled={isUploading}>Redistribuir</button>
+        <button disabled={isUploading}>Exportar</button>
+        <button disabled={isUploading}>Confirmar</button>
+      </div>
+    </>
+  );
+};
+```
+
+### 0.6.3 Mensajes de Carga por Etapa (Opcional)
+
+Si quieres mostrar diferentes mensajes según la etapa del proceso:
+
+```tsx
+const handleUpload = async () => {
+  setUploading(true, 'Subiendo archivo...');
+  
+  // Simular diferentes etapas
+  await new Promise(resolve => setTimeout(resolve, 500));
+  setUploading(true, 'Validando estructura...');
+  
+  await new Promise(resolve => setTimeout(resolve, 500));
+  setUploading(true, 'Procesando datos...');
+  
+  // Petición real
+  const response = await fetch('/api/plantillas/upload', { ... });
+  
+  setUploading(false);
+};
+```
+
+### 0.6.4 Prevención de Navegación (Opcional)
+
+Para evitar que el usuario navegue o cierre la página durante la carga:
+
+```tsx
+import { useEffect } from 'react';
+
+useEffect(() => {
+  if (isUploading) {
+    // Prevenir cierre de página
+    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = 'Hay una carga en progreso. ¿Estás seguro de que quieres salir?';
+      return e.returnValue;
+    };
+
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    
+    return () => {
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+    };
+  }
+}, [isUploading]);
+```
+
+### 0.6.5 Checklist de Implementación
+
+- [ ] Modal/overlay que cubre toda la pantalla (z-index alto)
+- [ ] Spinner o indicador de carga visible
+- [ ] Mensaje descriptivo ("Procesando plantilla Excel...")
+- [ ] Todos los botones deshabilitados durante la carga
+- [ ] Input de archivo deshabilitado durante la carga
+- [ ] Modal se oculta al recibir respuesta (éxito o error)
+- [ ] Manejo de errores: ocultar modal y mostrar mensaje de error
+- [ ] (Opcional) Prevenir navegación durante carga
+
+### 0.6.6 Ejemplo Vue.js (si usas Vue)
+
+```vue
+<template>
+  <div>
+    <!-- Modal de carga -->
+    <div v-if="isUploading" class="loading-overlay">
+      <div class="loading-modal">
+        <div class="loading-spinner"></div>
+        <p class="loading-message">{{ uploadMessage }}</p>
+        <p class="loading-subtitle">Por favor, no cierre esta ventana</p>
+      </div>
+    </div>
+
+    <!-- Interfaz principal -->
+    <div class="pedido-header-actions">
+      <input
+        type="file"
+        accept=".xlsx,.xls"
+        @change="handleFileChange"
+        :disabled="isUploading"
+      />
+      <button 
+        @click="handleUpload"
+        :disabled="!file || isUploading"
+      >
+        Cargar Plantilla Excel
+      </button>
+      
+      <button :disabled="isUploading">Redistribuir</button>
+      <button :disabled="isUploading">Exportar</button>
+    </div>
+  </div>
+</template>
+
+<script setup lang="ts">
+import { ref } from 'vue';
+
+const file = ref<File | null>(null);
+const isUploading = ref(false);
+const uploadMessage = ref('Procesando plantilla Excel...');
+
+const handleFileChange = (event: Event) => {
+  const target = event.target as HTMLInputElement;
+  file.value = target.files?.[0] || null;
+};
+
+const handleUpload = async () => {
+  if (!file.value) return;
+
+  try {
+    isUploading.value = true;
+    uploadMessage.value = 'Cargando plantilla Excel...';
+
+    const formData = new FormData();
+    formData.append('file', file.value);
+
+    const response = await fetch('/api/plantillas/upload', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${token}`
+      },
+      body: formData
+    });
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      throw new Error(data.detail || 'Error al cargar plantilla');
+    }
+
+    // Éxito
+    isUploading.value = false;
+    // Mostrar notificación de éxito
+
+  } catch (error) {
+    // Error
+    isUploading.value = false;
+    // Mostrar notificación de error
+  }
+};
+</script>
+```
 
 ---
 
