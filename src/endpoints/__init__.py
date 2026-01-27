@@ -65,9 +65,3 @@ def create_endpoints(app: FastAPI):
     
     # Registrar endpoints de pedidos (refactorizado - 29 endpoints)
     register_pedidos_endpoints(app)
-    
-    # ? TODOS LOS ENDPOINTS HAN SIDO MIGRADOS
-    # Ya no es necesario importar el m?dulo legacy
-    # El archivo _endpoints_legacy.py puede mantenerse como respaldo o eliminarse
-    # si se confirma que todo funciona correctamente
-

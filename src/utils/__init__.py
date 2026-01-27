@@ -29,7 +29,6 @@ if _utils_module_path.exists():
         validate_query = utils_module.validate_query
         parse_query = utils_module.parse_query
         save_query_to_file = utils_module.save_query_to_file
-        build_query_from_parts = utils_module.build_query_from_parts
         normalizar_codigo_producto = utils_module.normalizar_codigo_producto
         validar_longitud_minima_codigo = utils_module.validar_longitud_minima_codigo
     else:
@@ -40,7 +39,6 @@ if _utils_module_path.exists():
         validate_query = utils_module.validate_query
         parse_query = utils_module.parse_query
         save_query_to_file = utils_module.save_query_to_file
-        build_query_from_parts = utils_module.build_query_from_parts
 else:
     raise ImportError("No se pudo encontrar el módulo utils.py")
 
@@ -59,7 +57,6 @@ __all__ = [
     "validate_query",
     "parse_query",
     "save_query_to_file",
-    "build_query_from_parts",
     "normalizar_codigo_producto",
     "validar_longitud_minima_codigo",
     "send_migration_notification",

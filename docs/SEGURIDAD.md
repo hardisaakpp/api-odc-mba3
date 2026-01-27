@@ -8,11 +8,10 @@ Todas las funcionalidades de seguridad están **DESHABILITADAS por defecto** par
 
 ### Funcionalidades Disponibles
 
-1. **Autenticación mediante API Keys** - Protege endpoints con API Keys
-2. **Autenticación JWT** - Integración con SCNexus.Core mediante tokens JWT
-3. **Rate Limiting** - Limita el número de requests por tiempo
-4. **CORS Restrictivo** - Limita orígenes permitidos
-5. **Ocultar Swagger en Producción** - Oculta documentación en producción
+1. **Autenticación JWT** - Integración con SCNexus.Core mediante tokens JWT
+2. **Rate Limiting** - Limita el número de requests por tiempo
+3. **CORS Restrictivo** - Limita orígenes permitidos
+4. **Ocultar Swagger en Producción** - Oculta documentación en producción
 
 ---
 
@@ -26,10 +25,6 @@ Agrega estas variables a tu archivo `.env`:
 # ============================================================================
 # CONFIGURACIÓN DE SEGURIDAD (Opcional)
 # ============================================================================
-
-# Autenticación mediante API Keys
-ENABLE_AUTH=false                    # true para habilitar autenticación
-API_KEY=tu-api-key-secreta-aqui      # Requerida si ENABLE_AUTH=true
 
 # Autenticación JWT (integración con SCNexus.Core)
 JWT_SECRET=clave_super_secreta_para_jwt_12345  # DEBE coincidir con Core
@@ -49,48 +44,6 @@ CORS_ALLOWED_ORIGINS=http://localhost:5173,https://tu-dominio.com  # Orígenes p
 ENVIRONMENT=development               # development, staging, production
 HIDE_SWAGGER_IN_PROD=true            # true para ocultar /docs en producción
 ```
-
----
-
-## 🔑 Autenticación (API Keys)
-
-### Activar Autenticación
-
-1. **Configurar en `.env`:**
-```env
-ENABLE_AUTH=true
-API_KEY=mi-api-key-super-secreta-12345
-```
-
-2. **Usar en requests:**
-```bash
-# Con curl
-curl -H "X-API-Key: mi-api-key-super-secreta-12345" \
-     http://localhost:8000/consultar
-
-# Con Postman
-# Agregar header: X-API-Key = mi-api-key-super-secreta-12345
-```
-
-### Endpoints Protegidos
-
-Cuando `ENABLE_AUTH=true`, estos endpoints requieren API Key:
-- ✅ `GET /consultar`
-- ✅ `GET /migrar`
-- ✅ `GET /procesar-oc`
-- ✅ `POST /integrar-sap`
-- ✅ `GET /pruebas`
-
-### Endpoints Públicos (sin autenticación)
-
-Estos endpoints siempre son públicos:
-- ✅ `GET /health` - Health check
-- ✅ `GET /docs` - Swagger UI (si está habilitado)
-
-### Comportamiento
-
-- **Si `ENABLE_AUTH=false`**: Todos los endpoints funcionan sin autenticación (comportamiento actual)
-- **Si `ENABLE_AUTH=true`**: Endpoints protegidos requieren `X-API-Key` header
 
 ---
 
@@ -150,29 +103,6 @@ async def get_despachos_count(
     return {"data": [...]}
 ```
 
-#### Endpoint con Autenticación JWT Opcional
-
-```python
-from security.jwt_auth import optional_jwt_auth
-
-@app.get("/consultar")
-async def consultar_despachos(
-    request: Request,
-    user: Optional[dict] = Depends(optional_jwt_auth)  # ✅ Opcional
-):
-    """
-    Endpoint que funciona con o sin autenticación.
-    Si hay token válido, 'user' contendrá la información del usuario.
-    Si no hay token, 'user' será None.
-    """
-    if user:
-        logger.info(f"Usuario autenticado: {user.get('username')}")
-    else:
-        logger.info("Acceso sin autenticación")
-    
-    return {"data": [...]}
-```
-
 #### Endpoint con Permiso Específico
 
 ```python
@@ -190,25 +120,6 @@ async def migrar_despachos(
     2. Permiso específico 'mba3_consultas.migrar'
     """
     return {"status": "success"}
-```
-
-#### Endpoint con Rol Específico
-
-```python
-from security.jwt_auth import verify_jwt_token, require_role
-
-@app.get("/ordenes-compra")
-async def get_ordenes_compra(
-    request: Request,
-    user: dict = Depends(verify_jwt_token),  # ✅ Requiere JWT válido
-    _: None = Depends(require_role('Admin'))  # ✅ Requiere rol Admin
-):
-    """
-    Endpoint que requiere:
-    1. Token JWT válido
-    2. Rol 'Admin'
-    """
-    return {"data": [...]}
 ```
 
 ### Flujo Completo
@@ -240,14 +151,8 @@ El token JWT contiene claims estándar de .NET Identity:
 - **`verify_jwt_token`**: Valida y decodifica un token JWT. Lanza `HTTPException` si el token es inválido o falta.
   - Uso: `user: dict = Depends(verify_jwt_token)`
 
-- **`optional_jwt_auth`**: Similar a `verify_jwt_token` pero retorna `None` si no hay token (no lanza excepción).
-  - Uso: `user: Optional[dict] = Depends(optional_jwt_auth)`
-
-- **`require_permission(permission_key: str)`**: Valida que el usuario tenga un permiso específico.
+- **`require_permission(permission_key: str)`**: Valida que el usuario tenga un permiso específico. Los usuarios con rol 'Admin' tienen acceso automáticamente.
   - Uso: `_: None = Depends(require_permission('mba3_consultas.migrar'))`
-
-- **`require_role(role_name: str)`**: Valida que el usuario tenga un rol específico.
-  - Uso: `_: None = Depends(require_role('Admin'))`
 
 ### Registro de Permisos en el Core
 
@@ -400,18 +305,18 @@ HIDE_SWAGGER_IN_PROD=true
 
 ## 🚀 Activación Gradual Recomendada
 
-### Fase 1: Desarrollo (Sin Seguridad)
+### Fase 1: Desarrollo (Sin Seguridad Adicional)
 ```env
-ENABLE_AUTH=false
+ENABLE_JWT_AUTH=false
 ENABLE_RATE_LIMITING=false
 ENABLE_CORS_RESTRICTION=false
 ENVIRONMENT=development
 ```
-✅ **Estado actual** - Todo funciona sin cambios
+✅ **Estado actual** - Endpoints disponibles sin autenticación
 
 ### Fase 2: Testing (Activar CORS)
 ```env
-ENABLE_AUTH=false
+ENABLE_JWT_AUTH=false
 ENABLE_RATE_LIMITING=false
 ENABLE_CORS_RESTRICTION=true
 CORS_ALLOWED_ORIGINS=http://localhost:5173
@@ -421,7 +326,7 @@ ENVIRONMENT=development
 
 ### Fase 3: Staging (Activar Rate Limiting)
 ```env
-ENABLE_AUTH=false
+ENABLE_JWT_AUTH=false
 ENABLE_RATE_LIMITING=true
 RATE_LIMIT_DEFAULT=50/minute
 ENABLE_CORS_RESTRICTION=true
@@ -430,10 +335,12 @@ ENVIRONMENT=staging
 ```
 ✅ **Protege contra abuso** sin requerir autenticación
 
-### Fase 4: Producción (Todo Activado)
+### Fase 4: Producción (JWT + Rate Limiting + CORS)
 ```env
-ENABLE_AUTH=true
-API_KEY=generar-api-key-segura-aqui
+ENABLE_JWT_AUTH=true
+JWT_SECRET=clave_super_secreta_para_jwt_12345
+JWT_ISSUER=SCNexus.Core
+JWT_AUDIENCE=SCNexus.Users
 ENABLE_RATE_LIMITING=true
 RATE_LIMIT_DEFAULT=100/minute
 ENABLE_CORS_RESTRICTION=true
@@ -441,45 +348,21 @@ CORS_ALLOWED_ORIGINS=https://app.tu-dominio.com
 ENVIRONMENT=production
 HIDE_SWAGGER_IN_PROD=true
 ```
-✅ **Máxima seguridad** - Listo para producción
-
----
-
-## 🔧 Generar API Key Segura
-
-### Opción 1: Python
-```python
-import secrets
-api_key = secrets.token_urlsafe(32)
-print(f"API_KEY={api_key}")
-```
-
-### Opción 2: OpenSSL
-```bash
-openssl rand -hex 32
-```
-
-### Opción 3: Online
-Usa un generador de tokens seguros (ej: https://randomkeygen.com/)
+✅ **Máxima seguridad** - JWT + Rate Limiting + CORS restrictivo
 
 ---
 
 ## ⚠️ Notas Importantes
 
-1. **Por Defecto Todo Está Deshabilitado**: La aplicación funciona igual que antes
+1. **JWT es la forma de autenticación**: Solo JWT, no API Keys
 2. **Activa Gradualmente**: No necesitas activar todo de una vez
 3. **Prueba en Desarrollo**: Siempre prueba en desarrollo antes de producción
-4. **Guarda API Keys Seguras**: Nunca subas API Keys al repositorio
+4. **Guarda Secretos Seguros**: Nunca subas JWT_SECRET al repositorio
 5. **Health Check Siempre Público**: `/health` nunca requiere autenticación
 
 ---
 
 ## 🐛 Troubleshooting
-
-### Error: "API Key requerida"
-- Verifica que `ENABLE_AUTH=true` en `.env`
-- Verifica que estás enviando el header `X-API-Key`
-- Verifica que la API Key coincide con `API_KEY` en `.env`
 
 ### Error: "Rate limit exceeded"
 - Aumenta `RATE_LIMIT_DEFAULT` en `.env`
@@ -499,26 +382,28 @@ Usa un generador de tokens seguros (ej: https://randomkeygen.com/)
 ### Ejemplo 1: Desarrollo Local
 ```env
 # .env para desarrollo
-ENABLE_AUTH=false
+ENABLE_JWT_AUTH=false
 ENABLE_RATE_LIMITING=false
 ENABLE_CORS_RESTRICTION=false
 ENVIRONMENT=development
 ```
-✅ Todo funciona sin autenticación
+✅ Todo funciona sin autenticación JWT
 
 ### Ejemplo 2: Testing con Frontend
 ```env
-ENABLE_AUTH=false
+ENABLE_JWT_AUTH=false
 ENABLE_CORS_RESTRICTION=true
 CORS_ALLOWED_ORIGINS=http://localhost:5173
 ENVIRONMENT=development
 ```
-✅ Frontend puede conectarse, sin autenticación
+✅ Frontend puede conectarse, sin autenticación JWT
 
-### Ejemplo 3: Producción
+### Ejemplo 3: Producción con SCNexus.Core
 ```env
-ENABLE_AUTH=true
-API_KEY=sk_live_abc123xyz789...
+ENABLE_JWT_AUTH=true
+JWT_SECRET=clave_super_secreta_para_jwt_12345
+JWT_ISSUER=SCNexus.Core
+JWT_AUDIENCE=SCNexus.Users
 ENABLE_RATE_LIMITING=true
 RATE_LIMIT_DEFAULT=100/minute
 ENABLE_CORS_RESTRICTION=true
@@ -526,5 +411,4 @@ CORS_ALLOWED_ORIGINS=https://app.tu-dominio.com
 ENVIRONMENT=production
 HIDE_SWAGGER_IN_PROD=true
 ```
-✅ Máxima seguridad
-
+✅ Máxima seguridad con integración JWT

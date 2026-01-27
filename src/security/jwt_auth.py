@@ -179,31 +179,6 @@ def _extract_permissions(data: Dict[str, Any]) -> list:
     return permissions
 
 
-async def optional_jwt_auth(
-    request: Request,
-    credentials: Optional[HTTPAuthorizationCredentials] = Security(security)
-) -> Optional[Dict[str, Any]]:
-    """
-    Dependency opcional para autenticación JWT.
-    
-    Similar a verify_jwt_token pero retorna None si no hay token
-    en lugar de lanzar excepción. Útil para endpoints que pueden
-    funcionar con o sin autenticación.
-    
-    Args:
-        request: Request de FastAPI
-        credentials: Credenciales del header Authorization
-        
-    Returns:
-        Diccionario con información del usuario o None si no hay token
-    """
-    try:
-        return await verify_jwt_token(request, credentials)
-    except HTTPException:
-        # Si no hay token o es inválido, retornar None (no lanzar excepción)
-        return None
-
-
 def require_permission(permission_key: str, legacy_permission: Optional[str] = None):
     """
     Dependency factory para validar permisos específicos.
@@ -299,49 +274,3 @@ def require_permission(permission_key: str, legacy_permission: Optional[str] = N
             logger.debug("=" * 80)
     
     return permission_checker
-
-
-def require_role(role_name: str):
-    """
-    Dependency factory para validar roles específicos.
-    
-    Uso:
-        @app.get("/endpoint")
-        async def my_endpoint(
-            user: Dict = Depends(verify_jwt_token),
-            _: None = Depends(require_role('Admin'))
-        ):
-            ...
-    
-    Args:
-        role_name: Nombre del rol requerido
-        
-    Returns:
-        Dependency que valida el rol
-    """
-    async def role_checker(
-        request: Request,
-        user: Dict[str, Any] = Security(verify_jwt_token)
-    ) -> None:
-        if not hasattr(request.state, 'current_user'):
-            raise HTTPException(
-                status_code=401,
-                detail="Autenticación requerida"
-            )
-        
-        roles = user.get('roles', [])
-        
-        if role_name not in roles:
-            username = user.get('username', 'unknown')
-            logger.warning(
-                f"❌ Rol denegado: usuario {username} "
-                f"intentó acceder sin rol '{role_name}'"
-            )
-            raise HTTPException(
-                status_code=403,
-                detail=f"Rol denegado: se requiere rol '{role_name}'"
-            )
-    
-    return role_checker
-
-

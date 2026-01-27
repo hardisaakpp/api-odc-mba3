@@ -1,26 +1,16 @@
 """
-Módulo de seguridad opcional para la aplicación.
+Módulo de seguridad para la aplicación.
 
-Todas las funcionalidades de seguridad están deshabilitadas por defecto
-y se pueden activar mediante variables de entorno.
+Autenticación JWT y rate limiting. Auth por API Key (auth.py) fue removido
+por no estar en uso; los endpoints usan verify_jwt_token y require_permission.
 """
 
-from .auth import optional_auth, verify_api_key
 from .rate_limit import setup_rate_limiting
-from .jwt_auth import (
-    verify_jwt_token,
-    optional_jwt_auth,
-    require_permission,
-    require_role
-)
+from .jwt_auth import verify_jwt_token, require_permission
 
 __all__ = [
-    "optional_auth",
-    "verify_api_key",
     "setup_rate_limiting",
     "verify_jwt_token",
-    "optional_jwt_auth",
     "require_permission",
-    "require_role"
 ]
 

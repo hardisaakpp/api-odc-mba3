@@ -293,34 +293,3 @@ def save_query_to_file(response_data: Dict[str, Any]) -> None:
     except Exception as e:
         logger.error(f"Error al guardar consulta en archivo: {e}")
 
-
-def build_query_from_parts(parts: Dict[str, Any]) -> str:
-    """
-    Construye una consulta SQL SELECT a partir de partes individuales.
-    
-    Args:
-        parts: Diccionario con select, from, where, orderBy, limit
-        
-    Returns:
-        Consulta SQL construida
-    """
-    if not parts.get("from"):
-        raise ValueError("El campo 'from' es obligatorio")
-    
-    select = parts.get("select") or "*"
-    from_table = parts["from"]
-    where = parts.get("where")
-    order_by = parts.get("orderBy")
-    limit = parts.get("limit")
-    
-    query = f"SELECT {select} FROM {from_table}"
-    
-    if where:
-        query += f" WHERE {where}"
-    if order_by:
-        query += f" ORDER BY {order_by}"
-    if limit:
-        query += f" LIMIT {limit}"
-    
-    return query
-

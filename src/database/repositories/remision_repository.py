@@ -5,26 +5,10 @@ Repositorio para operaciones CRUD de remisiones en SQL Server.
 import logging
 import pyodbc
 from typing import Optional, Dict, Any
-from datetime import date, datetime
+
+from .common.serialization import serialize_date
 
 logger = logging.getLogger(__name__)
-
-
-def serialize_date(value):
-    """
-    Convierte un objeto date o datetime a string ISO format para JSON serialization.
-    
-    Args:
-        value: Objeto date, datetime, o None
-        
-    Returns:
-        String en formato ISO o None
-    """
-    if value is None:
-        return None
-    if isinstance(value, (date, datetime)):
-        return value.isoformat()
-    return value
 
 
 class RemisionRepository:
