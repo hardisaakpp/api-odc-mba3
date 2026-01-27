@@ -123,6 +123,189 @@ def register_crud_endpoints(app: FastAPI):
                 status_code=500,
                 detail=f"Error interno al listar pedidos: {str(e)}"
             )
+
+    @app.get("/api/pedidos/confirmados", tags=["Pedidos"])
+    async def listar_pedidos_confirmados(
+        page: Optional[int] = Query(1, ge=1, description="Número de página (1-based)"),
+        page_size: Optional[int] = Query(50, ge=1, le=100, description="Tamaño de página (snake_case)"),
+        pageSize: Optional[int] = Query(None, ge=1, le=100, description="Tamaño de página (camelCase, alias de page_size)"),
+        limit: Optional[int] = Query(None, description="Límite de registros (alternativa a page_size)"),
+        offset: Optional[int] = Query(None, description="Offset (alternativa a page)"),
+        redistribucion_confirmada: Optional[str] = Query(
+            None,
+            description="Si 'true', solo pedidos con redistribución ya confirmada (estado PEDIDO_CONFIRMADO)"
+        ),
+        user: Dict = Depends(verify_jwt_token),
+        _: None = Depends(require_permission('mba3-consultas.facturas.view'))
+    ):
+        """
+        Lista pedidos en estado confirmado, ordenados por creado_en DESC.
+        Para pantalla Redistribución: lista de pedidos confirmados y/o con redistribución confirmada.
+
+        **Query Parameters:**
+        - `page` (int, default: 1) - Número de página
+        - `page_size` o `pageSize` (int, default: 50) - Registros por página
+        - `redistribucion_confirmada` - Si "true", solo pedidos en estado PEDIDO_CONFIRMADO
+        - `limit` / `offset` - Alternativa para paginación (si se usan, ignoran page/page_size)
+
+        **Formato de respuesta (compatible con frontend):**
+        - `data`: array de pedidos; cada uno con `cabecera: { pedido_id, numero_pedido, fecha_pedido, estado, ... }`
+        - `total`, `page`, `pageSize`, `totalPages`
+        """
+        try:
+            from src.database.connection import get_db_connection_context
+            from src.database.repositories.pedido_repository import PedidoRepository
+
+            # Tamaño de página: prioridad pageSize (frontend) > page_size
+            size = pageSize if pageSize is not None else page_size
+            if limit is not None:
+                use_limit, use_offset = limit, offset or 0
+            else:
+                use_limit = size
+                use_offset = (page - 1) * size
+
+            solo_redistribucion = (
+                redistribucion_confirmada is not None
+                and str(redistribucion_confirmada).lower() in ("true", "1")
+            )
+
+            with get_db_connection_context() as conn:
+                repo = PedidoRepository(conn)
+                resultado = repo.get_pedidos_confirmados(
+                    limit=use_limit,
+                    offset=use_offset,
+                    solo_redistribucion_confirmada=solo_redistribucion
+                )
+
+            # Formato esperado por frontend: cada item con cabecera.*
+            data = []
+            for row in resultado["data"]:
+                data.append({
+                    "cabecera": {
+                        "pedido_id": row.get("pedido_id"),
+                        "numero_pedido": row.get("numero_pedido"),
+                        "fecha_pedido": row.get("fecha_pedido"),
+                        "fecha_entrega": row.get("fecha_entrega"),
+                        "estado": row.get("estado"),
+                        "proveedor_nombre": row.get("proveedor_nombre"),
+                        "creado_por": row.get("creado_por"),
+                        "creado_en": row.get("creado_en"),
+                    },
+                    "pedido_id": row.get("pedido_id"),
+                    "numero_pedido": row.get("numero_pedido"),
+                    "fecha_pedido": row.get("fecha_pedido"),
+                    "estado": row.get("estado"),
+                })
+
+            total = resultado["total"]
+            total_pages = (total + size - 1) // size if size else 0
+
+            return JSONResponse(
+                status_code=200,
+                content={
+                    "status": "success",
+                    "data": data,
+                    "total": total,
+                    "page": page,
+                    "pageSize": size,
+                    "totalPages": total_pages,
+                },
+            )
+        except Exception as e:
+            logger.error(f"❌ Error al listar pedidos confirmados: {e}", exc_info=True)
+            raise HTTPException(
+                status_code=500,
+                detail=f"Error interno al listar pedidos confirmados: {str(e)}"
+            )
+
+    @app.get("/api/pedidos/ultimo-redistribucion", tags=["Pedidos"])
+    async def get_ultimo_pedido_redistribucion(
+        solo_usuario: Optional[bool] = Query(
+            True,
+            description="Si true, último pedido RESPUESTA_PROVEEDOR_CARGADA del usuario; si false, último en todo el sistema"
+        ),
+        user: Dict = Depends(verify_jwt_token),
+        _: None = Depends(require_permission('mba3-consultas.facturas.view'))
+    ):
+        """
+        Obtiene el último pedido con estado RESPUESTA_PROVEEDOR_CARGADA.
+        Misma lógica que /api/plantillas/ultimo (cargar-plantilla) pero filtrado por ese estado.
+        Para la pantalla Redistribución: al entrar en /redistribucion sin número de pedido,
+        el front puede llamar a este endpoint y, si hay resultado, redirigir a
+        /pedidos/{numero_pedido}/redistribucion.
+
+        **Query Parameters:**
+        - `solo_usuario` (bool, default: true) - Si true, último del usuario autenticado; si false, último global.
+
+        **Respuesta:** Objeto con cabecera básica (pedido_id, numero_pedido, estado, ...) o null.
+        """
+        try:
+            from src.database.connection import get_db_connection_context
+            from src.database.repositories.pedido_repository import PedidoRepository
+
+            user_id = get_user_id(user) if solo_usuario else None
+            with get_db_connection_context() as conn:
+                repo = PedidoRepository(conn)
+                ultimo = repo.get_ultimo_pedido_respuesta_proveedor_cargada(usuario_id=user_id)
+            if not ultimo:
+                return JSONResponse(status_code=200, content=None)
+            return JSONResponse(status_code=200, content=ultimo)
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"❌ Error al obtener último pedido redistribución: {e}", exc_info=True)
+            raise HTTPException(
+                status_code=500,
+                detail=f"Error interno al obtener último pedido para redistribución: {str(e)}"
+            )
+
+    @app.get("/api/pedidos/existe", tags=["Pedidos"])
+    async def verificar_pedidos_existen(
+        user: Dict = Depends(verify_jwt_token),
+        _: None = Depends(require_permission('mba3-consultas.facturas.view'))
+    ):
+        """
+        Verifica si existe al menos un pedido guardado en la base de datos.
+        
+        Este endpoint es útil para el frontend para determinar si debe mostrar
+        el botón "Gestionar Pedido" o cualquier otra funcionalidad relacionada
+        con pedidos existentes.
+        
+        **Respuesta:**
+        ```json
+        {
+            "status": "success",
+            "tiene_pedidos": true,
+            "message": "Existen pedidos en el sistema"
+        }
+        ```
+        
+        Returns:
+            JSON indicando si hay pedidos guardados
+        """
+        try:
+            from src.database.connection import get_db_connection_context
+            from src.database.repositories.pedido_repository import PedidoRepository
+            
+            with get_db_connection_context() as conn:
+                repo = PedidoRepository(conn)
+                tiene_pedidos = repo.tiene_pedidos()
+                
+                return JSONResponse(
+                    status_code=200,
+                    content={
+                        "status": "success",
+                        "tiene_pedidos": tiene_pedidos,
+                        "message": "Existen pedidos en el sistema" if tiene_pedidos else "No hay pedidos en el sistema"
+                    }
+                )
+                
+        except Exception as e:
+            logger.error(f"❌ Error al verificar existencia de pedidos: {e}", exc_info=True)
+            raise HTTPException(
+                status_code=500,
+                detail=f"Error interno al verificar existencia de pedidos: {str(e)}"
+            )
     
     @app.get("/api/plantillas/{identificador}", tags=["Plantillas"])
     async def get_pedido(

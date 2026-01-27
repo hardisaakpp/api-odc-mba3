@@ -647,6 +647,97 @@ class PedidoCabeceraRepository:
         finally:
             cursor.close()
 
+    def get_pedidos_confirmados(
+        self,
+        limit: Optional[int] = None,
+        offset: Optional[int] = None,
+        solo_redistribucion_confirmada: bool = False
+    ) -> Dict[str, Any]:
+        """
+        Obtiene pedidos en estado confirmado, ordenados por creado_en DESC,
+        para uso en pantalla Redistribución.
+
+        Args:
+            limit: Límite de registros (ej: 1 para "último confirmado")
+            offset: Offset para paginación
+            solo_redistribucion_confirmada: Si True, solo pedidos con estado
+                PEDIDO_CONFIRMADO (redistribución ya confirmada). Si False,
+                incluye CONFIRMADO_PROVEEDOR y PEDIDO_CONFIRMADO.
+
+        Returns:
+            Dict con "data", "total", "limit", "offset", "has_more"
+        """
+        cursor = self.conn.cursor()
+        try:
+            tiene_estado = self.utils.tiene_columna_estado(cursor)
+            if not tiene_estado:
+                return {"data": [], "total": 0, "limit": limit, "offset": offset or 0, "has_more": False}
+
+            if solo_redistribucion_confirmada:
+                where_clause = "p.estado = ?"
+                params_list: List[Any] = ["PEDIDO_CONFIRMADO"]
+            else:
+                where_clause = "p.estado IN (?, ?)"
+                params_list = ["CONFIRMADO_PROVEEDOR", "PEDIDO_CONFIRMADO"]
+            params: List[Any] = list(params_list)
+
+            count_query = f"SELECT COUNT(*) FROM pedido p WHERE {where_clause}"
+            cursor.execute(count_query, params)
+            result = cursor.fetchone()
+            total = result[0] if result else 0
+
+            select_fields = """
+                p.pedido_id, p.numero_pedido, p.fecha_pedido, p.fecha_entrega,
+                p.forma_pago, p.odc, p.proveedor_nombre, p.comprador_nombre,
+                p.comprador_codigo, p.origen_traslado, p.serie, p.archivo_nombre,
+                p.creado_por, p.creado_en, p.estado
+            """
+            data_query = f"""
+                SELECT {select_fields}
+                FROM pedido p
+                WHERE {where_clause}
+                ORDER BY p.creado_en DESC
+            """
+            if limit is not None:
+                data_query += f" OFFSET {offset or 0} ROWS FETCH NEXT {limit} ROWS ONLY"
+
+            cursor.execute(data_query, params)
+            pedidos = []
+            for row in cursor.fetchall():
+                idx = 0
+                pedido = {
+                    "pedido_id": str(row[idx]),
+                    "numero_pedido": row[idx + 1],
+                    "fecha_pedido": row[idx + 2].isoformat() if row[idx + 2] else None,
+                    "fecha_entrega": row[idx + 3],
+                    "forma_pago": row[idx + 4],
+                    "odc": row[idx + 5],
+                    "proveedor_nombre": row[idx + 6],
+                    "comprador_nombre": row[idx + 7],
+                    "comprador_codigo": row[idx + 8],
+                    "origen_traslado": row[idx + 9],
+                    "serie": row[idx + 10],
+                    "archivo_nombre": row[idx + 11],
+                    "creado_por": row[idx + 12],
+                    "creado_en": row[idx + 13].isoformat() if row[idx + 13] else None,
+                    "estado": row[idx + 14],
+                }
+                pedidos.append(pedido)
+
+            has_more = (offset or 0) + len(pedidos) < total if limit else False
+            return {
+                "data": pedidos,
+                "total": total,
+                "limit": limit,
+                "offset": offset or 0,
+                "has_more": has_more,
+            }
+        except Exception as e:
+            logger.error(f"❌ Error al obtener pedidos confirmados: {e}", exc_info=True)
+            raise
+        finally:
+            cursor.close()
+
     def existe_numero_pedido(self, numero_pedido: str) -> bool:
         """
         Verifica si un número de pedido ya existe en el sistema.
@@ -764,6 +855,108 @@ class PedidoCabeceraRepository:
                 
         except Exception as e:
             logger.error(f"❌ Error al obtener último pedido del usuario {usuario_id}: {e}", exc_info=True)
+            raise
+        finally:
+            cursor.close()
+
+    def get_ultimo_pedido_respuesta_proveedor_cargada(
+        self, usuario_id: Optional[str] = None
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Obtiene el último pedido con estado RESPUESTA_PROVEEDOR_CARGADA.
+        Misma lógica que get_ultimo_pedido pero filtrado por ese estado;
+        usado en la pantalla Redistribución para cargar el último listo para redistribuir.
+
+        Args:
+            usuario_id: Si se indica, solo pedidos creados por ese usuario.
+                       Si None, último en todo el sistema (creado_en DESC).
+
+        Returns:
+            Dict con datos básicos del pedido o None si no hay ninguno en ese estado.
+        """
+        cursor = self.conn.cursor()
+        try:
+            tiene_estado = self.utils.tiene_columna_estado(cursor)
+            if not tiene_estado:
+                return None
+
+            if usuario_id is not None:
+                cursor.execute("""
+                    SELECT TOP 1
+                        pedido_id, numero_pedido, fecha_pedido, fecha_entrega,
+                        forma_pago, odc, proveedor_nombre, comprador_nombre,
+                        comprador_codigo, origen_traslado, serie, archivo_nombre,
+                        creado_por, estado, creado_en
+                    FROM pedido
+                    WHERE estado = ? AND creado_por = ?
+                    ORDER BY creado_en DESC
+                """, ("RESPUESTA_PROVEEDOR_CARGADA", usuario_id))
+            else:
+                cursor.execute("""
+                    SELECT TOP 1
+                        pedido_id, numero_pedido, fecha_pedido, fecha_entrega,
+                        forma_pago, odc, proveedor_nombre, comprador_nombre,
+                        comprador_codigo, origen_traslado, serie, archivo_nombre,
+                        creado_por, estado, creado_en
+                    FROM pedido
+                    WHERE estado = ?
+                    ORDER BY creado_en DESC
+                """, ("RESPUESTA_PROVEEDOR_CARGADA",))
+
+            row = cursor.fetchone()
+            if not row:
+                return None
+
+            return {
+                "pedido_id": str(row[0]),
+                "numero_pedido": row[1],
+                "fecha_pedido": row[2].isoformat() if row[2] else None,
+                "fecha_entrega": row[3],
+                "forma_pago": row[4],
+                "odc": row[5],
+                "proveedor_nombre": row[6],
+                "comprador_nombre": row[7],
+                "comprador_codigo": row[8],
+                "origen_traslado": row[9],
+                "serie": row[10],
+                "archivo_nombre": row[11],
+                "creado_por": row[12],
+                "estado": row[13],
+                "creado_en": row[14].isoformat() if row[14] else None,
+            }
+        except Exception as e:
+            logger.error(
+                "❌ Error al obtener último pedido RESPUESTA_PROVEEDOR_CARGADA: %s", e, exc_info=True
+            )
+            raise
+        finally:
+            cursor.close()
+
+    def tiene_pedidos(self) -> bool:
+        """
+        Verifica si existe al menos un pedido en la base de datos.
+        
+        Returns:
+            True si hay al menos un pedido, False si no hay pedidos
+        """
+        cursor = self.conn.cursor()
+        
+        try:
+            cursor.execute("""
+                SELECT COUNT(*) 
+                FROM pedido
+            """)
+            
+            row = cursor.fetchone()
+            count = row[0] if row else 0
+            
+            tiene_pedidos = count > 0
+            logger.debug(f"✓ Verificación de pedidos: {count} pedido(s) encontrado(s)")
+            
+            return tiene_pedidos
+            
+        except Exception as e:
+            logger.error(f"❌ Error al verificar existencia de pedidos: {e}", exc_info=True)
             raise
         finally:
             cursor.close()

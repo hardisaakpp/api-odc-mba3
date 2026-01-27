@@ -169,6 +169,7 @@ def register_proveedor_endpoints(app: FastAPI):
                     from src.database.connection import get_db_connection_context
                     from src.database.repositories.pedido_repository import PedidoRepository
                     from src.database.repositories.pedido_confirmacion_rayo_repository import PedidoConfirmacionRayoRepository
+                    from src.config import EMAIL_PROVEEDOR_PRUEBAS
                     
                     # Obtener número de pedido y detalles modificados
                     with get_db_connection_context() as conn:
@@ -195,14 +196,16 @@ def register_proveedor_endpoints(app: FastAPI):
                                 # Usar un valor aproximado basado en las cantidades y precios guardados
                                 detalles_modificados = resultado.get("cantidades_guardadas", 0) + resultado.get("precios_guardados", 0)
                             
+                            # Momentáneamente: enviar al correo de prueba en lugar de MABEL TRADING
                             email_enviado = send_rayo_confirmacion_notification(
                                 pedido_id=pedido_id,
                                 numero_pedido=numero_pedido,
                                 usuario_rayo=usuario_id,
-                                detalles_modificados=detalles_modificados
+                                detalles_modificados=detalles_modificados,
+                                email_destino=EMAIL_PROVEEDOR_PRUEBAS,
                             )
                             if email_enviado:
-                                logger.info(f"📧 Email de confirmación de El Rayo enviado a MABEL TRADING (Pedido: {numero_pedido})")
+                                logger.info(f"📧 Email de confirmación de El Rayo enviado a correo de prueba ({EMAIL_PROVEEDOR_PRUEBAS}) (Pedido: {numero_pedido})")
                             else:
                                 logger.warning(f"⚠️ No se pudo enviar email de confirmación de El Rayo (no crítico)")
                         else:

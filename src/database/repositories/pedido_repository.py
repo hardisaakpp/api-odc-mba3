@@ -117,6 +117,21 @@ class PedidoRepository:
             numero_pedido, creado_por, limit, offset
         )
 
+    def get_pedidos_confirmados(
+        self,
+        limit: Optional[int] = None,
+        offset: Optional[int] = None,
+        solo_redistribucion_confirmada: bool = False
+    ) -> Dict[str, Any]:
+        """
+        Obtiene pedidos en estado confirmado, ordenados por creado_en DESC.
+        DELEGADO a PedidoCabeceraRepository.
+        """
+        return self.cabecera_repo.get_pedidos_confirmados(
+            limit=limit, offset=offset,
+            solo_redistribucion_confirmada=solo_redistribucion_confirmada
+        )
+
     def existe_numero_pedido(self, numero_pedido: str) -> bool:
         """
         Verifica si un número de pedido ya existe en el sistema.
@@ -132,6 +147,25 @@ class PedidoRepository:
         DELEGADO a PedidoCabeceraRepository.
         """
         return self.cabecera_repo.get_ultimo_pedido(usuario_id)
+
+    def get_ultimo_pedido_respuesta_proveedor_cargada(
+        self, usuario_id: Optional[str] = None
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Obtiene el último pedido con estado RESPUESTA_PROVEEDOR_CARGADA.
+        Para pantalla Redistribución: mismo criterio que "último pedido" pero solo ese estado.
+        
+        DELEGADO a PedidoCabeceraRepository.
+        """
+        return self.cabecera_repo.get_ultimo_pedido_respuesta_proveedor_cargada(usuario_id)
+
+    def tiene_pedidos(self) -> bool:
+        """
+        Verifica si existe al menos un pedido en la base de datos.
+        
+        DELEGADO a PedidoCabeceraRepository.
+        """
+        return self.cabecera_repo.tiene_pedidos()
 
     # ========== Métodos de Detalle (delegados) ==========
 

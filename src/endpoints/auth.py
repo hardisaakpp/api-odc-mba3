@@ -67,52 +67,48 @@ def _map_permissions_to_capabilities(permissions: list, roles: list) -> Dict[str
         
         return has_specific
     
-    # Permiso ODC SAP: odcsap.view da acceso amplio.
-    # Con odcsap.view: MOSTRAR "Cargar Plantilla Excel", "Gestión ODC SAP", operar pedidos.
-    # Con odcsap.view: OCULTAR solo el botón "Confirmar" (can_confirm_pedido).
-    has_odc_permission = is_admin or has_permission('odcsap.view')
-
     # Mapeo de permisos específicos a capabilities
     # IMPORTANTE: Cada capability mapea a un permiso específico por intención de negocio
     # Las capabilities NO son mutuamente excluyentes - un usuario puede tener múltiples
     capabilities = {
-        # Capability: Subir plantillas Excel. MOSTRAR con odcsap.view.
+        # Capability: Subir plantillas Excel.
         # Permiso específico: mba3-consultas.plantillas.upload
         # Backward compatibility: mba3-consultas.proceso.execute (temporal)
-        "can_upload_templates": is_admin or has_odc_permission or has_permission(
+        "can_upload_templates": is_admin or has_permission(
             'mba3-consultas.plantillas.upload',
             legacy_perm='mba3-consultas.proceso.execute'
         ),
-        # Capability: Botón "Cargar Plantilla Excel" (alias). MOSTRAR con odcsap.view.
-        "can_cargar_plantilla_excel": is_admin or has_odc_permission or has_permission(
+        # Capability: Botón "Cargar Plantilla Excel" (alias).
+        "can_cargar_plantilla_excel": is_admin or has_permission(
             'mba3-consultas.plantillas.upload',
             legacy_perm='mba3-consultas.proceso.execute'
         ),
         # Capability: Ver plantillas y pedidos
         # Permiso específico: mba3-consultas.plantillas.view
-        "can_view_templates": is_admin or has_odc_permission or has_permission(
+        "can_view_templates": is_admin or has_permission(
             'mba3-consultas.plantillas.view',
             legacy_perm='mba3-consultas.facturas.view'
         ),
         # Capability: Operar pedidos (redistribuir, exportar, Descargar para MBA)
-        # Permiso específico: mba3-consultas.pedidos.operate. MOSTRAR con odcsap.view.
-        "can_operate_pedidos": is_admin or has_odc_permission or has_permission(
+        # Permiso específico: mba3-consultas.pedidos.operate
+        "can_operate_pedidos": is_admin or has_permission(
             'mba3-consultas.pedidos.operate',
             legacy_perm='mba3-consultas.proceso.execute'
         ),
-        # Capability: Ver botón "Gestión ODC SAP" en el sidebar. MOSTRAR con odcsap.view.
-        "can_view_odc_sap": has_odc_permission,
+        # Capability: Ver botón "Gestión ODC SAP" en el sidebar.
+        # Pendiente de reconfiguración de permiso (odcsap.view / odc.view eliminados).
+        "can_view_odc_sap": False,
         # Capability: Ver órdenes de compra (ODC). Solo admin.
         "can_view_odc": is_admin,
         # Capability: Revisar pedido (no hay botón en UI; se mantiene por compatibilidad).
-        "can_review_pedido": not has_odc_permission and (
+        "can_review_pedido": (
             is_admin or
             has_permission('mba3-consultas.plantillas.view', legacy_perm='mba3-consultas.facturas.view') or
             has_permission('mba3-consultas.pedidos.operate', legacy_perm='mba3-consultas.proceso.execute')
         ),
-        # Capability: Confirmar pedido. OCULTAR solo si tiene odcsap.view.
+        # Capability: Confirmar pedido.
         # Frontend: can_confirm_pedido SOLO para "Confirmar"; can_operate_pedidos para el resto.
-        "can_confirm_pedido": not has_odc_permission and (
+        "can_confirm_pedido": (
             is_admin or
             has_permission('mba3-consultas.pedidos.operate', legacy_perm='mba3-consultas.proceso.execute') or
             has_permission('mba3-consultas.plantillas.view', legacy_perm='mba3-consultas.facturas.view')
@@ -169,18 +165,17 @@ def register_auth_endpoints(app: FastAPI):
           "permissions": [
             "mba3-consultas.plantillas.upload",
             "mba3-consultas.plantillas.view",
-            "mba3-consultas.pedidos.operate",
-            "odcsap.view"
+            "mba3-consultas.pedidos.operate"
           ],
           "capabilities": {
             "can_upload_templates": true,
             "can_cargar_plantilla_excel": true,
             "can_view_templates": true,
             "can_operate_pedidos": true,
-            "can_view_odc_sap": true,
+            "can_view_odc_sap": false,
             "can_view_odc": false,
-            "can_review_pedido": false,
-            "can_confirm_pedido": false
+            "can_review_pedido": true,
+            "can_confirm_pedido": true
           }
         }
         ```
@@ -209,14 +204,11 @@ def register_auth_endpoints(app: FastAPI):
         {permissions.includes('mba3-consultas.plantillas.upload') && <Button>...</Button>}
         ```
         
-        **Con odcsap.view:** MOSTRAR "Cargar Plantilla Excel", "Gestión ODC SAP", operar pedidos.
-        OCULTAR solo el botón "Confirmar".
-
         **Pantalla detalle pedido** (`/mba3-consultas/pedidos/{id}`):
         - "Cargar Plantilla Excel": `capabilities.can_cargar_plantilla_excel`
         - Sidebar "Gestión ODC SAP": `capabilities.can_view_odc_sap`
         - Redistribuir, Exportar, Descargar para MBA: `capabilities.can_operate_pedidos`
-        - Botón "Confirmar" únicamente: `capabilities.can_confirm_pedido` (oculto si odcsap.view)
+        - Botón "Confirmar": `capabilities.can_confirm_pedido`
         """
         try:
             # Extraer información del usuario

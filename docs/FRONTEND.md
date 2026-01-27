@@ -57,7 +57,7 @@ Si eliminaste modo MABEL TRADING/EL RAYO y los botones dependen solo de capabili
   - `can_operate_pedidos`
   - `can_view_odc_sap`
   - `can_confirm_pedido`
-- Para usuario con `odcsap.view`: `can_cargar_plantilla_excel`, `can_operate_pedidos`, `can_view_odc_sap` en `true`; `can_confirm_pedido` en `false`.
+- Los valores dependen de los permisos del usuario (p. ej. `mba3-consultas.plantillas.upload`, `mba3-consultas.pedidos.operate`, etc.).
 - Si las claves vienen en otro formato (ej. camelCase) o no existen, el backend no las envía así; habría que revisar si hay una capa intermedia que transforma la respuesta.
 
 #### 3. ¿Los getters leen **solo** de `capabilities`?
@@ -91,7 +91,7 @@ Si eliminaste modo MABEL TRADING/EL RAYO y los botones dependen solo de capabili
 | Paso | Comprobar |
 |------|-----------|
 | 1 | Hay `GET /api/auth/me` con 200 al abrir o refrescar la pantalla de detalle |
-| 2 | La respuesta tiene `capabilities` con `can_cargar_plantilla_excel`, `can_operate_pedidos`, `can_view_odc_sap` en `true` (usuario con `odcsap.view`) |
+| 2 | La respuesta tiene `capabilities` con las claves esperadas y valores según permisos del usuario |
 | 3 | El store guarda `capabilities` y los getters leen solo de ahí (sin modo/empresa) |
 | 4 | En la vista de detalle, auth/me ya se ejecutó antes de renderizar |
 | 5 | Los `v-if` usan getters/computed reactivos que mapean esas capabilities |
@@ -246,45 +246,60 @@ Para identificar y eliminar código legacy en el frontend, buscar:
 | `permissions.includes('mba3-consultas.facturas.view')` | `capabilities.can_view_templates` |
 | `usuario.tipo === 'EL_RAYO'` → operar pedidos | `capabilities.can_operate_pedidos` |
 
-### 0.5.8 Usuarios con `odcsap.view`: MOSTRAR vs OCULTAR
-
-**Con `odcsap.view` el backend devuelve:**
-
-| Capability | Valor | Acción en frontend |
-|------------|--------|---------------------|
-| `can_cargar_plantilla_excel` | **true** | **MOSTRAR** botón "Cargar Plantilla Excel" |
-| `can_view_odc_sap` | **true** | **MOSTRAR** ítem "Gestión ODC SAP" en el sidebar |
-| `can_operate_pedidos` | **true** | **MOSTRAR** Redistribuir, Exportar, Descargar para MBA |
-| `can_confirm_pedido` | **false** | **OCULTAR** botón "Confirmar" |
-
-No existe el botón "Revisar"; no usarlo para lógica de UI.
-
-**Implementación obligatoria:**
-
-```tsx
-{/* MOSTRAR con odcsap.view */}
-{capabilities?.can_cargar_plantilla_excel && (
-  <Button onClick={handleCargarPlantilla}>Cargar Plantilla Excel</Button>
-)}
-{capabilities?.can_view_odc_sap && (
-  <SidebarItem to="/mba3-consultas/gestion-odc-sap">Gestión ODC SAP</SidebarItem>
-)}
-
-{/* OCULTAR solo "Confirmar" con odcsap.view */}
-{capabilities?.can_confirm_pedido && (
-  <Button onClick={handleConfirmar}>Confirmar</Button>
-)}
-```
-
-No usar `modo === 'el-rayo'`, `permissions.includes('odcsap.view')` ni lógica distinta a las capabilities.
-
-### 0.5.9 Pantalla "Detalle del Pedido - EL RAYO" (`/mba3-consultas/pedidos/{id}`)
+### 0.5.8 Pantalla "Detalle del Pedido - EL RAYO" (`/mba3-consultas/pedidos/{id}`)
 
 **Ruta:** `http://localhost:3000/mba3-consultas/pedidos/{numero_pedido}` (ej. `P-12.21 - 12 - 2025`).
 
 - **MOSTRAR** "Cargar Plantilla Excel" si `capabilities.can_cargar_plantilla_excel`.
 - **MOSTRAR** Redistribuir, Exportar, Descargar para MBA si `capabilities.can_operate_pedidos`.
-- **OCULTAR** solo el botón "Confirmar" si `capabilities.can_confirm_pedido === false` (usuarios con `odcsap.view`).
+- **MOSTRAR** el botón "Confirmar" solo si `capabilities.can_confirm_pedido === true`.
+
+### 0.5.8.1 Gestión del botón "Confirmar" en detalle del pedido
+
+En la pantalla `/mba3-consultas/pedidos/{numero_pedido}` (ej. `P-12.23 - 12 - 2025`), cuando el usuario hace clic en **"Confirmar"** se debe:
+
+1. **Llamar al backend** para guardar y registrar la confirmación.
+2. **Persistir el estado** del pedido en el backend (el backend lo hace; el frontend solo debe llamar al endpoint).
+3. **Deshabilitar el botón "Confirmar"** una vez que el pedido está confirmado o ya tiene respuesta cargada, para evitar confirmaciones duplicadas.
+
+**Endpoint a usar:** `POST /api/pedidos/{pedido_id}/crear-respuesta-desde-pedido`
+
+- **Método:** POST  
+- **URL:** `/api/pedidos/{pedido_id}/crear-respuesta-desde-pedido`  
+- **Nota:** La ruta de la app usa `numero_pedido` (ej. `P-12.23 - 12 - 2025`), pero el API recibe **`pedido_id`** (UUID). Usar siempre el **`cabecera.pedido_id`** del pedido cargado en esa pantalla.  
+- **Body:** no se envía body (o vacío).  
+- **Autenticación:** JWT en header `Authorization: Bearer {token}`.  
+- **Permiso:** `mba3-consultas.proceso.execute`.
+
+**Qué hace el backend:**
+
+- Toma los datos actuales del pedido (totales, costos, etc.), genera la respuesta del proveedor y la guarda.
+- Actualiza el estado del pedido a **`RESPUESTA_PROVEEDOR_CARGADA`**.
+- Registra la confirmación en el historial (tabla de confirmaciones EL RAYO).
+- Responde con `status: "success"`, `confirmacion_registrada: true/false`, `estado_guardado`, etc.
+
+**Comportamiento en el frontend:**
+
+| Acción | Comportamiento |
+|--------|----------------|
+| **Al hacer clic en "Confirmar"** | Enviar `POST /api/pedidos/{cabecera.pedido_id}/crear-respuesta-desde-pedido`. Mostrar indicador de carga (p. ej. botón deshabilitado + “Guardando…” o spinner). |
+| **Si la petición es exitosa** | Actualizar el estado local del pedido con el nuevo `estado` (p. ej. `RESPUESTA_PROVEEDOR_CARGADA`) o recargar el pedido desde el backend. Deshabilitar el botón "Confirmar". Opcionalmente, según diseño: redirigir a la pantalla de redistribución del mismo pedido (como en el flujo anterior). |
+| **Si la petición falla** | Mostrar mensaje de error, dejar el botón habilitado para reintentar. |
+
+**Cuándo deshabilitar el botón "Confirmar":**
+
+Deshabilitar (y no permitir nueva confirmación) cuando el estado del pedido ya indica que la respuesta está cargada o confirmada. Usar el campo **`cabecera.estado`** del pedido cargado:
+
+- `RESPUESTA_PROVEEDOR_CARGADA` → respuesta ya guardada; deshabilitar.
+- `CONFIRMADO_PROVEEDOR` → confirmación ya procesada; deshabilitar.
+- `PEDIDO_CONFIRMADO` → redistribución ya confirmada; deshabilitar.
+- Cualquier otro estado posterior (p. ej. `PROCESADO_SAP`, `CONFIRMADO_ENVIADO`, etc.) → deshabilitar.
+
+**Resumen:**
+
+- **Mostrar** el botón solo si `capabilities.can_confirm_pedido` (ya definido en 0.5.8).
+- **Deshabilitar** el botón si `cabecera.estado` está en uno de los estados anteriores (ya confirmado / respuesta cargada).
+- **Al hacer clic:** `POST /api/pedidos/{cabecera.pedido_id}/crear-respuesta-desde-pedido` → tras éxito, actualizar estado (o recargar pedido) y deshabilitar el botón.
 
 ### 0.5.10 Cambio de Ruta: Cargar Plantillas → Gestionar Pedido
 
@@ -294,6 +309,143 @@ La ruta para cargar plantillas Excel ha sido renombrada:
 
 - **❌ Ruta antigua:** `/mba3-consultas/cargar-plantillas`
 - **✅ Ruta nueva:** `/mba3-consultas/gestionar-pedido`
+
+### 0.5.11 Visibilidad del Botón "Gestionar Pedido"
+
+**Requerimiento:** El botón "Gestionar Pedido" debe aparecer solo cuando existan pedidos guardados en la base de datos.
+
+**Endpoint:** `GET /api/pedidos/existe`
+
+**Autenticación:** JWT token requerido  
+**Permiso:** `mba3-consultas.facturas.view`
+
+**Respuesta:**
+```json
+{
+  "status": "success",
+  "tiene_pedidos": true,
+  "message": "Existen pedidos en el sistema"
+}
+```
+
+**Implementación en el Frontend:**
+
+```tsx
+// React/TypeScript
+import { useState, useEffect } from 'react';
+
+const Sidebar = () => {
+  const [tienePedidos, setTienePedidos] = useState<boolean>(false);
+  const [cargando, setCargando] = useState<boolean>(true);
+
+  useEffect(() => {
+    const verificarPedidos = async () => {
+      try {
+        const response = await fetch('/api/pedidos/existe', {
+          headers: {
+            'Authorization': `Bearer ${token}`
+          }
+        });
+        
+        const data = await response.json();
+        setTienePedidos(data.tiene_pedidos);
+      } catch (error) {
+        console.error('Error al verificar pedidos:', error);
+        setTienePedidos(false);
+      } finally {
+        setCargando(false);
+      }
+    };
+
+    verificarPedidos();
+  }, []);
+
+  return (
+    <nav>
+      {/* Otros elementos del sidebar */}
+      
+      {/* Mostrar botón solo si hay pedidos */}
+      {!cargando && tienePedidos && (
+        <Link to="/mba3-consultas/gestionar-pedido">
+          Gestionar Pedido
+        </Link>
+      )}
+    </nav>
+  );
+};
+```
+
+```vue
+<!-- Vue.js -->
+<template>
+  <nav>
+    <!-- Otros elementos del sidebar -->
+    
+    <!-- Mostrar botón solo si hay pedidos -->
+    <router-link 
+      v-if="!cargando && tienePedidos"
+      to="/mba3-consultas/gestionar-pedido"
+    >
+      Gestionar Pedido
+    </router-link>
+  </nav>
+</template>
+
+<script setup lang="ts">
+import { ref, onMounted } from 'vue';
+
+const tienePedidos = ref<boolean>(false);
+const cargando = ref<boolean>(true);
+
+const verificarPedidos = async () => {
+  try {
+    const response = await fetch('/api/pedidos/existe', {
+      headers: {
+        'Authorization': `Bearer ${token}`
+      }
+    });
+    
+    const data = await response.json();
+    tienePedidos.value = data.tiene_pedidos;
+  } catch (error) {
+    console.error('Error al verificar pedidos:', error);
+    tienePedidos.value = false;
+  } finally {
+    cargando.value = false;
+  }
+};
+
+onMounted(() => {
+  verificarPedidos();
+});
+</script>
+```
+
+**Cuándo verificar:**
+
+1. **Al cargar la aplicación:** Verificar al montar el componente del sidebar o menú principal
+2. **Después de crear un pedido:** Si el usuario crea un pedido (manual o desde Excel), actualizar el estado para mostrar el botón
+3. **Después de eliminar el último pedido:** Si se elimina el último pedido, ocultar el botón
+
+**Optimización (opcional):**
+
+Para evitar múltiples llamadas, puedes cachear el resultado en el store de estado global:
+
+```tsx
+// Store (Zustand/Pinia/Redux)
+const usePedidosStore = create((set) => ({
+  tienePedidos: false,
+  verificarPedidos: async () => {
+    const response = await fetch('/api/pedidos/existe', {
+      headers: { 'Authorization': `Bearer ${token}` }
+    });
+    const data = await response.json();
+    set({ tienePedidos: data.tiene_pedidos });
+  }
+}));
+```
+
+**Nota:** El endpoint es ligero y eficiente, pero si prefieres evitar una llamada adicional, también puedes usar `GET /api/pedidos?limit=1` y verificar si `metadata.total > 0`. Sin embargo, el endpoint `/api/pedidos/existe` es más semántico y eficiente para este propósito.
 
 #### Cambios Requeridos en el Frontend
 
@@ -371,6 +523,180 @@ Para que la ruta antigua redirija automáticamente a la nueva:
 - [ ] Actualizar documentación interna del frontend
 
 **Nota:** El backend no requiere cambios. Los endpoints API (ej. `POST /api/plantillas/upload`) siguen funcionando igual. Solo cambia la ruta del frontend.
+
+### 0.5.12 Comportamiento de Redirección Después de Cargar Plantilla Excel
+
+**⚠️ IMPORTANTE: Comportamiento Correcto de Navegación**
+
+Cuando se termina de cargar la información de la plantilla Excel exitosamente:
+
+- **❌ INCORRECTO:** Redirigir a `/mba3-consultas/pedidos/{numero_pedido}`
+- **✅ CORRECTO:** Permanecer en `/mba3-consultas/cargar-plantilla/{numero_pedido}`
+
+**Razón:** La interfaz de "Cargar Plantilla" es diferente a la interfaz de "Detalle de Pedido". Después de cargar, el usuario debe permanecer en la misma interfaz para poder:
+- Ver el resultado de la carga
+- Cargar otra plantilla si es necesario
+- Revisar errores o advertencias de validación
+
+**Implementación Correcta:**
+
+```tsx
+// React/TypeScript
+const handleUpload = async () => {
+  if (!file) return;
+
+  try {
+    setUploading(true, 'Cargando plantilla Excel...');
+
+    const formData = new FormData();
+    formData.append('file', file);
+
+    const response = await fetch('/api/plantillas/upload', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${token}`
+      },
+      body: formData
+    });
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      throw new Error(data.detail || 'Error al cargar plantilla');
+    }
+
+    // ✅ CORRECTO: Actualizar URL sin cambiar de ruta base
+    const numeroPedido = data.numero_pedido;
+    if (numeroPedido) {
+      // Actualizar la URL para incluir el número de pedido, pero mantener la ruta base
+      navigate(`/mba3-consultas/cargar-plantilla/${encodeURIComponent(numeroPedido)}`, { replace: true });
+    }
+
+    setUploading(false);
+    showSuccessNotification('Plantilla cargada exitosamente');
+    
+    // Opcional: Recargar los datos del pedido en la misma interfaz
+    if (numeroPedido) {
+      await cargarDatosPedido(numeroPedido);
+    }
+
+  } catch (error) {
+    setUploading(false);
+    showErrorNotification(error.message || 'Error al procesar plantilla');
+  }
+};
+```
+
+```vue
+<!-- Vue.js -->
+<script setup lang="ts">
+import { ref } from 'vue';
+import { useRouter } from 'vue-router';
+
+const router = useRouter();
+const file = ref<File | null>(null);
+const isUploading = ref(false);
+
+const handleUpload = async () => {
+  if (!file.value) return;
+
+  try {
+    isUploading.value = true;
+
+    const formData = new FormData();
+    formData.append('file', file.value);
+
+    const response = await fetch('/api/plantillas/upload', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${token}`
+      },
+      body: formData
+    });
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      throw new Error(data.detail || 'Error al cargar plantilla');
+    }
+
+    // ✅ CORRECTO: Actualizar URL sin cambiar de ruta base
+    const numeroPedido = data.numero_pedido;
+    if (numeroPedido) {
+      // Actualizar la URL para incluir el número de pedido, pero mantener la ruta base
+      router.push({
+        path: `/mba3-consultas/cargar-plantilla/${encodeURIComponent(numeroPedido)}`,
+        replace: true
+      });
+    }
+
+    isUploading.value = false;
+    // Mostrar notificación de éxito
+    
+    // Opcional: Recargar los datos del pedido en la misma interfaz
+    if (numeroPedido) {
+      await cargarDatosPedido(numeroPedido);
+    }
+
+  } catch (error) {
+    isUploading.value = false;
+    // Mostrar notificación de error
+  }
+};
+</script>
+```
+
+**Estructura de Respuesta del Backend:**
+
+El endpoint `POST /api/plantillas/upload` devuelve:
+
+```json
+{
+  "status": "success",
+  "message": "Plantilla procesada y guardada exitosamente",
+  "pedido_id": "uuid-del-pedido",
+  "numero_pedido": "P-12.21 - 12 - 2025",
+  "formato_detectado": "v1.0",
+  "articulos_cargados": 150,
+  "distribuciones_cargadas": 450,
+  "validation": { ... },
+  "file_info": {
+    "filename": "pedido.xlsx",
+    "size_mb": 2.5
+  },
+  "metadata": {
+    "uploaded_by": "usuario@example.com",
+    "uploaded_at": "2025-01-26T10:30:00"
+  }
+}
+```
+
+**Checklist de Implementación:**
+
+- [ ] NO redirigir a `/mba3-consultas/pedidos/{numero_pedido}` después de cargar
+- [ ] Permanecer en `/mba3-consultas/cargar-plantilla/{numero_pedido}` (o actualizar URL si no tiene el número de pedido)
+- [ ] Usar `replace: true` al actualizar la URL para no crear una nueva entrada en el historial
+- [ ] Mostrar notificación de éxito/error
+- [ ] Opcional: Recargar datos del pedido en la misma interfaz si es necesario
+
+**Nota:** Si el usuario quiere ver el detalle completo del pedido, puede hacer clic en un botón/link que lo lleve a `/mba3-consultas/pedidos/{numero_pedido}`, pero esto debe ser una acción explícita del usuario, no una redirección automática.
+
+### 0.5.13 Título de la Pantalla Proceso (`/mba3-consultas/proceso`)
+
+**Ruta:** `http://localhost:3000/mba3-consultas/proceso`
+
+**Título obligatorio:** **Procesar ODC - MABEL TRADING**
+
+El título de la página (etiqueta `<title>` del documento y/o encabezado visible de la vista) debe ser exactamente:
+
+```
+Procesar ODC - MABEL TRADING
+```
+
+**Implementación sugerida:**
+
+- **React:** En el componente de la ruta `/mba3-consultas/proceso`, usar `document.title = "Procesar ODC - MABEL TRADING"` en `useEffect` o definir el título en el meta/helmet según la convención del proyecto.
+- **Vue:** En el componente de la ruta `/mba3-consultas/proceso`, usar `document.title = "Procesar ODC - MABEL TRADING"` en `onMounted` o el mecanismo de title del router (ej. `meta.title`).
 
 ---
 
@@ -858,6 +1184,104 @@ GET /api/pedidos?fecha_desde=2025-01-01&fecha_hasta=2025-01-31&proveedor_nombre=
   }
 }
 ```
+
+### 1.3 Pedidos para Redistribución y “último pedido” (misma lógica que cargar-plantilla)
+
+**Rutas de la interfaz Redistribución:**
+
+- **Entrada (sin pedido):** `http://localhost:3000/mba3-consultas/redistribucion`  
+  Aquí se muestra el **input de búsqueda** donde el usuario puede ingresar el número del pedido. Si no se hace nada más, el usuario tiene que buscar manualmente.
+- **Vista de un pedido:** `http://localhost:3000/mba3-consultas/pedidos/{numero_pedido}/redistribucion`  
+  Ejemplo: `http://localhost:3000/mba3-consultas/pedidos/P-12.24%20-%2012%20-%202025/redistribucion`. En esta URL se visualiza la información de redistribución de ese pedido.
+
+**Requerimiento:** Cuando el usuario haga clic en **“Redistribución”**, entra en `http://localhost:3000/mba3-consultas/redistribucion`. Se debe usar **la misma lógica que en cargar-plantilla** (`/mba3-consultas/cargar-plantilla/{numero_pedido}`): al entrar sin número de pedido, **cargar el último pedido que corresponda** y, si existe, **redirigir de inmediato** a `http://localhost:3000/mba3-consultas/pedidos/{numero_pedido}/redistribucion`. Para Redistribución, ese “último” debe ser solo pedidos con estado **`RESPUESTA_PROVEEDOR_CARGADA`** (listos para redistribuir).
+
+**Comportamiento esperado:**
+
+- En `http://localhost:3000/mba3-consultas/redistribucion` (sin `{numero_pedido}`), al montar la vista se debe llamar a **`GET /api/pedidos/ultimo-redistribucion`** (misma idea que `GET /api/plantillas/ultimo` en cargar-plantilla). Si la respuesta trae un pedido, tomar su `numero_pedido` y hacer `router.replace('/mba3-consultas/pedidos/' + encodeURIComponent(numero_pedido) + '/redistribucion')`. Así el usuario ve de inmediato el último pedido con estado `RESPUESTA_PROVEEDOR_CARGADA` sin buscarlo.
+- Sigue siendo válido **búsqueda por número de pedido** (input): el usuario escribe el número, se busca y se redirige a `/pedidos/{numero_pedido}/redistribucion`.
+- Opcional: para mostrar una **lista** de pedidos en esa pantalla se puede usar `GET /api/pedidos/confirmados` (véase más abajo). La redirección automática al “último” se hace con `GET /api/pedidos/ultimo-redistribucion`.
+
+**Endpoint “último pedido para redistribución” (recomendado al entrar en `/redistribucion`):** `GET /api/pedidos/ultimo-redistribucion`
+
+Misma lógica que `GET /api/plantillas/ultimo` en cargar-plantilla, pero devuelve solo el último pedido con estado **`RESPUESTA_PROVEEDOR_CARGADA`**.
+
+**Autenticación:** JWT token requerido  
+**Permiso:** `mba3-consultas.facturas.view`
+
+**Query Parameters:**
+- `solo_usuario` (bool, default: `true`) - Si `true`, último pedido RESPUESTA_PROVEEDOR_CARGADA del usuario autenticado; si `false`, último en todo el sistema.
+
+**Respuesta:** Objeto con cabecera básica (`pedido_id`, `numero_pedido`, `estado`, `fecha_pedido`, etc.) o **`null`** si no hay ninguno en ese estado.
+
+**Ejemplo de uso en el front (al montar `/redistribucion` sin `{numero_pedido}`):**
+```text
+GET /api/pedidos/ultimo-redistribucion
+```
+Si la respuesta es un objeto con `numero_pedido`, hacer  
+`router.replace('/mba3-consultas/pedidos/' + encodeURIComponent(numero_pedido) + '/redistribucion')`.
+
+---
+
+**Endpoint para listar pedidos confirmados (lista opcional en Redistribución):** `GET /api/pedidos/confirmados`
+
+**Autenticación:** JWT token requerido  
+**Permiso:** `mba3-consultas.facturas.view`
+
+**Query Parameters (contrato backend/frontend):**
+- `page` (int, default: 1) - Número de página.
+- `pageSize` o `page_size` (int, default: 50, max: 100) - Tamaño de página. El front suele enviar `pageSize`.
+- `redistribucion_confirmada` (opcional) - Si vale `"true"`, el backend devuelve solo pedidos con **redistribución ya confirmada** (estado `PEDIDO_CONFIRMADO`). Si no se envía o es `"false"`, devuelve pedidos en `CONFIRMADO_PROVEEDOR` o `PEDIDO_CONFIRMADO`.
+
+**Ejemplos de URL:**
+- Lista para pantalla Redistribución (opcional):  
+  `GET /api/pedidos/confirmados?page=1&pageSize=20&redistribucion_confirmada=true`
+- Solo el último confirmado (alternativa si no se usa `ultimo-redistribucion`):  
+  `GET /api/pedidos/confirmados?page=1&pageSize=1`
+
+**Formato de respuesta (lo que devuelve el backend y debe consumir el front):**
+```json
+{
+  "status": "success",
+  "data": [
+    {
+      "cabecera": {
+        "pedido_id": "uuid",
+        "numero_pedido": "P-12.24 - 12 - 2025",
+        "fecha_pedido": "2025-01-24",
+        "estado": "PEDIDO_CONFIRMADO",
+        "proveedor_nombre": "...",
+        "creado_por": "...",
+        "creado_en": "..."
+      },
+      "pedido_id": "uuid",
+      "numero_pedido": "P-12.24 - 12 - 2025",
+      "fecha_pedido": "2025-01-24",
+      "estado": "PEDIDO_CONFIRMADO"
+    }
+  ],
+  "total": 5,
+  "page": 1,
+  "pageSize": 20,
+  "totalPages": 1
+}
+```
+Cada elemento de `data` incluye `cabecera` (con `numero_pedido`, `fecha_pedido`, `estado`, etc.) para que el front pueda usar `cabecera.numero_pedido` y armar la lista o el detalle en `/mba3-consultas/redistribucion`.
+
+**Pasos concretos:**
+
+1. **Usuario hace clic en “Redistribución”** → la app navega a `http://localhost:3000/mba3-consultas/redistribucion` (ruta sin id).
+2. **En esa ruta (p. ej. en `onMounted`):**  
+   - Mostrar “Buscando último pedido…” (o similar) mientras se consulta.  
+   - Llamar a **`GET /api/pedidos/ultimo-redistribucion`** (misma lógica que `GET /api/plantillas/ultimo` en cargar-plantilla; aquí solo pedidos con estado `RESPUESTA_PROVEEDOR_CARGADA`).  
+   - Si la respuesta es un objeto con `numero_pedido`, hacer  
+     `router.replace('/mba3-consultas/pedidos/' + encodeURIComponent(numero_pedido) + '/redistribucion')`.  
+     Usar `encodeURIComponent(numero_pedido)` para que espacios y guiones se codifiquen bien en la URL (p. ej. `P-12.24 - 12 - 2025` → `P-12.24%20-%2012%20-%202025`).  
+   - Tras el `replace`, la URL pasa a ser `http://localhost:3000/mba3-consultas/pedidos/P-12.24%20-%2012%20-%202025/redistribucion` y la vista carga ese pedido (p. ej. con `loadPedido()` o un `watch` de `route.params.id`), mostrando la información del último pedido con `RESPUESTA_PROVEEDOR_CARGADA`.
+3. **Si la respuesta es `null` o falla la llamada:** permanecer en `/mba3-consultas/redistribucion` con el input de búsqueda; el usuario puede buscar por número de pedido y, al enviar la búsqueda, la app redirige a `/mba3-consultas/pedidos/{numero_pedido}/redistribucion` para visualizarlo.
+4. **Si el usuario ya está en** `http://localhost:3000/mba3-consultas/pedidos/{numero_pedido}/redistribucion` (p. ej. por enlace o tras la redirección): cargar ese pedido como siempre; no volver a llamar al endpoint de último pedido.
+
+**Resumen:** Clic en “Redistribución” → entra en `/mba3-consultas/redistribucion` → se llama a **`GET /api/pedidos/ultimo-redistribucion`** → si hay último pedido con `RESPUESTA_PROVEEDOR_CARGADA`, `router.replace` a `/mba3-consultas/pedidos/{numero_pedido}/redistribucion` (con `encodeURIComponent`) → el usuario ve de inmediato ese pedido en esa URL.
 
 ---
 
