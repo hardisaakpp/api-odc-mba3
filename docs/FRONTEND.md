@@ -8,11 +8,13 @@ Guías de implementación y requerimientos para el sistema frontend.
 
 **Problema:** Si el botón "Cargar Plantilla Excel" (u otros gated por capabilities) no se muestra en pantallas como `/mba3-consultas/pedidos/{id}`, suele deberse a que **las capabilities no se cargan** o **los getters no las usan bien**, no a la configuración del backend. Si ya dependen solo de capabilities y siguen sin verse → **0.4.1 Diagnóstico**.
 
-### 0.1 Fuente de verdad: `GET /api/auth/me`
+### 0.1 Fuente de verdad: `GET /api/auth/me` o `GET /api/Auth/me`
 
-- El backend expone `GET /api/auth/me` (header `Authorization: Bearer {token}`).
-- La respuesta incluye `user`, `roles`, `permissions` y **`capabilities`**.
+- El backend expone `GET /api/auth/me` y, como alias, `GET /api/Auth/me` (header `Authorization: Bearer {token}`).
+- La respuesta **debe incluir siempre** `user`, `roles`, `permissions` y **`capabilities`**.
 - El frontend debe usar **solo `capabilities`** para decidir qué botones/acciones mostrar (p. ej. `can_upload_templates`, `can_cargar_plantilla_excel`, `can_operate_pedidos`, `can_confirm_pedido`).
+
+**Opción A (backend):** Si al llamar `/api/Auth/me` (o `/api/auth/me`) el frontend obtiene `data.capabilities === undefined`, el backend que sirve esa ruta **debe modificarse** para incluir el objeto `capabilities` en la respuesta. El backend de mba3-consultas ya lo hace: devuelve `user` (con `userName`, `fullName`, `permissions`, `roles`), `roles`, `permissions` y **`capabilities`**. Para que el frontend vea el botón "Gestión ODC SAP" y el resto por capability, la petición auth/me debe ir a un backend que implemente este contrato (p. ej. el de mba3-consultas) o el backend actual debe añadir el cálculo y envío de `capabilities`.
 
 ### 0.2 Cuándo llamar a `/api/auth/me`
 
@@ -56,8 +58,10 @@ Si eliminaste modo MABEL TRADING/EL RAYO y los botones dependen solo de capabili
   - `can_cargar_plantilla_excel`
   - `can_operate_pedidos`
   - `can_view_odc_sap`
+  - `can_manage_order`
+  - `can_view_order_list`
   - `can_confirm_pedido`
-- Los valores dependen de los permisos del usuario (p. ej. `mba3-consultas.plantillas.upload`, `mba3-consultas.pedidos.operate`, etc.).
+- Los valores dependen de los permisos del usuario. **`can_view_odc_sap`** es `true` **solo** si tiene `odc.view` (0.5.7.1). **`can_manage_order`** y **`can_view_order_list`** son `true` **solo** si tiene `odcsap.view` (0.5.7.2).
 - Si las claves vienen en otro formato (ej. camelCase) o no existen, el backend no las envía así; habría que revisar si hay una capa intermedia que transforma la respuesta.
 
 #### 3. ¿Los getters leen **solo** de `capabilities`?
@@ -67,6 +71,8 @@ Si eliminaste modo MABEL TRADING/EL RAYO y los botones dependen solo de capabili
   - `canOperatePedidos` → `state.auth.capabilities?.can_operate_pedidos === true`
   - `canCargarPlantillaExcel` → `state.auth.capabilities?.can_cargar_plantilla_excel === true`
   - `canViewOdcSap` → `state.auth.capabilities?.can_view_odc_sap === true`
+  - `canManageOrder` → `state.auth.capabilities?.can_manage_order === true`
+  - `canViewOrderList` → `state.auth.capabilities?.can_view_order_list === true`
   - `canConfirmPedido` → `state.auth.capabilities?.can_confirm_pedido === true`
 - **Evitar:** que los getters usen `modo`, `esModoMabelTrading`, `esModoElRayo`, `empresa`, etc. para derivar estos valores. Cualquier condición extra puede hacer que sigan en `false` aunque el backend envíe `true`.
 
@@ -245,6 +251,66 @@ Para identificar y eliminar código legacy en el frontend, buscar:
 | `permissions.includes('mba3-consultas.proceso.execute')` | `capabilities.can_upload_templates` o `capabilities.can_operate_pedidos` |
 | `permissions.includes('mba3-consultas.facturas.view')` | `capabilities.can_view_templates` |
 | `usuario.tipo === 'EL_RAYO'` → operar pedidos | `capabilities.can_operate_pedidos` |
+
+#### 0.5.7.1 Botón sidebar "Gestión ODC SAP" — permiso `odc.view`
+
+El botón **"Gestión ODC SAP"** en el sidebar depende **únicamente** del permiso `odc.view`.
+
+**Reglas exactas:**
+
+- La capability `can_view_odc_sap` es `true` **solo** si el usuario tiene el permiso `odc.view` (sin admin override).
+- El botón **solo debe mostrarse** si `capabilities.can_view_odc_sap === true`.
+- El permiso `odc.view` **no** condiciona ningún otro botón ni funcionalidad del dashboard.
+- El frontend **no** debe chequear permisos directamente; solo la capability.
+
+**Implementación en frontend:**
+
+```tsx
+{capabilities.can_view_odc_sap && <SidebarODCButton />}
+```
+
+Nada más. No usar `permissions.includes('odc.view')` ni lógica distinta a la capability.
+
+**Comportamiento esperado:**
+
+- Usuario sin `odc.view` → no ve el botón.
+- Usuario con `odc.view` → ve el botón y puede entrar.
+
+#### 0.5.7.2 Botones "Gestionar Pedido" y "Listado de Pedidos" — permiso `odcsap.view`
+
+Los botones **"Gestionar Pedido"** y **"Listado de Pedidos"** dependen **únicamente** del permiso `odcsap.view`.
+
+**Reglas exactas:**
+
+- El permiso `odcsap.view` habilita **exclusivamente** estos dos botones:
+  - "Gestionar Pedido" → capability `can_manage_order`
+  - "Listado de Pedidos" → capability `can_view_order_list`
+- Cada capability es `true` **solo** si el usuario tiene el permiso `odcsap.view`.
+- Usuarios **sin** `odcsap.view` **no** ven ninguno de los dos botones.
+- El permiso `odcsap.view` **no** afecta al botón "Gestión ODC SAP" del sidebar ni a ningún otro botón del dashboard.
+- El frontend **solo** debe usar capabilities para mostrar u ocultar estos botones; nunca permisos directos.
+
+**Mapeo:**
+
+| Permiso       | Capability            | Botón              |
+|---------------|-----------------------|--------------------|
+| `odcsap.view` | `can_manage_order`    | Gestionar Pedido   |
+| `odcsap.view` | `can_view_order_list` | Listado de Pedidos |
+
+**Implementación en frontend:**
+
+```tsx
+{capabilities.can_manage_order && <Button to="/mba3-consultas/gestionar-pedido">Gestionar Pedido</Button>}
+{capabilities.can_view_order_list && <Link to="/mba3-consultas/listado-pedidos">Listado de Pedidos</Link>}
+```
+
+No usar `permissions.includes('odcsap.view')` ni lógica distinta a las capabilities.
+
+**Comportamiento esperado:**
+
+- Usuario con `odcsap.view` → ve "Gestionar Pedido" y "Listado de Pedidos".
+- Usuario sin `odcsap.view` → no ve ninguno de los dos.
+- El sidebar **no cambia** por este permiso.
 
 ### 0.5.8 Pantalla "Detalle del Pedido - EL RAYO" (`/mba3-consultas/pedidos/{id}`)
 

@@ -96,8 +96,15 @@ def _map_permissions_to_capabilities(permissions: list, roles: list) -> Dict[str
             legacy_perm='mba3-consultas.proceso.execute'
         ),
         # Capability: Ver botón "Gestión ODC SAP" en el sidebar.
-        # Pendiente de reconfiguración de permiso (odcsap.view / odc.view eliminados).
-        "can_view_odc_sap": False,
+        # Única responsabilidad: solo el permiso odc.view habilita visibilidad y acceso.
+        # Sin admin override ni otros permisos.
+        "can_view_odc_sap": has_permission('odc.view'),
+        # Capability: Ver botón "Gestionar Pedido". Solo permiso odcsap.view.
+        # No afecta al sidebar ni a otros botones.
+        "can_manage_order": has_permission('odcsap.view'),
+        # Capability: Ver botón/link "Listado de Pedidos". Solo permiso odcsap.view.
+        # No afecta al sidebar ni a otros botones.
+        "can_view_order_list": has_permission('odcsap.view'),
         # Capability: Ver órdenes de compra (ODC). Solo admin.
         "can_view_odc": is_admin,
         # Capability: Revisar pedido (no hay botón en UI; se mantiene por compatibilidad).
@@ -134,6 +141,7 @@ def register_auth_endpoints(app: FastAPI):
     """
     
     @app.get("/api/auth/me", tags=["Autenticación"])
+    @app.get("/api/Auth/me", tags=["Autenticación"])  # Alias: mismo contenido, incluye capabilities
     async def get_current_user(
         user: Dict[str, Any] = Depends(verify_jwt_token)
     ):
@@ -173,6 +181,8 @@ def register_auth_endpoints(app: FastAPI):
             "can_view_templates": true,
             "can_operate_pedidos": true,
             "can_view_odc_sap": false,
+            "can_manage_order": false,
+            "can_view_order_list": false,
             "can_view_odc": false,
             "can_review_pedido": true,
             "can_confirm_pedido": true
@@ -206,36 +216,46 @@ def register_auth_endpoints(app: FastAPI):
         
         **Pantalla detalle pedido** (`/mba3-consultas/pedidos/{id}`):
         - "Cargar Plantilla Excel": `capabilities.can_cargar_plantilla_excel`
-        - Sidebar "Gestión ODC SAP": `capabilities.can_view_odc_sap`
+        - Sidebar "Gestión ODC SAP": `capabilities.can_view_odc_sap` (true solo si permiso `odc.view`; sin admin override)
         - Redistribuir, Exportar, Descargar para MBA: `capabilities.can_operate_pedidos`
         - Botón "Confirmar": `capabilities.can_confirm_pedido`
+
+        **Botones "Gestionar Pedido" y "Listado de Pedidos":**
+        - "Gestionar Pedido": `capabilities.can_manage_order` (true solo si permiso `odcsap.view`)
+        - "Listado de Pedidos": `capabilities.can_view_order_list` (true solo si permiso `odcsap.view`)
         """
         try:
-            # Extraer información del usuario
-            user_info = {
-                "id": user.get("id"),
-                "username": user.get("username"),
-                "email": user.get("email")
-            }
-            
             # Extraer roles y permisos
             roles = user.get("roles", [])
             permissions = user.get("permissions", [])
-            
+
             # Mapear permisos a capabilities (SIEMPRE debe ejecutarse)
             capabilities = _map_permissions_to_capabilities(permissions, roles)
-            
+
             # Validar que capabilities se calculó correctamente
             if not isinstance(capabilities, dict):
                 logger.error(f"❌ [AUTH/ME] ERROR: capabilities no es un dict, es: {type(capabilities)}")
                 capabilities = {}
-            
-            # Construir respuesta - SIEMPRE incluir capabilities
+
+            # user_info: compatible con Core (userName, fullName) y con permisos/roles dentro de user
+            # para que el frontend que usa data.user?.permissions y data.capabilities funcione sin cambios
+            username_val = user.get("username") or user.get("userName")
+            user_info = {
+                "id": user.get("id"),
+                "username": username_val,
+                "userName": username_val,
+                "email": user.get("email"),
+                "fullName": user.get("fullName") or username_val or "",
+                "roles": roles,
+                "permissions": permissions,
+            }
+
+            # Construir respuesta - SIEMPRE incluir capabilities (Opción A: requerido por el frontend)
             response_data = {
                 "user": user_info,
                 "roles": roles,
                 "permissions": permissions,
-                "capabilities": capabilities  # OBLIGATORIO: siempre incluir capabilities
+                "capabilities": capabilities,
             }
             
             # Logging detallado para debugging
@@ -258,15 +278,22 @@ def register_auth_endpoints(app: FastAPI):
         except Exception as e:
             logger.error(f"❌ [AUTH/ME] Error al obtener información del usuario: {e}", exc_info=True)
             # En caso de error, devolver respuesta con capabilities vacías para no romper el frontend
+            err_roles = user.get("roles", []) if user else []
+            err_perms = user.get("permissions", []) if user else []
+            err_username = (user.get("username") or user.get("userName")) if user else None
             error_response = {
                 "user": {
                     "id": user.get("id") if user else None,
-                    "username": user.get("username") if user else None,
-                    "email": user.get("email") if user else None
+                    "username": err_username,
+                    "userName": err_username,
+                    "email": user.get("email") if user else None,
+                    "fullName": (user.get("fullName") or err_username or "") if user else "",
+                    "roles": err_roles,
+                    "permissions": err_perms,
                 },
-                "roles": user.get("roles", []) if user else [],
-                "permissions": user.get("permissions", []) if user else [],
-                "capabilities": {}  # Capabilities vacías en caso de error
+                "roles": err_roles,
+                "permissions": err_perms,
+                "capabilities": {},
             }
-            logger.warning(f"⚠️ [AUTH/ME] Devolviendo respuesta con capabilities vacías debido a error")
+            logger.warning("⚠️ [AUTH/ME] Devolviendo respuesta con capabilities vacías debido a error")
             return JSONResponse(status_code=200, content=error_response)
