@@ -5,14 +5,11 @@ Similar a copy_despacho_to_orden_compra() pero para pedidos.
 """
 
 import logging
-import json
 import pyodbc
-from pathlib import Path
 from typing import Dict, Any, List, Optional
 from datetime import datetime
 
 from ..connection import get_db_connection_context
-from src.config import PROJECT_ROOT
 from ..repositories.pedido_repository import PedidoRepository
 from ..repositories.pedido_sap_procesamiento_repository import PedidoSAPProcesamientoRepository
 from ..repositories.orden_compra_repository import OrdenCompraRepository
@@ -401,38 +398,4 @@ class PedidoOCService:
                 f"✅ OC {accion}: {oc_id} para pedido {pedido_id} "
                 f"(detalles: {detalles_insertados}/{len(procesamientos_validos)})"
             )
-            
-            # ⭐ GUARDAR JSON DE LA OC CREADA EN ARCHIVO (para auditoría/debugging)
-            try:
-                oc_completa_json = {
-                    "oc_id": oc_id,
-                    "pedido_id": pedido_id,
-                    "fecha_generacion": datetime.now().isoformat(),
-                    "cabecera": oc_cabecera_data,
-                    "detalles": oc_detalles,
-                    "resultado": {
-                        "detalles_insertados": detalles_insertados,
-                        "total_lineas": len(oc_detalles),
-                        "cabecera_insertada": result.get("cabecera_insertada"),
-                        "cabecera_actualizada": result.get("cabecera_actualizada"),
-                    }
-                }
-                
-                # Crear directorio si no existe
-                output_dir = PROJECT_ROOT / "output" / "orden_compra_json"
-                output_dir.mkdir(parents=True, exist_ok=True)
-                
-                # Nombre de archivo: oc_generada_{oc_id}_{timestamp}.json
-                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                filename = f"oc_generada_{oc_id}_{timestamp}.json"
-                filepath = output_dir / filename
-                
-                # Guardar JSON
-                with open(filepath, 'w', encoding='utf-8') as f:
-                    json.dump(oc_completa_json, f, indent=2, ensure_ascii=False, default=str)
-                
-                logger.info(f"📄 JSON de OC generada guardado en: {filepath}")
-            except Exception as e:
-                logger.warning(f"⚠️ No se pudo guardar JSON de OC (no crítico): {e}")
-            
             return result

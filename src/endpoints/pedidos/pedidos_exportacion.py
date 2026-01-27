@@ -3,11 +3,14 @@ Endpoints de exportación de pedidos.
 """
 
 import logging
+import uuid
 from typing import Dict
 from datetime import datetime
 from fastapi import FastAPI, Depends, HTTPException, Path, Query
 from fastapi.responses import Response
 
+from src.database.connection import get_db_connection_context
+from src.database.repositories.pedido_repository import PedidoRepository
 from src.security.jwt_auth import verify_jwt_token, require_permission
 
 logger = logging.getLogger(__name__)
@@ -120,9 +123,6 @@ def register_exportacion_endpoints(app: FastAPI):
         """
         try:
             from src.database.services.mba_pedido_exporter import MBAPedidoExporter, MBAExportConfig
-            from src.database.repositories.pedido_repository import PedidoRepository
-            from src.database.connection import get_db_connection_context
-            import uuid
             
             # Determinar si es UUID o numero_pedido
             with get_db_connection_context() as conn:

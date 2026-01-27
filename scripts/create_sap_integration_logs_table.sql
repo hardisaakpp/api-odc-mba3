@@ -59,36 +59,3 @@ PRINT 'Script completado exitosamente';
 GO
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

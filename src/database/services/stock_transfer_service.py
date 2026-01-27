@@ -8,10 +8,7 @@ solo crean una solicitud que debe ser procesada posteriormente.
 """
 
 import logging
-import json
-from pathlib import Path
 from typing import Dict, Any, List, Optional
-from datetime import datetime
 from collections import defaultdict
 
 from ..connection import get_db_connection_context
@@ -23,7 +20,6 @@ from ..clients.sap_service_layer_client import SAPServiceLayerClient
 from ..mappers.sap_stock_transfer_mapper import SAPStockTransferMapper
 from ..services.bodega_sap_service import BodegaSAPService
 from src.exceptions import SAPDataMasterError
-from src.config import PROJECT_ROOT
 
 logger = logging.getLogger(__name__)
 
@@ -790,20 +786,6 @@ class StockTransferService:
                         f"🔄 Enviando ITR {idx+1}/{len(stock_transfers_json)} a SAP: "
                         f"{bodega_origen} → {tienda_codigo}..."
                     )
-                    
-                    # ⭐ GUARDAR JSON DEL ITR EN ARCHIVO (para auditoría/debugging)
-                    try:
-                        output_dir = PROJECT_ROOT / "output" / "orden_compra_json"
-                        output_dir.mkdir(parents=True, exist_ok=True)
-                        timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
-                        filename = f"itr_tienda_{pedido_id}_{tienda_codigo}_{timestamp}_{idx+1}.json"
-                        filepath = output_dir / filename
-                        with open(filepath, 'w', encoding='utf-8') as f:
-                            json.dump(stock_transfer_json, f, indent=2, ensure_ascii=False, default=str)
-                        logger.info(f"📄 JSON de ITR (por tienda) guardado en: {filepath}")
-                    except Exception as e:
-                        logger.warning(f"⚠️ No se pudo guardar JSON de ITR (no crítico): {e}")
-                    
                     sap_response = self.sap_client.create_stock_transfer(stock_transfer_json)
                     
                     # Obtener nombre de la tienda desde el mapeo

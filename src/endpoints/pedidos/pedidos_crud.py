@@ -3,10 +3,14 @@ Endpoints CRUD para gestión de pedidos.
 """
 
 import logging
+import re
 from typing import Dict, Optional
 from fastapi import FastAPI, UploadFile, File, Depends, HTTPException, Path, Query, Body, status
 from fastapi.responses import JSONResponse
 
+from src.database.connection import get_db_connection_context
+from src.database.repositories.pedido_repository import PedidoRepository
+from src.database.repositories.pedido_respuesta_repository import PedidoRespuestaRepository
 from src.security.jwt_auth import verify_jwt_token, require_permission
 from src.exceptions import BusinessException
 from src.models import (
@@ -87,9 +91,6 @@ def register_crud_endpoints(app: FastAPI):
             JSON con lista de pedidos y metadata de paginación
         """
         try:
-            from src.database.connection import get_db_connection_context
-            from src.database.repositories.pedido_repository import PedidoRepository
-            
             with get_db_connection_context() as conn:
                 repo = PedidoRepository(conn)
                 resultado = repo.get_pedidos_con_filtros(
@@ -153,16 +154,14 @@ def register_crud_endpoints(app: FastAPI):
         - `total`, `page`, `pageSize`, `totalPages`
         """
         try:
-            from src.database.connection import get_db_connection_context
-            from src.database.repositories.pedido_repository import PedidoRepository
-
             # Tamaño de página: prioridad pageSize (frontend) > page_size
             size = pageSize if pageSize is not None else page_size
             if limit is not None:
                 use_limit, use_offset = limit, offset or 0
             else:
-                use_limit = size
-                use_offset = (page - 1) * size
+                use_size = size if size is not None else 50
+                use_limit = use_size
+                use_offset = ((page or 1) - 1) * use_size
 
             solo_redistribucion = (
                 redistribucion_confirmada is not None
@@ -240,9 +239,6 @@ def register_crud_endpoints(app: FastAPI):
         **Respuesta:** Objeto con cabecera básica (pedido_id, numero_pedido, estado, ...) o null.
         """
         try:
-            from src.database.connection import get_db_connection_context
-            from src.database.repositories.pedido_repository import PedidoRepository
-
             user_id = get_user_id(user) if solo_usuario else None
             with get_db_connection_context() as conn:
                 repo = PedidoRepository(conn)
@@ -284,9 +280,6 @@ def register_crud_endpoints(app: FastAPI):
             JSON indicando si hay pedidos guardados
         """
         try:
-            from src.database.connection import get_db_connection_context
-            from src.database.repositories.pedido_repository import PedidoRepository
-            
             with get_db_connection_context() as conn:
                 repo = PedidoRepository(conn)
                 tiene_pedidos = repo.tiene_pedidos()
@@ -362,11 +355,6 @@ def register_crud_endpoints(app: FastAPI):
             JSON con pedido completo
         """
         try:
-            import re
-            from src.database.connection import get_db_connection_context
-            from src.database.repositories.pedido_repository import PedidoRepository
-            from src.database.repositories.pedido_respuesta_repository import PedidoRespuestaRepository
-            
             # Detectar si es UUID (formato: 8-4-4-4-12 caracteres hexadecimales)
             uuid_pattern = re.compile(r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$')
             es_uuid = uuid_pattern.match(identificador.strip()) is not None
@@ -687,9 +675,6 @@ def register_crud_endpoints(app: FastAPI):
             JSON con resultado de la modificación
         """
         try:
-            from src.database.connection import get_db_connection_context
-            from src.database.repositories.pedido_repository import PedidoRepository
-            
             datos_cabecera = request_body.model_dump(exclude_unset=True)
             campos_modificados = list(datos_cabecera.keys())
             user_id = get_user_id(user)

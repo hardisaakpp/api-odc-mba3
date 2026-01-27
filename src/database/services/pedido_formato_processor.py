@@ -8,6 +8,8 @@ import pandas as pd
 from typing import Dict, Any, List, Optional, Tuple
 import io
 
+from .pedido_parser.pedido_parser_utils import normalize_column_name
+
 logger = logging.getLogger(__name__)
 
 
@@ -89,8 +91,7 @@ class PedidoFormatoProcessor:
         
         # Detección de formato simple
         df_detalle_detection_lower = df_detalle_detection.copy()
-        df_detalle_detection_lower.columns = [str(col).strip().lower() if pd.notna(col) else "" 
-                                              for col in df_detalle_detection_lower.columns]
+        df_detalle_detection_lower.columns = [normalize_column_name(col) for col in df_detalle_detection_lower.columns]
         has_producto = any('codigoproducto' in col or 'codigo producto' in col for col in df_detalle_detection_lower.columns)
         has_idtienda = any('idtienda' in col or 'id tienda' in col for col in df_detalle_detection_lower.columns)
         has_cantidad = any('cantidad' in col for col in df_detalle_detection_lower.columns)

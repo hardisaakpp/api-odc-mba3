@@ -12,7 +12,7 @@ import re
 import unicodedata
 from typing import Dict, Any, List, Optional
 
-from .pedido_parser_utils import PedidoParserUtils
+from .pedido_parser_utils import PedidoParserUtils, normalize_column_name
 
 logger = logging.getLogger(__name__)
 
@@ -226,7 +226,7 @@ class PedidoParserTiendas:
         distribuciones = []
         
         for col_name in columnas:
-            col_lower = str(col_name).lower().strip()
+            col_lower = normalize_column_name(col_name)
             col_upper = str(col_name).upper().strip()
             
             es_codigo_tienda = bool(re.match(self.utils.PATRON_CODIGO_TIENDA, col_upper))
@@ -310,7 +310,7 @@ class PedidoParserTiendas:
             catalogo = {}
             
             def _normalize_header(text: str) -> str:
-                t = str(text).lower().strip()
+                t = normalize_column_name(text)
                 t = ''.join(
                     c for c in unicodedata.normalize('NFD', t)
                     if unicodedata.category(c) != 'Mn'
@@ -365,7 +365,7 @@ class PedidoParserTiendas:
                 
                 activa_normalizada = True
                 if activa_bruto is not None:
-                    activa_str = str(activa_bruto).lower().strip()
+                    activa_str = normalize_column_name(activa_bruto)
                     if activa_str in ("no", "false", "0", "f"):
                         activa_normalizada = False
                     elif activa_str in ("si", "yes", "true", "1", "v"):

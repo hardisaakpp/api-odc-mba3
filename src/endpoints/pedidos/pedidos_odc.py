@@ -3,9 +3,12 @@ Endpoint de creación de órdenes de compra.
 """
 
 import logging
+import re
 from typing import Dict
 from fastapi import FastAPI, Depends, HTTPException, Path, status
 
+from src.database.connection import get_db_connection_context
+from src.database.repositories.pedido_repository import PedidoRepository
 from src.security.jwt_auth import verify_jwt_token, require_permission
 
 logger = logging.getLogger(__name__)
@@ -22,10 +25,7 @@ def register_odc_endpoints(app: FastAPI):
     ):
         """Crea una orden de compra desde un pedido confirmado."""
         try:
-            import re
             from src.database.services.pedido_oc_service import PedidoOCService
-            from src.database.connection import get_db_connection_context
-            from src.database.repositories.pedido_repository import PedidoRepository
             
             user_id = user.get("sub") or user.get("user_id")
             

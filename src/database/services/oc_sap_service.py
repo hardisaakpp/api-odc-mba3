@@ -5,15 +5,12 @@ Este servicio orquesta la construcción del JSON y el envío de ODC a SAP.
 """
 
 import logging
-import json
-from pathlib import Path
 from datetime import datetime
 from typing import Optional, Dict, Any, List
 
 from ..repositories.orden_compra_repository import OrdenCompraRepository
 from ..clients.sap_service_layer_client import SAPServiceLayerClient
 from ..mappers.sap_oc_mapper import SAPOCMapper
-from src.config import PROJECT_ROOT
 
 logger = logging.getLogger(__name__)
 
@@ -249,33 +246,6 @@ class OCSAPService:
                     usuario_id=oc_cabecera.get("creado_por"),  # Usuario de la cabecera
                     pedido_id=oc_cabecera.get("pedido_id")     # Pedido relacionado
                 )
-                
-                # ⭐ GUARDAR JSON QUE SE ENVIARÁ A SAP EN ARCHIVO (para auditoría/debugging)
-                try:
-                    # Crear directorio si no existe
-                    output_dir = PROJECT_ROOT / "output" / "orden_compra_json"
-                    output_dir.mkdir(parents=True, exist_ok=True)
-                    
-                    # Nombre de archivo: oc_sap_{oc_id}_{timestamp}.json
-                    timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
-                    filename = f"oc_sap_{oc_id}_{timestamp}.json"
-                    filepath = output_dir / filename
-                    
-                    # JSON completo con metadata
-                    sap_json_completo = {
-                        "oc_id": oc_id,
-                        "fecha_envio": datetime.utcnow().isoformat(),
-                        "warehouse_code": warehouse_code,
-                        "purchase_order_json": purchase_order_json
-                    }
-                    
-                    # Guardar JSON
-                    with open(filepath, 'w', encoding='utf-8') as f:
-                        json.dump(sap_json_completo, f, indent=2, ensure_ascii=False, default=str)
-                    
-                    logger.info(f"📤 JSON que se enviará a SAP guardado en: {filepath}")
-                except Exception as e:
-                    logger.warning(f"⚠️ No se pudo guardar JSON de SAP (no crítico): {e}")
             except ValueError as e:
                 error_msg = f"Error al construir JSON de SAP: {str(e)}"
                 result["error"] = error_msg
@@ -445,20 +415,6 @@ class OCSAPService:
                         logger.info(f"📤 Enviando {len(itr_payloads)} Inventory Transfer Request(s) por bodega a SAP...")
                         for idx, pl in enumerate(itr_payloads):
                             to_warehouse = pl.get("ToWarehouse", "UNKNOWN")
-                            
-                            # ⭐ GUARDAR JSON DEL ITR EN ARCHIVO (para auditoría/debugging)
-                            try:
-                                output_dir = PROJECT_ROOT / "output" / "orden_compra_json"
-                                output_dir.mkdir(parents=True, exist_ok=True)
-                                timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
-                                filename = f"itr_bodega_{oc_id}_{to_warehouse}_{timestamp}_{idx+1}.json"
-                                filepath = output_dir / filename
-                                with open(filepath, 'w', encoding='utf-8') as f:
-                                    json.dump(pl, f, indent=2, ensure_ascii=False, default=str)
-                                logger.debug(f"📄 JSON de ITR (por bodega) guardado en: {filepath}")
-                            except Exception as e:
-                                logger.warning(f"⚠️ No se pudo guardar JSON de ITR (no crítico): {e}")
-                            
                             logger.debug(f"🔄 Enviando ITR {idx+1}/{len(itr_payloads)} a SAP: {from_wh} → {to_warehouse}...")
                             resp = self.sap_client.create_stock_transfer(pl)
                             

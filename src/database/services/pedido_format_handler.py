@@ -8,6 +8,8 @@ import pandas as pd
 from typing import Dict, Any, List, Optional, Tuple
 import io
 
+from .pedido_parser.pedido_parser_utils import normalize_column_name
+
 logger = logging.getLogger(__name__)
 
 
@@ -105,8 +107,7 @@ class PedidoFormatHandler:
                 return False, []
             
             # Normalizar nombres de columnas
-            df.columns = [str(col).strip().lower() if pd.notna(col) else "" 
-                         for col in df.columns]
+            df.columns = [normalize_column_name(col) for col in df.columns]
             
             # Buscar columnas de tienda (formato complejo)
             import re

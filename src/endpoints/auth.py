@@ -6,7 +6,7 @@ permisos y capacidades para control de UI en el frontend.
 """
 
 import logging
-from typing import Dict, Any
+from typing import Any, Dict, Optional
 from fastapi import FastAPI, Depends
 from fastapi.responses import JSONResponse
 
@@ -44,7 +44,7 @@ def _map_permissions_to_capabilities(permissions: list, roles: list) -> Dict[str
     is_admin = any('admin' in r for r in user_roles) or any('admin' in p for p in perms)
     
     # Helper para verificar permiso (con backward compatibility temporal)
-    def has_permission(specific_perm: str, legacy_perm: str = None) -> bool:
+    def has_permission(specific_perm: str, legacy_perm: Optional[str] = None) -> bool:
         """
         Verifica si el usuario tiene un permiso específico.
         

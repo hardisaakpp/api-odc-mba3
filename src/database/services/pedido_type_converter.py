@@ -8,6 +8,8 @@ from typing import Optional, Any
 from datetime import datetime, date
 import re
 
+from .pedido_parser.pedido_parser_utils import normalize_column_name
+
 logger = logging.getLogger(__name__)
 
 
@@ -170,7 +172,7 @@ class PedidoTypeConverter:
         if valor is None:
             return None
         
-        valor_str = str(valor).strip().lower()
+        valor_str = normalize_column_name(valor)
         
         if valor_str in ["sí", "si", "yes", "1", "true", "activo", "v"]:
             return True

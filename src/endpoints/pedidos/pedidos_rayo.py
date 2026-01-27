@@ -6,6 +6,9 @@ import logging
 from typing import Dict, Optional
 from fastapi import FastAPI, Depends, HTTPException, Path, Query
 
+from src.database.connection import get_db_connection_context
+from src.database.repositories.pedido_confirmacion_rayo_repository import PedidoConfirmacionRayoRepository
+from src.database.repositories.pedido_repository import PedidoRepository
 from src.security.jwt_auth import verify_jwt_token, require_permission
 from src.models import (
     ConfirmacionRayoListResponse,
@@ -30,10 +33,6 @@ def register_rayo_endpoints(app: FastAPI):
     ):
         """Obtiene el historial de confirmaciones realizadas por EL RAYO para un pedido."""
         try:
-            from src.database.connection import get_db_connection_context
-            from src.database.repositories.pedido_confirmacion_rayo_repository import PedidoConfirmacionRayoRepository
-            from src.database.repositories.pedido_repository import PedidoRepository
-            
             with get_db_connection_context() as conn:
                 repo_pedido = PedidoRepository(conn)
                 pedido = repo_pedido.get_pedido_completo(pedido_id)
@@ -75,10 +74,6 @@ def register_rayo_endpoints(app: FastAPI):
     ):
         """Obtiene el detalle completo de una confirmación específica de EL RAYO."""
         try:
-            from src.database.connection import get_db_connection_context
-            from src.database.repositories.pedido_confirmacion_rayo_repository import PedidoConfirmacionRayoRepository
-            from src.database.repositories.pedido_repository import PedidoRepository
-            
             with get_db_connection_context() as conn:
                 repo_pedido = PedidoRepository(conn)
                 pedido = repo_pedido.get_pedido_completo(pedido_id)

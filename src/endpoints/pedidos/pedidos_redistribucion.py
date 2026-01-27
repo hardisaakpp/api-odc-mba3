@@ -11,6 +11,10 @@ from datetime import datetime
 import pandas as pd
 from io import BytesIO
 
+from src.database.connection import get_db_connection_context
+from src.database.repositories.distribucion_confirmada_repository import DistribucionConfirmadaRepository
+from src.database.repositories.pedido_repository import PedidoRepository
+from src.database.services.redistribucion_validator import RedistribucionValidator
 from src.security.jwt_auth import verify_jwt_token, require_permission
 from src.models import (
     DistribucionPedidoResponse,
@@ -77,10 +81,6 @@ def register_redistribucion_endpoints(app: FastAPI):
         ```
         """
         try:
-            from src.database.connection import get_db_connection_context
-            from src.database.repositories.distribucion_confirmada_repository import DistribucionConfirmadaRepository
-            from src.database.repositories.pedido_repository import PedidoRepository
-            
             with get_db_connection_context() as conn:
                 repo_dist = DistribucionConfirmadaRepository(conn)
                 repo_pedido = PedidoRepository(conn)
@@ -210,11 +210,6 @@ def register_redistribucion_endpoints(app: FastAPI):
         ```
         """
         try:
-            from src.database.connection import get_db_connection_context
-            from src.database.repositories.distribucion_confirmada_repository import DistribucionConfirmadaRepository
-            from src.database.repositories.pedido_repository import PedidoRepository
-            from src.database.services.redistribucion_validator import RedistribucionValidator
-            
             user_id = get_user_id(user)
             
             with get_db_connection_context() as conn:
@@ -361,11 +356,6 @@ def register_redistribucion_endpoints(app: FastAPI):
         ```
         """
         try:
-            from src.database.connection import get_db_connection_context
-            from src.database.repositories.distribucion_confirmada_repository import DistribucionConfirmadaRepository
-            from src.database.repositories.pedido_repository import PedidoRepository
-            from src.database.services.redistribucion_validator import RedistribucionValidator
-            
             user_id = get_user_id(user)
             
             with get_db_connection_context() as conn:
@@ -560,10 +550,6 @@ def register_redistribucion_endpoints(app: FastAPI):
         """
         try:
             import re
-            from src.database.connection import get_db_connection_context
-            from src.database.repositories.distribucion_confirmada_repository import DistribucionConfirmadaRepository
-            from src.database.repositories.pedido_repository import PedidoRepository
-            
             # Detectar si es UUID o numero_pedido
             uuid_pattern = re.compile(r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$')
             es_uuid = uuid_pattern.match(pedido_id.strip()) is not None
@@ -648,11 +634,6 @@ def register_redistribucion_endpoints(app: FastAPI):
         - Archivo Excel descargable (.xlsx)
         """
         try:
-            from src.database.connection import get_db_connection_context
-            from src.database.repositories.distribucion_confirmada_repository import DistribucionConfirmadaRepository
-            from src.database.repositories.pedido_repository import PedidoRepository
-            import pandas as pd
-            from io import BytesIO
             from fastapi.responses import StreamingResponse
             
             with get_db_connection_context() as conn:
@@ -789,10 +770,6 @@ def register_redistribucion_endpoints(app: FastAPI):
         ```
         """
         try:
-            from src.database.connection import get_db_connection_context
-            from src.database.repositories.pedido_repository import PedidoRepository
-            import json
-            
             user_id = get_user_id(user)
             
             with get_db_connection_context() as conn:
@@ -911,10 +888,6 @@ def register_redistribucion_endpoints(app: FastAPI):
         ```
         """
         try:
-            from src.database.connection import get_db_connection_context
-            from src.database.repositories.pedido_repository import PedidoRepository
-            import json
-            
             with get_db_connection_context() as conn:
                 repo_pedido = PedidoRepository(conn)
                 
@@ -1049,9 +1022,6 @@ def register_redistribucion_endpoints(app: FastAPI):
         ```
         """
         try:
-            from src.database.connection import get_db_connection_context
-            from src.database.repositories.pedido_repository import PedidoRepository
-            
             with get_db_connection_context() as conn:
                 repo_pedido = PedidoRepository(conn)
                 
@@ -1274,11 +1244,6 @@ def register_redistribucion_endpoints(app: FastAPI):
         ```
         """
         try:
-            from src.database.connection import get_db_connection_context
-            from src.database.repositories.pedido_repository import PedidoRepository
-            from src.database.repositories.distribucion_confirmada_repository import DistribucionConfirmadaRepository
-            from src.database.services.redistribucion_validator import RedistribucionValidator
-            
             user_id = get_user_id(user)
             
             with get_db_connection_context() as conn:
@@ -1588,9 +1553,6 @@ def register_redistribucion_endpoints(app: FastAPI):
         cuando se redistribuye a las tiendas. Las bodegas permanecen con sus valores originales.
         """
         try:
-            from src.database.connection import get_db_connection_context
-            from src.database.repositories.pedido_repository import PedidoRepository
-            
             with get_db_connection_context() as conn:
                 repo_pedido = PedidoRepository(conn)
                 

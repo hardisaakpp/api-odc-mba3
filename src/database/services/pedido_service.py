@@ -33,6 +33,16 @@ from src.config import ENABLE_SAP_QUERIES
 
 logger = logging.getLogger(__name__)
 
+# Parámetros por defecto para validación de pedidos (Ecuador: IVA 15%, formato estándar)
+DEFAULT_PEDIDO_VALIDATOR_KWARGS = {
+    "max_cantidad_por_tienda": 10000,
+    "max_cantidad_total": 100000,
+    "permitir_fechas_pasadas": False,
+    "validar_precios": True,
+    "iva_porcentaje": 15.0,
+    "usar_comas_decimales": False,
+}
+
 
 class PedidoService:
     """
@@ -1010,12 +1020,7 @@ class PedidoService:
             if validar_antes_de_guardar:
                 validator = PedidoValidator(
                     tiendas_permitidas=tiendas_permitidas,
-                    max_cantidad_por_tienda=10000,  # Ajustar según negocio
-                    max_cantidad_total=100000,       # Ajustar según negocio
-                    permitir_fechas_pasadas=False,
-                    validar_precios=True,  # Habilitar validación de precios/impuestos
-                    iva_porcentaje=15.0,   # IVA por defecto para Ecuador (15%)
-                    usar_comas_decimales=False  # Usar punto como separador decimal (formato estándar)
+                    **DEFAULT_PEDIDO_VALIDATOR_KWARGS
                 )
                 
                 # El nuevo formato v1.0 no es "simple"

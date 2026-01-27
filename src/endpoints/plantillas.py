@@ -10,6 +10,9 @@ from datetime import datetime
 from fastapi import FastAPI, UploadFile, File, Depends, HTTPException, Query, Form
 from fastapi.responses import JSONResponse
 
+from src.database.connection import get_db_connection_context
+from src.database.repositories.pedido_repository import PedidoRepository
+from src.database.repositories.pedido_respuesta_repository import PedidoRespuestaRepository
 from src.security.jwt_auth import verify_jwt_token, require_permission
 from src.exceptions import BusinessException
 from src.endpoints.pedidos.utils import validate_excel_file, get_user_id, MAX_FILE_SIZE
@@ -250,10 +253,6 @@ def register_plantillas_endpoints(app: FastAPI):
             JSON con pedido completo o null si no hay pedidos
         """
         try:
-            from src.database.connection import get_db_connection_context
-            from src.database.repositories.pedido_repository import PedidoRepository
-            from src.database.repositories.pedido_respuesta_repository import PedidoRespuestaRepository
-            
             # Obtener ID del usuario (normalizado, mismo que al subir Excel)
             user_id = get_user_id(user)
             

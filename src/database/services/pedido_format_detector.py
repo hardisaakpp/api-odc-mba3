@@ -8,6 +8,8 @@ import pandas as pd
 from typing import Dict, Optional, Tuple
 import io
 
+from .pedido_parser.pedido_parser_utils import normalize_column_name
+
 logger = logging.getLogger(__name__)
 
 
@@ -77,8 +79,8 @@ class PedidoFormatDetector:
         
         # Formato de 2 hojas v1.0: hojas "cabecera" y "detalle" en minúsculas (ÚNICO FORMATO SOPORTADO)
         if tiene_cabecera and tiene_detalle:
-            cabecera_name = str(hojas['cabecera']).lower().strip()
-            detalle_name = str(hojas['detalle']).lower().strip()
+            cabecera_name = normalize_column_name(hojas['cabecera'])
+            detalle_name = normalize_column_name(hojas['detalle'])
             if cabecera_name == "cabecera" and detalle_name == "detalle":
                 return 'dos_hojas_nuevo_v1_0'
         

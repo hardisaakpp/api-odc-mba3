@@ -7,6 +7,8 @@ from typing import Dict
 from fastapi import FastAPI, Depends, HTTPException, Path, Body, status
 from fastapi.responses import JSONResponse
 
+from src.database.connection import get_db_connection_context
+from src.database.repositories.pedido_repository import PedidoRepository
 from src.security.jwt_auth import verify_jwt_token, require_permission
 from src.models import (
     ActualizarCostoRequest,
@@ -35,9 +37,6 @@ def register_edicion_endpoints(app: FastAPI):
     ):
         """Actualiza el costo unitario de una línea de detalle del pedido."""
         try:
-            from src.database.connection import get_db_connection_context
-            from src.database.repositories.pedido_repository import PedidoRepository
-            
             nuevo_costo = request_body.costo_doc_sin_iva
             
             if nuevo_costo is None:
@@ -88,9 +87,6 @@ def register_edicion_endpoints(app: FastAPI):
     ):
         """Actualiza el total de una línea de detalle del pedido."""
         try:
-            from src.database.connection import get_db_connection_context
-            from src.database.repositories.pedido_repository import PedidoRepository
-            
             nuevo_total = request_body.total
             
             if nuevo_total is None:
@@ -149,9 +145,6 @@ def register_edicion_endpoints(app: FastAPI):
     ):
         """Actualiza el comentario de una línea de detalle del pedido."""
         try:
-            from src.database.connection import get_db_connection_context
-            from src.database.repositories.pedido_repository import PedidoRepository
-            
             nuevo_comentario = request_body.comentario
             
             if nuevo_comentario is not None:
@@ -202,9 +195,6 @@ def register_edicion_endpoints(app: FastAPI):
     ):
         """Guarda o actualiza las modificaciones de columnas para un pedido."""
         try:
-            from src.database.connection import get_db_connection_context
-            from src.database.repositories.pedido_repository import PedidoRepository
-            
             if request_body.numero_pedido != numero_pedido:
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
                                   detail={"error": "numero_pedido_mismatch",
@@ -245,9 +235,6 @@ def register_edicion_endpoints(app: FastAPI):
     ):
         """Obtiene las modificaciones de columnas para un pedido."""
         try:
-            from src.database.connection import get_db_connection_context
-            from src.database.repositories.pedido_repository import PedidoRepository
-            
             with get_db_connection_context() as conn:
                 repo = PedidoRepository(conn)
                 resultado = repo.obtener_modificaciones_columnas(numero_pedido=numero_pedido)

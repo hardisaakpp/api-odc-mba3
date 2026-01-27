@@ -3,10 +3,14 @@ Endpoint de procesamiento SAP.
 """
 
 import logging
+import re
 from typing import Dict
 from datetime import datetime
 from fastapi import FastAPI, Depends, HTTPException, Path, status
 
+from src.database.connection import get_db_connection_context
+from src.database.repositories.pedido_repository import PedidoRepository
+from src.database.repositories.pedido_sap_procesamiento_repository import PedidoSAPProcesamientoRepository
 from src.security.jwt_auth import verify_jwt_token, require_permission
 from src.models import ProcesamientoSAPResponse, ProductoSAPProcesamientoItem, EstadisticasProcesamientoSAP
 
@@ -26,11 +30,6 @@ def register_sap_endpoints(app: FastAPI):
     ):
         """Obtiene información de procesamiento SAP de un pedido."""
         try:
-            import re
-            from src.database.connection import get_db_connection_context
-            from src.database.repositories.pedido_repository import PedidoRepository
-            from src.database.repositories.pedido_sap_procesamiento_repository import PedidoSAPProcesamientoRepository
-            
             uuid_pattern = re.compile(r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$')
             es_uuid = uuid_pattern.match(pedido_id.strip()) is not None
             

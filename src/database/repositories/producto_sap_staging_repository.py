@@ -373,7 +373,3 @@ class ProductoSAPStagingRepository:
         finally:
             cursor.close()
 
-
-
-
-

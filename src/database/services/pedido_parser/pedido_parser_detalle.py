@@ -10,7 +10,7 @@ import pandas as pd
 import io
 from typing import Dict, Any, List, Optional
 
-from .pedido_parser_utils import PedidoParserUtils
+from .pedido_parser_utils import PedidoParserUtils, normalize_column_name
 
 logger = logging.getLogger(__name__)
 
@@ -179,7 +179,7 @@ class PedidoParserDetalle:
         columnas_producto = {}
         
         for col_idx, col_name in enumerate(df_detalle.columns):
-            col_lower = str(col_name).lower().strip()
+            col_lower = normalize_column_name(col_name)
             
             for campo_bd, posibles_nombres in self.utils.MAPEO_COLUMNAS_PRODUCTO.items():
                 if any(nombre in col_lower for nombre in posibles_nombres):

@@ -3,14 +3,25 @@ Utilidades compartidas para parsers de pedido.
 
 CHANGELOG:
 - 2026-01-23: Extraído de pedido_parser.py
+- 2026-01-27: Función normalize_column_name para evitar repetir str(x).strip().lower()
 """
 
 import logging
 import pandas as pd
 import re
-from typing import Dict, Any, List, Optional
+from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
+
+
+def normalize_column_name(value: Any) -> str:
+    """
+    Normaliza un nombre de columna/celda para comparación: string, sin espacios, minúsculas.
+    None/NaN devuelve "".
+    """
+    if value is None or (hasattr(pd, "isna") and pd.isna(value)):
+        return ""
+    return str(value).strip().lower()
 
 
 class PedidoParserUtils:
@@ -166,7 +177,7 @@ class PedidoParserUtils:
                 keywords = col_normalized.split()
             
             for idx_col in row.index:
-                idx_col_lower = str(idx_col).lower().strip()
+                idx_col_lower = normalize_column_name(idx_col)
                 if all(keyword in idx_col_lower for keyword in keywords):
                     return idx_col
         
