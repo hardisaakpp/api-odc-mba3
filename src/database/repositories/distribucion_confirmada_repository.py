@@ -516,8 +516,13 @@ class DistribucionConfirmadaRepository:
                 cantidad_asignada = row[5]
                 diferencia_cantidad = cantidad_asignada - cantidad_confirmada
                 
-                subtotal_original = float(row[9]) if row[9] is not None else None
-                subtotal_ajustado = float(row[10]) if row[10] is not None else None
+                # Índices según el SELECT:
+                # 6: costo_unitario_original
+                # 7: costo_unitario_ajustado
+                # 8: subtotal_original
+                # 9: subtotal_ajustado
+                subtotal_original = float(row[8]) if row[8] is not None else None
+                subtotal_ajustado = float(row[9]) if row[9] is not None else None
                 diferencia_costo = (
                     subtotal_ajustado - subtotal_original 
                     if subtotal_ajustado is not None and subtotal_original is not None 
@@ -532,8 +537,8 @@ class DistribucionConfirmadaRepository:
                     "cantidad_confirmada": cantidad_confirmada,
                     "cantidad_asignada": cantidad_asignada,
                     "diferencia_cantidad": diferencia_cantidad,
-                    "costo_unitario_original": float(row[7]) if row[7] is not None else None,
-                    "costo_unitario_ajustado": float(row[8]) if row[8] is not None else None,
+                    "costo_unitario_original": float(row[6]) if row[6] is not None else None,
+                    "costo_unitario_ajustado": float(row[7]) if row[7] is not None else None,
                     "subtotal_original": subtotal_original,
                     "subtotal_ajustado": subtotal_ajustado,
                     "diferencia_costo": diferencia_costo
