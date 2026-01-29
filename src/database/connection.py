@@ -42,7 +42,9 @@ def get_db_connection() -> pyodbc.Connection:
                 f"SERVER={SQL_SERVER_SERVER};"
                 f"DATABASE={SQL_SERVER_DATABASE};"
                 f"UID={SQL_SERVER_UID};"
-                f"PWD={SQL_SERVER_PWD}"
+                f"PWD={SQL_SERVER_PWD};"
+                f"Encrypt=yes;"
+                f"TrustServerCertificate=yes;"
             )
         else:
             # Autenticación Windows (Trusted Connection)
@@ -51,6 +53,8 @@ def get_db_connection() -> pyodbc.Connection:
                 f"SERVER={SQL_SERVER_SERVER};"
                 f"DATABASE={SQL_SERVER_DATABASE};"
                 f"Trusted_Connection=yes;"
+                f"Encrypt=yes;"
+                f"TrustServerCertificate=yes;"
             )
         
         logger.debug(f"Conectando a SQL Server: {SQL_SERVER_SERVER}/{SQL_SERVER_DATABASE}")
@@ -110,7 +114,9 @@ def get_sap_db_connection() -> pyodbc.Connection:
                 f"SERVER={SQL_SERVER_SAP_SERVER};"
                 f"DATABASE={SQL_SERVER_SAP_DATABASE};"
                 f"UID={SQL_SERVER_SAP_UID};"
-                f"PWD={SQL_SERVER_SAP_PWD}"
+                f"PWD={SQL_SERVER_SAP_PWD};"
+                f"Encrypt=yes;"
+                f"TrustServerCertificate=yes;"
             )
         else:
             # Autenticación Windows (Trusted Connection)
@@ -119,6 +125,8 @@ def get_sap_db_connection() -> pyodbc.Connection:
                 f"SERVER={SQL_SERVER_SAP_SERVER};"
                 f"DATABASE={SQL_SERVER_SAP_DATABASE};"
                 f"Trusted_Connection=yes;"
+                f"Encrypt=yes;"
+                f"TrustServerCertificate=yes;"
             )
         
         logger.debug(f"Conectando a SQL Server SAP: {SQL_SERVER_SAP_SERVER}/{SQL_SERVER_SAP_DATABASE}")
@@ -186,6 +194,8 @@ def get_db_connection_context() -> Iterator[pyodbc.Connection]:
                 f"MARS_Connection=yes;"  # Múltiples result sets activos
                 f"Connection Timeout=10;"  # Timeout de conexión (10 segundos)
                 f"Command Timeout=30;"  # Timeout de comandos (30 segundos)
+                f"Encrypt=yes;"
+                f"TrustServerCertificate=yes;"
             )
         else:
             connection_string = (
@@ -196,6 +206,8 @@ def get_db_connection_context() -> Iterator[pyodbc.Connection]:
                 f"MARS_Connection=yes;"
                 f"Connection Timeout=10;"
                 f"Command Timeout=30;"
+                f"Encrypt=yes;"
+                f"TrustServerCertificate=yes;"
             )
         
         logger.debug(f"[Context Manager] Creando conexión a {SQL_SERVER_SERVER}/{SQL_SERVER_DATABASE}")
@@ -259,6 +271,8 @@ def get_sap_db_connection_context() -> Iterator[pyodbc.Connection]:
                 f"MARS_Connection=yes;"
                 f"Connection Timeout=10;"
                 f"Command Timeout=30;"
+                f"Encrypt=yes;"
+                f"TrustServerCertificate=yes;"
             )
         else:
             connection_string = (
@@ -269,6 +283,8 @@ def get_sap_db_connection_context() -> Iterator[pyodbc.Connection]:
                 f"MARS_Connection=yes;"
                 f"Connection Timeout=10;"
                 f"Command Timeout=30;"
+                f"Encrypt=yes;"
+                f"TrustServerCertificate=yes;"
             )
         
         logger.debug(f"[Context Manager SAP] Creando conexión a {SQL_SERVER_SAP_SERVER}/{SQL_SERVER_SAP_DATABASE}")
