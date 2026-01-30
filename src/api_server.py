@@ -23,6 +23,10 @@ import logging
 import uvicorn
 import sys
 from pathlib import Path
+
+from dotenv import load_dotenv
+load_dotenv("/opt/odc-sap/.env")
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 

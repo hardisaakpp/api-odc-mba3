@@ -1,16 +1,16 @@
 """
-Configuración y constantes para la API de consultas MBA3.
+Configuracion y constantes para la API de consultas MBA3.
 """
 
 import os
 from pathlib import Path
 from dotenv import load_dotenv
 
-# Configuración de límites
-MAX_QUERY_LENGTH = 5000  # Longitud máxima de consulta en caracteres
+# Configuracion de li­mites
+MAX_QUERY_LENGTH = 5000  # Longitud maxima de consulta en caracteres
 
-# Ruta para guardar la última consulta (en la raíz del proyecto)
-# Si api_server.py está en src/, subir un nivel para llegar a la raíz
+# Ruta para guardar la Ãºltima consulta (en la raÃ­z del proyecto)
+# Si api_server.py estÃ¡ en src/, subir un nivel para llegar a la raÃ­z
 _current_file = Path(__file__).resolve()
 if _current_file.parent.name == "src":
     PROJECT_ROOT = _current_file.parent.parent
@@ -19,24 +19,24 @@ else:
 
 QUERY_STORAGE_FILE = PROJECT_ROOT / "ultima_consulta.json"
 
-# Ruta estándar para guardar resultados de consultas MBA3
-# Siempre en la raíz del proyecto
+# Ruta estÃ¡ndar para guardar resultados de consultas MBA3
+# Siempre en la raÃ­z del proyecto
 RESULTADO_API_FILE = PROJECT_ROOT / "resultado_api.json"
 
 # Cargar variables de entorno desde .env si existe
 env_path = Path(__file__).resolve().parent.parent / ".env"
 if env_path.exists():
     load_dotenv(env_path)
-    # print(f"✅ Variables de entorno cargadas desde: {env_path}")
+    # print(f"âœ… Variables de entorno cargadas desde: {env_path}")
 else:
-    # print(f"⚠️ Archivo .env no encontrado en: {env_path}")
+    # print(f"âš ï¸ Archivo .env no encontrado en: {env_path}")
     pass
 
 # ============================================================================
-# Configuración de MBA3
+# ConfiguraciÃ³n de MBA3
 # ============================================================================
-# ⚠️ IMPORTANTE: Configurar en .env (sin defaults por seguridad)
-# En desarrollo puedes dejar vacío, pero en producción es obligatorio
+# âš ï¸ IMPORTANTE: Configurar en .env (sin defaults por seguridad)
+# En desarrollo puedes dejar vacÃ­o, pero en producciÃ³n es obligatorio
 
 MBA3_BASE_URL = os.getenv("MBA3_BASE_URL", "")
 MBA3_SERVICE_CODE = os.getenv("MBA3_CODIGO", os.getenv("MBA3_SERVICE_CODE", ""))
@@ -45,14 +45,14 @@ MBA3_DIGEST_USERNAME = os.getenv("MBA3_DIGEST_USERNAME", MBA3_SERVICE_CODE)
 MBA3_DIGEST_PASSWORD = os.getenv("MBA3_DIGEST_PASSWORD", MBA3_SERVICE_PASSWORD)
 
 # ============================================================================
-# Configuración de SQL Server (Principal - para almacenar datos)
+# ConfiguraciÃ³n de SQL Server (Principal - para almacenar datos)
 # ============================================================================
 # Para usar variables de entorno, configura en el archivo .env:
 # - SQL_SERVER_DRIVER={ODBC Driver 17 for SQL Server}
 # - SQL_SERVER_SERVER=tu_servidor
 # - SQL_SERVER_DATABASE=tu_base_de_datos
 # - SQL_SERVER_UID=tu_usuario (opcional para Windows Auth)
-# - SQL_SERVER_PWD=tu_contraseña (opcional para Windows Auth)
+# - SQL_SERVER_PWD=tu_contraseÃ±a (opcional para Windows Auth)
 # - ENABLE_SQL_SERVER_STORAGE=true
 
 SQL_SERVER_DRIVER = os.getenv("SQL_SERVER_DRIVER", "{ODBC Driver 17 for SQL Server}")
@@ -65,7 +65,7 @@ SQL_SERVER_PWD = os.getenv("SQL_SERVER_PWD", "")
 ENABLE_SQL_SERVER_STORAGE = os.getenv("ENABLE_SQL_SERVER_STORAGE", "true").lower() == "true"
 
 # ============================================================================
-# Configuración de SQL Server SAP (para consultas OPENQUERY)
+# ConfiguraciÃ³n de SQL Server SAP (para consultas OPENQUERY)
 # ============================================================================
 # Este servidor es diferente y se usa SOLO para ejecutar consultas OPENQUERY a SAP
 # Debe tener el servidor vinculado [MYHANADB] configurado
@@ -78,27 +78,27 @@ SQL_SERVER_SAP_UID = os.getenv("SQL_SERVER_SAP_UID", SQL_SERVER_UID)
 SQL_SERVER_SAP_PWD = os.getenv("SQL_SERVER_SAP_PWD", SQL_SERVER_PWD)
 
 # ============================================================================
-# Configuración de SAP (HANA)
+# ConfiguraciÃ³n de SAP (HANA)
 # ============================================================================
-# Configuración para consultas a SAP usando OPENQUERY desde SQL Server
+# ConfiguraciÃ³n para consultas a SAP usando OPENQUERY desde SQL Server
 # El servidor vinculado debe estar configurado en SQL Server como [MYHANADB]
 
 # Nombre del servidor vinculado en SQL Server (configurado con OPENQUERY)
 SAP_LINKED_SERVER = os.getenv("SAP_LINKED_SERVER", "MYHANADB")
 
 # Base de datos y esquema de SAP
-# Configurar en .env para no exponer nombres en el código
+# Configurar en .env para no exponer nombres en el cÃ³digo
 SAP_DATABASE = os.getenv("SAP_DATABASE", "")
 SAP_SCHEMA = os.getenv("SAP_SCHEMA", "")
 
 # Habilitar consultas a SAP (poner a False para deshabilitar)
 ENABLE_SAP_QUERIES = os.getenv("ENABLE_SAP_QUERIES", "true").lower() == "true"
 
-# Tiempo de vida del cache en días (cuántos días antes de re-consultar SAP)
+# Tiempo de vida del cache en dÃ­as (cuÃ¡ntos dÃ­as antes de re-consultar SAP)
 SAP_CACHE_DAYS = int(os.getenv("SAP_CACHE_DAYS", "30"))
 
 # ============================================================================
-# Configuración de SAP Service Layer (API REST)
+# ConfiguraciÃ³n de SAP Service Layer (API REST)
 # ============================================================================
 # Contrato validado con Postman: Login, PurchaseOrders, InventoryTransferRequests (puerto 50001).
 # No hardcodear credenciales en servicios; usar variables de entorno.
@@ -115,61 +115,61 @@ SAP_SERVICE_LAYER_USERNAME = SAP_USER
 SAP_SERVICE_LAYER_PASSWORD = SAP_PASSWORD
 SAP_SERVICE_LAYER_DATABASE = SAP_COMPANY_DB
 
-# Habilitar envío de ODC a SAP Service Layer
+# Habilitar envÃ­o de ODC a SAP Service Layer
 ENABLE_SAP_SERVICE_LAYER = os.getenv("ENABLE_SAP_SERVICE_LAYER", "false").lower() == "true"
 
 # Timeout para requests a Service Layer (segundos)
 SAP_SERVICE_LAYER_TIMEOUT = int(os.getenv("SAP_SERVICE_LAYER_TIMEOUT", "30"))
 
-# Verificación SSL (deshabilitar solo para desarrollo/pruebas con certificados autofirmados)
-# ⚠️ ADVERTENCIA: Deshabilitar verificación SSL es inseguro. Solo usar en desarrollo/pruebas.
+# VerificaciÃ³n SSL (deshabilitar solo para desarrollo/pruebas con certificados autofirmados)
+# âš ï¸ ADVERTENCIA: Deshabilitar verificaciÃ³n SSL es inseguro. Solo usar en desarrollo/pruebas.
 SAP_SERVICE_LAYER_VERIFY_SSL = os.getenv("SAP_SERVICE_LAYER_VERIFY_SSL", "true").lower() == "true"
 
 # Bodega origen para InventoryTransferRequests (FromWarehouse).
-# ⚠️ REGLA: Solo se usa como FALLBACK si no hay codigo_bodega en la OC (que viene de Excel).
+# âš ï¸ REGLA: Solo se usa como FALLBACK si no hay codigo_bodega en la OC (que viene de Excel).
 # Prioridad: 1) codigo_bodega de la OC (desde Excel), 2) SAP_ST_FROM_WAREHOUSE (fallback).
-# Si está vacío y no hay bodega en la OC, las ITR no se crearán.
+# Si estÃ¡ vacÃ­o y no hay bodega en la OC, las ITR no se crearÃ¡n.
 SAP_ST_FROM_WAREHOUSE = os.getenv("SAP_ST_FROM_WAREHOUSE", "")
 
 # ============================================================================
-# Configuración de Seguridad (Opcional)
+# ConfiguraciÃ³n de Seguridad (Opcional)
 # ============================================================================
-# Todas las funcionalidades de seguridad están DESHABILITADAS por defecto
-# Actívalas configurando las variables a "true" en .env
+# Todas las funcionalidades de seguridad estÃ¡n DESHABILITADAS por defecto
+# ActÃ­valas configurando las variables a "true" en .env
 
-# Autenticación mediante API Keys
+# AutenticaciÃ³n mediante API Keys
 ENABLE_AUTH = os.getenv("ENABLE_AUTH", "false").lower() == "true"
 API_KEY = os.getenv("API_KEY", "")  # API Key requerida si ENABLE_AUTH=true
 
-# Autenticación JWT (integración con SCNexus.Core)
-# ⚠️ DEBE SER LA MISMA CLAVE DEL CORE
+# AutenticaciÃ³n JWT (integraciÃ³n con SCNexus.Core)
+# âš ï¸ DEBE SER LA MISMA CLAVE DEL CORE
 # Configura estas variables en .env para que coincidan con appsettings.json del Core
 JWT_SECRET = os.getenv('JWT_SECRET', 'clave_super_secreta_para_jwt_12345')
 JWT_ISSUER = os.getenv('JWT_ISSUER', 'SCNexus.Core')
 JWT_AUDIENCE = os.getenv('JWT_AUDIENCE', 'SCNexus.Users')
 
 # ============================================================================
-# Configuración de SCNexus.Core API (Active Directory)
+# ConfiguraciÃ³n de SCNexus.Core API (Active Directory)
 # ============================================================================
 # URL base del Core para llamadas a la API de permisos y otros servicios
-# El Core gestiona la integración con Active Directory y asigna permisos
-# a usuarios y roles de AD según las páginas a las que pueden tener acceso
+# El Core gestiona la integraciÃ³n con Active Directory y asigna permisos
+# a usuarios y roles de AD segÃºn las pÃ¡ginas a las que pueden tener acceso
 CORE_API_URL = os.getenv("CORE_API_URL", "http://192.168.2.12:8080")
 CORE_API_TIMEOUT = int(os.getenv("CORE_API_TIMEOUT", "30"))  # Timeout en segundos
 
-# Habilitar autenticación JWT (requiere token válido del Core)
-# Cuando está habilitado, los endpoints protegidos requerirán JWT válido
+# Habilitar autenticaciÃ³n JWT (requiere token vÃ¡lido del Core)
+# Cuando estÃ¡ habilitado, los endpoints protegidos requerirÃ¡n JWT vÃ¡lido
 ENABLE_JWT_AUTH = os.getenv("ENABLE_JWT_AUTH", "false").lower() == "true"
 
-# Rate Limiting (límite de requests)
+# Rate Limiting (lÃ­mite de requests)
 ENABLE_RATE_LIMITING = os.getenv("ENABLE_RATE_LIMITING", "false").lower() == "true"
-RATE_LIMIT_DEFAULT = os.getenv("RATE_LIMIT_DEFAULT", "100/minute")  # Límite por defecto
+RATE_LIMIT_DEFAULT = os.getenv("RATE_LIMIT_DEFAULT", "100/minute")  # LÃ­mite por defecto
 
 # CORS Restrictivo
 ENABLE_CORS_RESTRICTION = os.getenv("ENABLE_CORS_RESTRICTION", "false").lower() == "true"
 CORS_ALLOWED_ORIGINS = os.getenv("CORS_ALLOWED_ORIGINS", "*").split(",")  # Lista separada por comas
 
-# Ocultar Swagger en producción
+# Ocultar Swagger en producciÃ³n
 ENVIRONMENT = os.getenv("ENVIRONMENT", "development")  # development, staging, production
 HIDE_SWAGGER_IN_PROD = os.getenv("HIDE_SWAGGER_IN_PROD", "true").lower() == "true"
 
@@ -179,42 +179,45 @@ HIDE_SWAGGER_IN_PROD = os.getenv("HIDE_SWAGGER_IN_PROD", "true").lower() == "tru
 import logging
 logger = logging.getLogger(__name__)
 
-# Validar configuraciones críticas en producción
+# Validar configuraciones crÃ­ticas en producciÃ³n
 if ENVIRONMENT == "production":
     # Validar MBA3
     if not MBA3_BASE_URL:
         raise ValueError(
-            "❌ MBA3_BASE_URL es obligatorio en producción. "
+            "âŒ MBA3_BASE_URL es obligatorio en producciÃ³n. "
             "Configura en .env"
         )
     if not MBA3_SERVICE_CODE:
         raise ValueError(
-            "❌ MBA3_SERVICE_CODE (o MBA3_CODIGO) es obligatorio en producción. "
+            "âŒ MBA3_SERVICE_CODE (o MBA3_CODIGO) es obligatorio en producciÃ³n. "
             "Configura en .env"
         )
     if not MBA3_SERVICE_PASSWORD:
         raise ValueError(
-            "❌ MBA3_SERVICE_PASSWORD (o MBA3_PWD) es obligatorio en producción. "
+            "âŒ MBA3_SERVICE_PASSWORD (o MBA3_PWD) es obligatorio en producciÃ³n. "
             "Configura en .env"
         )
     
     # Validar JWT_SECRET si JWT está habilitado
     if ENABLE_JWT_AUTH:
-        if not JWT_SECRET or JWT_SECRET == 'clave_super_secreta_para_jwt_12345':
+        if not JWT_SECRET:
             raise ValueError(
-                "❌ JWT_SECRET debe configurarse en .env en producción con un valor seguro. "
-                "No usar la clave por defecto. Genera una con: "
-                "python -c \"import secrets; print(secrets.token_urlsafe(64))\""
+                "JWT_SECRET debe configurarse en .env en produccion. No puede estar vacio."
+            )
+        if JWT_SECRET == 'clave_super_secreta_para_jwt_12345':
+            logger.warning(
+                "[TEMPORAL] JWT_SECRET usa valor por defecto (compatibilidad con Core). "
+                "Cuando Core migre a secret seguro, actualizar mba3-consultas."
             )
     
     # Advertencia sobre SSL deshabilitado
     if ENABLE_SAP_SERVICE_LAYER and not SAP_SERVICE_LAYER_VERIFY_SSL:
         logger.warning("=" * 70)
-        logger.warning("⚠️ ADVERTENCIA DE SEGURIDAD EN PRODUCCIÓN")
+        logger.warning("âš ï¸ ADVERTENCIA DE SEGURIDAD EN PRODUCCIÃ“N")
         logger.warning("   SAP_SERVICE_LAYER_VERIFY_SSL=false")
-        logger.warning("   La verificación SSL está DESHABILITADA")
-        logger.warning("   Esto es INSEGURO en producción")
-        logger.warning("   Considera usar certificados válidos")
+        logger.warning("   La verificaciÃ³n SSL estÃ¡ DESHABILITADA")
+        logger.warning("   Esto es INSEGURO en producciÃ³n")
+        logger.warning("   Considera usar certificados vÃ¡lidos")
         logger.warning("=" * 70)
 
 # Warnings en desarrollo
@@ -224,45 +227,45 @@ elif ENVIRONMENT == "development":
     if not MBA3_BASE_URL or not MBA3_SERVICE_CODE or not MBA3_SERVICE_PASSWORD:
         if not warnings_found:
             logger.warning("=" * 70)
-            logger.warning("⚠️ CONFIGURACIÓN INCOMPLETA (Desarrollo)")
+            logger.warning("âš ï¸ CONFIGURACIÃ“N INCOMPLETA (Desarrollo)")
             warnings_found = True
         logger.warning("   Credenciales MBA3 no configuradas en .env")
     
     if ENABLE_JWT_AUTH and (not JWT_SECRET or JWT_SECRET == 'clave_super_secreta_para_jwt_12345'):
         if not warnings_found:
             logger.warning("=" * 70)
-            logger.warning("⚠️ CONFIGURACIÓN INCOMPLETA (Desarrollo)")
+            logger.warning("âš ï¸ CONFIGURACIÃ“N INCOMPLETA (Desarrollo)")
             warnings_found = True
         logger.warning("   JWT_SECRET usando valor por defecto (inseguro)")
     
     if ENABLE_SAP_SERVICE_LAYER and not SAP_SERVICE_LAYER_VERIFY_SSL:
         if not warnings_found:
             logger.warning("=" * 70)
-            logger.warning("⚠️ CONFIGURACIÓN INCOMPLETA (Desarrollo)")
+            logger.warning("âš ï¸ CONFIGURACIÃ“N INCOMPLETA (Desarrollo)")
             warnings_found = True
         logger.warning("   SAP SSL verification deshabilitada")
     
     if warnings_found:
-        logger.warning("   Esto está OK para desarrollo, pero corrige en producción")
+        logger.warning("   Esto estÃ¡ OK para desarrollo, pero corrige en producciÃ³n")
         logger.warning("=" * 70)
 
 # ============================================================================
-# Configuración de Migración Automática
+# ConfiguraciÃ³n de MigraciÃ³n AutomÃ¡tica
 # ============================================================================
-# Habilitar migración automática (ejecuta /migrar cada N minutos)
+# Habilitar migraciÃ³n automÃ¡tica (ejecuta /migrar cada N minutos)
 ENABLE_AUTO_MIGRATE = os.getenv("ENABLE_AUTO_MIGRATE", "true").lower() == "true"
 
-# Intervalo en minutos entre ejecuciones automáticas
+# Intervalo en minutos entre ejecuciones automÃ¡ticas
 # Configurar en .env: AUTO_MIGRATE_INTERVAL_MINUTES=15
 AUTO_MIGRATE_INTERVAL_MINUTES = int(os.getenv("AUTO_MIGRATE_INTERVAL_MINUTES", "15"))
 
-# Días hacia atrás para el filtro de fecha en migración (automática y manual)
-# Ambos procesos (automático y manual) usan la misma configuración
-# Por defecto: 365 días (1 año) desde hoy
+# DÃ­as hacia atrÃ¡s para el filtro de fecha en migraciÃ³n (automÃ¡tica y manual)
+# Ambos procesos (automÃ¡tico y manual) usan la misma configuraciÃ³n
+# Por defecto: 365 dÃ­as (1 aÃ±o) desde hoy
 # Configurable en .env con MIGRATE_DATE_FILTER_DAYS
 # 
-# Compatibilidad hacia atrás: Si existe AUTO_MIGRATE_DATE_FILTER_DAYS o 
-# MANUAL_MIGRATE_DATE_FILTER_DAYS en .env, se usará ese valor.
+# Compatibilidad hacia atrÃ¡s: Si existe AUTO_MIGRATE_DATE_FILTER_DAYS o 
+# MANUAL_MIGRATE_DATE_FILTER_DAYS en .env, se usarÃ¡ ese valor.
 # Si no, se usa MIGRATE_DATE_FILTER_DAYS o el valor por defecto (365).
 _migrate_days = os.getenv("MIGRATE_DATE_FILTER_DAYS") or \
                 os.getenv("AUTO_MIGRATE_DATE_FILTER_DAYS") or \
@@ -271,33 +274,33 @@ _migrate_days = os.getenv("MIGRATE_DATE_FILTER_DAYS") or \
 MIGRATE_DATE_FILTER_DAYS = int(_migrate_days)
 
 # ============================================================================
-# Configuración de Celery y Tareas Automatizadas
+# ConfiguraciÃ³n de Celery y Tareas Automatizadas
 # ============================================================================
-# ⚠️ Configurar en .env para personalizar, o usar defaults para desarrollo
+# âš ï¸ Configurar en .env para personalizar, o usar defaults para desarrollo
 
 # URL de Redis para Celery (broker y backend)
 REDIS_URL = os.getenv('REDIS_URL', 'redis://localhost:6379/0')
 
-# Horario de sincronización de productos (hora en formato 24h)
+# Horario de sincronizaciÃ³n de productos (hora en formato 24h)
 SYNC_PRODUCTOS_HOUR = int(os.getenv('SYNC_PRODUCTOS_HOUR', '3'))  # Default: 3:00 AM
 SYNC_PRODUCTOS_MINUTE = int(os.getenv('SYNC_PRODUCTOS_MINUTE', '0'))  # Default: minuto 0
 
 # ============================================================================
-# Configuración de Notificaciones por Email
+# ConfiguraciÃ³n de Notificaciones por Email
 # ============================================================================
-# Habilitar notificaciones por correo electrónico
+# Habilitar notificaciones por correo electronico
 ENABLE_EMAIL_NOTIFICATIONS = os.getenv("ENABLE_EMAIL_NOTIFICATIONS", "true").lower() == "true"
 
-# Configuración SMTP (Outlook)
+# ConfiguraciÃ³n SMTP (Outlook)
 EMAIL_SMTP_SERVER = os.getenv("EMAIL_SMTP_SERVER", "mabeltrading-com-ec.mail.protection.outlook.com")
 EMAIL_SMTP_PORT = int(os.getenv("EMAIL_SMTP_PORT", "25"))  # Puerto 25 para relay interno (sin TLS)
 EMAIL_SMTP_USER = os.getenv("EMAIL_SMTP_USER", "")
-EMAIL_SMTP_PASSWORD = os.getenv("EMAIL_SMTP_PASSWORD", "")  # Vacío para relay interno sin autenticación
+EMAIL_SMTP_PASSWORD = os.getenv("EMAIL_SMTP_PASSWORD", "")  # VacÃ­o para relay interno sin autenticaciÃ³n
 
 # Direcciones de correo
 EMAIL_FROM = os.getenv("EMAIL_FROM", "integrationsap@mabeltrading.com.ec")
 # Nombre del remitente para los correos
-EMAIL_FROM_NAME = os.getenv("EMAIL_FROM_NAME", "INTEGRACIÓN SAP")
+EMAIL_FROM_NAME = os.getenv("EMAIL_FROM_NAME", "INTEGRACIÃ“N SAP")
 
 # EMAIL_TO - SEGMENTADO POR TIPO DE USUARIO
 # Usuario Principal: Operaciones/Despachos (recibe notificaciones de NUEVOS DESPACHOS)
@@ -308,18 +311,18 @@ EMAIL_TO_OPERACIONES = [email.strip() for email in _email_operaciones.split(",")
 _email_homologaciones = os.getenv("EMAIL_TO_HOMOLOGACIONES", "cortiz@mabeltrading.com.ec")
 EMAIL_TO_HOMOLOGACIONES = [email.strip() for email in _email_homologaciones.split(",") if email.strip()]
 
-# Usuario Técnico: Errores y advertencias del sistema (recibe notificaciones técnicas)
+# Usuario TÃ©cnico: Errores y advertencias del sistema (recibe notificaciones tÃ©cnicas)
 _email_tecnicos = os.getenv("EMAIL_TO_TECNICOS", "cortiz@mabeltrading.com.ec")
 EMAIL_TO_TECNICOS = [email.strip() for email in _email_tecnicos.split(",") if email.strip()]
 
-# EMAIL_TO (legacy - para compatibilidad con código existente)
+# EMAIL_TO (legacy - para compatibilidad con cÃ³digo existente)
 # Por defecto usa EMAIL_TO_OPERACIONES
 _email_to_str = os.getenv("EMAIL_TO", _email_operaciones)
 EMAIL_TO = [email.strip() for email in _email_to_str.split(",") if email.strip()]
 
 # Email del proveedor para pruebas (FASE 6)
 # Durante fase de pruebas, se usa este email para notificaciones de ODC
-# TODO: En producción, obtener desde tabla cliente usando CardCode
+# TODO: En producciÃ³n, obtener desde tabla cliente usando CardCode
 EMAIL_PROVEEDOR_PRUEBAS = os.getenv("EMAIL_PROVEEDOR_PRUEBAS", "cortiz@mabeltrading.com.ec")
 
 # Email de MABEL TRADING para notificaciones de confirmacion de pedidos
@@ -327,12 +330,12 @@ EMAIL_PROVEEDOR_PRUEBAS = os.getenv("EMAIL_PROVEEDOR_PRUEBAS", "cortiz@mabeltrad
 EMAIL_MABEL_TRADING = os.getenv("EMAIL_MABEL_TRADING", "cortiz@mabeltrading.com.ec")
 
 
-# Configuración de advertencias técnicas
+# ConfiguraciÃ³n de advertencias tÃ©cnicas
 # Porcentaje del time limit para enviar advertencia
 EMAIL_WARNING_TIME_LIMIT_PERCENT = int(os.getenv("EMAIL_WARNING_TIME_LIMIT_PERCENT", "80"))
-# Número de facturas que se considera "alto" para advertir
+# NÃºmero de facturas que se considera "alto" para advertir
 EMAIL_WARNING_HIGH_VOLUME_THRESHOLD = int(os.getenv("EMAIL_WARNING_HIGH_VOLUME_THRESHOLD", "500"))
-# Número de fallos en 24h para advertir
+# NÃºmero de fallos en 24h para advertir
 EMAIL_WARNING_FAILURES_THRESHOLD = int(os.getenv("EMAIL_WARNING_FAILURES_THRESHOLD", "3"))
 
 # ============================================================================
@@ -351,7 +354,7 @@ MBA3_QUERY_PREDEFINIDA = (
     "AND ObjDatosFactura IS NOT NULL"
 )
 
-# Query SQL predefinida para consultar documentos de remisión sin detalles
+# Query SQL predefinida para consultar documentos de remisiÃ³n sin detalles
 # Usada en el endpoint /remisiones/consultar
 # Estos documentos no tienen ObjDatosFactura ni detalles asociados
 MBA3_QUERY_REMISIONES = (
@@ -362,7 +365,7 @@ MBA3_QUERY_REMISIONES = (
     "WHERE TIPO_DOCUMENTO='REM' AND CONFIRMADO='false' AND Remision_Facturada='false' "
     "AND ObjDatosFactura IS NULL AND FACTURA_IMPRESA='false' AND ANULADA='false'"
 )# ============================================================================
-# Configuración de Staging de Productos
+# ConfiguraciÃ³n de Staging de Productos
 # ============================================================================
 # Activar staging para productos (maestros MBA3 y SAP)
 USE_PRODUCT_STAGING = os.getenv("USE_PRODUCT_STAGING", "true").lower() == "true"# Permitir fallback a ERP si staging falla (solo en desarrollo)
