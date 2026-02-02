@@ -45,7 +45,7 @@ def register_redistribucion_endpoints(app: FastAPI):
         pedido_id: str = Path(..., description="UUID del pedido"),
         version: Optional[int] = Query(None, ge=1, description="Versión específica (si no se especifica, obtiene la última)"),
         user: Dict = Depends(verify_jwt_token),
-        _: None = Depends(require_permission('mba3-consultas.facturas.view'))
+        _: None = Depends(require_permission('mabel.view'))
     ):
         """
         Obtiene la distribución confirmada de un pedido.
@@ -149,7 +149,7 @@ def register_redistribucion_endpoints(app: FastAPI):
         pedido_id: str = Path(..., description="UUID del pedido"),
         request_body: RedistribuirPedidoRequest = Body(..., description="Datos de la redistribución"),
         user: Dict = Depends(verify_jwt_token),
-        _: None = Depends(require_permission('mba3-consultas.proceso.execute'))
+        _: None = Depends(require_permission('mabel.view'))
     ):
         """
         Crea una nueva redistribución para un pedido (OBLIGATORIO - Fase 4).
@@ -324,7 +324,7 @@ def register_redistribucion_endpoints(app: FastAPI):
         pedido_id: str = Path(..., description="UUID del pedido"),
         request_body: ConfirmarRedistribucionRequest = Body(..., description="Datos de confirmación"),
         user: Dict = Depends(verify_jwt_token),
-        _: None = Depends(require_permission('mba3-consultas.proceso.execute'))
+        _: None = Depends(require_permission('mabel.view'))
     ):
         """
         Confirma una redistribución, cambiando su estado a 'CONFIRMADO'.
@@ -514,7 +514,7 @@ def register_redistribucion_endpoints(app: FastAPI):
         pedido_id: str = Path(..., description="UUID del pedido"),
         version: Optional[int] = Query(None, ge=1, description="Versión específica (si no se especifica, analiza la última)"),
         user: Dict = Depends(verify_jwt_token),
-        _: None = Depends(require_permission('mba3-consultas.facturas.view'))
+        _: None = Depends(require_permission('mabel.view'))
     ):
         """
         Obtiene el reporte de diferencias de una redistribución.
@@ -617,7 +617,7 @@ def register_redistribucion_endpoints(app: FastAPI):
         pedido_id: str = Path(..., description="UUID del pedido"),
         version: Optional[int] = Query(None, ge=1, description="Versión específica (si no se especifica, analiza la última)"),
         user: Dict = Depends(verify_jwt_token),
-        _: None = Depends(require_permission('mba3-consultas.facturas.view'))
+        _: None = Depends(require_permission('mabel.view'))
     ):
         """
         Exporta el reporte de diferencias a Excel.
@@ -726,7 +726,7 @@ def register_redistribucion_endpoints(app: FastAPI):
         numero_pedido: str = Path(..., description="Número del pedido"),
         request_body: GuardarBorradorRequest = Body(..., description="Datos del borrador de redistribución"),
         user: Dict = Depends(verify_jwt_token),
-        _: None = Depends(require_permission('mba3-consultas.proceso.execute'))
+        _: None = Depends(require_permission('mabel.view'))
     ):
         """
         Guarda un borrador de redistribución.
@@ -869,7 +869,7 @@ def register_redistribucion_endpoints(app: FastAPI):
     async def obtener_borrador_redistribucion(
         numero_pedido: str = Path(..., description="Número del pedido"),
         user: Dict = Depends(verify_jwt_token),
-        _: None = Depends(require_permission('mba3-consultas.facturas.view'))
+        _: None = Depends(require_permission('mabel.view'))
     ):
         """
         Obtiene el borrador de redistribución guardado.
@@ -985,7 +985,7 @@ def register_redistribucion_endpoints(app: FastAPI):
     async def obtener_datos_iniciales_redistribucion(
         numero_pedido: str = Path(..., description="Número del pedido"),
         user: Dict = Depends(verify_jwt_token),
-        _: None = Depends(require_permission('mba3-consultas.facturas.view'))
+        _: None = Depends(require_permission('mabel.view'))
     ):
         """
         Obtiene los datos iniciales para la redistribución sincronizados con el pedido actualizado.
@@ -1187,7 +1187,7 @@ def register_redistribucion_endpoints(app: FastAPI):
         numero_pedido: str = Path(..., description="Número del pedido"),
         request_body: RedistribucionConfirmarRequest = Body(..., description="Datos de confirmación de redistribución"),
         user: Dict = Depends(verify_jwt_token),
-        _: None = Depends(require_permission('mba3-consultas.proceso.execute'))
+        _: None = Depends(require_permission('mabel.view'))
     ):
         """
         Confirma una redistribución (compatible con frontend).
@@ -1538,7 +1538,7 @@ def register_redistribucion_endpoints(app: FastAPI):
         numero_pedido: str = Path(..., description="Número del pedido"),
         request_body: RedistribucionConfirmarRequest = Body(..., description="Datos de redistribución para ajustar"),
         user: Dict = Depends(verify_jwt_token),
-        _: None = Depends(require_permission('mba3-consultas.facturas.view'))
+        _: None = Depends(require_permission('mabel.view'))
     ):
         """
         Retorna los datos de redistribución sin ajustar automáticamente las bodegas.

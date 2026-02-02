@@ -26,7 +26,7 @@ def register_sap_endpoints(app: FastAPI):
     async def obtener_procesamiento_sap(
         pedido_id: str = Path(..., description="UUID del pedido"),
         user: Dict = Depends(verify_jwt_token),
-        _: None = Depends(require_permission('mba3-consultas.facturas.view'))
+        _: None = Depends(require_permission('mabel.view'))
     ):
         """Obtiene información de procesamiento SAP de un pedido."""
         try:

@@ -21,7 +21,7 @@ def register_odc_endpoints(app: FastAPI):
     async def crear_orden_compra_desde_pedido(
         identificador: str = Path(..., description="UUID del pedido o número de pedido (ej: 'P-12.55 - 12 - 2025')"),
         user: Dict = Depends(verify_jwt_token),
-        _: None = Depends(require_permission('mba3-consultas.proceso.execute'))
+        _: None = Depends(require_permission('odcsap.view'))
     ):
         """Crea una orden de compra desde un pedido confirmado."""
         try:

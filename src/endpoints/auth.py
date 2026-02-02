@@ -43,87 +43,26 @@ def _map_permissions_to_capabilities(permissions: list, roles: list) -> Dict[str
     # Verificar si es Admin (acceso total)
     is_admin = any('admin' in r for r in user_roles) or any('admin' in p for p in perms)
     
-    # Helper para verificar permiso (con backward compatibility temporal)
-    def has_permission(specific_perm: str, legacy_perm: Optional[str] = None) -> bool:
-        """
-        Verifica si el usuario tiene un permiso específico.
-        
-        Args:
-            specific_perm: Permiso específico (ej: 'mba3-consultas.plantillas.upload')
-            legacy_perm: Permiso legacy para backward compatibility (opcional)
-        """
-        # Buscar permiso específico
-        has_specific = any(specific_perm.lower() in p for p in perms)
-        
-        # Si no tiene el específico y hay legacy, verificar legacy (backward compatibility)
-        if not has_specific and legacy_perm:
-            has_legacy = any(legacy_perm.lower() in p for p in perms)
-            if has_legacy:
-                logger.debug(
-                    f"⚠️ [BACKWARD COMPAT] Usuario tiene permiso legacy '{legacy_perm}' "
-                    f"pero no tiene '{specific_perm}'. Considerar migrar permisos en el Core."
-                )
-            return has_legacy
-        
-        return has_specific
-    
-    # Mapeo de permisos específicos a capabilities
-    # IMPORTANTE: Cada capability mapea a un permiso específico por intención de negocio
-    # Las capabilities NO son mutuamente excluyentes - un usuario puede tener múltiples
+    # Helper: verificar permiso (solo permisos Core: odcsap.view, mabel.view, odc.view)
+    def has_perm(perm: str) -> bool:
+        return any(perm.lower() in p for p in perms)
+
+    # Mapeo de permisos a capabilities (Core: odcsap.view = EL RAYO, mabel.view = MABEL TRADING)
     capabilities = {
-        # Capability: Subir plantillas Excel.
-        # Permiso específico: mba3-consultas.plantillas.upload
-        # Backward compatibility: mba3-consultas.proceso.execute (temporal)
-        "can_upload_templates": is_admin or has_permission(
-            'mba3-consultas.plantillas.upload',
-            legacy_perm='mba3-consultas.proceso.execute'
-        ),
-        # Capability: Botón "Cargar Plantilla Excel" (alias).
-        "can_cargar_plantilla_excel": is_admin or has_permission(
-            'mba3-consultas.plantillas.upload',
-            legacy_perm='mba3-consultas.proceso.execute'
-        ),
-        # Capability: Ver plantillas y pedidos
-        # Permiso específico: mba3-consultas.plantillas.view
-        "can_view_templates": is_admin or has_permission(
-            'mba3-consultas.plantillas.view',
-            legacy_perm='mba3-consultas.facturas.view'
-        ),
-        # Capability: Operar pedidos (redistribuir, exportar, Descargar para MBA)
-        # Permiso específico: mba3-consultas.pedidos.operate
-        "can_operate_pedidos": is_admin or has_permission(
-            'mba3-consultas.pedidos.operate',
-            legacy_perm='mba3-consultas.proceso.execute'
-        ),
-        # Capability: Ver botón "Gestión ODC SAP" en el sidebar.
-        # Única responsabilidad: solo el permiso odc.view habilita visibilidad y acceso.
-        # Sin admin override ni otros permisos.
-        "can_view_odc_sap": has_permission('odc.view'),
-        # Capability: Ver botón "Gestionar Pedido". Solo permiso odcsap.view.
-        # No afecta al sidebar ni a otros botones.
-        "can_manage_order": has_permission('odcsap.view'),
-        # Capability: Ver botón/link "Listado de Pedidos". Solo permiso odcsap.view.
-        # No afecta al sidebar ni a otros botones.
-        "can_view_order_list": has_permission('odcsap.view'),
-        # Capability: Ver botones del módulo MABEL (Cargar Plantilla, Redistribución,
-        # Procesamiento SAP, Procesos, Homologaciones). Solo permiso mabel.view.
-        # Sin admin override ni inferencia de otros permisos.
-        "mabel_view": has_permission('mabel.view'),
-        # Capability: Ver órdenes de compra (ODC). Solo admin.
+        # MABEL: Subir plantillas Excel.
+        "can_upload_templates": is_admin or has_perm('mabel.view'),
+        "can_cargar_plantilla_excel": is_admin or has_perm('mabel.view'),
+        # Ver plantillas/pedidos: cualquiera de los dos módulos.
+        "can_view_templates": is_admin or has_perm('mabel.view') or has_perm('odcsap.view'),
+        # Operar pedidos (redistribuir, exportar, Descargar para MBA): cualquiera.
+        "can_operate_pedidos": is_admin or has_perm('mabel.view') or has_perm('odcsap.view'),
+        "can_view_odc_sap": has_perm('odc.view'),
+        "can_manage_order": has_perm('odcsap.view'),
+        "can_view_order_list": has_perm('odcsap.view'),
+        "mabel_view": has_perm('mabel.view'),
         "can_view_odc": is_admin,
-        # Capability: Revisar pedido (no hay botón en UI; se mantiene por compatibilidad).
-        "can_review_pedido": (
-            is_admin or
-            has_permission('mba3-consultas.plantillas.view', legacy_perm='mba3-consultas.facturas.view') or
-            has_permission('mba3-consultas.pedidos.operate', legacy_perm='mba3-consultas.proceso.execute')
-        ),
-        # Capability: Confirmar pedido.
-        # Frontend: can_confirm_pedido SOLO para "Confirmar"; can_operate_pedidos para el resto.
-        "can_confirm_pedido": (
-            is_admin or
-            has_permission('mba3-consultas.pedidos.operate', legacy_perm='mba3-consultas.proceso.execute') or
-            has_permission('mba3-consultas.plantillas.view', legacy_perm='mba3-consultas.facturas.view')
-        ),
+        "can_review_pedido": is_admin or has_perm('mabel.view') or has_perm('odcsap.view'),
+        "can_confirm_pedido": is_admin or has_perm('mabel.view') or has_perm('odcsap.view'),
     }
     
     # Logging de debug solo en desarrollo
@@ -174,11 +113,7 @@ def register_auth_endpoints(app: FastAPI):
             "email": "juan@example.com"
           },
           "roles": ["EL_RAYO_OPERADOR"],
-          "permissions": [
-            "mba3-consultas.plantillas.upload",
-            "mba3-consultas.plantillas.view",
-            "mba3-consultas.pedidos.operate"
-          ],
+          "permissions": ["odcsap.view", "mabel.view"],
           "capabilities": {
             "can_upload_templates": true,
             "can_cargar_plantilla_excel": true,
@@ -216,7 +151,7 @@ def register_auth_endpoints(app: FastAPI):
         {capabilities.can_cargar_plantilla_excel && <Button>Cargar Plantilla Excel</Button>}
         
         // ❌ INCORRECTO: No usar permissions directamente
-        {permissions.includes('mba3-consultas.plantillas.upload') && <Button>...</Button>}
+        {permissions.includes('mabel.view') && <Button>...</Button>}
         ```
         
         **Pantalla detalle pedido** (`/mba3-consultas/pedidos/{id}`):

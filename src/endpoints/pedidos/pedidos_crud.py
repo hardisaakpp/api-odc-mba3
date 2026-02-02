@@ -11,7 +11,7 @@ from fastapi.responses import JSONResponse
 from src.database.connection import get_db_connection_context
 from src.database.repositories.pedido_repository import PedidoRepository
 from src.database.repositories.pedido_respuesta_repository import PedidoRespuestaRepository
-from src.security.jwt_auth import verify_jwt_token, require_permission
+from src.security.jwt_auth import verify_jwt_token, require_permission, require_any_permission
 from src.exceptions import BusinessException
 from src.models import (
     ModificarPedidoCabeceraRequest,
@@ -38,7 +38,7 @@ def register_crud_endpoints(app: FastAPI):
         limit: Optional[int] = Query(50, description="Límite de registros por página"),
         offset: Optional[int] = Query(0, description="Offset para paginación"),
         user: Dict = Depends(verify_jwt_token),
-        _: None = Depends(require_permission('mba3-consultas.facturas.view'))
+        _: None = Depends(require_any_permission(['odcsap.view', 'mabel.view']))
     ):
         """
         Lista pedidos con filtros y paginación.
@@ -137,7 +137,7 @@ def register_crud_endpoints(app: FastAPI):
             description="Si 'true', solo pedidos con redistribución ya confirmada (estado PEDIDO_CONFIRMADO)"
         ),
         user: Dict = Depends(verify_jwt_token),
-        _: None = Depends(require_permission('mba3-consultas.facturas.view'))
+        _: None = Depends(require_any_permission(['odcsap.view', 'mabel.view']))
     ):
         """
         Lista pedidos en estado confirmado, ordenados por creado_en DESC.
@@ -224,7 +224,7 @@ def register_crud_endpoints(app: FastAPI):
             description="Si true, último pedido RESPUESTA_PROVEEDOR_CARGADA del usuario; si false, último en todo el sistema"
         ),
         user: Dict = Depends(verify_jwt_token),
-        _: None = Depends(require_permission('mba3-consultas.facturas.view'))
+        _: None = Depends(require_any_permission(['odcsap.view', 'mabel.view']))
     ):
         """
         Obtiene el último pedido con estado RESPUESTA_PROVEEDOR_CARGADA.
@@ -258,7 +258,7 @@ def register_crud_endpoints(app: FastAPI):
     @app.get("/api/pedidos/existe", tags=["Pedidos"])
     async def verificar_pedidos_existen(
         user: Dict = Depends(verify_jwt_token),
-        _: None = Depends(require_permission('mba3-consultas.facturas.view'))
+        _: None = Depends(require_any_permission(['odcsap.view', 'mabel.view']))
     ):
         """
         Verifica si existe al menos un pedido guardado en la base de datos.
@@ -305,7 +305,7 @@ def register_crud_endpoints(app: FastAPI):
         identificador: str = Path(..., description="Número de pedido (ej: 'P-12.48 - 12 - 2025') o UUID del pedido (para compatibilidad)"),
         incluir_respuesta: bool = Query(False, description="Incluir respuesta del proveedor si existe"),
         user: Dict = Depends(verify_jwt_token),
-        _: None = Depends(require_permission('mba3-consultas.facturas.view'))
+        _: None = Depends(require_any_permission(['odcsap.view', 'mabel.view']))
     ):
         """
         Obtiene un pedido completo con cabecera, detalles y distribuciones por tienda.
@@ -407,7 +407,7 @@ def register_crud_endpoints(app: FastAPI):
         validar_sap: bool = Query(True, description="Validar códigos de producto contra SAP"),
         sap_obligatorio: bool = Query(True, description="Si True, errores de SAP bloquean la importación. Si False, solo genera warnings"),
         user: Dict = Depends(verify_jwt_token),
-        _: None = Depends(require_permission('mba3-consultas.proceso.execute'))
+        _: None = Depends(require_permission('mabel.view'))
     ):
         """
         Importa y parsea un archivo Excel de pedido en formato v1.0.
@@ -606,7 +606,7 @@ def register_crud_endpoints(app: FastAPI):
     async def crear_pedido_manual(
         request_body: CrearPedidoRequest = Body(..., description="Datos del pedido a crear"),
         user: Dict = Depends(verify_jwt_token),
-        _: None = Depends(require_permission('mba3-consultas.proceso.execute'))
+        _: None = Depends(require_permission('mabel.view'))
     ):
         """
         Crea un pedido manualmente desde la pantalla web (HU-01 - Carga por Pantalla).
@@ -664,7 +664,7 @@ def register_crud_endpoints(app: FastAPI):
         pedido_id: str = Path(..., description="UUID del pedido"),
         request_body: ModificarPedidoCabeceraRequest = Body(..., description="Datos de la cabecera a modificar"),
         user: Dict = Depends(verify_jwt_token),
-        _: None = Depends(require_permission('mba3-consultas.proceso.execute'))
+        _: None = Depends(require_permission('mabel.view'))
     ):
         """
         Modifica la cabecera de un pedido (HU-03 - Modificación de pedidos).

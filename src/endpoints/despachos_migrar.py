@@ -113,7 +113,7 @@ def register_migrar_endpoint(app: FastAPI):
     async def migrar_despachos(
         request: Request,
         user: dict = Depends(verify_jwt_token),
-        _: None = Depends(require_permission('mba3-consultas.proceso.execute'))
+        _: None = Depends(require_permission('mabel.view'))
     ):
         """
         Endpoint MIGRAR COMPLETO: Ejecuta consulta predefinida y guarda en despacho_cabecera/detalle.
@@ -412,7 +412,7 @@ def register_migrar_endpoint(app: FastAPI):
         use_date_filter: bool = False,
         days: int = 30,
         user: dict = Depends(verify_jwt_token),
-        _: None = Depends(require_permission('mba3-consultas.proceso.execute'))
+        _: None = Depends(require_permission('mabel.view'))
     ):
         """
         Endpoint CONSULTAR MBA3: Solo consulta datos desde MBA3, NO guarda en base de datos.
@@ -564,7 +564,7 @@ def register_migrar_endpoint(app: FastAPI):
         request: Request,
         save_request: SaveDataRequest = Body(...),
         user: dict = Depends(verify_jwt_token),
-        _: None = Depends(require_permission('mba3-consultas.proceso.execute'))
+        _: None = Depends(require_permission('mabel.view'))
     ):
         """
         Endpoint GUARDAR: Guarda datos en SQL Server (despacho_cabecera/detalle).

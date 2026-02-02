@@ -27,7 +27,7 @@ def register_consultar_endpoint(app: FastAPI):
     async def consultar_despachos(
         request: Request,
         user: dict = Depends(verify_jwt_token),
-        _: None = Depends(require_permission('mba3-consultas.proceso.execute'))
+        _: None = Depends(require_permission('mabel.view'))
     ):
         """
         Endpoint CONSULTAR: Ejecuta consulta predefinida y muestra resultados.

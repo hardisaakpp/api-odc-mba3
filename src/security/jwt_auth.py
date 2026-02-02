@@ -7,7 +7,7 @@ información del usuario, roles y permisos.
 
 import os
 import logging
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 import jwt
 from fastapi import HTTPException, Security, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
@@ -190,8 +190,7 @@ def require_permission(permission_key: str, legacy_permission: Optional[str] = N
         @app.get("/endpoint")
         async def my_endpoint(
             user: Dict = Depends(verify_jwt_token),
-            _: None = Depends(require_permission('mba3-consultas.plantillas.upload', 
-                                                  legacy_permission='mba3-consultas.proceso.execute'))
+            _: None = Depends(require_permission('mabel.view'))
         ):
             ...
     
@@ -273,4 +272,48 @@ def require_permission(permission_key: str, legacy_permission: Optional[str] = N
             logger.debug(f"✅ [DEBUG PERMISSION] Permiso '{permiso_usado}' validado correctamente")
             logger.debug("=" * 80)
     
+    return permission_checker
+
+
+def require_any_permission(permission_keys: List[str]):
+    """
+    Dependency factory que permite acceso si el usuario tiene AL MENOS UNO de los permisos.
+
+    Usado para rutas que aplican a EL RAYO (odcsap.view) o MABEL (mabel.view).
+
+    Uso:
+        Depends(require_any_permission(['odcsap.view', 'mabel.view']))
+
+    Args:
+        permission_keys: Lista de permisos; basta con tener uno.
+
+    Returns:
+        Dependency que valida que el usuario tenga al menos uno de los permisos.
+    """
+    async def permission_checker(
+        request: Request,
+        user: Dict[str, Any] = Security(verify_jwt_token)
+    ) -> None:
+        if not hasattr(request.state, 'current_user'):
+            raise HTTPException(
+                status_code=401,
+                detail="Autenticación requerida"
+            )
+        permissions = user.get('permissions', [])
+        roles = user.get('roles', [])
+        username = user.get('username', 'unknown')
+        if ENVIRONMENT == "development":
+            logger.debug(f"🔍 [DEBUG PERMISSION] require_any: {permission_keys} for {username}")
+        is_admin = 'Admin' in roles or 'Admin' in permissions
+        if is_admin:
+            return
+        has_any = any(p in permissions for p in permission_keys)
+        if not has_any:
+            logger.warning(
+                f"❌ Permiso denegado: usuario {username} requiere uno de {permission_keys}"
+            )
+            raise HTTPException(
+                status_code=403,
+                detail=f"Permiso denegado: se requiere uno de {permission_keys}. Permisos: {permissions}"
+            )
     return permission_checker

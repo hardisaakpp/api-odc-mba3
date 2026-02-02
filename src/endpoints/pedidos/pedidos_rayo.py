@@ -29,7 +29,7 @@ def register_rayo_endpoints(app: FastAPI):
         pedido_id: str = Path(..., description="UUID del pedido"),
         limit: Optional[int] = Query(None, ge=1, le=100, description="Número máximo de confirmaciones a retornar (opcional)"),
         user: Dict = Depends(verify_jwt_token),
-        _: None = Depends(require_permission('mba3-consultas.facturas.view'))
+        _: None = Depends(require_permission('odcsap.view'))
     ):
         """Obtiene el historial de confirmaciones realizadas por EL RAYO para un pedido."""
         try:
@@ -70,7 +70,7 @@ def register_rayo_endpoints(app: FastAPI):
         pedido_id: str = Path(..., description="UUID del pedido"),
         confirmacion_id: str = Path(..., description="UUID de la confirmación"),
         user: Dict = Depends(verify_jwt_token),
-        _: None = Depends(require_permission('mba3-consultas.facturas.view'))
+        _: None = Depends(require_permission('odcsap.view'))
     ):
         """Obtiene el detalle completo de una confirmación específica de EL RAYO."""
         try:

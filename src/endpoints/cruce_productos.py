@@ -35,7 +35,7 @@ def register_cruce_productos_endpoints(app: FastAPI):
     @app.get("/cruce-productos/realizar-cruce", tags=["Cruce de Productos"])
     async def realizar_cruce_productos(
         user: dict = Depends(verify_jwt_token),
-        _: None = Depends(require_permission('mba3-consultas.proceso.execute'))
+        _: None = Depends(require_permission('mabel.view'))
     ):
         """
         Realiza un cruce completo entre productos de MBA3 y SAP.
@@ -66,7 +66,7 @@ def register_cruce_productos_endpoints(app: FastAPI):
     @app.get("/cruce-productos/sugerencias", tags=["Cruce de Productos"])
     async def obtener_sugerencias_homologacion(
         user: dict = Depends(verify_jwt_token),
-        _: None = Depends(require_permission('mba3-consultas.proceso.execute'))
+        _: None = Depends(require_permission('mabel.view'))
     ):
         """
         Obtiene sugerencias de homologación para productos que no tienen match exacto.
@@ -202,7 +202,7 @@ def register_cruce_productos_endpoints(app: FastAPI):
     @app.post("/cruce-productos/sincronizar-maestros/mba3", tags=["Cruce de Productos"])
     async def sincronizar_maestros_mba3(
         user: dict = Depends(verify_jwt_token),
-        _: None = Depends(require_permission('mba3-consultas.proceso.execute'))
+        _: None = Depends(require_permission('mabel.view'))
     ):
         """
         Sincroniza maestros de productos MBA3 desde API a staging.
@@ -238,7 +238,7 @@ def register_cruce_productos_endpoints(app: FastAPI):
     @app.post("/cruce-productos/sincronizar-maestros/sap", tags=["Cruce de Productos"])
     async def sincronizar_maestros_sap(
         user: dict = Depends(verify_jwt_token),
-        _: None = Depends(require_permission('mba3-consultas.proceso.execute'))
+        _: None = Depends(require_permission('mabel.view'))
     ):
         """
         Sincroniza maestros de productos SAP desde OPENQUERY a staging.
@@ -272,7 +272,7 @@ def register_cruce_productos_endpoints(app: FastAPI):
     async def sincronizar_maestros(
         force_full: bool = Query(False, description="Forzar sincronización completa desde el inicio (útil para pruebas o cuando se eliminan datos)"),
         user: dict = Depends(verify_jwt_token),
-        _: None = Depends(require_permission('mba3-consultas.proceso.execute'))
+        _: None = Depends(require_permission('mabel.view'))
     ):
         """
         Sincroniza ambos maestros de productos (MBA3 y SAP) desde ERPs a staging.
@@ -326,7 +326,7 @@ def register_cruce_productos_endpoints(app: FastAPI):
         incluir_sugerencias_sap: bool = Query(False, description="Si True, incluye sugerencias similares de SAP basadas en el código de MBA3"),
         limite_sugerencias: int = Query(20, ge=1, le=50, description="Límite máximo de sugerencias SAP a retornar (1-50, solo si incluir_sugerencias_sap=True)"),
         user: dict = Depends(verify_jwt_token),
-        _: None = Depends(require_permission('mba3-consultas.proceso.execute'))
+        _: None = Depends(require_permission('mabel.view'))
     ):
         """
         Busca un SKU directamente en la base de datos de MBA3.
@@ -601,7 +601,7 @@ def register_cruce_productos_endpoints(app: FastAPI):
     async def buscar_sku_sap(
         sku: str = Query(..., description="SKU (ItemCode) del producto a buscar en SAP"),
         user: dict = Depends(verify_jwt_token),
-        _: None = Depends(require_permission('mba3-consultas.proceso.execute'))
+        _: None = Depends(require_permission('mabel.view'))
     ):
         """
         Busca un SKU directamente en la base de datos de SAP.
@@ -744,7 +744,7 @@ def register_cruce_productos_endpoints(app: FastAPI):
         sku: str = Query(..., description="SKU (ItemCode) de referencia para buscar sugerencias similares en SAP"),
         limite: int = Query(20, ge=1, le=50, description="Límite máximo de sugerencias a retornar (1-50)"),
         user: dict = Depends(verify_jwt_token),
-        _: None = Depends(require_permission('mba3-consultas.proceso.execute'))
+        _: None = Depends(require_permission('mabel.view'))
     ):
         """
         Busca SKUs similares en SAP basándose en un SKU de referencia.
@@ -904,7 +904,7 @@ def register_cruce_productos_endpoints(app: FastAPI):
     @app.get("/cruce-productos/estado-sincronizacion", tags=["Cruce de Productos"])
     async def obtener_estado_sincronizacion(
         user: dict = Depends(verify_jwt_token),
-        _: None = Depends(require_permission('mba3-consultas.proceso.execute'))
+        _: None = Depends(require_permission('mabel.view'))
     ):
         """
         Obtiene el estado actual de sincronización de maestros MBA3 y SAP.
@@ -969,7 +969,7 @@ def register_cruce_productos_endpoints(app: FastAPI):
     @app.post("/cruce-productos/iniciar", tags=["Cruce de Productos"])
     async def iniciar_cruce_productos(
         user: dict = Depends(verify_jwt_token),
-        _: None = Depends(require_permission('mba3-consultas.proceso.execute'))
+        _: None = Depends(require_permission('mabel.view'))
     ):
         """
         Inicia un cruce de productos en background usando Celery.
@@ -1015,7 +1015,7 @@ def register_cruce_productos_endpoints(app: FastAPI):
         process_id: str,
         request: Request,
         user: dict = Depends(verify_jwt_token),
-        _: None = Depends(require_permission('mba3-consultas.proceso.execute'))
+        _: None = Depends(require_permission('mabel.view'))
     ):
         """
         Stream de progreso usando Server-Sent Events (SSE).
@@ -1134,7 +1134,7 @@ def register_cruce_productos_endpoints(app: FastAPI):
     async def obtener_resultado_cruce(
         process_id: str,
         user: dict = Depends(verify_jwt_token),
-        _: None = Depends(require_permission('mba3-consultas.proceso.execute'))
+        _: None = Depends(require_permission('mabel.view'))
     ):
         """
         Obtiene el resultado final del cruce (por si se perdió el stream SSE).

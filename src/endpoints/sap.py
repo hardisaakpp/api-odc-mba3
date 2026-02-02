@@ -36,7 +36,7 @@ def register_sap_endpoints(app: FastAPI):
         oc_id: Optional[List[str]] = Query(None, description="UUID(s) de la(s) orden(es) de compra a enviar. Puede especificarse múltiples veces (ej: ?oc_id=xxx&oc_id=yyy)."),
         referencia_despacho: Optional[List[str]] = Query(None, description="Referencia(s) del despacho (número de factura) para buscar OC(s) específica(s). Puede especificarse múltiples veces (ej: ?referencia_despacho=xxx&referencia_despacho=yyy). Si no se proporciona oc_id ni referencia_despacho, se procesa la primera OC pendiente."),
         user: dict = Depends(verify_jwt_token),
-        _: None = Depends(require_permission('mba3-consultas.proceso.execute'))
+        _: None = Depends(require_permission('mabel.view'))
     ):
         """
         Endpoint INTEGRAR-SAP: Envía órdenes de compra a SAP Service Layer.

@@ -14,7 +14,7 @@ from src.utils import get_source_from_headers
 from src.database.repositories.despacho_repository import DespachoRepository
 from src.database.repositories.orden_compra_repository import OrdenCompraRepository
 from src.database.connection import get_db_connection
-from src.security.jwt_auth import verify_jwt_token, require_permission
+from src.security.jwt_auth import verify_jwt_token, require_permission, require_any_permission
 
 logger = logging.getLogger(__name__)
 
@@ -97,7 +97,7 @@ def register_info_endpoints(app: FastAPI):
         request: Request,
         limit: Optional[int] = Query(None, description="Número máximo de registros a retornar (opcional)"),
         user: dict = Depends(verify_jwt_token),
-        _: None = Depends(require_permission('mba3-consultas.facturas.view'))
+        _: None = Depends(require_any_permission(['odcsap.view', 'mabel.view']))
     ):
         """
         Endpoint para obtener el conteo y información detallada de despachos con sus órdenes de compra.
@@ -233,7 +233,7 @@ def register_info_endpoints(app: FastAPI):
         request: Request,
         despacho_id: str,
         user: dict = Depends(verify_jwt_token),
-        _: None = Depends(require_permission('mba3-consultas.facturas.view'))
+        _: None = Depends(require_any_permission(['odcsap.view', 'mabel.view']))
     ):
         """
         Endpoint para obtener los detalles de un despacho específico.

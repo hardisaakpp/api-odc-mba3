@@ -26,7 +26,7 @@ def register_proveedor_endpoints(app: FastAPI):
         pedido_id: str = Path(..., description="UUID del pedido"),
         file: UploadFile = File(..., description="Archivo Excel con respuesta del proveedor"),
         user: Dict = Depends(verify_jwt_token),
-        _: None = Depends(require_permission('mba3-consultas.proceso.execute'))
+        _: None = Depends(require_permission('mabel.view'))
     ):
         """Carga la respuesta del proveedor desde un archivo Excel."""
         try:
@@ -74,7 +74,7 @@ def register_proveedor_endpoints(app: FastAPI):
     async def obtener_formulario_proveedor(
         pedido_id: str = Path(..., description="UUID del pedido"),
         user: Dict = Depends(verify_jwt_token),
-        _: None = Depends(require_permission('mba3-consultas.facturas.view'))
+        _: None = Depends(require_permission('mabel.view'))
     ):
         """Obtiene los datos del pedido formateados para el formulario web del proveedor."""
         try:
@@ -101,7 +101,7 @@ def register_proveedor_endpoints(app: FastAPI):
         pedido_id: str = Path(..., description="UUID del pedido"),
         respuesta: RespuestaProveedorRequest = Body(...),
         user: Dict = Depends(verify_jwt_token),
-        _: None = Depends(require_permission('mba3-consultas.proceso.execute'))
+        _: None = Depends(require_permission('mabel.view'))
     ):
         """Recibe la respuesta del proveedor desde el formulario web."""
         try:
@@ -142,7 +142,7 @@ def register_proveedor_endpoints(app: FastAPI):
     async def crear_respuesta_desde_pedido(
         pedido_id: str = Path(..., description="UUID del pedido"),
         user: Dict = Depends(verify_jwt_token),
-        _: None = Depends(require_permission('mba3-consultas.proceso.execute'))
+        _: None = Depends(require_permission('mabel.view'))
     ):
         """Guarda los cambios realizados por EL RAYO y crea la respuesta del proveedor."""
         try:

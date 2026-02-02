@@ -98,7 +98,7 @@ def register_procesar_endpoint(app: FastAPI):
         request: Request,
         despacho_id: Optional[List[str]] = Query(None, description="UUID(s) del despacho a procesar. Puede especificarse múltiples veces (ej: ?despacho_id=xxx&despacho_id=yyy). Si no se proporciona, procesa todos los despachos sin OC."),
         user: dict = Depends(verify_jwt_token),
-        _: None = Depends(require_permission('mba3-consultas.proceso.execute'))
+        _: None = Depends(require_permission('mabel.view'))
     ):
         """
         Endpoint PROCESAR-OC: Copia despachos a orden de compra.

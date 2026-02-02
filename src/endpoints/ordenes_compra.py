@@ -15,7 +15,7 @@ from src.database.repositories.orden_compra_repository import OrdenCompraReposit
 from src.database.repositories.sap_integration_log_repository import SAPIntegrationLogRepository
 from src.database.connection import get_db_connection
 from src.database.clients.sap_client import SAPClient
-from src.security.jwt_auth import verify_jwt_token, require_permission
+from src.security.jwt_auth import verify_jwt_token, require_permission, require_any_permission
 
 logger = logging.getLogger(__name__)
 
@@ -107,7 +107,7 @@ def register_ordenes_compra_endpoints(app: FastAPI):
         limit: Optional[int] = Query(50, description="Límite de registros por página"),
         offset: Optional[int] = Query(0, description="Offset para paginación"),
         user: dict = Depends(verify_jwt_token),
-        _: None = Depends(require_permission('mba3-consultas.facturas.view'))
+        _: None = Depends(require_any_permission(['odcsap.view', 'mabel.view']))
     ):
         """
         Endpoint HISTORIAL-ORDENES: Obtiene el historial de integración de órdenes de compra con SAP.
@@ -291,7 +291,7 @@ def register_ordenes_compra_endpoints(app: FastAPI):
         request: Request,
         estado: Optional[str] = Query(None, description="Filtrar por estado (PENDIENTE, ENVIADA, ERROR)"),
         user: dict = Depends(verify_jwt_token),
-        _: None = Depends(require_permission('mba3-consultas.ordenes-compra.view'))
+        _: None = Depends(require_permission('mabel.view'))
     ):
         """
         Endpoint ORDENES-COMPRA: Obtiene órdenes de compra desde la base de datos.
@@ -413,7 +413,7 @@ def register_ordenes_compra_endpoints(app: FastAPI):
         nivel_log: Optional[str] = Query(None, description="Filtrar por nivel (INFO, ERROR, WARNING)"),
         success: Optional[bool] = Query(None, description="Filtrar por éxito (true) o error (false)"),
         user: dict = Depends(verify_jwt_token),
-        _: None = Depends(require_permission('mba3-consultas.ordenes-compra.view'))
+        _: None = Depends(require_permission('mabel.view'))
     ):
         """
         Endpoint ORDENES-COMPRA/LOGS: Obtiene el historial de logs de integración de órdenes de compra con SAP.
@@ -628,7 +628,7 @@ def register_ordenes_compra_endpoints(app: FastAPI):
         request: Request,
         oc_id: str,
         user: dict = Depends(verify_jwt_token),
-        _: None = Depends(require_permission('mba3-consultas.ordenes-compra.delete'))
+        _: None = Depends(require_permission('mabel.view'))
     ):
         """
         Endpoint para eliminar una orden de compra específica.
@@ -787,7 +787,7 @@ def register_ordenes_compra_endpoints(app: FastAPI):
         request: Request,
         oc_id: Optional[List[str]] = Query(None, description="UUID(s) de la(s) orden(es) de compra a eliminar. Puede especificarse múltiples veces (ej: ?oc_id=id1&oc_id=id2)."),
         user: dict = Depends(verify_jwt_token),
-        _: None = Depends(require_permission('mba3-consultas.ordenes-compra.delete'))
+        _: None = Depends(require_permission('mabel.view'))
     ):
         """
         Endpoint para eliminar múltiples órdenes de compra.
@@ -1007,7 +1007,7 @@ def register_ordenes_compra_endpoints(app: FastAPI):
         request: Request,
         oc_id: str = Path(..., description="UUID de la orden de compra"),
         user: dict = Depends(verify_jwt_token),
-        _: None = Depends(require_permission('mba3-consultas.ordenes-compra.view'))
+        _: None = Depends(require_permission('mabel.view'))
     ):
         """
         Endpoint para obtener los detalles (líneas) de una orden de compra específica.
@@ -1117,7 +1117,7 @@ def register_ordenes_compra_endpoints(app: FastAPI):
         nuevo_sku: str = Body(..., embed=True, description="Nuevo SKU (ItemCode) de SAP"),
         validar_en_sap: bool = Body(True, embed=True, description="Validar que el SKU exista en SAP antes de actualizar"),
         user: dict = Depends(verify_jwt_token),
-        _: None = Depends(require_permission('mba3-consultas.ordenes-compra.update'))
+        _: None = Depends(require_permission('mabel.view'))
     ):
         """
         Endpoint para actualizar el SKU de un detalle de orden de compra.

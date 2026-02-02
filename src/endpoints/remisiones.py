@@ -15,7 +15,7 @@ from fastapi.responses import JSONResponse
 
 from src.services.mba3_service import MBA3Service
 from src.utils import get_source_from_headers
-from src.security.jwt_auth import verify_jwt_token, require_permission
+from src.security.jwt_auth import verify_jwt_token, require_permission, require_any_permission
 from src.exceptions import MBA3ConnectionError, MBA3QueryError
 from src.config import MBA3_QUERY_REMISIONES, MIGRATE_DATE_FILTER_DAYS
 
@@ -69,7 +69,7 @@ def register_remisiones_endpoints(app: FastAPI):
         page: int = Query(1, ge=1, description="Número de página (empezando en 1)"),
         pageSize: int = Query(10, ge=1, le=100, description="Tamaño de página (máximo 100)"),
         user: dict = Depends(verify_jwt_token),
-        _: None = Depends(require_permission('mba3-consultas.facturas.view'))
+        _: None = Depends(require_any_permission(['odcsap.view', 'mabel.view']))
     ):
         """
         Endpoint para obtener remisiones desde la base de datos con paginación.
@@ -78,7 +78,7 @@ def register_remisiones_endpoints(app: FastAPI):
         - ✅ Consulta desde la tabla `remision_cabecera` (ya guardada)
         - ✅ Paginación con `page` y `pageSize`
         - ✅ Ordenamiento por fecha más reciente primero
-        - ✅ Permisos: solo lectura (`mba3-consultas.facturas.view`)
+        - ✅ Permisos: `odcsap.view` o `mabel.view`
         
         **Query Parameters:**
         - `page` (int, default: 1) - Número de página (empezando en 1)
@@ -179,7 +179,7 @@ def register_remisiones_endpoints(app: FastAPI):
     async def consultar_remisiones(
         request: Request,
         user: dict = Depends(verify_jwt_token),
-        _: None = Depends(require_permission('mba3-consultas.proceso.execute'))
+        _: None = Depends(require_permission('mabel.view'))
     ):
         """
         Endpoint para consultar documentos de remisión desde MBA3 y guardar solo cabeceras.

@@ -32,7 +32,7 @@ def register_pruebas_endpoints(app: FastAPI):
     async def ejecutar_pruebas(
         request: Request,
         user: dict = Depends(verify_jwt_token),
-        _: None = Depends(require_permission('mba3-consultas.proceso.execute'))
+        _: None = Depends(require_permission('mabel.view'))
     ):
         """
         Endpoint de PRUEBAS: Ejecuta el proceso completo de los 3 primeros endpoints.

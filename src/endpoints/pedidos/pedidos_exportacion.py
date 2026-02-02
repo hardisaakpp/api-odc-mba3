@@ -23,7 +23,7 @@ def register_exportacion_endpoints(app: FastAPI):
     async def exportar_pedido_para_proveedor(
         pedido_id: str = Path(..., description="UUID del pedido"),
         user: Dict = Depends(verify_jwt_token),
-        _: None = Depends(require_permission('mba3-consultas.facturas.view'))
+        _: None = Depends(require_permission('mabel.view'))
     ):
         """
         Exporta un pedido a Excel para que el proveedor lo complete.
@@ -76,7 +76,7 @@ def register_exportacion_endpoints(app: FastAPI):
         consolidado: bool = Query(False, description="Si True, consolida cantidades por producto; si False, genera una línea por tienda/sucursal"),
         incluir_encabezado: bool = Query(True, description="Incluir las 19 líneas de encabezado del formato MBA"),
         user: Dict = Depends(verify_jwt_token),
-        _: None = Depends(require_permission('mba3-consultas.facturas.view'))
+        _: None = Depends(require_permission('odcsap.view'))
     ):
         """
         Exporta un pedido en formato plano (.txt) para importar en MBA.
