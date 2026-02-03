@@ -21,7 +21,7 @@ from typing import Dict, Any, List, Optional, Tuple
 from .pedido.pedido_cabecera_repository import PedidoCabeceraRepository
 from .pedido.pedido_detalle_repository import PedidoDetalleRepository
 from .pedido.pedido_tienda_repository import PedidoTiendaRepository
-from ..pedido_estados import ESTADO_BORRADOR, estado_id_desde_legacy
+from ..pedido_estados import ESTADO_BORRADOR, ESTADO_NUEVO_PEDIDO, estado_id_desde_legacy
 
 logger = logging.getLogger(__name__)
 
@@ -105,7 +105,8 @@ class PedidoRepository:
         numero_pedido: Optional[str] = None,
         creado_por: Optional[str] = None,
         limit: Optional[int] = None,
-        offset: Optional[int] = None
+        offset: Optional[int] = None,
+        excluir_borrador: bool = False,
     ) -> Dict[str, Any]:
         """
         Obtiene pedidos con filtros y paginación.
@@ -114,7 +115,7 @@ class PedidoRepository:
         """
         return self.cabecera_repo.get_pedidos_con_filtros(
             estado, fecha_desde, fecha_hasta, proveedor_nombre,
-            numero_pedido, creado_por, limit, offset
+            numero_pedido, creado_por, limit, offset, excluir_borrador
         )
 
     def get_pedidos_confirmados(
@@ -170,7 +171,7 @@ class PedidoRepository:
     def validar_puede_descartar(self, pedido_id: str) -> Tuple[bool, str, str]:
         """
         Valida si un pedido puede descartarse (eliminarse).
-        Solo se permite para pedidos en estado BORRADOR y sin datos aguas abajo.
+        Solo se permite para pedidos en estado BORRADOR o NUEVO PEDIDO y sin datos aguas abajo.
 
         Returns:
             (ok, error_code, message): ok=True si puede descartarse;
@@ -184,11 +185,11 @@ class PedidoRepository:
         estado_id = cabecera.get("estado_id")
         if estado_id is None:
             estado_id = estado_id_desde_legacy(cabecera.get("estado"))
-        if estado_id != ESTADO_BORRADOR:
+        if estado_id not in (ESTADO_BORRADOR, ESTADO_NUEVO_PEDIDO):
             return (
                 False,
                 "estado_no_borrador",
-                "El pedido no puede descartarse porque no está en estado Borrador.",
+                "El pedido no puede descartarse porque no está en estado Borrador o Nuevo Pedido.",
             )
 
         cursor = self.conn.cursor()

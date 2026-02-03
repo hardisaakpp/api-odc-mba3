@@ -37,20 +37,22 @@ BEGIN
     SET NOCOUNT ON;
 
     INSERT INTO [dbo].[pedido_estado] (id, nombre, orden, activo) VALUES
-        (1,  N'BORRADOR',                        1,  1),  -- ex PENDIENTE_CONFIRMACION_PROVEEDOR
-        (2,  N'RESPUESTA_PROVEEDOR_CARGADA',    2,  1),
-        (3,  N'EN_REVISION',                    3,  1),
-        (4,  N'CONFIRMADO_PROVEEDOR',            4,  1),
-        (5,  N'RECHAZADO_PROVEEDOR',            5,  1),
-        (6,  N'EN_AJUSTE_MABEL',                 6,  1),
-        (7,  N'REDISTRIBUIDO',                   7,  1),
-        (8,  N'PEDIDO_CONFIRMADO',               8,  1),
-        (9,  N'PROCESADO_SAP',                   9,  1),
-        (10, N'CONFIRMADO_ENVIADO',             10,  1),
-        (11, N'PENDIENTE_LOGISTICA',            11,  1),
-        (12, N'ERROR_DATOS_MAESTROS',            12,  1),
-        (13, N'EN_PROCESO',                     13,  1),
-        (14, N'COMPLETADO',                      14,  1);
+        (1,  N'BORRADOR',                        1,  1),
+        (2,  N'NUEVO PEDIDO',                   2,  1),  -- Enviado a EL RAYO (notificación enviada)
+        (3,  N'RESPUESTA_PROVEEDOR_CARGADA',    3,  1),
+        (4,  N'EN_REVISION',                    4,  1),
+        (5,  N'CONFIRMADO_PROVEEDOR',            5,  1),
+        (6,  N'RECHAZADO_PROVEEDOR',            6,  1),
+        (7,  N'EN_AJUSTE_MABEL',                 7,  1),
+        (8,  N'REDISTRIBUIDO',                   8,  1),
+        (9,  N'PEDIDO_CONFIRMADO',               9,  1),
+        (10, N'PROCESADO_SAP',                  10,  1),
+        (11, N'CONFIRMADO_ENVIADO',             11,  1),
+        (12, N'PENDIENTE_LOGISTICA',            12,  1),
+        (13, N'ERROR_DATOS_MAESTROS',            13,  1),
+        (14, N'EN_PROCESO',                     14,  1),
+        (15, N'COMPLETADO',                      15,  1),
+        (16, N'GESTIONAR PEDIDO',                16,  1);  -- Al hacer clic en Ver Detalle desde tabla Pedidos
 
     SET NOCOUNT OFF;
     PRINT 'Datos iniciales de pedido_estado insertados.';

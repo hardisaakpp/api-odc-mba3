@@ -364,12 +364,13 @@ class PedidoCabeceraRepository:
             estado_id = int(estado) if isinstance(estado, int) else estado_id_desde_legacy(estado)
 
             if tiene_estado_id:
+                # COALESCE evita NULL en p.estado si no existe la fila en pedido_estado (ej. estado nuevo no migrado)
                 cursor.execute("""
-                    UPDATE p SET p.estado_id = ?, p.estado = pe.nombre
+                    UPDATE p SET p.estado_id = ?, p.estado = COALESCE(pe.nombre, CAST(? AS NVARCHAR(100)))
                     FROM pedido p
                     LEFT JOIN pedido_estado pe ON pe.id = ?
                     WHERE p.pedido_id = ?
-                """, (estado_id, estado_id, pedido_id))
+                """, (estado_id, estado_id, estado_id, pedido_id))
             elif tiene_estado:
                 cursor.execute(
                     "SELECT nombre FROM pedido_estado WHERE id = ?", (estado_id,)
@@ -678,7 +679,8 @@ class PedidoCabeceraRepository:
         numero_pedido: Optional[str] = None,
         creado_por: Optional[str] = None,
         limit: Optional[int] = None,
-        offset: Optional[int] = None
+        offset: Optional[int] = None,
+        excluir_borrador: bool = False,
     ) -> Dict[str, Any]:
         """
         Obtiene pedidos con filtros y paginación.
@@ -686,6 +688,7 @@ class PedidoCabeceraRepository:
         Args:
             estado: estado_id (int) o nombre legacy (str) para filtrar
             fecha_desde, fecha_hasta, proveedor_nombre, numero_pedido, creado_por, limit, offset
+            excluir_borrador: si True, excluye pedidos en estado BORRADOR (estado_id=1)
         """
         cursor = self.conn.cursor()
         try:
@@ -706,6 +709,13 @@ class PedidoCabeceraRepository:
                     nom = r[0] if r and r[0] else str(estado_id)
                     where_conditions.append("p.estado = ?")
                     params.append(nom)
+
+            if excluir_borrador and (tiene_estado_id or tiene_estado):
+                if tiene_estado_id:
+                    where_conditions.append("(p.estado_id IS NULL OR p.estado_id <> ?)")
+                    params.append(ESTADO_BORRADOR)
+                else:
+                    where_conditions.append("(p.estado IS NULL OR (p.estado <> N'BORRADOR' AND p.estado <> N'PENDIENTE_CONFIRMACION_PROVEEDOR'))")
 
             if fecha_desde:
                 where_conditions.append("CAST(p.fecha_pedido AS DATE) >= CAST(? AS DATE)")
@@ -1104,7 +1114,7 @@ class PedidoCabeceraRepository:
         self, usuario_id: Optional[str] = None
     ) -> Optional[Dict[str, Any]]:
         """
-        Obtiene el último pedido con estado_id = ESTADO_RESPUESTA_PROVEEDOR_CARGADA (2).
+        Obtiene el último pedido con estado_id = ESTADO_RESPUESTA_PROVEEDOR_CARGADA (3).
         Usado en pantalla Redistribución.
         """
         cursor = self.conn.cursor()

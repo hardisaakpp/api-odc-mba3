@@ -19,6 +19,7 @@ from src.config import ENABLE_SQL_SERVER_STORAGE
 from src.exceptions import BusinessException
 from ..connection import get_db_connection_context
 from ..repositories.pedido_repository import PedidoRepository
+from ..pedido_estados import ESTADO_BORRADOR, ESTADO_NUEVO_PEDIDO
 from .pedido_validator import PedidoValidator, ValidationSeverity
 from .pedido_parser import PedidoParser
 from .pedido_consolidator import PedidoConsolidator
@@ -1657,6 +1658,88 @@ class PedidoService:
                     resultado["errores"].append(error_msg)
                     continue
     
+    def enviar_pedido(self, pedido_id: str, usuario_id: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Acción de negocio "Enviar": valida que el pedido esté en BORRADOR, envía correo a EL RAYO
+        y cambia el estado a NUEVO_PEDIDO. Todo en una operación lógica: si el correo falla,
+        el pedido no se marca como enviado.
+
+        Raises:
+            BusinessException: not_found, estado_no_borrador, sin_detalles, email_failed
+        """
+        if not ENABLE_SQL_SERVER_STORAGE:
+            raise BusinessException(
+                "SQL Server storage está deshabilitado.",
+                error_code="storage_disabled"
+            )
+        with get_db_connection_context() as conn:
+            repository = PedidoRepository(conn)
+            pedido = repository.get_pedido_completo(pedido_id)
+            if not pedido:
+                raise BusinessException(
+                    "No se encontró el pedido.",
+                    error_code="not_found"
+                )
+            cabecera = pedido.get("cabecera", {})
+            estado_id = cabecera.get("estado_id")
+            if estado_id != ESTADO_BORRADOR:
+                raise BusinessException(
+                    "El pedido no se puede enviar en su estado actual.",
+                    error_code="estado_no_borrador"
+                )
+            detalles = pedido.get("detalles", [])
+            if not detalles:
+                raise BusinessException(
+                    "El pedido no tiene detalles. Debe tener al menos un artículo.",
+                    error_code="sin_detalles"
+                )
+            numero_pedido = cabecera.get("numero_pedido") or "N/A"
+            articulos_cargados = len(detalles)
+            distribuciones_cargadas = sum(len(d.get("tiendas", [])) for d in detalles)
+
+        # Enviar correo antes de cambiar estado: si falla, el pedido sigue en BORRADOR
+        try:
+            from src.utils.email_notifier import send_plantilla_upload_notification
+            email_enviado = send_plantilla_upload_notification(
+                pedido_id=pedido_id,
+                numero_pedido=numero_pedido,
+                filename=None,
+                usuario_id=usuario_id,
+                articulos_cargados=articulos_cargados,
+                distribuciones_cargadas=distribuciones_cargadas,
+                formato_detectado="Enviado desde pantalla"
+            )
+            if not email_enviado:
+                raise BusinessException(
+                    "No se pudo enviar la notificación por correo. El pedido no ha sido enviado.",
+                    error_code="email_failed"
+                )
+        except BusinessException:
+            raise
+        except Exception as e:
+            logger.warning(f"⚠️ Error al enviar correo en enviar_pedido: {e}", exc_info=True)
+            raise BusinessException(
+                "No se pudo enviar la notificación por correo. El pedido no ha sido enviado.",
+                error_code="email_failed"
+            )
+
+        # Cambiar estado a NUEVO_PEDIDO
+        with get_db_connection_context() as conn:
+            repository = PedidoRepository(conn)
+            repository.update_estado(pedido_id, ESTADO_NUEVO_PEDIDO)
+
+        logger.info(
+            f"✅ Pedido {pedido_id} ({numero_pedido}) enviado a EL RAYO por usuario {usuario_id or 'N/A'}"
+        )
+        return {
+            "status": "success",
+            "message": "Pedido enviado",
+            "pedido_id": pedido_id,
+            "numero_pedido": numero_pedido,
+            "estado_id": ESTADO_NUEVO_PEDIDO,
+            "estado_nombre": "NUEVO_PEDIDO",
+        }
+
     def _convertir_a_decimal(self, valor) -> Optional[float]:
         """Delegado a PedidoTypeConverter."""
         return self.type_converter.convertir_a_decimal(valor)

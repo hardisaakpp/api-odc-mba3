@@ -13,6 +13,7 @@ from fastapi.responses import JSONResponse
 from src.database.connection import get_db_connection_context
 from src.database.repositories.pedido_repository import PedidoRepository
 from src.database.repositories.pedido_respuesta_repository import PedidoRespuestaRepository
+from src.database.pedido_estados import ESTADO_BORRADOR, ESTADO_NUEVO_PEDIDO
 from src.security.jwt_auth import verify_jwt_token, require_permission
 from src.exceptions import BusinessException
 from src.endpoints.pedidos.utils import validate_excel_file, get_user_id, MAX_FILE_SIZE
@@ -199,28 +200,7 @@ def register_plantillas_endpoints(app: FastAPI):
                     detail=f"Error al procesar plantilla: {resultado.get('errores', ['Error desconocido'])}"
                 )
             
-            # Enviar notificación por correo electrónico a El Rayo cuando se procesa exitosamente
-            if resultado["status"] == "success":
-                try:
-                    from src.utils.email_notifier import send_plantilla_upload_notification
-                    
-                    email_enviado = send_plantilla_upload_notification(
-                        pedido_id=resultado.get("pedido_id"),
-                        numero_pedido=resultado.get("numero_pedido"),
-                        filename=file.filename,
-                        usuario_id=user_id,
-                        articulos_cargados=resultado.get("articulos_cargados", 0),
-                        distribuciones_cargadas=resultado.get("distribuciones_cargadas", 0),
-                        formato_detectado=resultado.get("formato_detectado")
-                    )
-                    if email_enviado:
-                        logger.info(f"📧 Email de notificación de plantilla enviado a El Rayo (Pedido: {resultado.get('numero_pedido', 'N/A')})")
-                    else:
-                        logger.warning(f"⚠️ No se pudo enviar email de notificación de plantilla (no crítico)")
-                except Exception as e:
-                    # NO fallar el proceso si el email falla
-                    logger.warning(f"⚠️ Error al enviar email de notificación de plantilla (no crítico): {e}")
-            
+            # La carga Excel solo crea BORRADOR. El correo a EL RAYO se envía al hacer clic en "Enviar".
             return JSONResponse(status_code=200, content=response_data)
             
         except HTTPException:
@@ -276,7 +256,15 @@ def register_plantillas_endpoints(app: FastAPI):
                     respuesta = respuesta_repo.obtener_respuesta_activa(pedido_id)
                     if respuesta:
                         pedido_completo["respuesta_proveedor"] = respuesta
-                
+
+                # Para cargar-plantilla: habilitar Descartar solo en BORRADOR o NUEVO PEDIDO (normalizar estado_id por si viene string)
+                _eid = pedido_completo.get("cabecera", {}).get("estado_id")
+                try:
+                    _eid = int(_eid) if _eid is not None else None
+                except (TypeError, ValueError):
+                    _eid = None
+                pedido_completo["puede_descartar"] = _eid in (ESTADO_BORRADOR, ESTADO_NUEVO_PEDIDO)
+
                 return JSONResponse(status_code=200, content=pedido_completo)
             
         except HTTPException:

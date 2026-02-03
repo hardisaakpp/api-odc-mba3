@@ -11,6 +11,7 @@ from fastapi.responses import JSONResponse
 from src.database.connection import get_db_connection_context
 from src.database.repositories.pedido_repository import PedidoRepository
 from src.database.repositories.pedido_respuesta_repository import PedidoRespuestaRepository
+from src.database.pedido_estados import ESTADO_BORRADOR, ESTADO_NUEVO_PEDIDO, ESTADO_GESTIONAR_PEDIDO
 from src.security.jwt_auth import verify_jwt_token, require_permission, require_any_permission
 from src.exceptions import BusinessException
 from src.models import (
@@ -42,6 +43,7 @@ def register_crud_endpoints(app: FastAPI):
     ):
         """
         Lista pedidos con filtros y paginación.
+        Los pedidos en estado BORRADOR no se incluyen (solo NUEVO PEDIDO y posteriores).
         
         **HU-02 y HU-07: Visualizar estado de pedidos con filtros**
         
@@ -101,7 +103,8 @@ def register_crud_endpoints(app: FastAPI):
                     numero_pedido=numero_pedido,
                     creado_por=creado_por,
                     limit=limit,
-                    offset=offset
+                    offset=offset,
+                    excluir_borrador=True,
                 )
                 
                 return JSONResponse(
@@ -387,7 +390,15 @@ def register_crud_endpoints(app: FastAPI):
                     respuesta = respuesta_repo.obtener_respuesta_activa(pedido_id)
                     if respuesta:
                         pedido["respuesta_proveedor"] = respuesta
-                
+
+                # Para cargar-plantilla: habilitar Descartar solo en BORRADOR o NUEVO PEDIDO (normalizar estado_id por si viene string)
+                _eid = pedido.get("cabecera", {}).get("estado_id")
+                try:
+                    _eid = int(_eid) if _eid is not None else None
+                except (TypeError, ValueError):
+                    _eid = None
+                pedido["puede_descartar"] = _eid in (ESTADO_BORRADOR, ESTADO_NUEVO_PEDIDO)
+
                 return JSONResponse(status_code=200, content=pedido)
             
         except HTTPException:
@@ -398,7 +409,51 @@ def register_crud_endpoints(app: FastAPI):
                 status_code=500,
                 detail=f"Error interno al obtener pedido: {str(e)}"
             )
-    
+
+    @app.post("/api/pedidos/{pedido_id}/gestionar", tags=["Pedidos"])
+    async def marcar_pedido_gestionar(
+        pedido_id: str = Path(..., description="UUID del pedido"),
+        user: Dict = Depends(verify_jwt_token),
+        _: None = Depends(require_any_permission(['odcsap.view', 'mabel.view']))
+    ):
+        """
+        Marca el pedido como GESTIONAR PEDIDO (al hacer clic en "Ver Detalle" desde la tabla Pedidos).
+        Si el pedido está en estado NUEVO PEDIDO, actualiza a GESTIONAR PEDIDO y devuelve el pedido completo.
+        Si ya está en otro estado, solo devuelve el pedido sin cambiar estado.
+        """
+        try:
+            with get_db_connection_context() as conn:
+                repo = PedidoRepository(conn)
+                pedido = repo.get_pedido_completo(pedido_id)
+                if not pedido:
+                    raise HTTPException(
+                        status_code=status.HTTP_404_NOT_FOUND,
+                        detail={"error": "not_found", "message": "No se encontró el pedido."}
+                    )
+                estado_id = pedido.get("cabecera", {}).get("estado_id")
+                try:
+                    estado_id = int(estado_id) if estado_id is not None else None
+                except (TypeError, ValueError):
+                    estado_id = None
+                if estado_id == ESTADO_NUEVO_PEDIDO:
+                    repo.update_estado(pedido_id, ESTADO_GESTIONAR_PEDIDO)
+                    pedido = repo.get_pedido_completo(pedido_id)
+                _eid = pedido.get("cabecera", {}).get("estado_id")
+                try:
+                    _eid = int(_eid) if _eid is not None else None
+                except (TypeError, ValueError):
+                    _eid = None
+                pedido["puede_descartar"] = _eid in (ESTADO_BORRADOR, ESTADO_NUEVO_PEDIDO)
+                return JSONResponse(status_code=status.HTTP_200_OK, content=pedido)
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"❌ Error al marcar pedido como gestionar {pedido_id}: {e}", exc_info=True)
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail={"error": "internal_error", "message": str(e)}
+            )
+
     @app.post("/pedidos/importar-excel", tags=["Pedidos"])
     async def importar_excel_pedido(
         file: UploadFile = File(..., description="Archivo Excel (.xlsx) con hojas 'cabecera' y 'detalle' (formato v1.0)"),
@@ -724,6 +779,53 @@ def register_crud_endpoints(app: FastAPI):
                 detail={
                     "error": "internal_error",
                     "message": f"Error interno al modificar cabecera del pedido: {str(e)}"
+                }
+            )
+
+    @app.post("/api/pedidos/{pedido_id}/enviar", tags=["Pedidos"])
+    async def enviar_pedido(
+        pedido_id: str = Path(..., description="UUID del pedido a enviar a EL RAYO"),
+        user: Dict = Depends(verify_jwt_token),
+        _: None = Depends(require_permission('mabel.view'))
+    ):
+        """
+        Enviar pedido a EL RAYO: cambia estado de BORRADOR a NUEVO_PEDIDO y envía notificación por correo.
+
+        Solo se permite para pedidos en estado BORRADOR (estado_id = 1).
+        Valida que el pedido tenga detalles; si el correo falla, el pedido no se marca como enviado.
+
+        - **404**: Pedido no encontrado.
+        - **400**: Pedido no en BORRADOR, sin detalles o fallo al enviar correo.
+        - **200**: Pedido enviado (estado actualizado, correo enviado).
+        """
+        try:
+            from src.database.services.pedido_service import PedidoService
+            service = PedidoService()
+            usuario_id = get_user_id(user)
+            resultado = service.enviar_pedido(pedido_id=pedido_id, usuario_id=usuario_id)
+            return JSONResponse(
+                status_code=status.HTTP_200_OK,
+                content=resultado
+            )
+        except BusinessException as e:
+            if e.error_code == "not_found":
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail={"error": e.error_code, "message": e.message}
+                )
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={"error": e.error_code, "message": e.message}
+            )
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"❌ Error al enviar pedido {pedido_id}: {e}", exc_info=True)
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail={
+                    "error": "internal_error",
+                    "message": f"Error al enviar el pedido: {str(e)}"
                 }
             )
 
