@@ -367,21 +367,18 @@ En la pantalla `/mba3-consultas/pedidos/{numero_pedido}` (ej. `P-12.23 - 12 - 20
 2. **Persistir el estado** del pedido en el backend (el backend lo hace; el frontend solo debe llamar al endpoint).
 3. **Deshabilitar el botón "Confirmar"** una vez que el pedido está confirmado o ya tiene respuesta cargada, para evitar confirmaciones duplicadas.
 
-**Endpoint a usar:** `POST /api/pedidos/{pedido_id}/crear-respuesta-desde-pedido`
+**Endpoints posibles:**
 
-- **Método:** POST  
-- **URL:** `/api/pedidos/{pedido_id}/crear-respuesta-desde-pedido`  
-- **Nota:** La ruta de la app usa `numero_pedido` (ej. `P-12.23 - 12 - 2025`), pero el API recibe **`pedido_id`** (UUID). Usar siempre el **`cabecera.pedido_id`** del pedido cargado en esa pantalla.  
-- **Body:** no se envía body (o vacío).  
-- **Autenticación:** JWT en header `Authorization: Bearer {token}`.  
-- **Permiso:** `mba3-consultas.proceso.execute`.
+1. **`POST /api/pedidos/{pedido_id}/confirmar-para-redistribucion`** (usado por muchos frontends)
+   - Cambia el estado de GESTIONAR PEDIDO a **CONFIRMADO** (`estado_id` 4).
+   - **Respuesta 200:** devuelve el **pedido completo** (objeto con `cabecera`, `detalles`, etc.) ya con `cabecera.estado_id === 4` y `cabecera.estado === 'CONFIRMADO'`.
+   - El frontend **debe** tomar esa respuesta y actualizar el pedido en memoria para que el botón "Confirmar" se deshabilite de inmediato.
 
-**Qué hace el backend:**
+2. **`POST /api/pedidos/{pedido_id}/crear-respuesta-desde-pedido`**
+   - Toma los datos actuales del pedido (totales, costos, etc.), genera la respuesta del proveedor, la guarda y actualiza el estado a **CONFIRMADO** (id 4). Envía email a MABEL TRADING.
+   - Respuesta: `status: "success"`, etc. Tras éxito, el frontend debe recargar el pedido o actualizar estado para deshabilitar el botón.
 
-- Toma los datos actuales del pedido (totales, costos, etc.), genera la respuesta del proveedor y la guarda.
-- Actualiza el estado del pedido a **`RESPUESTA_PROVEEDOR_CARGADA`**.
-- Registra la confirmación en el historial (tabla de confirmaciones EL RAYO).
-- Responde con `status: "success"`, `confirmacion_registrada: true/false`, `estado_guardado`, etc.
+En ambos casos usar **`cabecera.pedido_id`** (UUID) en la URL. **Body:** ninguno (o vacío). **Autenticación:** JWT. **Permisos:** `odcsap.view` o `mabel.view` (confirmar-para-redistribucion); `mabel.view` (crear-respuesta-desde-pedido).
 
 **Comportamiento en el frontend:**
 
@@ -393,18 +390,58 @@ En la pantalla `/mba3-consultas/pedidos/{numero_pedido}` (ej. `P-12.23 - 12 - 20
 
 **Cuándo deshabilitar el botón "Confirmar":**
 
-Deshabilitar (y no permitir nueva confirmación) cuando el estado del pedido ya indica que la respuesta está cargada o confirmada. Usar el campo **`cabecera.estado`** del pedido cargado:
+Deshabilitar (y no permitir nueva confirmación) **desde el estado CONFIRMADO en adelante**. Usar **`cabecera.estado_id`** o **`cabecera.estado`** del pedido cargado:
 
+- **`CONFIRMADO`** (`estado_id === 4`) → pedido confirmado para redistribución; **deshabilitar**. (Es el estado que devuelve `POST .../confirmar-para-redistribucion`.)
 - `RESPUESTA_PROVEEDOR_CARGADA` → respuesta ya guardada; deshabilitar.
 - `CONFIRMADO_PROVEEDOR` → confirmación ya procesada; deshabilitar.
 - `CONFIRMADO REDISTRIBUCION` (o `PEDIDO_CONFIRMADO` por compatibilidad) → redistribución ya confirmada; deshabilitar.
 - Cualquier otro estado posterior (p. ej. `PROCESADO_SAP`, `CONFIRMADO_ENVIADO`, etc.) → deshabilitar.
 
+**Condición recomendada en código:** deshabilitar si `cabecera.estado_id === 4` **o** `cabecera.estado === 'CONFIRMADO'` **o** cualquiera de los estados listados arriba (por id o por nombre).
+
+**Tras hacer clic en "Confirmar":** Si el frontend usa `POST /api/pedidos/{pedido_id}/confirmar-para-redistribucion`, la respuesta **200** trae el **pedido completo** ya con estado CONFIRMADO (`estado_id` 4). El frontend **debe actualizar el pedido en memoria** con esa respuesta (reemplazar el objeto pedido o asignar `cabecera.estado_id` y `cabecera.estado` del body). Así el botón se deshabilita de inmediato al evaluar la condición anterior. Si no se actualiza el estado local con la respuesta, el botón seguirá habilitado.
+
 **Resumen:**
 
 - **Mostrar** el botón solo si `capabilities.can_confirm_pedido` (ya definido en 0.5.8).
-- **Deshabilitar** el botón si `cabecera.estado` está en uno de los estados anteriores (ya confirmado / respuesta cargada).
-- **Al hacer clic:** `POST /api/pedidos/{cabecera.pedido_id}/crear-respuesta-desde-pedido` → tras éxito, actualizar estado (o recargar pedido) y deshabilitar el botón.
+- **Deshabilitar** el botón si `cabecera.estado_id === 4` o `cabecera.estado === 'CONFIRMADO'` o cualquier estado posterior (lista anterior).
+- **Al hacer clic:** Llamar al endpoint de confirmar; **tras éxito, actualizar el pedido local con la respuesta del backend** (o recargar el pedido) para que el botón pase a deshabilitado.
+
+**Al mismo tiempo que se deshabilita "Confirmar":** Las opciones de **editar** (COSTO UNIT., TOTAL, COMENTARIO) deben deshabilitarse también cuando el usuario hace clic en "Confirmar" (porque el estado pasa a CONFIRMADO). Véase 0.5.8.2.
+
+### 0.5.8.2 Edición de COSTO UNIT., TOTAL y COMENTARIO (solo en GESTIONAR PEDIDO)
+
+En la pantalla de detalle del pedido (`/mba3-consultas/pedidos/{id}`), los campos **COSTO UNIT.**, **TOTAL** y **COMENTARIO** de cada línea solo pueden **editarse cuando el pedido está en estado GESTIONAR PEDIDO** (`estado_id === 3` o `cabecera.estado === 'GESTIONAR PEDIDO'`).
+
+- **Si el estado es GESTIONAR PEDIDO:** el usuario puede modificar esos campos (y el backend acepta los PATCH).
+- **En cualquier otro estado** (CONFIRMADO, RESPUESTA_PROVEEDOR_CARGADA, CONFIRMADO REDISTRIBUCION, etc.): las celdas deben mostrarse **solo lectura** (deshabilitar inputs / no permitir edición). El backend rechazará con **400** y `error: "estado_no_editable"` si se intenta editar.
+
+**Comportamiento requerido:**
+
+1. **Al cargar la vista:** Si `cabecera.estado_id !== 3` (o `cabecera.estado !== 'GESTIONAR PEDIDO'`), deshabilitar la edición de COSTO UNIT., TOTAL y COMENTARIO en toda la tabla. El usuario puede volver a entrar a este pedido más tarde; si ya está confirmado, las celdas deben seguir en solo lectura.
+2. **Al hacer clic en "Confirmar":** En el mismo momento en que se deshabilita el botón "Confirmar", **deshabilitar también** las opciones de editar (COSTO UNIT., TOTAL, COMENTARIO), porque el estado pasa a CONFIRMADO. Actualizar el pedido en memoria con la respuesta para que la condición "solo editable en GESTIONAR PEDIDO" haga que las celdas queden en solo lectura.
+
+**Condición en código:** habilitar edición solo si `cabecera.estado_id === 3` (o `cabecera.estado === 'GESTIONAR PEDIDO'`). En cualquier otro estado, no permitir edición.
+
+### 0.5.9 Marcar como "Despachar y Facturar" (detalle del pedido)
+
+En la pantalla `/mba3-consultas/pedidos/{id}` (detalle del pedido), cuando el pedido está en estado **Confirmado y Enviado** (ODC enviada a SAP, solicitudes de transferencia generadas; en BD el pedido tiene `estado_id` = 12 / `estado` = `CONFIRMADO_ENVIADO`), el usuario puede marcar manualmente el pedido como **"Despachar y Facturar"** (estado indicativo, guardado en BD).
+
+**Endpoint:** `POST /api/pedidos/{pedido_id}/marcar-despachar-y-facturar`
+
+- **Método:** POST  
+- **URL:** `/api/pedidos/{pedido_id}/marcar-despachar-y-facturar` (usar `cabecera.pedido_id`).  
+- **Body:** ninguno.  
+- **Autenticación:** JWT en header `Authorization: Bearer {token}`.  
+- **Permisos:** `odcsap.view` o `mabel.view`.
+
+**Condición:** Solo se permite si el pedido está en estado **Confirmado y Enviado** (`cabecera.estado_id === 12` o `cabecera.estado === 'CONFIRMADO_ENVIADO'`). Si no, el backend responde **400** con `error: "estado_no_confirmado_enviado"`.
+
+**Comportamiento en el frontend:**
+
+- **Mostrar** el botón/acción "Despachar y Facturar" solo cuando `cabecera.estado_id === 12` (o `cabecera.estado === 'CONFIRMADO_ENVIADO'`). No mostrarlo si el estado ya es "DESPACHAR Y FACTURAR" (`estado_id === 17`) u otro.
+- **Al hacer clic:** Enviar `POST /api/pedidos/{cabecera.pedido_id}/marcar-despachar-y-facturar`. Tras éxito (200), actualizar estado local o recargar el pedido; el estado pasará a "DESPACHAR Y FACTURAR" (`estado_id` 17).
 
 ### 0.5.10 Cambio de Ruta: Cargar Plantillas → Gestionar Pedido
 
@@ -1390,37 +1427,38 @@ Cada elemento de `data` incluye `cabecera` (con `numero_pedido`, `fecha_pedido`,
 
 ### 1.3.1 Gestión del botón "Confirmar Redistribución"
 
-En la pantalla de redistribución (`/mba3-consultas/pedidos/{numero_pedido}/redistribucion`), el botón **"Confirmar Redistribución"** debe deshabilitarse en dos casos:
+**Importante:** La redistribución solo se puede confirmar **una vez** por pedido. Tras el primer clic exitoso en "Confirmar Redistribución", el botón debe **deshabilitarse y permanecer deshabilitado** (no se permite confirmar de nuevo).
 
-1. **Mientras se procesa el clic** — para evitar doble envío y dar feedback.
-2. **Cuando la redistribución ya está confirmada** — según el estado del pedido (`cabecera.estado`).
+En la pantalla de redistribución (`/mba3-consultas/pedidos/{numero_pedido}/redistribucion`), el botón **"Confirmar Redistribución"** debe deshabilitarse en estos casos:
+
+1. **Al hacer clic** — deshabilitar de inmediato (evitar doble envío) y mostrar "Confirmando…" o spinner.
+2. **Tras un clic exitoso** — el botón debe **quedar deshabilitado para siempre** en esa vista (la acción solo se hace una vez).
+3. **Al cargar la vista** — si el pedido ya está en estado CONFIRMADO REDISTRIBUCION (o posterior), el botón debe mostrarse deshabilitado.
 
 **Endpoint a usar:** `POST /api/pedidos/{numero_pedido}/redistribucion/confirmar`
 
 - **Método:** POST  
 - **Body:** `RedistribucionConfirmarRequest` (p. ej. `{ "ajustes_detalle": [ ... ] }`).  
-- **Respuesta exitosa:** incluye `status: "success"`, `numero_pedido`, `message`, etc. El backend actualiza el estado del pedido a **`CONFIRMADO REDISTRIBUCION`**.
+- **Respuesta exitosa:** incluye `status: "success"`, `numero_pedido`, `message`, etc. **No incluye el pedido completo**; el backend actualiza el estado del pedido a **`CONFIRMADO REDISTRIBUCION`** (`estado_id` 10).
 
 **Comportamiento en el frontend:**
 
 | Acción | Comportamiento |
 |--------|----------------|
-| **Al hacer clic en "Confirmar Redistribución"** | Enviar `POST /api/pedidos/{numero_pedido}/redistribucion/confirmar` con el body correspondiente. **Deshabilitar el botón de inmediato** y mostrar indicador de carga (p. ej. texto "Confirmando…" o spinner). |
-| **Si la petición es exitosa** | Actualizar el estado local del pedido con el nuevo `estado` (p. ej. `CONFIRMADO REDISTRIBUCION`) o recargar el pedido desde el backend. **Mantener el botón deshabilitado** (la redistribución ya está confirmada). |
+| **Al hacer clic en "Confirmar Redistribución"** | Deshabilitar el botón **de inmediato**. Mostrar "Confirmando…" o spinner. Enviar `POST .../redistribucion/confirmar` con el body. |
+| **Si la petición es exitosa** | **Mantener el botón deshabilitado** (no volver a habilitar). Opción A: marcar en estado local que la redistribución ya se confirmó (p. ej. `redistribucionConfirmada = true`). Opción B: recargar el pedido desde el backend (GET pedido) para obtener `cabecera.estado === 'CONFIRMADO REDISTRIBUCION'` y que la condición de deshabilitado se cumpla por estado. |
 | **Si la petición falla** | Mostrar mensaje de error y **volver a habilitar el botón** para que el usuario pueda reintentar. |
 
-**Cuándo deshabilitar el botón "Confirmar Redistribución" (al cargar la vista o tras recargar):**
+**Cuándo deshabilitar el botón (condición en código):**
 
-Deshabilitar cuando el estado del pedido indica que la redistribución ya está confirmada. Usar el campo **`cabecera.estado`** del pedido cargado en esa pantalla:
-
-- `CONFIRMADO REDISTRIBUCION` (o `PEDIDO_CONFIRMADO` por compatibilidad) → redistribución ya confirmada; deshabilitar.
-- Cualquier estado posterior (p. ej. `PROCESADO_SAP`, `CONFIRMADO_ENVIADO`, etc.) → deshabilitar.
+- `cabecera.estado_id === 10` o `cabecera.estado === 'CONFIRMADO REDISTRIBUCION'` (o `'PEDIDO_CONFIRMADO'`) → deshabilitar.
+- Cualquier estado posterior (p. ej. `PROCESADO_SAP`, `CONFIRMADO_ENVIADO`) → deshabilitar.
+- **O** un flag local tipo `redistribucionConfirmada === true` tras un clic exitoso (y no recargar la página sin recargar el pedido).
 
 **Resumen de implementación:**
 
-- **Al cargar la vista:** Deshabilitar el botón si `cabecera.estado === 'CONFIRMADO REDISTRIBUCION'` o `cabecera.estado === 'PEDIDO_CONFIRMADO'` (o estado posterior).
-- **Al hacer clic:** Deshabilitar de inmediato y mostrar "Confirmando…" (o spinner); llamar a `POST /api/pedidos/{numero_pedido}/redistribucion/confirmar`.
-- **Si la petición tiene éxito:** Actualizar estado (o recargar pedido) y dejar el botón deshabilitado.
+- **Al cargar la vista:** Deshabilitar el botón si `cabecera.estado_id === 10` o `cabecera.estado === 'CONFIRMADO REDISTRIBUCION'` (o estado posterior).
+- **Al hacer clic:** Deshabilitar el botón de inmediato; tras **éxito**, no volver a habilitarlo (actualizar estado local con flag o recargar pedido).
 - **Si la petición falla:** Rehabilitar el botón y mostrar el error.
 
 ---

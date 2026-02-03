@@ -52,7 +52,8 @@ BEGIN
         (13, N'PENDIENTE_LOGISTICA',            13,  1),
         (14, N'ERROR_DATOS_MAESTROS',           14,  1),
         (15, N'EN_PROCESO',                     15,  1),
-        (16, N'COMPLETADO',                     16,  1);
+        (16, N'COMPLETADO',                     16,  1),
+        (17, N'DESPACHAR Y FACTURAR',         17,  1);  -- Manual: desde Confirmado y Enviado (ODC enviada a SAP)
 
     SET NOCOUNT OFF;
     PRINT 'Datos iniciales de pedido_estado insertados.';

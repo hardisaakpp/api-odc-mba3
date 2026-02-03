@@ -1114,8 +1114,10 @@ class PedidoCabeceraRepository:
         self, usuario_id: Optional[str] = None
     ) -> Optional[Dict[str, Any]]:
         """
-        Obtiene el último pedido con estado CONFIRMADO (estado_id = ESTADO_REDISTRIBUCION = 4).
-        Usado en pantalla Redistribución: al entrar en /redistribucion se carga el último pedido confirmado.
+        Obtiene el último pedido con estado CONFIRMADO (4) o CONFIRMADO REDISTRIBUCION (10).
+        Usado en pantalla Revisar Redistribución: al entrar en /redistribucion se carga el último
+        pedido que esté listo para redistribuir (CONFIRMADO) o ya con redistribución confirmada
+        (CONFIRMADO REDISTRIBUCION) para poder visualizarlo.
         """
         cursor = self.conn.cursor()
         try:
@@ -1134,9 +1136,9 @@ class PedidoCabeceraRepository:
                             p.creado_por, p.estado_id, pe.nombre AS estado_nombre, p.creado_en
                         FROM pedido p
                         LEFT JOIN pedido_estado pe ON pe.id = p.estado_id
-                        WHERE p.estado_id = ? AND p.creado_por = ?
+                        WHERE p.estado_id IN (?, ?) AND p.creado_por = ?
                         ORDER BY p.creado_en DESC
-                    """, (ESTADO_REDISTRIBUCION, usuario_id))
+                    """, (ESTADO_REDISTRIBUCION, ESTADO_PEDIDO_CONFIRMADO, usuario_id))
                 else:
                     cursor.execute("""
                         SELECT TOP 1
@@ -1146,9 +1148,9 @@ class PedidoCabeceraRepository:
                             p.creado_por, p.estado_id, pe.nombre AS estado_nombre, p.creado_en
                         FROM pedido p
                         LEFT JOIN pedido_estado pe ON pe.id = p.estado_id
-                        WHERE p.estado_id = ?
+                        WHERE p.estado_id IN (?, ?)
                         ORDER BY p.creado_en DESC
-                    """, (ESTADO_REDISTRIBUCION,))
+                    """, (ESTADO_REDISTRIBUCION, ESTADO_PEDIDO_CONFIRMADO))
             else:
                 if usuario_id is not None:
                     cursor.execute("""
@@ -1158,9 +1160,9 @@ class PedidoCabeceraRepository:
                             comprador_codigo, origen_traslado, serie, archivo_nombre,
                             creado_por, estado, creado_en
                         FROM pedido
-                        WHERE estado = ? AND creado_por = ?
+                        WHERE estado IN (?, ?, ?) AND creado_por = ?
                         ORDER BY creado_en DESC
-                    """, ("CONFIRMADO", usuario_id))
+                    """, ("CONFIRMADO", "CONFIRMADO REDISTRIBUCION", "PEDIDO_CONFIRMADO", usuario_id))
                 else:
                     cursor.execute("""
                         SELECT TOP 1
@@ -1169,9 +1171,9 @@ class PedidoCabeceraRepository:
                             comprador_codigo, origen_traslado, serie, archivo_nombre,
                             creado_por, estado, creado_en
                         FROM pedido
-                        WHERE estado = ?
+                        WHERE estado IN (?, ?, ?)
                         ORDER BY creado_en DESC
-                    """, ("CONFIRMADO",))
+                    """, ("CONFIRMADO", "CONFIRMADO REDISTRIBUCION", "PEDIDO_CONFIRMADO"))
 
             row = cursor.fetchone()
             if not row:
@@ -1216,7 +1218,7 @@ class PedidoCabeceraRepository:
             }
         except Exception as e:
             logger.error(
-                "❌ Error al obtener último pedido CONFIRMADO (redistribución): %s", e, exc_info=True
+                "❌ Error al obtener último pedido CONFIRMADO/CONFIRMADO REDISTRIBUCION: %s", e, exc_info=True
             )
             raise
         finally:

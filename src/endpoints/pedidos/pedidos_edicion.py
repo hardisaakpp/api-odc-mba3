@@ -3,12 +3,14 @@ Endpoints de edición de detalles de pedidos.
 """
 
 import logging
-from typing import Dict
+import uuid as uuid_module
+from typing import Dict, Optional
 from fastapi import FastAPI, Depends, HTTPException, Path, Body, status
 from fastapi.responses import JSONResponse
 
 from src.database.connection import get_db_connection_context
 from src.database.repositories.pedido_repository import PedidoRepository
+from src.database.pedido_estados import ESTADO_GESTIONAR_PEDIDO
 from src.security.jwt_auth import verify_jwt_token, require_permission
 from src.models import (
     ActualizarCostoRequest,
@@ -24,12 +26,28 @@ from .utils import get_user_id
 logger = logging.getLogger(__name__)
 
 
+def _get_pedido_por_identificador(repo: PedidoRepository, identificador: str) -> Optional[Dict]:
+    """
+    Obtiene el pedido completo por pedido_id (UUID) o por numero_pedido.
+    El frontend puede enviar la URL con UUID (ej. /api/pedidos/EFB69529-.../detalle/...)
+    o con numero_pedido (ej. /api/pedidos/P-12.23 - 12 - 2025/detalle/...).
+    """
+    if not identificador or not identificador.strip():
+        return None
+    identificador = identificador.strip()
+    try:
+        uuid_module.UUID(identificador)
+        return repo.get_pedido_completo(identificador)
+    except (ValueError, TypeError):
+        return repo.get_pedido_completo_por_numero(identificador)
+
+
 def register_edicion_endpoints(app: FastAPI):
     """Registra los endpoints de edición de detalles de pedidos."""
     
     @app.patch("/api/pedidos/{numero_pedido}/detalle/{pedido_detalle_id}/costo", tags=["Pedidos - Edición"])
     async def actualizar_costo_detalle(
-        numero_pedido: str = Path(..., description="Número del pedido"),
+        numero_pedido: str = Path(..., description="Número del pedido o pedido_id (UUID); el backend acepta ambos."),
         pedido_detalle_id: str = Path(..., description="UUID del detalle del pedido"),
         request_body: ActualizarCostoRequest = Body(..., description="Datos del costo a actualizar"),
         user: Dict = Depends(verify_jwt_token),
@@ -57,6 +75,19 @@ def register_edicion_endpoints(app: FastAPI):
             
             with get_db_connection_context() as conn:
                 repo = PedidoRepository(conn)
+                pedido = _get_pedido_por_identificador(repo, numero_pedido)
+                if not pedido:
+                    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
+                                      detail={"error": "pedido_not_found", "message": f"No se encontró el pedido: {numero_pedido}"})
+                estado_id = pedido.get("cabecera", {}).get("estado_id")
+                try:
+                    estado_id = int(estado_id) if estado_id is not None else None
+                except (TypeError, ValueError):
+                    estado_id = None
+                if estado_id != ESTADO_GESTIONAR_PEDIDO:
+                    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                                      detail={"error": "estado_no_editable",
+                                             "message": "Solo se pueden editar COSTO UNIT., TOTAL y COMENTARIO cuando el pedido está en estado GESTIONAR PEDIDO."})
                 resultado = repo.update_costo_detalle(pedido_detalle_id, nuevo_costo, modificado_por=user_id)
             
             if resultado["success"]:
@@ -79,7 +110,7 @@ def register_edicion_endpoints(app: FastAPI):
     
     @app.patch("/api/pedidos/{numero_pedido}/detalle/{pedido_detalle_id}/total", tags=["Pedidos - Edición"])
     async def actualizar_total_detalle(
-        numero_pedido: str = Path(..., description="Número del pedido"),
+        numero_pedido: str = Path(..., description="Número del pedido o pedido_id (UUID); el backend acepta ambos."),
         pedido_detalle_id: str = Path(..., description="UUID del detalle del pedido"),
         request_body: ActualizarTotalRequest = Body(..., description="Datos del total a actualizar"),
         user: Dict = Depends(verify_jwt_token),
@@ -114,6 +145,19 @@ def register_edicion_endpoints(app: FastAPI):
             
             with get_db_connection_context() as conn:
                 repo = PedidoRepository(conn)
+                pedido = _get_pedido_por_identificador(repo, numero_pedido)
+                if not pedido:
+                    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
+                                      detail={"error": "pedido_not_found", "message": f"No se encontró el pedido: {numero_pedido}"})
+                estado_id = pedido.get("cabecera", {}).get("estado_id")
+                try:
+                    estado_id = int(estado_id) if estado_id is not None else None
+                except (TypeError, ValueError):
+                    estado_id = None
+                if estado_id != ESTADO_GESTIONAR_PEDIDO:
+                    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                                      detail={"error": "estado_no_editable",
+                                             "message": "Solo se pueden editar COSTO UNIT., TOTAL y COMENTARIO cuando el pedido está en estado GESTIONAR PEDIDO."})
                 resultado = repo.update_total_detalle(pedido_detalle_id, nuevo_total, modificado_por=user_id)
             
             if resultado["success"]:
@@ -137,7 +181,7 @@ def register_edicion_endpoints(app: FastAPI):
     
     @app.patch("/api/pedidos/{numero_pedido}/detalle/{pedido_detalle_id}/comentario", tags=["Pedidos - Edición"])
     async def actualizar_comentario_detalle(
-        numero_pedido: str = Path(..., description="Número del pedido"),
+        numero_pedido: str = Path(..., description="Número del pedido o pedido_id (UUID); el backend acepta ambos."),
         pedido_detalle_id: str = Path(..., description="UUID del detalle del pedido"),
         request_body: ActualizarComentarioRequest = Body(..., description="Datos del comentario a actualizar"),
         user: Dict = Depends(verify_jwt_token),
@@ -163,6 +207,19 @@ def register_edicion_endpoints(app: FastAPI):
             
             with get_db_connection_context() as conn:
                 repo = PedidoRepository(conn)
+                pedido = _get_pedido_por_identificador(repo, numero_pedido)
+                if not pedido:
+                    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
+                                      detail={"error": "pedido_not_found", "message": f"No se encontró el pedido: {numero_pedido}"})
+                estado_id = pedido.get("cabecera", {}).get("estado_id")
+                try:
+                    estado_id = int(estado_id) if estado_id is not None else None
+                except (TypeError, ValueError):
+                    estado_id = None
+                if estado_id != ESTADO_GESTIONAR_PEDIDO:
+                    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                                      detail={"error": "estado_no_editable",
+                                             "message": "Solo se pueden editar COSTO UNIT., TOTAL y COMENTARIO cuando el pedido está en estado GESTIONAR PEDIDO."})
                 resultado = repo.update_comentario_detalle(pedido_detalle_id, nuevo_comentario, modificado_por=user_id)
             
             if resultado["success"]:
@@ -188,7 +245,7 @@ def register_edicion_endpoints(app: FastAPI):
               response_model=GuardarModificacionesColumnasResponse,
               tags=["Pedidos - Modificaciones"])
     async def guardar_modificaciones_columnas(
-        numero_pedido: str = Path(..., description="Número del pedido"),
+        numero_pedido: str = Path(..., description="Número del pedido o pedido_id (UUID); el backend acepta ambos."),
         request_body: GuardarModificacionesColumnasRequest = Body(..., description="Datos de las modificaciones"),
         user: Dict = Depends(verify_jwt_token),
         _: None = Depends(require_permission('mabel.view'))
@@ -206,14 +263,28 @@ def register_edicion_endpoints(app: FastAPI):
             
             with get_db_connection_context() as conn:
                 repo = PedidoRepository(conn)
+                pedido = _get_pedido_por_identificador(repo, numero_pedido)
+                if not pedido:
+                    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
+                                      detail={"error": "pedido_not_found", "message": f"No se encontró el pedido: {numero_pedido}"})
+                estado_id = pedido.get("cabecera", {}).get("estado_id")
+                try:
+                    estado_id = int(estado_id) if estado_id is not None else None
+                except (TypeError, ValueError):
+                    estado_id = None
+                if estado_id != ESTADO_GESTIONAR_PEDIDO:
+                    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                                      detail={"error": "estado_no_editable",
+                                             "message": "Solo se pueden editar COSTO UNIT., TOTAL y COMENTARIO cuando el pedido está en estado GESTIONAR PEDIDO."})
+                numero_pedido_real = pedido.get("cabecera", {}).get("numero_pedido") or numero_pedido
                 resultado = repo.guardar_modificaciones_columnas(
-                    numero_pedido=numero_pedido, modificaciones=modificaciones_list, modificado_por=user_id)
+                    numero_pedido=numero_pedido_real, modificaciones=modificaciones_list, modificado_por=user_id)
             
             if resultado["success"]:
-                logger.info(f"✅ Modificaciones guardadas para pedido {numero_pedido} por usuario {user.get('username', 'UNKNOWN')}")
+                logger.info(f"✅ Modificaciones guardadas para pedido {numero_pedido_real} por usuario {user.get('username', 'UNKNOWN')}")
                 return GuardarModificacionesColumnasResponse(
                     status="success", message=resultado["mensaje"],
-                    numero_pedido=numero_pedido, modificaciones_guardadas=resultado["modificaciones_guardadas"])
+                    numero_pedido=numero_pedido_real, modificaciones_guardadas=resultado["modificaciones_guardadas"])
             else:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
                                   detail={"error": "pedido_not_found", "message": resultado["mensaje"]})
@@ -229,7 +300,7 @@ def register_edicion_endpoints(app: FastAPI):
              response_model=ObtenerModificacionesColumnasResponse,
              tags=["Pedidos - Modificaciones"])
     async def obtener_modificaciones_columnas(
-        numero_pedido: str = Path(..., description="Número del pedido"),
+        numero_pedido: str = Path(..., description="Número del pedido o pedido_id (UUID); el backend acepta ambos."),
         user: Dict = Depends(verify_jwt_token),
         _: None = Depends(require_permission('mabel.view'))
     ):
@@ -237,7 +308,12 @@ def register_edicion_endpoints(app: FastAPI):
         try:
             with get_db_connection_context() as conn:
                 repo = PedidoRepository(conn)
-                resultado = repo.obtener_modificaciones_columnas(numero_pedido=numero_pedido)
+                pedido = _get_pedido_por_identificador(repo, numero_pedido)
+                if not pedido:
+                    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
+                                      detail={"error": "pedido_not_found", "message": f"No se encontró el pedido: {numero_pedido}"})
+                numero_pedido_real = pedido.get("cabecera", {}).get("numero_pedido") or numero_pedido
+                resultado = repo.obtener_modificaciones_columnas(numero_pedido=numero_pedido_real)
             
             if not resultado["success"]:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
@@ -248,9 +324,9 @@ def register_edicion_endpoints(app: FastAPI):
                 modificado_por=mod["modificado_por"], fecha_modificacion=mod["fecha_modificacion"])
                 for mod in resultado["modificaciones"]]
             
-            logger.info(f"✅ Modificaciones obtenidas para pedido {numero_pedido} por usuario {user.get('username', 'UNKNOWN')}")
+            logger.info(f"✅ Modificaciones obtenidas para pedido {numero_pedido_real} por usuario {user.get('username', 'UNKNOWN')}")
             return ObtenerModificacionesColumnasResponse(
-                status="success", numero_pedido=numero_pedido, modificaciones=modificaciones_items)
+                status="success", numero_pedido=numero_pedido_real, modificaciones=modificaciones_items)
                 
         except HTTPException:
             raise

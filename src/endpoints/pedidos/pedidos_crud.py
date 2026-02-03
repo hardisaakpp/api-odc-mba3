@@ -11,7 +11,14 @@ from fastapi.responses import JSONResponse
 from src.database.connection import get_db_connection_context
 from src.database.repositories.pedido_repository import PedidoRepository
 from src.database.repositories.pedido_respuesta_repository import PedidoRespuestaRepository
-from src.database.pedido_estados import ESTADO_BORRADOR, ESTADO_NUEVO_PEDIDO, ESTADO_GESTIONAR_PEDIDO, ESTADO_REDISTRIBUCION
+from src.database.pedido_estados import (
+    ESTADO_BORRADOR,
+    ESTADO_NUEVO_PEDIDO,
+    ESTADO_GESTIONAR_PEDIDO,
+    ESTADO_REDISTRIBUCION,
+    ESTADO_CONFIRMADO_ENVIADO,
+    ESTADO_DESPACHAR_Y_FACTURAR,
+)
 from src.security.jwt_auth import verify_jwt_token, require_permission, require_any_permission
 from src.exceptions import BusinessException
 from src.models import (
@@ -224,19 +231,20 @@ def register_crud_endpoints(app: FastAPI):
     async def get_ultimo_pedido_redistribucion(
         solo_usuario: Optional[bool] = Query(
             True,
-            description="Si true, último pedido CONFIRMADO del usuario; si false, último en todo el sistema"
+            description="Si true, último pedido CONFIRMADO o CONFIRMADO REDISTRIBUCION del usuario; si false, último en todo el sistema"
         ),
         user: Dict = Depends(verify_jwt_token),
         _: None = Depends(require_any_permission(['odcsap.view', 'mabel.view']))
     ):
         """
-        Obtiene el último pedido con estado CONFIRMADO (listo para redistribución).
-        Para la pantalla Redistribución: al entrar en /redistribucion sin número de pedido,
+        Obtiene el último pedido con estado CONFIRMADO (4) o CONFIRMADO REDISTRIBUCION (10).
+        Para la pantalla Revisar Redistribución: al entrar en /redistribucion sin número de pedido,
         el front llama a este endpoint y, si hay resultado, redirige a
-        /pedidos/{numero_pedido}/redistribucion.
+        /pedidos/{numero_pedido}/redistribucion. Así se pueden visualizar tanto pedidos listos
+        para redistribuir (CONFIRMADO) como ya con redistribución confirmada (CONFIRMADO REDISTRIBUCION).
 
         **Query Parameters:**
-        - `solo_usuario` (bool, default: true) - Si true, último CONFIRMADO del usuario; si false, último global.
+        - `solo_usuario` (bool, default: true) - Si true, último pedido del usuario en esos estados; si false, último global.
 
         **Respuesta:** Objeto con cabecera básica (pedido_id, numero_pedido, estado, ...) o null.
         """
@@ -504,6 +512,63 @@ def register_crud_endpoints(app: FastAPI):
             raise
         except Exception as e:
             logger.error(f"❌ Error al confirmar pedido para redistribución {pedido_id}: {e}", exc_info=True)
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail={"error": "internal_error", "message": str(e)}
+            )
+
+    @app.post("/api/pedidos/{pedido_id}/marcar-despachar-y-facturar", tags=["Pedidos"])
+    async def marcar_despachar_y_facturar(
+        pedido_id: str = Path(..., description="UUID del pedido"),
+        user: Dict = Depends(verify_jwt_token),
+        _: None = Depends(require_any_permission(['odcsap.view', 'mabel.view']))
+    ):
+        """
+        Marca el pedido como "Despachar y Facturar" (estado indicativo).
+
+        Solo se permite cuando el pedido está en estado **Confirmado y Enviado**
+        (estado_id = CONFIRMADO_ENVIADO), es decir, cuando la ODC fue enviada a SAP
+        y se generaron las solicitudes de transferencia (estado ENVIADA en orden de compra).
+
+        - **404**: Pedido no encontrado.
+        - **400**: Pedido no está en estado Confirmado y Enviado.
+        - **200**: Estado actualizado a Despachar y Facturar; devuelve el pedido completo.
+        """
+        try:
+            with get_db_connection_context() as conn:
+                repo = PedidoRepository(conn)
+                pedido = repo.get_pedido_completo(pedido_id)
+                if not pedido:
+                    raise HTTPException(
+                        status_code=status.HTTP_404_NOT_FOUND,
+                        detail={"error": "not_found", "message": "No se encontró el pedido."}
+                    )
+                estado_id = pedido.get("cabecera", {}).get("estado_id")
+                try:
+                    estado_id = int(estado_id) if estado_id is not None else None
+                except (TypeError, ValueError):
+                    estado_id = None
+                if estado_id != ESTADO_CONFIRMADO_ENVIADO:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail={
+                            "error": "estado_no_confirmado_enviado",
+                            "message": "Solo se puede marcar como Despachar y Facturar cuando el pedido está en estado Confirmado y Enviado (ODC enviada a SAP)."
+                        }
+                    )
+                repo.update_estado(pedido_id, ESTADO_DESPACHAR_Y_FACTURAR)
+                pedido = repo.get_pedido_completo(pedido_id)
+                _eid = pedido.get("cabecera", {}).get("estado_id")
+                try:
+                    _eid = int(_eid) if _eid is not None else None
+                except (TypeError, ValueError):
+                    _eid = None
+                pedido["puede_descartar"] = _eid in (ESTADO_BORRADOR, ESTADO_NUEVO_PEDIDO)
+                return JSONResponse(status_code=status.HTTP_200_OK, content=pedido)
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"❌ Error al marcar pedido como Despachar y Facturar {pedido_id}: {e}", exc_info=True)
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail={"error": "internal_error", "message": str(e)}
