@@ -842,7 +842,11 @@ class DistribucionPedidoResponse(BaseModel):
     
     pedido_id: str = Field(..., description="UUID del pedido")
     numero_pedido: str = Field(..., description="Número del pedido")
-    version_actual: int = Field(..., ge=1, description="Versión actual de la redistribución")
+    version_actual: int = Field(
+        ...,
+        ge=0,
+        description="Versión actual de la redistribución (0 = sin redistribución aún)",
+    )
     estado_pedido: Optional[str] = None
     productos: List[DistribucionProductoResponse] = Field(default_factory=list)
 
