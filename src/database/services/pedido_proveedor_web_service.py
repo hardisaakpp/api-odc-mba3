@@ -9,7 +9,7 @@ from typing import Dict, Any, List, Optional
 from datetime import datetime
 
 from ..connection import get_db_connection_context
-from ..pedido_estados import ESTADO_RESPUESTA_PROVEEDOR_CARGADA
+from ..pedido_estados import ESTADO_REDISTRIBUCION
 from ..repositories.pedido_repository import PedidoRepository
 from ..repositories.pedido_respuesta_repository import PedidoRespuestaRepository
 from ..repositories.pedido_confirmacion_rayo_repository import PedidoConfirmacionRayoRepository
@@ -310,9 +310,9 @@ class PedidoProveedorWebService:
                 respuestas_precios=respuestas_precios
             )
             
-            # Si es confirmado, actualizar estado del pedido
+            # Si es confirmado, actualizar estado del pedido a REDISTRIBUCION (flujo unificado con confirmar para redistribución)
             if estado == "confirmado":
-                repo.update_estado(pedido_id, ESTADO_RESPUESTA_PROVEEDOR_CARGADA)
+                repo.update_estado(pedido_id, ESTADO_REDISTRIBUCION)
             
             return {
                 "status": "success",
@@ -605,10 +605,14 @@ class PedidoProveedorWebService:
                 }
                 logger.info(f"Respuesta ya existía, no se actualizan detalles de respuesta (solo se registrará confirmación si hay cambios)")
             
-            # Actualizar estado del pedido solo si no estaba ya en ese estado
-            estado_actual = pedido["cabecera"].get("estado")
-            if estado_actual != "RESPUESTA_PROVEEDOR_CARGADA":
-                repo.update_estado(pedido_id, ESTADO_RESPUESTA_PROVEEDOR_CARGADA)
+            # Actualizar estado del pedido a REDISTRIBUCION (flujo unificado: confirmar respuesta EL RAYO = ir a redistribución)
+            estado_id_actual = pedido["cabecera"].get("estado_id")
+            try:
+                estado_id_actual = int(estado_id_actual) if estado_id_actual is not None else None
+            except (TypeError, ValueError):
+                estado_id_actual = None
+            if estado_id_actual != ESTADO_REDISTRIBUCION:
+                repo.update_estado(pedido_id, ESTADO_REDISTRIBUCION)
             
             # ✅ REGISTRAR CONFIRMACIÓN DE EL RAYO
             # Obtener valores actuales desde la BD para registrar el historial completo
@@ -815,7 +819,7 @@ class PedidoProveedorWebService:
                 "cantidades_guardadas": resultado_guardado["cantidades_guardadas"],
                 "precios_guardados": resultado_guardado["precios_guardados"],
                 "pedido_id": pedido_id,
-                "estado_guardado": "PENDIENTE_REVISION",
+                "estado_guardado": "REDISTRIBUCION",
                 "ya_existia": ya_existia_respuesta,
                 "confirmacion_registrada": hay_cambios or not confirmaciones_previas
             }

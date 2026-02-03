@@ -7,6 +7,8 @@ import logging
 from typing import Dict, Any, List, Optional, Tuple
 from decimal import Decimal
 
+from src.database.pedido_estados import ESTADO_REDISTRIBUCION, estado_id_desde_legacy
+
 logger = logging.getLogger(__name__)
 
 
@@ -152,19 +154,16 @@ class RedistribucionValidator:
                 "El pedido no tiene respuesta del proveedor. Debe existir una confirmación antes de redistribuir."
             )
         
-        # Validación 6: Estado del pedido debe permitir redistribución
-        estado_pedido = pedido_data.get("cabecera", {}).get("estado", "")
-        estados_permitidos = [
-            "RESPUESTA_PROVEEDOR_CARGADA",  # Estado después de que EL RAYO confirma (Fase 3)
-            "CONFIRMADO_PROVEEDOR",
-            "EN_AJUSTE_MABEL",
-            "PENDIENTE_CONFIRMACION_PROVEEDOR"  # Por si acaso
-        ]
-        
-        if estado_pedido and estado_pedido not in estados_permitidos:
+        # Validación 6: Solo el estado REDISTRIBUCION permite confirmar redistribución
+        cabecera = pedido_data.get("cabecera", {})
+        estado_id = cabecera.get("estado_id")
+        if estado_id is None:
+            estado_id = estado_id_desde_legacy(cabecera.get("estado"))
+        estado_nombre = cabecera.get("estado_nombre") or cabecera.get("estado") or "N/A"
+        if estado_id != ESTADO_REDISTRIBUCION:
             errores.append(
-                f"El estado del pedido ({estado_pedido}) no permite redistribución. "
-                f"Estados permitidos: {', '.join(estados_permitidos)}"
+                f"El estado del pedido ({estado_nombre}) no permite confirmar redistribución. "
+                "Solo se permite en estado REDISTRIBUCION."
             )
         
         # Validación 7: Validar bodegas - las bodegas no pueden quedar negativas

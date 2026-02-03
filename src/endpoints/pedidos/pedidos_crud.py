@@ -11,7 +11,7 @@ from fastapi.responses import JSONResponse
 from src.database.connection import get_db_connection_context
 from src.database.repositories.pedido_repository import PedidoRepository
 from src.database.repositories.pedido_respuesta_repository import PedidoRespuestaRepository
-from src.database.pedido_estados import ESTADO_BORRADOR, ESTADO_NUEVO_PEDIDO, ESTADO_GESTIONAR_PEDIDO
+from src.database.pedido_estados import ESTADO_BORRADOR, ESTADO_NUEVO_PEDIDO, ESTADO_GESTIONAR_PEDIDO, ESTADO_REDISTRIBUCION
 from src.security.jwt_auth import verify_jwt_token, require_permission, require_any_permission
 from src.exceptions import BusinessException
 from src.models import (
@@ -449,6 +449,62 @@ def register_crud_endpoints(app: FastAPI):
             raise
         except Exception as e:
             logger.error(f"❌ Error al marcar pedido como gestionar {pedido_id}: {e}", exc_info=True)
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail={"error": "internal_error", "message": str(e)}
+            )
+
+    @app.post("/api/pedidos/{pedido_id}/confirmar-para-redistribucion", tags=["Pedidos"])
+    async def confirmar_para_redistribucion(
+        pedido_id: str = Path(..., description="UUID del pedido"),
+        user: Dict = Depends(verify_jwt_token),
+        _: None = Depends(require_any_permission(['odcsap.view', 'mabel.view']))
+    ):
+        """
+        Confirma el pedido para redistribución: cambia estado de GESTIONAR PEDIDO a REDISTRIBUCION.
+
+        Se usa cuando el usuario hace clic en "Confirmar" en la página de detalle del pedido
+        (estado actual = GESTIONAR PEDIDO). Solo se permite si el pedido está en ese estado.
+
+        - **404**: Pedido no encontrado.
+        - **400**: Pedido no está en estado GESTIONAR PEDIDO.
+        - **200**: Estado actualizado a REDISTRIBUCION; devuelve el pedido completo.
+        """
+        try:
+            with get_db_connection_context() as conn:
+                repo = PedidoRepository(conn)
+                pedido = repo.get_pedido_completo(pedido_id)
+                if not pedido:
+                    raise HTTPException(
+                        status_code=status.HTTP_404_NOT_FOUND,
+                        detail={"error": "not_found", "message": "No se encontró el pedido."}
+                    )
+                estado_id = pedido.get("cabecera", {}).get("estado_id")
+                try:
+                    estado_id = int(estado_id) if estado_id is not None else None
+                except (TypeError, ValueError):
+                    estado_id = None
+                if estado_id != ESTADO_GESTIONAR_PEDIDO:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail={
+                            "error": "estado_no_gestionar",
+                            "message": "Solo se puede confirmar para redistribución cuando el pedido está en estado GESTIONAR PEDIDO."
+                        }
+                    )
+                repo.update_estado(pedido_id, ESTADO_REDISTRIBUCION)
+                pedido = repo.get_pedido_completo(pedido_id)
+                _eid = pedido.get("cabecera", {}).get("estado_id")
+                try:
+                    _eid = int(_eid) if _eid is not None else None
+                except (TypeError, ValueError):
+                    _eid = None
+                pedido["puede_descartar"] = _eid in (ESTADO_BORRADOR, ESTADO_NUEVO_PEDIDO)
+                return JSONResponse(status_code=status.HTTP_200_OK, content=pedido)
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"❌ Error al confirmar pedido para redistribución {pedido_id}: {e}", exc_info=True)
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail={"error": "internal_error", "message": str(e)}

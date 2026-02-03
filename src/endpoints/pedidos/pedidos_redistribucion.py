@@ -13,7 +13,7 @@ from io import BytesIO
 
 from src.database.connection import get_db_connection_context
 from src.database.pedido_estados import (
-    ESTADO_EN_AJUSTE_MABEL,
+    ESTADO_REDISTRIBUCION,
     ESTADO_REDISTRIBUIDO,
     ESTADO_PEDIDO_CONFIRMADO,
 )
@@ -70,7 +70,7 @@ def register_redistribucion_endpoints(app: FastAPI):
             "pedido_id": "...",
             "numero_pedido": "P-12.48 - 12 - 2025",
             "version_actual": 1,
-            "estado_pedido": "EN_AJUSTE_MABEL",
+            "estado_pedido": "REDISTRIBUCION",
             "productos": [
                 {
                     "pedido_detalle_id": "...",
@@ -183,7 +183,7 @@ def register_redistribucion_endpoints(app: FastAPI):
         - Todas las tiendas pertenecen al pedido
         - No duplicados de tienda por producto
         - El pedido debe tener respuesta del proveedor
-        - Estado del pedido debe permitir redistribución (RESPUESTA_PROVEEDOR_CARGADA, CONFIRMADO_PROVEEDOR, EN_AJUSTE_MABEL)
+        - Estado del pedido debe ser REDISTRIBUCION (solo este estado permite confirmar redistribución)
         
         **Request:**
         ```json
@@ -292,8 +292,8 @@ def register_redistribucion_endpoints(app: FastAPI):
                     usuario=user_id
                 )
                 
-                # Actualizar estado del pedido
-                repo_pedido.update_estado(pedido_id, ESTADO_EN_AJUSTE_MABEL)
+                # Actualizar estado del pedido a REDISTRIBUCION (solo este estado permite Confirmar Redistribución)
+                repo_pedido.update_estado(pedido_id, ESTADO_REDISTRIBUCION)
                 
                 logger.info(f"✅ Redistribución creada para pedido {pedido_id} por usuario {user_id}")
                 
@@ -353,7 +353,7 @@ def register_redistribucion_endpoints(app: FastAPI):
             "pedido_id": "...",
             "numero_pedido": "P-12.48 - 12 - 2025",
             "version_confirmada": 1,
-            "estado_anterior": "EN_AJUSTE_MABEL",
+            "estado_anterior": "REDISTRIBUCION",
             "estado_nuevo": "REDISTRIBUIDO",
             "fecha_confirmacion": "2025-01-15T10:30:00Z",
             "mensaje": "Redistribución versión 1 confirmada exitosamente"
@@ -739,7 +739,7 @@ def register_redistribucion_endpoints(app: FastAPI):
         **Funcionalidad:**
         - Guarda la redistribución como borrador (no la confirma)
         - Permite recuperar el borrador más tarde
-        - No cambia el estado del pedido
+        - Pasa el pedido a estado REDISTRIBUCION para permitir luego Confirmar Redistribución
         
         **Request:**
         ```json
@@ -846,6 +846,9 @@ def register_redistribucion_endpoints(app: FastAPI):
                 """, (pedido_id, ajustes_json, user_id, pedido_id, pedido_id, numero_pedido, ajustes_json, user_id))
                 
                 conn.commit()
+
+                # Pasar a REDISTRIBUCION para que el usuario pueda luego Confirmar Redistribución
+                repo_pedido.update_estado(pedido_id, ESTADO_REDISTRIBUCION)
                 
                 logger.info(f"✅ Borrador guardado para pedido {numero_pedido} por usuario {user_id}")
                 

@@ -845,7 +845,7 @@ class PedidoCabeceraRepository:
         solo_redistribucion_confirmada: bool = False
     ) -> Dict[str, Any]:
         """
-        Obtiene pedidos en estado confirmado (estado_id 4 u 8), ordenados por creado_en DESC.
+        Obtiene pedidos en estado confirmado (estado_id 6 CONFIRMADO_PROVEEDOR o 10 PEDIDO_CONFIRMADO), ordenados por creado_en DESC.
         """
         cursor = self.conn.cursor()
         try:

@@ -144,7 +144,7 @@ def register_proveedor_endpoints(app: FastAPI):
         user: Dict = Depends(verify_jwt_token),
         _: None = Depends(require_permission('mabel.view'))
     ):
-        """Guarda los cambios realizados por EL RAYO y crea la respuesta del proveedor."""
+        """Guarda los cambios de EL RAYO, crea la respuesta del proveedor y deja el pedido en estado REDISTRIBUCION (confirmar = ir a redistribución)."""
         try:
             from src.database.services.pedido_proveedor_web_service import PedidoProveedorWebService
             
@@ -160,7 +160,7 @@ def register_proveedor_endpoints(app: FastAPI):
                 observaciones_generales=observaciones_generales
             )
             
-            logger.info(f"✅ Cambios guardados y respuesta creada para pedido {pedido_id}. Estado: RESPUESTA_PROVEEDOR_CARGADA")
+            logger.info(f"✅ Cambios guardados y respuesta creada para pedido {pedido_id}. Estado: REDISTRIBUCION")
             
             # Enviar notificación por correo electrónico a MABEL TRADING cuando El Rayo confirma el pedido
             if resultado.get("status") == "success" and resultado.get("confirmacion_registrada", False):

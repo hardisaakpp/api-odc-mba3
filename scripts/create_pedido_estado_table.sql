@@ -39,20 +39,20 @@ BEGIN
     INSERT INTO [dbo].[pedido_estado] (id, nombre, orden, activo) VALUES
         (1,  N'BORRADOR',                        1,  1),
         (2,  N'NUEVO PEDIDO',                   2,  1),  -- Enviado a EL RAYO (notificación enviada)
-        (3,  N'RESPUESTA_PROVEEDOR_CARGADA',    3,  1),
-        (4,  N'EN_REVISION',                    4,  1),
-        (5,  N'CONFIRMADO_PROVEEDOR',            5,  1),
-        (6,  N'RECHAZADO_PROVEEDOR',            6,  1),
-        (7,  N'EN_AJUSTE_MABEL',                 7,  1),
-        (8,  N'REDISTRIBUIDO',                   8,  1),
-        (9,  N'PEDIDO_CONFIRMADO',               9,  1),
-        (10, N'PROCESADO_SAP',                  10,  1),
-        (11, N'CONFIRMADO_ENVIADO',             11,  1),
-        (12, N'PENDIENTE_LOGISTICA',            12,  1),
-        (13, N'ERROR_DATOS_MAESTROS',            13,  1),
-        (14, N'EN_PROCESO',                     14,  1),
-        (15, N'COMPLETADO',                      15,  1),
-        (16, N'GESTIONAR PEDIDO',                16,  1);  -- Al hacer clic en Ver Detalle desde tabla Pedidos
+        (3,  N'GESTIONAR PEDIDO',               3,  1),  -- Al hacer clic en Ver Detalle desde tabla Pedidos
+        (4,  N'REDISTRIBUCION',                 4,  1),  -- Antes EN_REVISION
+        (5,  N'RESPUESTA_PROVEEDOR_CARGADA',    5,  1),
+        (6,  N'CONFIRMADO_PROVEEDOR',            6,  1),
+        (7,  N'RECHAZADO_PROVEEDOR',            7,  1),
+        (8,  N'EN_AJUSTE_MABEL',                 8,  1),
+        (9,  N'REDISTRIBUIDO',                   9,  1),
+        (10, N'PEDIDO_CONFIRMADO',              10,  1),
+        (11, N'PROCESADO_SAP',                  11,  1),
+        (12, N'CONFIRMADO_ENVIADO',             12,  1),
+        (13, N'PENDIENTE_LOGISTICA',            13,  1),
+        (14, N'ERROR_DATOS_MAESTROS',           14,  1),
+        (15, N'EN_PROCESO',                     15,  1),
+        (16, N'COMPLETADO',                     16,  1);
 
     SET NOCOUNT OFF;
     PRINT 'Datos iniciales de pedido_estado insertados.';

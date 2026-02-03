@@ -36,20 +36,24 @@ UPDATE [dbo].[pedido]
 SET estado_id = CASE
     WHEN estado = N'PENDIENTE_CONFIRMACION_PROVEEDOR' THEN 1
     WHEN estado = N'BORRADOR'                        THEN 1
-    WHEN estado = N'NUEVO_PEDIDO'                    THEN 2
-    WHEN estado = N'RESPUESTA_PROVEEDOR_CARGADA'     THEN 3
-    WHEN estado = N'EN_REVISION'                     THEN 4
-    WHEN estado = N'CONFIRMADO_PROVEEDOR'            THEN 5
-    WHEN estado = N'RECHAZADO_PROVEEDOR'            THEN 6
-    WHEN estado = N'EN_AJUSTE_MABEL'                 THEN 7
-    WHEN estado = N'REDISTRIBUIDO'                   THEN 8
-    WHEN estado = N'PEDIDO_CONFIRMADO'               THEN 9
-    WHEN estado = N'PROCESADO_SAP'                   THEN 10
-    WHEN estado = N'CONFIRMADO_ENVIADO'             THEN 11
-    WHEN estado = N'PENDIENTE_LOGISTICA'             THEN 12
-    WHEN estado = N'ERROR_DATOS_MAESTROS'            THEN 13
-    WHEN estado = N'EN_PROCESO'                      THEN 14
-    WHEN estado = N'COMPLETADO'                      THEN 15
+    WHEN estado = N'NUEVO_PEDIDO' THEN 2
+    WHEN estado = N'NUEVO PEDIDO' THEN 2
+    WHEN estado = N'GESTIONAR_PEDIDO' THEN 3
+    WHEN estado = N'GESTIONAR PEDIDO' THEN 3
+    WHEN estado = N'EN_REVISION' THEN 4
+    WHEN estado = N'REDISTRIBUCION' THEN 4
+    WHEN estado = N'RESPUESTA_PROVEEDOR_CARGADA'     THEN 5
+    WHEN estado = N'CONFIRMADO_PROVEEDOR'            THEN 6
+    WHEN estado = N'RECHAZADO_PROVEEDOR'            THEN 7
+    WHEN estado = N'EN_AJUSTE_MABEL'                 THEN 8
+    WHEN estado = N'REDISTRIBUIDO'                   THEN 9
+    WHEN estado = N'PEDIDO_CONFIRMADO'               THEN 10
+    WHEN estado = N'PROCESADO_SAP'                   THEN 11
+    WHEN estado = N'CONFIRMADO_ENVIADO'             THEN 12
+    WHEN estado = N'PENDIENTE_LOGISTICA'             THEN 13
+    WHEN estado = N'ERROR_DATOS_MAESTROS'            THEN 14
+    WHEN estado = N'EN_PROCESO'                      THEN 15
+    WHEN estado = N'COMPLETADO'                      THEN 16
     ELSE 1
 END
 WHERE estado_id IS NULL;
