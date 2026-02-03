@@ -14,7 +14,7 @@ from .pedido_utils import PedidoUtils
 
 from src.database.pedido_estados import (
     ESTADO_BORRADOR,
-    ESTADO_RESPUESTA_PROVEEDOR_CARGADA,
+    ESTADO_REDISTRIBUCION,
     ESTADO_CONFIRMADO_PROVEEDOR,
     ESTADO_PEDIDO_CONFIRMADO,
     estado_id_desde_legacy,
@@ -1114,8 +1114,8 @@ class PedidoCabeceraRepository:
         self, usuario_id: Optional[str] = None
     ) -> Optional[Dict[str, Any]]:
         """
-        Obtiene el último pedido con estado_id = ESTADO_RESPUESTA_PROVEEDOR_CARGADA (3).
-        Usado en pantalla Redistribución.
+        Obtiene el último pedido con estado CONFIRMADO (estado_id = ESTADO_REDISTRIBUCION = 4).
+        Usado en pantalla Redistribución: al entrar en /redistribucion se carga el último pedido confirmado.
         """
         cursor = self.conn.cursor()
         try:
@@ -1136,7 +1136,7 @@ class PedidoCabeceraRepository:
                         LEFT JOIN pedido_estado pe ON pe.id = p.estado_id
                         WHERE p.estado_id = ? AND p.creado_por = ?
                         ORDER BY p.creado_en DESC
-                    """, (ESTADO_RESPUESTA_PROVEEDOR_CARGADA, usuario_id))
+                    """, (ESTADO_REDISTRIBUCION, usuario_id))
                 else:
                     cursor.execute("""
                         SELECT TOP 1
@@ -1148,7 +1148,7 @@ class PedidoCabeceraRepository:
                         LEFT JOIN pedido_estado pe ON pe.id = p.estado_id
                         WHERE p.estado_id = ?
                         ORDER BY p.creado_en DESC
-                    """, (ESTADO_RESPUESTA_PROVEEDOR_CARGADA,))
+                    """, (ESTADO_REDISTRIBUCION,))
             else:
                 if usuario_id is not None:
                     cursor.execute("""
@@ -1160,7 +1160,7 @@ class PedidoCabeceraRepository:
                         FROM pedido
                         WHERE estado = ? AND creado_por = ?
                         ORDER BY creado_en DESC
-                    """, ("RESPUESTA_PROVEEDOR_CARGADA", usuario_id))
+                    """, ("CONFIRMADO", usuario_id))
                 else:
                     cursor.execute("""
                         SELECT TOP 1
@@ -1171,7 +1171,7 @@ class PedidoCabeceraRepository:
                         FROM pedido
                         WHERE estado = ?
                         ORDER BY creado_en DESC
-                    """, ("RESPUESTA_PROVEEDOR_CARGADA",))
+                    """, ("CONFIRMADO",))
 
             row = cursor.fetchone()
             if not row:
@@ -1216,7 +1216,7 @@ class PedidoCabeceraRepository:
             }
         except Exception as e:
             logger.error(
-                "❌ Error al obtener último pedido RESPUESTA_PROVEEDOR_CARGADA: %s", e, exc_info=True
+                "❌ Error al obtener último pedido CONFIRMADO (redistribución): %s", e, exc_info=True
             )
             raise
         finally:

@@ -144,12 +144,27 @@ def register_proveedor_endpoints(app: FastAPI):
         user: Dict = Depends(verify_jwt_token),
         _: None = Depends(require_permission('mabel.view'))
     ):
-        """Guarda los cambios de EL RAYO, crea la respuesta del proveedor y deja el pedido en estado REDISTRIBUCION (confirmar = ir a redistribución)."""
+        """Guarda los cambios de EL RAYO, crea la respuesta del proveedor y deja el pedido en estado CONFIRMADO (confirmar = ir a redistribución)."""
         try:
             from src.database.services.pedido_proveedor_web_service import PedidoProveedorWebService
+            from src.database.connection import get_db_connection_context
+            from src.database.repositories.pedido_repository import PedidoRepository
+            from src.database.pedido_estados import ESTADO_REDISTRIBUCION
             
             usuario_id = get_user_id(user)
             observaciones_generales = None
+            
+            # Estado del pedido antes de esta petición: solo enviamos email si pasamos a CONFIRMADO en este request
+            estado_id_antes = None
+            with get_db_connection_context() as conn:
+                repo = PedidoRepository(conn)
+                pedido_antes = repo.get_pedido_completo(pedido_id)
+                if pedido_antes and pedido_antes.get("cabecera"):
+                    eid = pedido_antes["cabecera"].get("estado_id")
+                    try:
+                        estado_id_antes = int(eid) if eid is not None else None
+                    except (TypeError, ValueError):
+                        estado_id_antes = None
             
             logger.info(f"Guardando cambios y creando respuesta para pedido {pedido_id} (usuario: {usuario_id})")
             
@@ -160,10 +175,15 @@ def register_proveedor_endpoints(app: FastAPI):
                 observaciones_generales=observaciones_generales
             )
             
-            logger.info(f"✅ Cambios guardados y respuesta creada para pedido {pedido_id}. Estado: REDISTRIBUCION")
+            logger.info(f"✅ Cambios guardados y respuesta creada para pedido {pedido_id}. Estado: CONFIRMADO")
             
-            # Enviar notificación por correo electrónico a MABEL TRADING cuando El Rayo confirma el pedido
-            if resultado.get("status") == "success" and resultado.get("confirmacion_registrada", False):
+            # Enviar email solo cuando el pedido acaba de pasar a CONFIRMADO en esta petición (no si ya estaba CONFIRMADO)
+            transicion_a_confirmado = estado_id_antes is not None and estado_id_antes != ESTADO_REDISTRIBUCION
+            if (
+                resultado.get("status") == "success"
+                and resultado.get("confirmacion_registrada", False)
+                and transicion_a_confirmado
+            ):
                 try:
                     from src.utils.email_notifier_pedido import send_rayo_confirmacion_notification
                     from src.database.connection import get_db_connection_context

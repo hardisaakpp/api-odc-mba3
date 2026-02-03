@@ -333,7 +333,7 @@ def send_rayo_confirmacion_notification(
                             <li><strong>Pedido ID:</strong> {pedido_id}</li>
                             {f'<li><strong>Usuario El Rayo:</strong> {usuario_rayo}</li>' if usuario_rayo else ''}
                             <li><strong>Detalles Modificados:</strong> {detalles_modificados}</li>
-                            <li><strong>Estado:</strong> REDISTRIBUCION</li>
+                            <li><strong>Estado:</strong> CONFIRMADO</li>
                         </ul>
                     </div>
                     
@@ -371,7 +371,7 @@ Información del Pedido:
 - Pedido ID: {pedido_id}
 {f'- Usuario El Rayo: {usuario_rayo}' if usuario_rayo else ''}
 - Detalles Modificados: {detalles_modificados}
-- Estado: REDISTRIBUCION
+- Estado: CONFIRMADO
 
 Puedes revisar el pedido en el siguiente enlace:
 {url_pedido}

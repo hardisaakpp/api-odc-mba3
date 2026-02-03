@@ -224,20 +224,19 @@ def register_crud_endpoints(app: FastAPI):
     async def get_ultimo_pedido_redistribucion(
         solo_usuario: Optional[bool] = Query(
             True,
-            description="Si true, último pedido RESPUESTA_PROVEEDOR_CARGADA del usuario; si false, último en todo el sistema"
+            description="Si true, último pedido CONFIRMADO del usuario; si false, último en todo el sistema"
         ),
         user: Dict = Depends(verify_jwt_token),
         _: None = Depends(require_any_permission(['odcsap.view', 'mabel.view']))
     ):
         """
-        Obtiene el último pedido con estado RESPUESTA_PROVEEDOR_CARGADA.
-        Misma lógica que /api/plantillas/ultimo (cargar-plantilla) pero filtrado por ese estado.
+        Obtiene el último pedido con estado CONFIRMADO (listo para redistribución).
         Para la pantalla Redistribución: al entrar en /redistribucion sin número de pedido,
-        el front puede llamar a este endpoint y, si hay resultado, redirigir a
+        el front llama a este endpoint y, si hay resultado, redirige a
         /pedidos/{numero_pedido}/redistribucion.
 
         **Query Parameters:**
-        - `solo_usuario` (bool, default: true) - Si true, último del usuario autenticado; si false, último global.
+        - `solo_usuario` (bool, default: true) - Si true, último CONFIRMADO del usuario; si false, último global.
 
         **Respuesta:** Objeto con cabecera básica (pedido_id, numero_pedido, estado, ...) o null.
         """
@@ -461,14 +460,14 @@ def register_crud_endpoints(app: FastAPI):
         _: None = Depends(require_any_permission(['odcsap.view', 'mabel.view']))
     ):
         """
-        Confirma el pedido para redistribución: cambia estado de GESTIONAR PEDIDO a REDISTRIBUCION.
+        Confirma el pedido para redistribución: cambia estado de GESTIONAR PEDIDO a CONFIRMADO.
 
         Se usa cuando el usuario hace clic en "Confirmar" en la página de detalle del pedido
         (estado actual = GESTIONAR PEDIDO). Solo se permite si el pedido está en ese estado.
 
         - **404**: Pedido no encontrado.
         - **400**: Pedido no está en estado GESTIONAR PEDIDO.
-        - **200**: Estado actualizado a REDISTRIBUCION; devuelve el pedido completo.
+        - **200**: Estado actualizado a CONFIRMADO; devuelve el pedido completo.
         """
         try:
             with get_db_connection_context() as conn:

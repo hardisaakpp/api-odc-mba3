@@ -819,7 +819,7 @@ class PedidoProveedorWebService:
                 "cantidades_guardadas": resultado_guardado["cantidades_guardadas"],
                 "precios_guardados": resultado_guardado["precios_guardados"],
                 "pedido_id": pedido_id,
-                "estado_guardado": "REDISTRIBUCION",
+                "estado_guardado": "CONFIRMADO",
                 "ya_existia": ya_existia_respuesta,
                 "confirmacion_registrada": hay_cambios or not confirmaciones_previas
             }

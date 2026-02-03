@@ -163,7 +163,7 @@ class RedistribucionValidator:
         if estado_id != ESTADO_REDISTRIBUCION:
             errores.append(
                 f"El estado del pedido ({estado_nombre}) no permite confirmar redistribución. "
-                "Solo se permite en estado REDISTRIBUCION."
+                "Solo se permite en estado CONFIRMADO."
             )
         
         # Validación 7: Validar bodegas - las bodegas no pueden quedar negativas

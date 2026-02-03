@@ -153,8 +153,8 @@ class PedidoRepository:
         self, usuario_id: Optional[str] = None
     ) -> Optional[Dict[str, Any]]:
         """
-        Obtiene el último pedido con estado RESPUESTA_PROVEEDOR_CARGADA.
-        Para pantalla Redistribución: mismo criterio que "último pedido" pero solo ese estado.
+        Obtiene el último pedido con estado CONFIRMADO (id 4).
+        Para pantalla Redistribución: al entrar en /redistribucion se carga el último pedido confirmado.
         
         DELEGADO a PedidoCabeceraRepository.
         """
