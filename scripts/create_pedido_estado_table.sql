@@ -46,7 +46,7 @@ BEGIN
         (7,  N'RECHAZADO_PROVEEDOR',            7,  1),
         (8,  N'EN_AJUSTE_MABEL',                 8,  1),
         (9,  N'REDISTRIBUIDO',                   9,  1),
-        (10, N'PEDIDO_CONFIRMADO',              10,  1),
+        (10, N'CONFIRMADO REDISTRIBUCION',    10,  1),
         (11, N'PROCESADO_SAP',                  11,  1),
         (12, N'CONFIRMADO_ENVIADO',             12,  1),
         (13, N'PENDIENTE_LOGISTICA',            13,  1),

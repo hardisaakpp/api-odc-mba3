@@ -397,7 +397,7 @@ Deshabilitar (y no permitir nueva confirmación) cuando el estado del pedido ya 
 
 - `RESPUESTA_PROVEEDOR_CARGADA` → respuesta ya guardada; deshabilitar.
 - `CONFIRMADO_PROVEEDOR` → confirmación ya procesada; deshabilitar.
-- `PEDIDO_CONFIRMADO` → redistribución ya confirmada; deshabilitar.
+- `CONFIRMADO REDISTRIBUCION` (o `PEDIDO_CONFIRMADO` por compatibilidad) → redistribución ya confirmada; deshabilitar.
 - Cualquier otro estado posterior (p. ej. `PROCESADO_SAP`, `CONFIRMADO_ENVIADO`, etc.) → deshabilitar.
 
 **Resumen:**
@@ -1336,7 +1336,7 @@ Si la respuesta es un objeto con `numero_pedido`, hacer
 **Query Parameters (contrato backend/frontend):**
 - `page` (int, default: 1) - Número de página.
 - `pageSize` o `page_size` (int, default: 50, max: 100) - Tamaño de página. El front suele enviar `pageSize`.
-- `redistribucion_confirmada` (opcional) - Si vale `"true"`, el backend devuelve solo pedidos con **redistribución ya confirmada** (estado `PEDIDO_CONFIRMADO`). Si no se envía o es `"false"`, devuelve pedidos en `CONFIRMADO_PROVEEDOR` o `PEDIDO_CONFIRMADO`.
+- `redistribucion_confirmada` (opcional) - Si vale `"true"`, el backend devuelve solo pedidos con **redistribución ya confirmada** (estado `CONFIRMADO REDISTRIBUCION`). Si no se envía o es `"false"`, devuelve pedidos en `CONFIRMADO_PROVEEDOR` o `CONFIRMADO REDISTRIBUCION`.
 
 **Ejemplos de URL:**
 - Lista para pantalla Redistribución (opcional):  
@@ -1354,7 +1354,7 @@ Si la respuesta es un objeto con `numero_pedido`, hacer
         "pedido_id": "uuid",
         "numero_pedido": "P-12.24 - 12 - 2025",
         "fecha_pedido": "2025-01-24",
-        "estado": "PEDIDO_CONFIRMADO",
+        "estado": "CONFIRMADO REDISTRIBUCION",
         "proveedor_nombre": "...",
         "creado_por": "...",
         "creado_en": "..."
@@ -1362,7 +1362,7 @@ Si la respuesta es un objeto con `numero_pedido`, hacer
       "pedido_id": "uuid",
       "numero_pedido": "P-12.24 - 12 - 2025",
       "fecha_pedido": "2025-01-24",
-      "estado": "PEDIDO_CONFIRMADO"
+      "estado": "CONFIRMADO REDISTRIBUCION"
     }
   ],
   "total": 5,
@@ -1399,26 +1399,26 @@ En la pantalla de redistribución (`/mba3-consultas/pedidos/{numero_pedido}/redi
 
 - **Método:** POST  
 - **Body:** `RedistribucionConfirmarRequest` (p. ej. `{ "ajustes_detalle": [ ... ] }`).  
-- **Respuesta exitosa:** incluye `status: "success"`, `numero_pedido`, `message`, etc. El backend actualiza el estado del pedido a **`PEDIDO_CONFIRMADO`**.
+- **Respuesta exitosa:** incluye `status: "success"`, `numero_pedido`, `message`, etc. El backend actualiza el estado del pedido a **`CONFIRMADO REDISTRIBUCION`**.
 
 **Comportamiento en el frontend:**
 
 | Acción | Comportamiento |
 |--------|----------------|
 | **Al hacer clic en "Confirmar Redistribución"** | Enviar `POST /api/pedidos/{numero_pedido}/redistribucion/confirmar` con el body correspondiente. **Deshabilitar el botón de inmediato** y mostrar indicador de carga (p. ej. texto "Confirmando…" o spinner). |
-| **Si la petición es exitosa** | Actualizar el estado local del pedido con el nuevo `estado` (p. ej. `PEDIDO_CONFIRMADO`) o recargar el pedido desde el backend. **Mantener el botón deshabilitado** (la redistribución ya está confirmada). |
+| **Si la petición es exitosa** | Actualizar el estado local del pedido con el nuevo `estado` (p. ej. `CONFIRMADO REDISTRIBUCION`) o recargar el pedido desde el backend. **Mantener el botón deshabilitado** (la redistribución ya está confirmada). |
 | **Si la petición falla** | Mostrar mensaje de error y **volver a habilitar el botón** para que el usuario pueda reintentar. |
 
 **Cuándo deshabilitar el botón "Confirmar Redistribución" (al cargar la vista o tras recargar):**
 
 Deshabilitar cuando el estado del pedido indica que la redistribución ya está confirmada. Usar el campo **`cabecera.estado`** del pedido cargado en esa pantalla:
 
-- `PEDIDO_CONFIRMADO` → redistribución ya confirmada; deshabilitar.
+- `CONFIRMADO REDISTRIBUCION` (o `PEDIDO_CONFIRMADO` por compatibilidad) → redistribución ya confirmada; deshabilitar.
 - Cualquier estado posterior (p. ej. `PROCESADO_SAP`, `CONFIRMADO_ENVIADO`, etc.) → deshabilitar.
 
 **Resumen de implementación:**
 
-- **Al cargar la vista:** Deshabilitar el botón si `cabecera.estado === 'PEDIDO_CONFIRMADO'` (o estado posterior).
+- **Al cargar la vista:** Deshabilitar el botón si `cabecera.estado === 'CONFIRMADO REDISTRIBUCION'` o `cabecera.estado === 'PEDIDO_CONFIRMADO'` (o estado posterior).
 - **Al hacer clic:** Deshabilitar de inmediato y mostrar "Confirmando…" (o spinner); llamar a `POST /api/pedidos/{numero_pedido}/redistribucion/confirmar`.
 - **Si la petición tiene éxito:** Actualizar estado (o recargar pedido) y dejar el botón deshabilitado.
 - **Si la petición falla:** Rehabilitar el botón y mostrar el error.

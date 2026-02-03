@@ -1497,7 +1497,7 @@ def send_mabel_redistribucion_confirmacion_notification(
                             {f'<li><strong>Versión Confirmada:</strong> {version_confirmada}</li>' if version_confirmada else ''}
                             <li><strong>Total Productos Redistribuidos:</strong> {total_productos}</li>
                             <li><strong>Total Cantidad Ajustada:</strong> {total_cantidad_ajustada}</li>
-                            <li><strong>Estado:</strong> PEDIDO_CONFIRMADO</li>
+                            <li><strong>Estado:</strong> CONFIRMADO REDISTRIBUCION</li>
                         </ul>
                     </div>
                     
@@ -1537,7 +1537,7 @@ Información del Pedido:
 {f'- Versión Confirmada: {version_confirmada}' if version_confirmada else ''}
 - Total Productos Redistribuidos: {total_productos}
 - Total Cantidad Ajustada: {total_cantidad_ajustada}
-- Estado: PEDIDO_CONFIRMADO
+- Estado: CONFIRMADO REDISTRIBUCION
 
 Puedes revisar el pedido en el siguiente enlace:
 {url_pedido}

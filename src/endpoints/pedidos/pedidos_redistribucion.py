@@ -439,11 +439,11 @@ def register_redistribucion_endpoints(app: FastAPI):
                     
                     logger.info(f"✅ Procesamiento SAP completado: {resultado_sap.get('productos_procesados', 0)} productos procesados")
                     
-                    # Actualizar estado a PEDIDO_CONFIRMADO si el procesamiento fue exitoso
+                    # Actualizar estado a CONFIRMADO REDISTRIBUCION si el procesamiento fue exitoso
                     if resultado_sap.get("status") in ["success", "partial"]:
                         repo_pedido.update_estado(pedido_id, ESTADO_PEDIDO_CONFIRMADO)
-                        estado_nuevo = "PEDIDO_CONFIRMADO"
-                        logger.info(f"✅ Estado del pedido {pedido_id} actualizado a PEDIDO_CONFIRMADO")
+                        estado_nuevo = "CONFIRMADO REDISTRIBUCION"
+                        logger.info(f"✅ Estado del pedido {pedido_id} actualizado a CONFIRMADO REDISTRIBUCION")
                     
                     # Verificar productos no homologados y notificar
                     if resultado_sap.get("productos_no_homologados", 0) > 0:
@@ -1204,7 +1204,7 @@ def register_redistribucion_endpoints(app: FastAPI):
         - Confirma la redistribución usando la estructura AjusteDetalle del frontend
         - Convierte automáticamente códigos de tienda a UUIDs
         - Calcula resumen de confirmación
-        - Actualiza estado del pedido a 'PEDIDO_CONFIRMADO' cuando se confirma desde el frontend
+        - Actualiza estado del pedido a 'CONFIRMADO REDISTRIBUCION' cuando se confirma desde el frontend
         
         **Request:**
         ```json
@@ -1391,7 +1391,7 @@ def register_redistribucion_endpoints(app: FastAPI):
                     usuario=user_id
                 )
                 
-                # Actualizar estado del pedido a "PEDIDO_CONFIRMADO" (específico para confirmación desde frontend)
+                # Actualizar estado del pedido a "CONFIRMADO REDISTRIBUCION" (específico para confirmación desde frontend)
                 repo_pedido.update_estado(pedido_id, ESTADO_PEDIDO_CONFIRMADO)
                 
                 # Calcular resumen

@@ -137,7 +137,7 @@ def register_crud_endpoints(app: FastAPI):
         offset: Optional[int] = Query(None, description="Offset (alternativa a page)"),
         redistribucion_confirmada: Optional[str] = Query(
             None,
-            description="Si 'true', solo pedidos con redistribución ya confirmada (estado PEDIDO_CONFIRMADO)"
+            description="Si 'true', solo pedidos con redistribución ya confirmada (estado CONFIRMADO REDISTRIBUCION)"
         ),
         user: Dict = Depends(verify_jwt_token),
         _: None = Depends(require_any_permission(['odcsap.view', 'mabel.view']))
@@ -149,7 +149,7 @@ def register_crud_endpoints(app: FastAPI):
         **Query Parameters:**
         - `page` (int, default: 1) - Número de página
         - `page_size` o `pageSize` (int, default: 50) - Registros por página
-        - `redistribucion_confirmada` - Si "true", solo pedidos en estado PEDIDO_CONFIRMADO
+        - `redistribucion_confirmada` - Si "true", solo pedidos en estado CONFIRMADO REDISTRIBUCION
         - `limit` / `offset` - Alternativa para paginación (si se usan, ignoran page/page_size)
 
         **Formato de respuesta (compatible con frontend):**

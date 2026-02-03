@@ -438,7 +438,7 @@ class DistribucionConfirmadaRepository:
             
             # Nota: El estado del pedido se actualiza externamente según el contexto
             # - Si se llama desde el endpoint interno: 'REDISTRIBUIDO'
-            # - Si se llama desde el frontend (MABEL TRADING): 'PEDIDO_CONFIRMADO'
+            # - Si se llama desde el frontend (MABEL TRADING): 'CONFIRMADO REDISTRIBUCION'
             # Por eso no actualizamos el estado aquí, se hace en el endpoint
             
             self.conn.commit()

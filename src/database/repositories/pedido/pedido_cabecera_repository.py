@@ -845,7 +845,7 @@ class PedidoCabeceraRepository:
         solo_redistribucion_confirmada: bool = False
     ) -> Dict[str, Any]:
         """
-        Obtiene pedidos en estado confirmado (estado_id 6 CONFIRMADO_PROVEEDOR o 10 PEDIDO_CONFIRMADO), ordenados por creado_en DESC.
+        Obtiene pedidos en estado confirmado (estado_id 6 CONFIRMADO_PROVEEDOR o 10 CONFIRMADO REDISTRIBUCION), ordenados por creado_en DESC.
         """
         cursor = self.conn.cursor()
         try:
@@ -881,11 +881,11 @@ class PedidoCabeceraRepository:
                 """
             else:
                 if solo_redistribucion_confirmada:
-                    where_clause = "p.estado = ?"
-                    params_list = ["PEDIDO_CONFIRMADO"]
-                else:
                     where_clause = "p.estado IN (?, ?)"
-                    params_list = ["CONFIRMADO_PROVEEDOR", "PEDIDO_CONFIRMADO"]
+                    params_list = ["PEDIDO_CONFIRMADO", "CONFIRMADO REDISTRIBUCION"]
+                else:
+                    where_clause = "p.estado IN (?, ?, ?)"
+                    params_list = ["CONFIRMADO_PROVEEDOR", "PEDIDO_CONFIRMADO", "CONFIRMADO REDISTRIBUCION"]
                 params = list(params_list)
                 count_query = f"SELECT COUNT(*) FROM pedido p WHERE {where_clause}"
                 cursor.execute(count_query, params)
