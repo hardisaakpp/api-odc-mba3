@@ -24,6 +24,7 @@ ESTADO_ERROR_DATOS_MAESTROS = 14
 ESTADO_EN_PROCESO = 15
 ESTADO_COMPLETADO = 16
 ESTADO_DESPACHAR_Y_FACTURAR = 17  # Manual: desde Confirmado y Enviado (ODC enviada a SAP)
+ESTADO_FINALIZADO = 18  # Estado final del flujo; solo desde Despachar y Facturar
 
 # Estado inicial al subir Excel o crear pedido (siempre id = 1)
 ESTADO_INICIAL = ESTADO_BORRADOR
@@ -71,6 +72,7 @@ ESTADO_IDS_VALIDOS = frozenset({
     ESTADO_EN_PROCESO,
     ESTADO_COMPLETADO,
     ESTADO_DESPACHAR_Y_FACTURAR,
+    ESTADO_FINALIZADO,
 })
 
 # --- Mapping legacy string → id (solo para migración / compat temporal) -------
@@ -99,6 +101,7 @@ LEGACY_STRING_TO_ID = {
     "COMPLETADO": ESTADO_COMPLETADO,
     "DESPACHAR Y FACTURAR": ESTADO_DESPACHAR_Y_FACTURAR,
     "DESPACHAR_Y_FACTURAR": ESTADO_DESPACHAR_Y_FACTURAR,
+    "FINALIZADO": ESTADO_FINALIZADO,
 }
 
 

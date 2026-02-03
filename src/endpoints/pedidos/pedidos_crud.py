@@ -18,6 +18,7 @@ from src.database.pedido_estados import (
     ESTADO_REDISTRIBUCION,
     ESTADO_CONFIRMADO_ENVIADO,
     ESTADO_DESPACHAR_Y_FACTURAR,
+    ESTADO_FINALIZADO,
 )
 from src.security.jwt_auth import verify_jwt_token, require_permission, require_any_permission
 from src.exceptions import BusinessException
@@ -569,6 +570,62 @@ def register_crud_endpoints(app: FastAPI):
             raise
         except Exception as e:
             logger.error(f"❌ Error al marcar pedido como Despachar y Facturar {pedido_id}: {e}", exc_info=True)
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail={"error": "internal_error", "message": str(e)}
+            )
+
+    @app.post("/api/pedidos/{pedido_id}/marcar-finalizado", tags=["Pedidos"])
+    async def marcar_finalizado(
+        pedido_id: str = Path(..., description="UUID del pedido"),
+        user: Dict = Depends(verify_jwt_token),
+        _: None = Depends(require_any_permission(['odcsap.view', 'mabel.view']))
+    ):
+        """
+        Marca el pedido como "Finalizado" (estado final del flujo).
+
+        Solo se permite cuando el pedido está en estado **Despachar y Facturar**
+        (estado_id = 17). Es el estado final de todo el flujo.
+
+        - **404**: Pedido no encontrado.
+        - **400**: Pedido no está en estado Despachar y Facturar.
+        - **200**: Estado actualizado a Finalizado; devuelve el pedido completo.
+        """
+        try:
+            with get_db_connection_context() as conn:
+                repo = PedidoRepository(conn)
+                pedido = repo.get_pedido_completo(pedido_id)
+                if not pedido:
+                    raise HTTPException(
+                        status_code=status.HTTP_404_NOT_FOUND,
+                        detail={"error": "not_found", "message": "No se encontró el pedido."}
+                    )
+                estado_id = pedido.get("cabecera", {}).get("estado_id")
+                try:
+                    estado_id = int(estado_id) if estado_id is not None else None
+                except (TypeError, ValueError):
+                    estado_id = None
+                if estado_id != ESTADO_DESPACHAR_Y_FACTURAR:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail={
+                            "error": "estado_no_despachar_y_facturar",
+                            "message": "Solo se puede marcar como Finalizado cuando el pedido está en estado Despachar y Facturar."
+                        }
+                    )
+                repo.update_estado(pedido_id, ESTADO_FINALIZADO)
+                pedido = repo.get_pedido_completo(pedido_id)
+                _eid = pedido.get("cabecera", {}).get("estado_id")
+                try:
+                    _eid = int(_eid) if _eid is not None else None
+                except (TypeError, ValueError):
+                    _eid = None
+                pedido["puede_descartar"] = _eid in (ESTADO_BORRADOR, ESTADO_NUEVO_PEDIDO)
+                return JSONResponse(status_code=status.HTTP_200_OK, content=pedido)
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"❌ Error al marcar pedido como Finalizado {pedido_id}: {e}", exc_info=True)
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail={"error": "internal_error", "message": str(e)}

@@ -33,6 +33,7 @@ from src.models import (
     GuardarBorradorResponse,
     BorradorResponse,
     AjusteDetalle,
+    DistribucionTiendaFrontend,
     ResumenConfirmacion
 )
 from .utils import get_user_id
@@ -992,13 +993,19 @@ def register_redistribucion_endpoints(app: FastAPI):
              tags=["Pedidos - Redistribución"])
     async def obtener_datos_iniciales_redistribucion(
         numero_pedido: str = Path(..., description="Número del pedido"),
+        solo_lectura: Optional[str] = Query(None, description="Si es '1' o 'true', devuelve la última redistribución confirmada (para vista solo lectura)"),
         user: Dict = Depends(verify_jwt_token),
         _: None = Depends(require_permission('mabel.view'))
     ):
         """
         Obtiene los datos iniciales para la redistribución sincronizados con el pedido actualizado.
         
-        **Funcionalidad:**
+        **Query params:**
+        - `solo_lectura`: Si es `1` o `true` y el pedido tiene redistribución confirmada (estado
+          CONFIRMADO REDISTRIBUCION o posterior), devuelve la **última redistribución guardada**
+          en formato ajustes_detalle, para que la interfaz de solo lectura muestre siempre lo confirmado.
+        
+        **Funcionalidad (sin solo_lectura):**
         - Genera los datos iniciales de redistribución basándose en el pedido actualizado
         - Sincroniza costos unitarios y totales con los valores actuales del pedido (EL RAYO)
         - Obtiene cantidades confirmadas desde la respuesta del proveedor
@@ -1046,6 +1053,59 @@ def register_redistribucion_endpoints(app: FastAPI):
                     )
                 
                 pedido_id = pedido_data["cabecera"]["pedido_id"]
+                
+                # Solo lectura: si hay redistribución confirmada, devolver la última guardada
+                if str(solo_lectura or "").lower() in ("1", "true"):
+                    repo_dist = DistribucionConfirmadaRepository(conn)
+                    version_actual = repo_dist.get_version_actual(pedido_id)
+                    if version_actual >= 1:
+                        distribucion_data = repo_dist.get_distribucion_completa(pedido_id)
+                        detalles_by_id = {d.get("pedido_detalle_id"): d for d in pedido_data.get("detalles", []) if d.get("pedido_detalle_id")}
+                        ajustes_detalle_confirmada = []
+                        for p in distribucion_data.get("productos", []):
+                            pedido_detalle_id = p.get("pedido_detalle_id")
+                            detalle = detalles_by_id.get(pedido_detalle_id, {})
+                            codigo = detalle.get("codigo_interno") or ""
+                            descripcion = detalle.get("descripcion_sap") or ""
+                            if not codigo:
+                                continue
+                            dist_tiendas = [
+                                DistribucionTiendaFrontend(
+                                    tienda_codigo=d.get("tienda_codigo") or "",
+                                    tienda_nombre=d.get("tienda_nombre") or "",
+                                    cantidad=int(d.get("cantidad_asignada", 0)),
+                                    es_bodega=bool(d.get("es_bodega", False)),
+                                )
+                                for d in p.get("distribuciones", [])
+                            ]
+                            if not dist_tiendas:
+                                continue
+                            primer_d = p.get("distribuciones", [{}])[0]
+                            costo = None
+                            if primer_d.get("costo_unitario_ajustado") is not None:
+                                costo = float(primer_d["costo_unitario_ajustado"])
+                            elif primer_d.get("costo_unitario_original") is not None:
+                                costo = float(primer_d["costo_unitario_original"])
+                            ajustes_detalle_confirmada.append(
+                                AjusteDetalle(
+                                    codigo_producto=codigo,
+                                    descripcion=descripcion,
+                                    cantidad_solicitada=int(p.get("cantidad_solicitada_total", 0)),
+                                    cantidad_confirmada=int(p.get("cantidad_confirmada_total", 0)),
+                                    cantidad_ajustada=int(p.get("cantidad_asignada_total", 0)),
+                                    distribucion_tiendas=dist_tiendas,
+                                    costo_original=costo,
+                                    costo_ajustado=costo,
+                                    cambio_precio=False,
+                                    pedido_detalle_id=pedido_detalle_id,
+                                    costo_modificado_manual=bool(detalle.get("costo_modificado_manual", False)),
+                                    total_modificado_manual=bool(detalle.get("total_modificado_manual", False)),
+                                )
+                            )
+                        return BorradorResponse(
+                            ajustes_detalle=ajustes_detalle_confirmada,
+                            fecha_guardado=datetime.now(),
+                        )
                 
                 # Obtener cantidades confirmadas desde la respuesta del proveedor
                 cursor = conn.cursor()

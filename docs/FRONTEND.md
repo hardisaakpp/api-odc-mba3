@@ -443,6 +443,31 @@ En la pantalla `/mba3-consultas/pedidos/{id}` (detalle del pedido), cuando el pe
 - **Mostrar** el botón/acción "Despachar y Facturar" solo cuando `cabecera.estado_id === 12` (o `cabecera.estado === 'CONFIRMADO_ENVIADO'`). No mostrarlo si el estado ya es "DESPACHAR Y FACTURAR" (`estado_id === 17`) u otro.
 - **Al hacer clic:** Enviar `POST /api/pedidos/{cabecera.pedido_id}/marcar-despachar-y-facturar`. Tras éxito (200), actualizar estado local o recargar el pedido; el estado pasará a "DESPACHAR Y FACTURAR" (`estado_id` 17).
 
+### 0.5.9.1 Botón "Finalizado" (solo en cargar-plantilla P-12.01 - 12 - 2025)
+
+El botón **"Finalizado"** depende del estado **"Despachar y Facturar"**: solo debe mostrarse cuando el pedido tiene `estado_id === 17` (DESPACHAR Y FACTURAR) y **únicamente** en la interfaz de **cargar plantilla** para la plantilla **P-12.01 - 12 - 2025**.
+
+- **Ruta donde debe aparecer el botón:**  
+  `http://localhost:3000/mba3-consultas/cargar-plantilla/P-12.01%20-%2012%20-%202025`  
+  Es decir: ruta base `/mba3-consultas/cargar-plantilla/{numero_pedido}` con `numero_pedido` = **"P-12.01 - 12 - 2025"** (URL decodificado). En ninguna otra pantalla ni en otras plantillas debe mostrarse este botón.
+
+- **Endpoint:** `POST /api/pedidos/{pedido_id}/marcar-finalizado`
+  - **Método:** POST  
+  - **URL:** `/api/pedidos/{pedido_id}/marcar-finalizado` (usar `cabecera.pedido_id`).  
+  - **Body:** ninguno.  
+  - **Autenticación:** JWT en header `Authorization: Bearer {token}`.  
+  - **Permisos:** `odcsap.view` o `mabel.view`.
+
+- **Condición backend:** Solo se permite si el pedido está en estado **Despachar y Facturar** (`cabecera.estado_id === 17`). Si no, el backend responde **400** con `error: "estado_no_despachar_y_facturar"`.
+
+**Comportamiento en el frontend:**
+
+- **Mostrar** el botón "Finalizado" **solo** cuando se cumplan **ambas** condiciones:
+  1. La ruta actual es `/mba3-consultas/cargar-plantilla/P-12.01%20-%2012%20-%202025` (o el `numero_pedido` de la URL decodificado es exactamente `"P-12.01 - 12 - 2025"`).
+  2. El pedido está en estado **Despachar y Facturar** (`cabecera.estado_id === 17`).
+- **No mostrar** el botón en detalle de pedido (`/mba3-consultas/pedidos/{id}`), ni en otras plantillas, ni en redistribución, ni en ninguna otra interfaz.
+- **Al hacer clic:** Enviar `POST /api/pedidos/{cabecera.pedido_id}/marcar-finalizado`. Tras éxito (200), actualizar estado local o recargar el pedido; el estado pasará a **"FINALIZADO"** (`estado_id` 18), que es el estado final del flujo.
+
 ### 0.5.10 Cambio de Ruta: Cargar Plantillas → Gestionar Pedido
 
 **⚠️ CAMBIO DE RUTA IMPLEMENTADO**
@@ -1335,6 +1360,8 @@ GET /api/pedidos?fecha_desde=2025-01-01&fecha_hasta=2025-01-31&proveedor_nombre=
   Aquí se muestra el **input de búsqueda** donde el usuario puede ingresar el número del pedido. Si no se hace nada más, el usuario tiene que buscar manualmente.
 - **Vista de un pedido:** `http://localhost:3000/mba3-consultas/pedidos/{numero_pedido}/redistribucion`  
   Ejemplo: `http://localhost:3000/mba3-consultas/pedidos/P-12.24%20-%2012%20-%202025/redistribucion`. En esta URL se visualiza la información de redistribución de ese pedido.
+- **Vista solo lectura (EL RAYO):** `http://localhost:3000/mba3-consultas/pedidos/{numero_pedido}/redistribucion?soloLectura=1`  
+  En esta interfaz **siempre** se debe visualizar la **última redistribución confirmada** (desde estado CONFIRMADO REDISTRIBUCION en adelante). Para ello, al cargar los datos se debe llamar a **`GET /api/pedidos/{numero_pedido}/redistribucion/inicial?solo_lectura=1`**. Si el pedido tiene redistribución confirmada, el backend devuelve esa redistribución guardada en el mismo formato que el resto del flujo; si no, devuelve los datos iniciales.
 
 **Requerimiento:** Cuando el usuario haga clic en **“Redistribución”**, entra en `http://localhost:3000/mba3-consultas/redistribucion`. Se debe usar **la misma lógica que en cargar-plantilla** (`/mba3-consultas/cargar-plantilla/{numero_pedido}`): al entrar sin número de pedido, **cargar el último pedido que corresponda** y, si existe, **redirigir de inmediato** a `http://localhost:3000/mba3-consultas/pedidos/{numero_pedido}/redistribucion`. Para Redistribución, ese “último” debe ser solo pedidos con estado **`RESPUESTA_PROVEEDOR_CARGADA`** (listos para redistribuir).
 

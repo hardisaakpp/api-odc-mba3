@@ -53,7 +53,8 @@ BEGIN
         (14, N'ERROR_DATOS_MAESTROS',           14,  1),
         (15, N'EN_PROCESO',                     15,  1),
         (16, N'COMPLETADO',                     16,  1),
-        (17, N'DESPACHAR Y FACTURAR',         17,  1);  -- Manual: desde Confirmado y Enviado (ODC enviada a SAP)
+        (17, N'DESPACHAR Y FACTURAR',         17,  1),  -- Manual: desde Confirmado y Enviado (ODC enviada a SAP)
+        (18, N'FINALIZADO',                   18,  1);  -- Estado final; solo desde Despachar y Facturar (cargar-plantilla P-12.01)
 
     SET NOCOUNT OFF;
     PRINT 'Datos iniciales de pedido_estado insertados.';
