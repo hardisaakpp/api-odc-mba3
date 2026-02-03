@@ -163,6 +163,7 @@ class DistribucionConfirmadaRepository:
                 
                 productos_dict[pedido_detalle_id]["distribuciones"].append({
                     "id": str(row[0]),
+                    "pedido_detalle_id": pedido_detalle_id,
                     "tienda_id": str(row[2]),
                     "tienda_codigo": row[3],
                     "tienda_nombre": row[4],
@@ -180,12 +181,41 @@ class DistribucionConfirmadaRepository:
                     "es_bodega": es_bodega  # ⭐ NUEVO: Incluir flag de bodega
                 })
             
-            # Calcular totales por producto
+            # Obtener totales de fuente de verdad (respuesta proveedor) para que
+            # cantidad_solicitada_total y cantidad_confirmada_total no cambien por redondeo
+            cursor.execute("""
+                SELECT
+                    rpd.pedido_detalle_id,
+                    rpd.cantidad_solicitada_total,
+                    rpd.cantidad_confirmada_total
+                FROM pedido_respuesta_proveedor_detalle rpd
+                INNER JOIN pedido_respuesta_proveedor rp ON rpd.respuesta_id = rp.respuesta_id
+                WHERE rp.pedido_id = ?
+                AND rp.respuesta_id = (
+                    SELECT TOP 1 respuesta_id
+                    FROM pedido_respuesta_proveedor
+                    WHERE pedido_id = ?
+                    ORDER BY version DESC, fecha_respuesta DESC
+                )
+            """, (pedido_id, pedido_id))
+            respuestas_proveedor = {}
+            for row in cursor.fetchall():
+                respuestas_proveedor[str(row[0])] = {
+                    "cantidad_solicitada_total": int(row[1]) if row[1] is not None else 0,
+                    "cantidad_confirmada_total": int(row[2]) if row[2] is not None else 0,
+                }
+            
+            # Calcular totales por producto (usar fuente de verdad para solicitada/confirmada)
             productos = []
             for pedido_detalle_id, producto_data in productos_dict.items():
                 distribuciones = producto_data["distribuciones"]
-                cantidad_solicitada_total = sum(d["cantidad_solicitada"] for d in distribuciones)
-                cantidad_confirmada_total = sum(d["cantidad_confirmada"] for d in distribuciones)
+                respuesta = respuestas_proveedor.get(pedido_detalle_id, {})
+                cantidad_solicitada_total = respuesta.get("cantidad_solicitada_total")
+                cantidad_confirmada_total = respuesta.get("cantidad_confirmada_total")
+                if cantidad_solicitada_total is None:
+                    cantidad_solicitada_total = sum(d["cantidad_solicitada"] for d in distribuciones)
+                if cantidad_confirmada_total is None:
+                    cantidad_confirmada_total = sum(d["cantidad_confirmada"] for d in distribuciones)
                 cantidad_asignada_total = sum(d["cantidad_asignada"] for d in distribuciones)
                 
                 productos.append({
