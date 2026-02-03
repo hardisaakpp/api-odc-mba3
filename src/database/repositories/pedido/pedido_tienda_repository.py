@@ -299,3 +299,37 @@ class PedidoTiendaRepository:
             raise
         finally:
             cursor.close()
+
+    def delete_distribuciones_by_pedido_id(
+        self, pedido_id: str, cursor: Optional[pyodbc.Cursor] = None
+    ) -> int:
+        """
+        Elimina todas las filas de pedido_detalle_tienda asociadas a un pedido.
+        Si se pasa cursor, no hace commit (para uso en transacción).
+
+        Returns:
+            Número de filas eliminadas.
+        """
+        own_cursor = cursor is None
+        cur = cursor or self.conn.cursor()
+        try:
+            cur.execute("""
+                DELETE FROM pedido_detalle_tienda
+                WHERE pedido_detalle_id IN (
+                    SELECT pedido_detalle_id FROM pedido_detalle WHERE pedido_id = ?
+                )
+            """, (pedido_id,))
+            count = cur.rowcount
+            if own_cursor:
+                self.conn.commit()
+            if count > 0:
+                logger.debug(f"✅ {count} distribuciones eliminadas para pedido {pedido_id}")
+            return count
+        except Exception as e:
+            if own_cursor:
+                self.conn.rollback()
+            logger.error(f"❌ Error al eliminar distribuciones del pedido {pedido_id}: {e}", exc_info=True)
+            raise
+        finally:
+            if own_cursor:
+                cur.close()

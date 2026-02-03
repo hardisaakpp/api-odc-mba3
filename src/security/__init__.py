@@ -1,5 +1,5 @@
 """
-Módulo de seguridad para la aplicación.
+Modulo de seguridad para la aplicación.
 
 Autenticación JWT y rate limiting. Auth por API Key (auth.py) fue removido
 por no estar en uso; los endpoints usan verify_jwt_token y require_permission.

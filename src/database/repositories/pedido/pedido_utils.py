@@ -26,7 +26,25 @@ class PedidoUtils:
         self.conn = conn
         # Cache para verificación de columnas
         self._tiene_estado_cache: Optional[bool] = None
+        self._tiene_estado_id_cache: Optional[bool] = None
         self._tiene_es_bodega_cache: Optional[bool] = None
+
+    def tiene_columna_estado_id(self, cursor: pyodbc.Cursor) -> bool:
+        """
+        Verifica si la tabla pedido tiene la columna estado_id (FK a pedido_estado).
+        """
+        if self._tiene_estado_id_cache is not None:
+            return self._tiene_estado_id_cache
+        cursor.execute("""
+            SELECT COUNT(*)
+            FROM INFORMATION_SCHEMA.COLUMNS
+            WHERE TABLE_NAME = 'pedido'
+            AND COLUMN_NAME = 'estado_id'
+        """)
+        row = cursor.fetchone()
+        resultado = (row[0] if row else 0) > 0
+        self._tiene_estado_id_cache = resultado
+        return resultado
     
     def tiene_columna_estado(self, cursor: pyodbc.Cursor) -> bool:
         """
@@ -102,52 +120,43 @@ class PedidoUtils:
         
         return str(fecha)
     
-    def construir_cabecera_desde_row(self, row: Any, tiene_estado: bool) -> Dict[str, Any]:
+    def construir_cabecera_desde_row(
+        self, row: Any, tiene_estado: bool, tiene_estado_id: bool = False
+    ) -> Dict[str, Any]:
         """
         Construye un diccionario de cabecera desde una fila de resultado SQL.
-        
-        Args:
-            row: Tupla con los valores de la fila
-            tiene_estado: Si True, incluye el campo estado
-            
-        Returns:
-            Diccionario con los datos de la cabecera
+
+        Cuando tiene_estado_id=True, la fila debe incluir estado_id y estado_nombre
+        (ej. FROM pedido p LEFT JOIN pedido_estado pe ON pe.id = p.estado_id).
+        Se devuelve estado_id, estado_nombre y estado=estado_nombre (compat).
         """
-        if tiene_estado:
-            return {
-                "pedido_id": str(row[0]),
-                "numero_pedido": row[1],
-                "fecha_pedido": row[2].isoformat() if row[2] else None,
-                "fecha_entrega": row[3],
-                "forma_pago": row[4],
-                "odc": row[5],
-                "proveedor_nombre": row[6],
-                "comprador_nombre": row[7],
-                "comprador_codigo": row[8],
-                "origen_traslado": row[9],
-                "serie": row[10],
-                "archivo_nombre": row[11],
-                "creado_por": row[12],
-                "estado": row[13],
-                "creado_en": row[14].isoformat() if row[14] else None,
-            }
+        base = {
+            "pedido_id": str(row[0]),
+            "numero_pedido": row[1],
+            "fecha_pedido": row[2].isoformat() if row[2] else None,
+            "fecha_entrega": row[3],
+            "forma_pago": row[4],
+            "odc": row[5],
+            "proveedor_nombre": row[6],
+            "comprador_nombre": row[7],
+            "comprador_codigo": row[8],
+            "origen_traslado": row[9],
+            "serie": row[10],
+            "archivo_nombre": row[11],
+            "creado_por": row[12],
+        }
+        if tiene_estado_id:
+            # row: ..., creado_por, estado_id, estado_nombre, creado_en
+            base["estado_id"] = row[13] if row[13] is not None else None
+            base["estado_nombre"] = row[14] if row[14] is not None else None
+            base["estado"] = base["estado_nombre"]  # compat
+            base["creado_en"] = row[15].isoformat() if row[15] else None
+        elif tiene_estado:
+            base["estado"] = row[13]
+            base["creado_en"] = row[14].isoformat() if row[14] else None
         else:
-            return {
-                "pedido_id": str(row[0]),
-                "numero_pedido": row[1],
-                "fecha_pedido": row[2].isoformat() if row[2] else None,
-                "fecha_entrega": row[3],
-                "forma_pago": row[4],
-                "odc": row[5],
-                "proveedor_nombre": row[6],
-                "comprador_nombre": row[7],
-                "comprador_codigo": row[8],
-                "origen_traslado": row[9],
-                "serie": row[10],
-                "archivo_nombre": row[11],
-                "creado_por": row[12],
-                "creado_en": row[13].isoformat() if row[13] else None,
-            }
+            base["creado_en"] = row[13].isoformat() if row[13] else None
+        return base
     
     def obtener_distribuciones_tienda(
         self, 

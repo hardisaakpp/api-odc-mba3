@@ -1166,7 +1166,7 @@ class PedidoService:
                 "serie": datos_pedido.get("serie"),
                 "archivo_nombre": "CREACION_MANUAL",
                 "creado_por": usuario_id,
-                "estado": "PENDIENTE_CONFIRMACION_PROVEEDOR"
+                "estado_id": 1
             }
             
             # Convertir artículos a formato interno
@@ -1456,7 +1456,9 @@ class PedidoService:
                 pedido_id = repository.insert_cabecera(cabecera)
                 resultado["pedido_id"] = pedido_id
                 resultado["numero_pedido"] = cabecera.get("numero_pedido")  # ⭐ Agregado para redirección del frontend
-                resultado["estado"] = "PENDIENTE_CONFIRMACION_PROVEEDOR"
+                resultado["estado_id"] = 1
+                resultado["estado_nombre"] = "BORRADOR"
+                resultado["estado"] = "BORRADOR"  # compat API
                 
                 for detalle_data in detalles_con_tiendas:
                     try:

@@ -12,6 +12,11 @@ import pandas as pd
 from io import BytesIO
 
 from src.database.connection import get_db_connection_context
+from src.database.pedido_estados import (
+    ESTADO_EN_AJUSTE_MABEL,
+    ESTADO_REDISTRIBUIDO,
+    ESTADO_PEDIDO_CONFIRMADO,
+)
 from src.database.repositories.distribucion_confirmada_repository import DistribucionConfirmadaRepository
 from src.database.repositories.pedido_repository import PedidoRepository
 from src.database.services.redistribucion_validator import RedistribucionValidator
@@ -288,7 +293,7 @@ def register_redistribucion_endpoints(app: FastAPI):
                 )
                 
                 # Actualizar estado del pedido
-                repo_pedido.update_estado(pedido_id, "EN_AJUSTE_MABEL")
+                repo_pedido.update_estado(pedido_id, ESTADO_EN_AJUSTE_MABEL)
                 
                 logger.info(f"✅ Redistribución creada para pedido {pedido_id} por usuario {user_id}")
                 
@@ -407,7 +412,7 @@ def register_redistribucion_endpoints(app: FastAPI):
                 )
                 
                 # Actualizar estado del pedido a 'REDISTRIBUIDO' (endpoint interno)
-                repo_pedido.update_estado(pedido_id, "REDISTRIBUIDO")
+                repo_pedido.update_estado(pedido_id, ESTADO_REDISTRIBUIDO)
                 estado_nuevo = "REDISTRIBUIDO"
                 
                 logger.info(f"✅ Redistribución confirmada para pedido {pedido_id} por usuario {user_id}")
@@ -436,7 +441,7 @@ def register_redistribucion_endpoints(app: FastAPI):
                     
                     # Actualizar estado a PEDIDO_CONFIRMADO si el procesamiento fue exitoso
                     if resultado_sap.get("status") in ["success", "partial"]:
-                        repo_pedido.update_estado(pedido_id, "PEDIDO_CONFIRMADO")
+                        repo_pedido.update_estado(pedido_id, ESTADO_PEDIDO_CONFIRMADO)
                         estado_nuevo = "PEDIDO_CONFIRMADO"
                         logger.info(f"✅ Estado del pedido {pedido_id} actualizado a PEDIDO_CONFIRMADO")
                     
@@ -1384,7 +1389,7 @@ def register_redistribucion_endpoints(app: FastAPI):
                 )
                 
                 # Actualizar estado del pedido a "PEDIDO_CONFIRMADO" (específico para confirmación desde frontend)
-                repo_pedido.update_estado(pedido_id, "PEDIDO_CONFIRMADO")
+                repo_pedido.update_estado(pedido_id, ESTADO_PEDIDO_CONFIRMADO)
                 
                 # Calcular resumen
                 total_productos = len(request_body.ajustes_detalle)

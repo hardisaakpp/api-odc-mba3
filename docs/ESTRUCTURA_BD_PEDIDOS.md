@@ -63,6 +63,7 @@ CREATE TABLE pedido (
 - `numero_pedido` es único (business key)
 - `archivo_nombre` permite rastrear el origen del pedido
 - `creado_por` almacena el usuario que subió el archivo
+- **Estados:** el pedido tiene `estado` (legacy string) y/o `estado_id` (FK a `pedido_estado`). Ver [ESTADOS_PEDIDO.md](ESTADOS_PEDIDO.md) para la tabla maestra y migración.
 
 ---
 

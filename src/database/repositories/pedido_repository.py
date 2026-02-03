@@ -15,12 +15,13 @@ CHANGELOG:
 
 import logging
 import pyodbc
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Tuple
 
 # Importar repositorios especializados
 from .pedido.pedido_cabecera_repository import PedidoCabeceraRepository
 from .pedido.pedido_detalle_repository import PedidoDetalleRepository
 from .pedido.pedido_tienda_repository import PedidoTiendaRepository
+from ..pedido_estados import ESTADO_BORRADOR, estado_id_desde_legacy
 
 logger = logging.getLogger(__name__)
 
@@ -64,11 +65,10 @@ class PedidoRepository:
         """
         return self.cabecera_repo.update(pedido_id, datos_cabecera)
 
-    def update_estado(self, pedido_id: str, estado: str) -> bool:
+    def update_estado(self, pedido_id: str, estado: "int | str") -> bool:
         """
         Actualiza el estado de un pedido.
-        
-        DELEGADO a PedidoCabeceraRepository.
+        estado: estado_id (int) o nombre legacy (str). DELEGADO a PedidoCabeceraRepository.
         """
         return self.cabecera_repo.update_estado(pedido_id, estado)
 
@@ -166,6 +166,80 @@ class PedidoRepository:
         DELEGADO a PedidoCabeceraRepository.
         """
         return self.cabecera_repo.tiene_pedidos()
+
+    def validar_puede_descartar(self, pedido_id: str) -> Tuple[bool, str, str]:
+        """
+        Valida si un pedido puede descartarse (eliminarse).
+        Solo se permite para pedidos en estado BORRADOR y sin datos aguas abajo.
+
+        Returns:
+            (ok, error_code, message): ok=True si puede descartarse;
+            si ok=False, error_code y message para la respuesta HTTP.
+        """
+        pedido = self.cabecera_repo.get_pedido_completo(pedido_id)
+        if not pedido:
+            return (False, "not_found", "No se encontró el pedido.")
+
+        cabecera = pedido.get("cabecera", {})
+        estado_id = cabecera.get("estado_id")
+        if estado_id is None:
+            estado_id = estado_id_desde_legacy(cabecera.get("estado"))
+        if estado_id != ESTADO_BORRADOR:
+            return (
+                False,
+                "estado_no_borrador",
+                "El pedido no puede descartarse porque no está en estado Borrador.",
+            )
+
+        cursor = self.conn.cursor()
+        try:
+            for table, col in [
+                ("pedido_respuesta_proveedor", "pedido_id"),
+                ("distribucion_confirmada", "pedido_id"),
+                ("orden_compra_cabecera", "pedido_id"),
+            ]:
+                try:
+                    cursor.execute(
+                        f"SELECT COUNT(*) FROM {table} WHERE {col} = ?",
+                        (pedido_id,),
+                    )
+                    row = cursor.fetchone()
+                    if row and (row[0] or 0) > 0:
+                        return (
+                            False,
+                            "tiene_datos_asociados",
+                            "El pedido tiene información asociada (respuesta de proveedor, redistribución u orden de compra) y no puede descartarse.",
+                        )
+                except pyodbc.Error:
+                    pass
+            return (True, "", "")
+        finally:
+            cursor.close()
+
+    def delete_pedido(self, pedido_id: str) -> bool:
+        """
+        Elimina un pedido y sus detalles/distribuciones en una transacción.
+        Solo debe llamarse después de validar con validar_puede_descartar.
+
+        Orden: pedido_detalle_tienda → pedido_detalle → pedido.
+        """
+        cursor = self.conn.cursor()
+        try:
+            self.conn.autocommit = False
+            self.tienda_repo.delete_distribuciones_by_pedido_id(pedido_id, cursor=cursor)
+            self.detalle_repo.delete_by_pedido_id(pedido_id, cursor=cursor)
+            ok = self.cabecera_repo.delete(pedido_id, cursor=cursor)
+            self.conn.commit()
+            if ok:
+                logger.info(f"✅ Pedido {pedido_id} descartado (eliminado)")
+            return ok
+        except Exception as e:
+            self.conn.rollback()
+            logger.error(f"❌ Error al descartar pedido {pedido_id}: {e}", exc_info=True)
+            raise
+        finally:
+            self.conn.autocommit = True
+            cursor.close()
 
     # ========== Métodos de Detalle (delegados) ==========
 

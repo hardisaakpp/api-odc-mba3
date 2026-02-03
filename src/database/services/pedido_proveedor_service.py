@@ -10,6 +10,7 @@ from datetime import datetime
 import io
 
 from ..connection import get_db_connection_context
+from ..pedido_estados import ESTADO_RESPUESTA_PROVEEDOR_CARGADA
 from ..repositories.pedido_repository import PedidoRepository
 from ..repositories.pedido_respuesta_repository import PedidoRespuestaRepository
 
@@ -424,7 +425,7 @@ class PedidoProveedorService:
                 )
                 
                 # ✅ Estado correcto: RESPUESTA_PROVEEDOR_CARGADA (no CONFIRMADO)
-                repo.update_estado(pedido_id, "RESPUESTA_PROVEEDOR_CARGADA")
+                repo.update_estado(pedido_id, ESTADO_RESPUESTA_PROVEEDOR_CARGADA)
                 
                 return {
                     "status": "success",

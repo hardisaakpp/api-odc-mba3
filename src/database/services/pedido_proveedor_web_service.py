@@ -9,6 +9,7 @@ from typing import Dict, Any, List, Optional
 from datetime import datetime
 
 from ..connection import get_db_connection_context
+from ..pedido_estados import ESTADO_RESPUESTA_PROVEEDOR_CARGADA
 from ..repositories.pedido_repository import PedidoRepository
 from ..repositories.pedido_respuesta_repository import PedidoRespuestaRepository
 from ..repositories.pedido_confirmacion_rayo_repository import PedidoConfirmacionRayoRepository
@@ -311,7 +312,7 @@ class PedidoProveedorWebService:
             
             # Si es confirmado, actualizar estado del pedido
             if estado == "confirmado":
-                repo.update_estado(pedido_id, "RESPUESTA_PROVEEDOR_CARGADA")
+                repo.update_estado(pedido_id, ESTADO_RESPUESTA_PROVEEDOR_CARGADA)
             
             return {
                 "status": "success",
@@ -607,7 +608,7 @@ class PedidoProveedorWebService:
             # Actualizar estado del pedido solo si no estaba ya en ese estado
             estado_actual = pedido["cabecera"].get("estado")
             if estado_actual != "RESPUESTA_PROVEEDOR_CARGADA":
-                repo.update_estado(pedido_id, "RESPUESTA_PROVEEDOR_CARGADA")
+                repo.update_estado(pedido_id, ESTADO_RESPUESTA_PROVEEDOR_CARGADA)
             
             # ✅ REGISTRAR CONFIRMACIÓN DE EL RAYO
             # Obtener valores actuales desde la BD para registrar el historial completo

@@ -16,6 +16,7 @@ from typing import Dict, Any, List, Optional
 from decimal import Decimal, ROUND_HALF_UP
 
 from ..connection import get_db_connection_context
+from ..pedido_estados import ESTADO_CONFIRMADO_PROVEEDOR
 from ..repositories.pedido_repository import PedidoRepository
 from ..repositories.pedido_respuesta_repository import PedidoRespuestaRepository
 
@@ -476,7 +477,7 @@ class PedidoAjusteService:
             # ✅ CORRECCIÓN: Cambio de estado del pedido al final
             # Esto debe ser el último paso antes del commit
             if pedido_repo:
-                pedido_repo.update_estado(pedido_id, "CONFIRMADO_PROVEEDOR")
+                pedido_repo.update_estado(pedido_id, ESTADO_CONFIRMADO_PROVEEDOR)
                 logger.debug(f"✅ Estado del pedido {pedido_id} actualizado a CONFIRMADO_PROVEEDOR")
             
         except Exception as e:

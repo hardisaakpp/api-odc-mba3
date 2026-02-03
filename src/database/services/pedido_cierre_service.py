@@ -4,6 +4,11 @@ Servicio para evaluar y cerrar pedidos cuando todas sus ODC están enviadas.
 
 import logging
 from typing import Optional, Dict, Any
+from ..pedido_estados import (
+    ESTADO_CONFIRMADO_ENVIADO,
+    ESTADO_ERROR_DATOS_MAESTROS,
+    ESTADO_PENDIENTE_LOGISTICA,
+)
 from ..repositories.orden_compra_repository import OrdenCompraRepository
 from ..repositories.pedido_repository import PedidoRepository
 
@@ -172,10 +177,12 @@ class PedidoCierreService:
         if resultado_st is None:
             # No se intentó crear ST (puede ser que no haya distribución o no se requiera)
             # En este caso, si OC está OK, podemos cerrar como CONFIRMADO_ENVIADO
+            estado_nuevo_id = ESTADO_CONFIRMADO_ENVIADO
             estado_nuevo = "CONFIRMADO_ENVIADO"
             razon_estado = "OC enviada, no se requieren Solicitudes de Transferencia"
         elif resultado_st.get("success", False):
             # ST exitosas → CONFIRMADO_ENVIADO
+            estado_nuevo_id = ESTADO_CONFIRMADO_ENVIADO
             estado_nuevo = "CONFIRMADO_ENVIADO"
             razon_estado = (
                 f"OC y ST exitosas: {resultado_st.get('transferencias_creadas', 0)}/"
@@ -189,6 +196,7 @@ class PedidoCierreService:
             
             if error_type == "datos_maestros":
                 # ❌ ERROR DE DATOS MAESTROS: No es problema de logística
+                estado_nuevo_id = ESTADO_ERROR_DATOS_MAESTROS
                 estado_nuevo = "ERROR_DATOS_MAESTROS"
                 razon_estado = (
                     f"OC enviada pero ST fallaron por errores de datos maestros en SAP. "
@@ -200,6 +208,7 @@ class PedidoCierreService:
                 )
             else:
                 # Stock insuficiente u otro error → PENDIENTE_LOGISTICA
+                estado_nuevo_id = ESTADO_PENDIENTE_LOGISTICA
                 estado_nuevo = "PENDIENTE_LOGISTICA"
                 razon_estado = (
                     f"OC enviada pero ST fallaron: {transferencias_errores} error(es). "
@@ -210,8 +219,8 @@ class PedidoCierreService:
                     f"Estado: {estado_anterior} → {estado_nuevo}"
                 )
         
-        # Actualizar estado del pedido
-        actualizado = pedido_repo.update_estado(pedido_id, estado_nuevo)
+        # Actualizar estado del pedido (por id)
+        actualizado = pedido_repo.update_estado(pedido_id, estado_nuevo_id)
         
         if actualizado:
             if estado_nuevo == "CONFIRMADO_ENVIADO":

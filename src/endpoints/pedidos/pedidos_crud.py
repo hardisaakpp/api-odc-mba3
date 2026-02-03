@@ -726,3 +726,54 @@ def register_crud_endpoints(app: FastAPI):
                     "message": f"Error interno al modificar cabecera del pedido: {str(e)}"
                 }
             )
+
+    @app.delete("/api/pedidos/{pedido_id}", status_code=status.HTTP_204_NO_CONTENT, tags=["Pedidos"])
+    async def descartar_pedido(
+        pedido_id: str = Path(..., description="UUID del pedido a descartar"),
+        user: Dict = Depends(verify_jwt_token),
+        _: None = Depends(require_any_permission(['odcsap.view', 'mabel.view']))
+    ):
+        """
+        Descartar (eliminar) un pedido en estado BORRADOR.
+
+        Solo se permite para pedidos en estado Borrador (estado_id = 1).
+        No se permite si el pedido tiene respuesta de proveedor, redistribución u orden de compra.
+
+        - **404**: Pedido no encontrado.
+        - **400**: Pedido no está en estado Borrador.
+        - **409**: Pedido tiene información asociada.
+        - **204**: Pedido eliminado correctamente.
+        """
+        try:
+            with get_db_connection_context() as conn:
+                repo = PedidoRepository(conn)
+                ok, error_code, message = repo.validar_puede_descartar(pedido_id)
+                if not ok:
+                    if error_code == "not_found":
+                        raise HTTPException(
+                            status_code=status.HTTP_404_NOT_FOUND,
+                            detail={"error": error_code, "message": message}
+                        )
+                    if error_code == "estado_no_borrador":
+                        raise HTTPException(
+                            status_code=status.HTTP_400_BAD_REQUEST,
+                            detail={"error": error_code, "message": message}
+                        )
+                    raise HTTPException(
+                        status_code=status.HTTP_409_CONFLICT,
+                        detail={"error": error_code, "message": message}
+                    )
+                repo.delete_pedido(pedido_id)
+            logger.info(f"✅ Pedido {pedido_id} descartado por usuario {user.get('username', 'UNKNOWN')}")
+            return None
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"❌ Error al descartar pedido {pedido_id}: {e}", exc_info=True)
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail={
+                    "error": "internal_error",
+                    "message": f"Error al descartar el pedido: {str(e)}"
+                }
+            )

@@ -12,6 +12,14 @@ from datetime import date
 
 from .pedido_utils import PedidoUtils
 
+from src.database.pedido_estados import (
+    ESTADO_BORRADOR,
+    ESTADO_RESPUESTA_PROVEEDOR_CARGADA,
+    ESTADO_CONFIRMADO_PROVEEDOR,
+    ESTADO_PEDIDO_CONFIRMADO,
+    estado_id_desde_legacy,
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -63,8 +71,48 @@ class PedidoCabeceraRepository:
             pedido_id = str(uuid_result[0])
             
             tiene_estado = self.utils.tiene_columna_estado(cursor)
-            
-            if tiene_estado:
+            tiene_estado_id = self.utils.tiene_columna_estado_id(cursor)
+
+            if tiene_estado_id:
+                estado_id = datos_cabecera_normalizado.get("estado_id", ESTADO_BORRADOR)
+                if isinstance(estado_id, str):
+                    estado_id = estado_id_desde_legacy(estado_id)
+                sql = """
+                INSERT INTO pedido (
+                    pedido_id,
+                    numero_pedido,
+                    fecha_pedido,
+                    fecha_entrega,
+                    forma_pago,
+                    odc,
+                    proveedor_nombre,
+                    comprador_nombre,
+                    comprador_codigo,
+                    origen_traslado,
+                    serie,
+                    archivo_nombre,
+                    creado_por,
+                    estado_id,
+                    creado_en
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, GETDATE())
+                """
+                values = (
+                    pedido_id,
+                    datos_cabecera_normalizado.get("numero_pedido"),
+                    datos_cabecera_normalizado.get("fecha_pedido"),
+                    datos_cabecera_normalizado.get("fecha_entrega"),
+                    datos_cabecera_normalizado.get("forma_pago"),
+                    datos_cabecera_normalizado.get("odc"),
+                    datos_cabecera_normalizado.get("proveedor_nombre"),
+                    datos_cabecera_normalizado.get("comprador_nombre"),
+                    datos_cabecera_normalizado.get("comprador_codigo"),
+                    datos_cabecera_normalizado.get("origen_traslado"),
+                    datos_cabecera_normalizado.get("serie"),
+                    datos_cabecera_normalizado.get("archivo_nombre"),
+                    datos_cabecera_normalizado.get("creado_por"),
+                    estado_id,
+                )
+            elif tiene_estado:
                 sql = """
                 INSERT INTO pedido (
                     pedido_id,
@@ -174,8 +222,20 @@ class PedidoCabeceraRepository:
         
         try:
             tiene_estado = self.utils.tiene_columna_estado(cursor)
-            
-            if tiene_estado:
+            tiene_estado_id = self.utils.tiene_columna_estado_id(cursor)
+
+            if tiene_estado_id:
+                cursor.execute("""
+                    SELECT 
+                        p.pedido_id, p.numero_pedido, p.fecha_pedido, p.fecha_entrega,
+                        p.forma_pago, p.odc, p.proveedor_nombre, p.comprador_nombre,
+                        p.comprador_codigo, p.origen_traslado, p.serie, p.archivo_nombre,
+                        p.creado_por, p.estado_id, pe.nombre AS estado_nombre, p.creado_en
+                    FROM pedido p
+                    LEFT JOIN pedido_estado pe ON pe.id = p.estado_id
+                    WHERE p.pedido_id = ?
+                """, (pedido_id,))
+            elif tiene_estado:
                 cursor.execute("""
                     SELECT 
                         pedido_id, numero_pedido, fecha_pedido, fecha_entrega,
@@ -195,12 +255,14 @@ class PedidoCabeceraRepository:
                     FROM pedido
                     WHERE pedido_id = ?
                 """, (pedido_id,))
-            
+
             row = cursor.fetchone()
             if not row:
                 return None
-            
-            cabecera = self.utils.construir_cabecera_desde_row(row, tiene_estado)
+
+            cabecera = self.utils.construir_cabecera_desde_row(
+                row, tiene_estado or tiene_estado_id, tiene_estado_id
+            )
             detalles = self.utils.obtener_detalles_pedido(cursor, pedido_id)
             
             return {
@@ -228,8 +290,20 @@ class PedidoCabeceraRepository:
         
         try:
             tiene_estado = self.utils.tiene_columna_estado(cursor)
-            
-            if tiene_estado:
+            tiene_estado_id = self.utils.tiene_columna_estado_id(cursor)
+
+            if tiene_estado_id:
+                cursor.execute("""
+                    SELECT 
+                        p.pedido_id, p.numero_pedido, p.fecha_pedido, p.fecha_entrega,
+                        p.forma_pago, p.odc, p.proveedor_nombre, p.comprador_nombre,
+                        p.comprador_codigo, p.origen_traslado, p.serie, p.archivo_nombre,
+                        p.creado_por, p.estado_id, pe.nombre AS estado_nombre, p.creado_en
+                    FROM pedido p
+                    LEFT JOIN pedido_estado pe ON pe.id = p.estado_id
+                    WHERE p.numero_pedido = ?
+                """, (numero_pedido,))
+            elif tiene_estado:
                 cursor.execute("""
                     SELECT 
                         pedido_id, numero_pedido, fecha_pedido, fecha_entrega,
@@ -249,13 +323,15 @@ class PedidoCabeceraRepository:
                     FROM pedido
                     WHERE numero_pedido = ?
                 """, (numero_pedido,))
-            
+
             row = cursor.fetchone()
             if not row:
                 return None
-            
+
             pedido_id = str(row[0])
-            cabecera = self.utils.construir_cabecera_desde_row(row, tiene_estado)
+            cabecera = self.utils.construir_cabecera_desde_row(
+                row, tiene_estado or tiene_estado_id, tiene_estado_id
+            )
             detalles = self.utils.obtener_detalles_pedido(cursor, pedido_id)
             
             return {
@@ -269,48 +345,84 @@ class PedidoCabeceraRepository:
         finally:
             cursor.close()
 
-    def update_estado(self, pedido_id: str, estado: str) -> bool:
+    def update_estado(self, pedido_id: str, estado: int | str) -> bool:
         """
         Actualiza el estado de un pedido.
-        
+
         Args:
             pedido_id: UUID del pedido
-            estado: Nuevo estado
-            
+            estado: Nuevo estado_id (int) o nombre legacy (str); se normaliza a estado_id.
+
         Returns:
-            True si se actualizó correctamente, False si no existe el pedido o no hay columna estado
+            True si se actualizó correctamente, False si no existe el pedido o no hay columna estado/estado_id.
         """
         cursor = self.conn.cursor()
-        
         try:
+            tiene_estado_id = self.utils.tiene_columna_estado_id(cursor)
             tiene_estado = self.utils.tiene_columna_estado(cursor)
-            
-            if not tiene_estado:
-                logger.warning("⚠️ Columna 'estado' no existe en tabla pedido. Ejecute el script add_estado_pedido.sql")
+
+            estado_id = int(estado) if isinstance(estado, int) else estado_id_desde_legacy(estado)
+
+            if tiene_estado_id:
+                cursor.execute("""
+                    UPDATE p SET p.estado_id = ?, p.estado = pe.nombre
+                    FROM pedido p
+                    LEFT JOIN pedido_estado pe ON pe.id = ?
+                    WHERE p.pedido_id = ?
+                """, (estado_id, estado_id, pedido_id))
+            elif tiene_estado:
+                cursor.execute(
+                    "SELECT nombre FROM pedido_estado WHERE id = ?", (estado_id,)
+                )
+                nom = cursor.fetchone()
+                nombre = nom[0] if nom and nom[0] else str(estado_id)
+                cursor.execute("""
+                    UPDATE pedido SET estado = ? WHERE pedido_id = ?
+                """, (nombre, pedido_id))
+            else:
+                logger.warning("⚠️ Columna 'estado'/'estado_id' no existe en tabla pedido.")
                 return False
-            
-            cursor.execute("""
-                UPDATE pedido 
-                SET estado = ?
-                WHERE pedido_id = ?
-            """, (estado, pedido_id))
-            
+
             rows_affected = cursor.rowcount
             self.conn.commit()
-            
             if rows_affected > 0:
-                logger.debug(f"✅ Estado actualizado para pedido {pedido_id}: {estado}")
+                logger.debug(f"✅ Estado actualizado para pedido {pedido_id}: estado_id={estado_id}")
                 return True
-            else:
-                logger.warning(f"⚠️ No se encontró pedido con ID: {pedido_id}")
-                return False
-                
+            logger.warning(f"⚠️ No se encontró pedido con ID: {pedido_id}")
+            return False
         except Exception as e:
             self.conn.rollback()
             logger.error(f"❌ Error al actualizar estado del pedido: {e}", exc_info=True)
             raise
         finally:
             cursor.close()
+
+    def delete(self, pedido_id: str, cursor: Optional[pyodbc.Cursor] = None) -> bool:
+        """
+        Elimina la cabecera del pedido (una sola fila).
+        Si se pasa cursor, no hace commit (para uso en transacción).
+
+        Returns:
+            True si se eliminó una fila, False si no existía.
+        """
+        own_cursor = cursor is None
+        cur = cursor or self.conn.cursor()
+        try:
+            cur.execute("DELETE FROM pedido WHERE pedido_id = ?", (pedido_id,))
+            rows = cur.rowcount
+            if own_cursor:
+                self.conn.commit()
+            if rows > 0:
+                logger.debug(f"✅ Pedido cabecera eliminada: {pedido_id}")
+            return rows > 0
+        except Exception as e:
+            if own_cursor:
+                self.conn.rollback()
+            logger.error(f"❌ Error al eliminar pedido {pedido_id}: {e}", exc_info=True)
+            raise
+        finally:
+            if own_cursor:
+                cur.close()
 
     def update(self, pedido_id: str, datos_cabecera: Dict[str, Any]) -> bool:
         """
@@ -458,25 +570,69 @@ class PedidoCabeceraRepository:
         finally:
             cursor.close()
 
-    def get_by_estado(self, estado: str) -> List[Dict[str, Any]]:
+    def get_by_estado(self, estado: str | int) -> List[Dict[str, Any]]:
         """
         Obtiene todos los pedidos con un estado específico.
-        
+
         Args:
-            estado: Estado a filtrar
-            
+            estado: estado_id (int) o nombre legacy (str) a filtrar.
+
         Returns:
-            Lista de diccionarios con datos de pedidos
+            Lista de diccionarios con datos de pedidos (incluye estado_id/estado_nombre si existe).
         """
         cursor = self.conn.cursor()
-        
         try:
+            tiene_estado_id = self.utils.tiene_columna_estado_id(cursor)
             tiene_estado = self.utils.tiene_columna_estado(cursor)
-            
-            if not tiene_estado:
-                logger.warning("⚠️ Columna 'estado' no existe en tabla pedido")
+            if not tiene_estado_id and not tiene_estado:
+                logger.warning("⚠️ Columna 'estado'/'estado_id' no existe en tabla pedido")
                 return []
-            
+
+            estado_id = int(estado) if isinstance(estado, int) else estado_id_desde_legacy(estado)
+
+            if tiene_estado_id:
+                cursor.execute("""
+                    SELECT 
+                        p.pedido_id, p.numero_pedido, p.fecha_pedido, p.fecha_entrega,
+                        p.forma_pago, p.odc, p.proveedor_nombre, p.comprador_nombre,
+                        p.comprador_codigo, p.origen_traslado, p.serie, p.archivo_nombre,
+                        p.creado_por, p.estado_id, pe.nombre AS estado_nombre, p.creado_en
+                    FROM pedido p
+                    LEFT JOIN pedido_estado pe ON pe.id = p.estado_id
+                    WHERE p.estado_id = ?
+                    ORDER BY p.creado_en DESC
+                """, (estado_id,))
+                pedidos = []
+                for row in cursor.fetchall():
+                    pedidos.append({
+                        "pedido_id": str(row[0]),
+                        "numero_pedido": row[1],
+                        "fecha_pedido": row[2].isoformat() if row[2] else None,
+                        "fecha_entrega": row[3],
+                        "forma_pago": row[4],
+                        "odc": row[5],
+                        "proveedor_nombre": row[6],
+                        "comprador_nombre": row[7],
+                        "comprador_codigo": row[8],
+                        "origen_traslado": row[9],
+                        "serie": row[10],
+                        "archivo_nombre": row[11],
+                        "creado_por": row[12],
+                        "estado_id": row[13],
+                        "estado_nombre": row[14],
+                        "estado": row[14],
+                        "creado_en": row[15].isoformat() if row[15] else None,
+                    })
+                return pedidos
+
+            # Solo columna estado: filtrar por string; si recibimos int, resolver nombre
+            filtro_estado: str
+            if isinstance(estado, str):
+                filtro_estado = estado
+            else:
+                cursor.execute("SELECT nombre FROM pedido_estado WHERE id = ?", (estado_id,))
+                r = cursor.fetchone()
+                filtro_estado = r[0] if r and r[0] else str(estado_id)
             cursor.execute("""
                 SELECT 
                     pedido_id, numero_pedido, fecha_pedido, fecha_entrega,
@@ -486,8 +642,7 @@ class PedidoCabeceraRepository:
                 FROM pedido
                 WHERE estado = ?
                 ORDER BY creado_en DESC
-            """, (estado,))
-            
+            """, (filtro_estado,))
             pedidos = []
             for row in cursor.fetchall():
                 pedidos.append({
@@ -507,9 +662,7 @@ class PedidoCabeceraRepository:
                     "estado": row[13],
                     "creado_en": row[14].isoformat() if row[14] else None,
                 })
-            
             return pedidos
-            
         except Exception as e:
             logger.error(f"❌ Error al obtener pedidos por estado: {e}", exc_info=True)
             raise
@@ -518,7 +671,7 @@ class PedidoCabeceraRepository:
 
     def get_pedidos_con_filtros(
         self,
-        estado: Optional[str] = None,
+        estado: Optional[str | int] = None,
         fecha_desde: Optional[str] = None,
         fecha_hasta: Optional[str] = None,
         proveedor_nombre: Optional[str] = None,
@@ -529,32 +682,31 @@ class PedidoCabeceraRepository:
     ) -> Dict[str, Any]:
         """
         Obtiene pedidos con filtros y paginación.
-        
+
         Args:
-            estado: Estado del pedido
-            fecha_desde: Fecha desde (YYYY-MM-DD)
-            fecha_hasta: Fecha hasta (YYYY-MM-DD)
-            proveedor_nombre: Nombre del proveedor (búsqueda parcial)
-            numero_pedido: Número de pedido (búsqueda exacta o parcial)
-            creado_por: Usuario que creó el pedido
-            limit: Límite de registros
-            offset: Offset para paginación
-        
-        Returns:
-            Dict con lista de pedidos y metadata
+            estado: estado_id (int) o nombre legacy (str) para filtrar
+            fecha_desde, fecha_hasta, proveedor_nombre, numero_pedido, creado_por, limit, offset
         """
         cursor = self.conn.cursor()
-        
         try:
             tiene_estado = self.utils.tiene_columna_estado(cursor)
-            
+            tiene_estado_id = self.utils.tiene_columna_estado_id(cursor)
+
             where_conditions = []
-            params = []
-            
-            if tiene_estado and estado:
-                where_conditions.append("p.estado = ?")
-                params.append(estado)
-            
+            params: List[Any] = []
+
+            if estado is not None and (tiene_estado_id or tiene_estado):
+                estado_id = int(estado) if isinstance(estado, int) else estado_id_desde_legacy(estado)
+                if tiene_estado_id:
+                    where_conditions.append("p.estado_id = ?")
+                    params.append(estado_id)
+                else:
+                    cursor.execute("SELECT nombre FROM pedido_estado WHERE id = ?", (estado_id,))
+                    r = cursor.fetchone()
+                    nom = r[0] if r and r[0] else str(estado_id)
+                    where_conditions.append("p.estado = ?")
+                    params.append(nom)
+
             if fecha_desde:
                 where_conditions.append("CAST(p.fecha_pedido AS DATE) >= CAST(? AS DATE)")
                 params.append(fecha_desde)
@@ -581,54 +733,83 @@ class PedidoCabeceraRepository:
             cursor.execute(count_query, params)
             result = cursor.fetchone()
             total = result[0] if result else 0
-            
-            select_fields = """
-                p.pedido_id, p.numero_pedido, p.fecha_pedido, p.fecha_entrega,
-                p.forma_pago, p.odc, p.proveedor_nombre, p.comprador_nombre,
-                p.comprador_codigo, p.origen_traslado, p.serie, p.archivo_nombre,
-                p.creado_por, p.creado_en
-            """
-            
-            if tiene_estado:
-                select_fields += ", p.estado"
-            
-            data_query = f"""
-                SELECT {select_fields}
-                FROM pedido p
-                WHERE {where_clause}
-                ORDER BY p.creado_en DESC
-            """
-            
+
+            if tiene_estado_id:
+                select_fields = """
+                    p.pedido_id, p.numero_pedido, p.fecha_pedido, p.fecha_entrega,
+                    p.forma_pago, p.odc, p.proveedor_nombre, p.comprador_nombre,
+                    p.comprador_codigo, p.origen_traslado, p.serie, p.archivo_nombre,
+                    p.creado_por, p.estado_id, pe.nombre AS estado_nombre, p.creado_en
+                """
+                data_query = f"""
+                    SELECT {select_fields}
+                    FROM pedido p
+                    LEFT JOIN pedido_estado pe ON pe.id = p.estado_id
+                    WHERE {where_clause}
+                    ORDER BY p.creado_en DESC
+                """
+            else:
+                select_fields = """
+                    p.pedido_id, p.numero_pedido, p.fecha_pedido, p.fecha_entrega,
+                    p.forma_pago, p.odc, p.proveedor_nombre, p.comprador_nombre,
+                    p.comprador_codigo, p.origen_traslado, p.serie, p.archivo_nombre,
+                    p.creado_por, p.creado_en
+                """
+                if tiene_estado:
+                    select_fields += ", p.estado"
+                data_query = f"""
+                    SELECT {select_fields}
+                    FROM pedido p
+                    WHERE {where_clause}
+                    ORDER BY p.creado_en DESC
+                """
+
             if limit is not None:
                 data_query += f" OFFSET {offset or 0} ROWS FETCH NEXT {limit} ROWS ONLY"
-            
+
             cursor.execute(data_query, params)
-            
+
             pedidos = []
             for row in cursor.fetchall():
                 idx = 0
-                pedido = {
-                    "pedido_id": str(row[idx]),
-                    "numero_pedido": row[idx + 1],
-                    "fecha_pedido": row[idx + 2].isoformat() if row[idx + 2] else None,
-                    "fecha_entrega": row[idx + 3],
-                    "forma_pago": row[idx + 4],
-                    "odc": row[idx + 5],
-                    "proveedor_nombre": row[idx + 6],
-                    "comprador_nombre": row[idx + 7],
-                    "comprador_codigo": row[idx + 8],
-                    "origen_traslado": row[idx + 9],
-                    "serie": row[idx + 10],
-                    "archivo_nombre": row[idx + 11],
-                    "creado_por": row[idx + 12],
-                    "creado_en": row[idx + 13].isoformat() if row[idx + 13] else None,
-                }
-                
-                if tiene_estado:
-                    pedido["estado"] = row[idx + 14]
+                if tiene_estado_id:
+                    pedido = {
+                        "pedido_id": str(row[idx]),
+                        "numero_pedido": row[idx + 1],
+                        "fecha_pedido": row[idx + 2].isoformat() if row[idx + 2] else None,
+                        "fecha_entrega": row[idx + 3],
+                        "forma_pago": row[idx + 4],
+                        "odc": row[idx + 5],
+                        "proveedor_nombre": row[idx + 6],
+                        "comprador_nombre": row[idx + 7],
+                        "comprador_codigo": row[idx + 8],
+                        "origen_traslado": row[idx + 9],
+                        "serie": row[idx + 10],
+                        "archivo_nombre": row[idx + 11],
+                        "creado_por": row[idx + 12],
+                        "estado_id": row[idx + 13],
+                        "estado_nombre": row[idx + 14],
+                        "estado": row[idx + 14],
+                        "creado_en": row[idx + 15].isoformat() if row[idx + 15] else None,
+                    }
                 else:
-                    pedido["estado"] = None
-                
+                    pedido = {
+                        "pedido_id": str(row[idx]),
+                        "numero_pedido": row[idx + 1],
+                        "fecha_pedido": row[idx + 2].isoformat() if row[idx + 2] else None,
+                        "fecha_entrega": row[idx + 3],
+                        "forma_pago": row[idx + 4],
+                        "odc": row[idx + 5],
+                        "proveedor_nombre": row[idx + 6],
+                        "comprador_nombre": row[idx + 7],
+                        "comprador_codigo": row[idx + 8],
+                        "origen_traslado": row[idx + 9],
+                        "serie": row[idx + 10],
+                        "archivo_nombre": row[idx + 11],
+                        "creado_por": row[idx + 12],
+                        "creado_en": row[idx + 13].isoformat() if row[idx + 13] else None,
+                    }
+                    pedido["estado"] = row[idx + 14] if tiene_estado else None
                 pedidos.append(pedido)
             
             has_more = (offset or 0) + len(pedidos) < total if limit else False
@@ -654,50 +835,65 @@ class PedidoCabeceraRepository:
         solo_redistribucion_confirmada: bool = False
     ) -> Dict[str, Any]:
         """
-        Obtiene pedidos en estado confirmado, ordenados por creado_en DESC,
-        para uso en pantalla Redistribución.
-
-        Args:
-            limit: Límite de registros (ej: 1 para "último confirmado")
-            offset: Offset para paginación
-            solo_redistribucion_confirmada: Si True, solo pedidos con estado
-                PEDIDO_CONFIRMADO (redistribución ya confirmada). Si False,
-                incluye CONFIRMADO_PROVEEDOR y PEDIDO_CONFIRMADO.
-
-        Returns:
-            Dict con "data", "total", "limit", "offset", "has_more"
+        Obtiene pedidos en estado confirmado (estado_id 4 u 8), ordenados por creado_en DESC.
         """
         cursor = self.conn.cursor()
         try:
+            tiene_estado_id = self.utils.tiene_columna_estado_id(cursor)
             tiene_estado = self.utils.tiene_columna_estado(cursor)
-            if not tiene_estado:
+            if not tiene_estado_id and not tiene_estado:
                 return {"data": [], "total": 0, "limit": limit, "offset": offset or 0, "has_more": False}
 
-            if solo_redistribucion_confirmada:
-                where_clause = "p.estado = ?"
-                params_list: List[Any] = ["PEDIDO_CONFIRMADO"]
+            if tiene_estado_id:
+                if solo_redistribucion_confirmada:
+                    where_clause = "p.estado_id = ?"
+                    params_list: List[Any] = [ESTADO_PEDIDO_CONFIRMADO]
+                else:
+                    where_clause = "p.estado_id IN (?, ?)"
+                    params_list = [ESTADO_CONFIRMADO_PROVEEDOR, ESTADO_PEDIDO_CONFIRMADO]
+                params: List[Any] = list(params_list)
+                count_query = f"SELECT COUNT(*) FROM pedido p WHERE {where_clause}"
+                cursor.execute(count_query, params)
+                result = cursor.fetchone()
+                total = result[0] if result else 0
+                select_fields = """
+                    p.pedido_id, p.numero_pedido, p.fecha_pedido, p.fecha_entrega,
+                    p.forma_pago, p.odc, p.proveedor_nombre, p.comprador_nombre,
+                    p.comprador_codigo, p.origen_traslado, p.serie, p.archivo_nombre,
+                    p.creado_por, p.estado_id, pe.nombre AS estado_nombre, p.creado_en
+                """
+                data_query = f"""
+                    SELECT {select_fields}
+                    FROM pedido p
+                    LEFT JOIN pedido_estado pe ON pe.id = p.estado_id
+                    WHERE {where_clause}
+                    ORDER BY p.creado_en DESC
+                """
             else:
-                where_clause = "p.estado IN (?, ?)"
-                params_list = ["CONFIRMADO_PROVEEDOR", "PEDIDO_CONFIRMADO"]
-            params: List[Any] = list(params_list)
+                if solo_redistribucion_confirmada:
+                    where_clause = "p.estado = ?"
+                    params_list = ["PEDIDO_CONFIRMADO"]
+                else:
+                    where_clause = "p.estado IN (?, ?)"
+                    params_list = ["CONFIRMADO_PROVEEDOR", "PEDIDO_CONFIRMADO"]
+                params = list(params_list)
+                count_query = f"SELECT COUNT(*) FROM pedido p WHERE {where_clause}"
+                cursor.execute(count_query, params)
+                result = cursor.fetchone()
+                total = result[0] if result else 0
+                select_fields = """
+                    p.pedido_id, p.numero_pedido, p.fecha_pedido, p.fecha_entrega,
+                    p.forma_pago, p.odc, p.proveedor_nombre, p.comprador_nombre,
+                    p.comprador_codigo, p.origen_traslado, p.serie, p.archivo_nombre,
+                    p.creado_por, p.creado_en, p.estado
+                """
+                data_query = f"""
+                    SELECT {select_fields}
+                    FROM pedido p
+                    WHERE {where_clause}
+                    ORDER BY p.creado_en DESC
+                """
 
-            count_query = f"SELECT COUNT(*) FROM pedido p WHERE {where_clause}"
-            cursor.execute(count_query, params)
-            result = cursor.fetchone()
-            total = result[0] if result else 0
-
-            select_fields = """
-                p.pedido_id, p.numero_pedido, p.fecha_pedido, p.fecha_entrega,
-                p.forma_pago, p.odc, p.proveedor_nombre, p.comprador_nombre,
-                p.comprador_codigo, p.origen_traslado, p.serie, p.archivo_nombre,
-                p.creado_por, p.creado_en, p.estado
-            """
-            data_query = f"""
-                SELECT {select_fields}
-                FROM pedido p
-                WHERE {where_clause}
-                ORDER BY p.creado_en DESC
-            """
             if limit is not None:
                 data_query += f" OFFSET {offset or 0} ROWS FETCH NEXT {limit} ROWS ONLY"
 
@@ -705,23 +901,44 @@ class PedidoCabeceraRepository:
             pedidos = []
             for row in cursor.fetchall():
                 idx = 0
-                pedido = {
-                    "pedido_id": str(row[idx]),
-                    "numero_pedido": row[idx + 1],
-                    "fecha_pedido": row[idx + 2].isoformat() if row[idx + 2] else None,
-                    "fecha_entrega": row[idx + 3],
-                    "forma_pago": row[idx + 4],
-                    "odc": row[idx + 5],
-                    "proveedor_nombre": row[idx + 6],
-                    "comprador_nombre": row[idx + 7],
-                    "comprador_codigo": row[idx + 8],
-                    "origen_traslado": row[idx + 9],
-                    "serie": row[idx + 10],
-                    "archivo_nombre": row[idx + 11],
-                    "creado_por": row[idx + 12],
-                    "creado_en": row[idx + 13].isoformat() if row[idx + 13] else None,
-                    "estado": row[idx + 14],
-                }
+                if tiene_estado_id:
+                    pedido = {
+                        "pedido_id": str(row[idx]),
+                        "numero_pedido": row[idx + 1],
+                        "fecha_pedido": row[idx + 2].isoformat() if row[idx + 2] else None,
+                        "fecha_entrega": row[idx + 3],
+                        "forma_pago": row[idx + 4],
+                        "odc": row[idx + 5],
+                        "proveedor_nombre": row[idx + 6],
+                        "comprador_nombre": row[idx + 7],
+                        "comprador_codigo": row[idx + 8],
+                        "origen_traslado": row[idx + 9],
+                        "serie": row[idx + 10],
+                        "archivo_nombre": row[idx + 11],
+                        "creado_por": row[idx + 12],
+                        "estado_id": row[idx + 13],
+                        "estado_nombre": row[idx + 14],
+                        "estado": row[idx + 14],
+                        "creado_en": row[idx + 15].isoformat() if row[idx + 15] else None,
+                    }
+                else:
+                    pedido = {
+                        "pedido_id": str(row[idx]),
+                        "numero_pedido": row[idx + 1],
+                        "fecha_pedido": row[idx + 2].isoformat() if row[idx + 2] else None,
+                        "fecha_entrega": row[idx + 3],
+                        "forma_pago": row[idx + 4],
+                        "odc": row[idx + 5],
+                        "proveedor_nombre": row[idx + 6],
+                        "comprador_nombre": row[idx + 7],
+                        "comprador_codigo": row[idx + 8],
+                        "origen_traslado": row[idx + 9],
+                        "serie": row[idx + 10],
+                        "archivo_nombre": row[idx + 11],
+                        "creado_por": row[idx + 12],
+                        "creado_en": row[idx + 13].isoformat() if row[idx + 13] else None,
+                        "estado": row[idx + 14],
+                    }
                 pedidos.append(pedido)
 
             has_more = (offset or 0) + len(pedidos) < total if limit else False
@@ -777,20 +994,26 @@ class PedidoCabeceraRepository:
     def get_ultimo_pedido(self, usuario_id: str) -> Optional[Dict[str, Any]]:
         """
         Obtiene el último pedido cargado por un usuario específico.
-        
-        Args:
-            usuario_id: ID del usuario autenticado (creado_por)
-        
-        Returns:
-            Dict con datos básicos del último pedido del usuario
-            o None si el usuario no tiene pedidos
+        Devuelve estado_id y estado_nombre cuando existe columna estado_id.
         """
         cursor = self.conn.cursor()
-        
         try:
+            tiene_estado_id = self.utils.tiene_columna_estado_id(cursor)
             tiene_estado = self.utils.tiene_columna_estado(cursor)
-            
-            if tiene_estado:
+
+            if tiene_estado_id:
+                cursor.execute("""
+                    SELECT TOP 1
+                        p.pedido_id, p.numero_pedido, p.fecha_pedido, p.fecha_entrega,
+                        p.forma_pago, p.odc, p.proveedor_nombre, p.comprador_nombre,
+                        p.comprador_codigo, p.origen_traslado, p.serie, p.archivo_nombre,
+                        p.creado_por, p.estado_id, pe.nombre AS estado_nombre, p.creado_en
+                    FROM pedido p
+                    LEFT JOIN pedido_estado pe ON pe.id = p.estado_id
+                    WHERE p.creado_por = ?
+                    ORDER BY p.creado_en DESC
+                """, (usuario_id,))
+            elif tiene_estado:
                 cursor.execute("""
                     SELECT TOP 1
                         pedido_id, numero_pedido, fecha_pedido, fecha_entrega,
@@ -812,11 +1035,31 @@ class PedidoCabeceraRepository:
                     WHERE creado_por = ?
                     ORDER BY creado_en DESC
                 """, (usuario_id,))
-            
+
             row = cursor.fetchone()
             if not row:
                 return None
-            
+
+            if tiene_estado_id:
+                return {
+                    "pedido_id": str(row[0]),
+                    "numero_pedido": row[1],
+                    "fecha_pedido": row[2].isoformat() if row[2] else None,
+                    "fecha_entrega": row[3],
+                    "forma_pago": row[4],
+                    "odc": row[5],
+                    "proveedor_nombre": row[6],
+                    "comprador_nombre": row[7],
+                    "comprador_codigo": row[8],
+                    "origen_traslado": row[9],
+                    "serie": row[10],
+                    "archivo_nombre": row[11],
+                    "creado_por": row[12],
+                    "estado_id": row[13],
+                    "estado_nombre": row[14],
+                    "estado": row[14],
+                    "creado_en": row[15].isoformat() if row[15] else None,
+                }
             if tiene_estado:
                 return {
                     "pedido_id": str(row[0]),
@@ -835,7 +1078,96 @@ class PedidoCabeceraRepository:
                     "estado": row[13],
                     "creado_en": row[14].isoformat() if row[14] else None,
                 }
+            return {
+                "pedido_id": str(row[0]),
+                "numero_pedido": row[1],
+                "fecha_pedido": row[2].isoformat() if row[2] else None,
+                "fecha_entrega": row[3],
+                "forma_pago": row[4],
+                "odc": row[5],
+                "proveedor_nombre": row[6],
+                "comprador_nombre": row[7],
+                "comprador_codigo": row[8],
+                "origen_traslado": row[9],
+                "serie": row[10],
+                "archivo_nombre": row[11],
+                "creado_por": row[12],
+                "creado_en": row[13].isoformat() if row[13] else None,
+            }
+        except Exception as e:
+            logger.error(f"❌ Error al obtener último pedido del usuario {usuario_id}: {e}", exc_info=True)
+            raise
+        finally:
+            cursor.close()
+
+    def get_ultimo_pedido_respuesta_proveedor_cargada(
+        self, usuario_id: Optional[str] = None
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Obtiene el último pedido con estado_id = ESTADO_RESPUESTA_PROVEEDOR_CARGADA (2).
+        Usado en pantalla Redistribución.
+        """
+        cursor = self.conn.cursor()
+        try:
+            tiene_estado_id = self.utils.tiene_columna_estado_id(cursor)
+            tiene_estado = self.utils.tiene_columna_estado(cursor)
+            if not tiene_estado_id and not tiene_estado:
+                return None
+
+            if tiene_estado_id:
+                if usuario_id is not None:
+                    cursor.execute("""
+                        SELECT TOP 1
+                            p.pedido_id, p.numero_pedido, p.fecha_pedido, p.fecha_entrega,
+                            p.forma_pago, p.odc, p.proveedor_nombre, p.comprador_nombre,
+                            p.comprador_codigo, p.origen_traslado, p.serie, p.archivo_nombre,
+                            p.creado_por, p.estado_id, pe.nombre AS estado_nombre, p.creado_en
+                        FROM pedido p
+                        LEFT JOIN pedido_estado pe ON pe.id = p.estado_id
+                        WHERE p.estado_id = ? AND p.creado_por = ?
+                        ORDER BY p.creado_en DESC
+                    """, (ESTADO_RESPUESTA_PROVEEDOR_CARGADA, usuario_id))
+                else:
+                    cursor.execute("""
+                        SELECT TOP 1
+                            p.pedido_id, p.numero_pedido, p.fecha_pedido, p.fecha_entrega,
+                            p.forma_pago, p.odc, p.proveedor_nombre, p.comprador_nombre,
+                            p.comprador_codigo, p.origen_traslado, p.serie, p.archivo_nombre,
+                            p.creado_por, p.estado_id, pe.nombre AS estado_nombre, p.creado_en
+                        FROM pedido p
+                        LEFT JOIN pedido_estado pe ON pe.id = p.estado_id
+                        WHERE p.estado_id = ?
+                        ORDER BY p.creado_en DESC
+                    """, (ESTADO_RESPUESTA_PROVEEDOR_CARGADA,))
             else:
+                if usuario_id is not None:
+                    cursor.execute("""
+                        SELECT TOP 1
+                            pedido_id, numero_pedido, fecha_pedido, fecha_entrega,
+                            forma_pago, odc, proveedor_nombre, comprador_nombre,
+                            comprador_codigo, origen_traslado, serie, archivo_nombre,
+                            creado_por, estado, creado_en
+                        FROM pedido
+                        WHERE estado = ? AND creado_por = ?
+                        ORDER BY creado_en DESC
+                    """, ("RESPUESTA_PROVEEDOR_CARGADA", usuario_id))
+                else:
+                    cursor.execute("""
+                        SELECT TOP 1
+                            pedido_id, numero_pedido, fecha_pedido, fecha_entrega,
+                            forma_pago, odc, proveedor_nombre, comprador_nombre,
+                            comprador_codigo, origen_traslado, serie, archivo_nombre,
+                            creado_por, estado, creado_en
+                        FROM pedido
+                        WHERE estado = ?
+                        ORDER BY creado_en DESC
+                    """, ("RESPUESTA_PROVEEDOR_CARGADA",))
+
+            row = cursor.fetchone()
+            if not row:
+                return None
+
+            if tiene_estado_id:
                 return {
                     "pedido_id": str(row[0]),
                     "numero_pedido": row[1],
@@ -850,63 +1182,11 @@ class PedidoCabeceraRepository:
                     "serie": row[10],
                     "archivo_nombre": row[11],
                     "creado_por": row[12],
-                    "creado_en": row[13].isoformat() if row[13] else None,
+                    "estado_id": row[13],
+                    "estado_nombre": row[14],
+                    "estado": row[14],
+                    "creado_en": row[15].isoformat() if row[15] else None,
                 }
-                
-        except Exception as e:
-            logger.error(f"❌ Error al obtener último pedido del usuario {usuario_id}: {e}", exc_info=True)
-            raise
-        finally:
-            cursor.close()
-
-    def get_ultimo_pedido_respuesta_proveedor_cargada(
-        self, usuario_id: Optional[str] = None
-    ) -> Optional[Dict[str, Any]]:
-        """
-        Obtiene el último pedido con estado RESPUESTA_PROVEEDOR_CARGADA.
-        Misma lógica que get_ultimo_pedido pero filtrado por ese estado;
-        usado en la pantalla Redistribución para cargar el último listo para redistribuir.
-
-        Args:
-            usuario_id: Si se indica, solo pedidos creados por ese usuario.
-                       Si None, último en todo el sistema (creado_en DESC).
-
-        Returns:
-            Dict con datos básicos del pedido o None si no hay ninguno en ese estado.
-        """
-        cursor = self.conn.cursor()
-        try:
-            tiene_estado = self.utils.tiene_columna_estado(cursor)
-            if not tiene_estado:
-                return None
-
-            if usuario_id is not None:
-                cursor.execute("""
-                    SELECT TOP 1
-                        pedido_id, numero_pedido, fecha_pedido, fecha_entrega,
-                        forma_pago, odc, proveedor_nombre, comprador_nombre,
-                        comprador_codigo, origen_traslado, serie, archivo_nombre,
-                        creado_por, estado, creado_en
-                    FROM pedido
-                    WHERE estado = ? AND creado_por = ?
-                    ORDER BY creado_en DESC
-                """, ("RESPUESTA_PROVEEDOR_CARGADA", usuario_id))
-            else:
-                cursor.execute("""
-                    SELECT TOP 1
-                        pedido_id, numero_pedido, fecha_pedido, fecha_entrega,
-                        forma_pago, odc, proveedor_nombre, comprador_nombre,
-                        comprador_codigo, origen_traslado, serie, archivo_nombre,
-                        creado_por, estado, creado_en
-                    FROM pedido
-                    WHERE estado = ?
-                    ORDER BY creado_en DESC
-                """, ("RESPUESTA_PROVEEDOR_CARGADA",))
-
-            row = cursor.fetchone()
-            if not row:
-                return None
-
             return {
                 "pedido_id": str(row[0]),
                 "numero_pedido": row[1],
