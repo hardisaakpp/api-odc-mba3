@@ -23,7 +23,13 @@ def register_odc_endpoints(app: FastAPI):
         user: Dict = Depends(verify_jwt_token),
         _: None = Depends(require_any_permission(['odcsap.view', 'mabel.view']))
     ):
-        """Crea una orden de compra desde un pedido confirmado."""
+        """
+        Crea una orden de compra desde un pedido confirmado (botón «Generar ODC»).
+
+        Al crear/actualizar la ODC se genera también el JSON que se enviará a SAP Service Layer.
+        La respuesta incluye `sap_request_json` con ese payload (CardCode, DocumentLines con ItemCode
+        y WarehouseCode) para mostrarlo en UI o depurar errores -2028.
+        """
         try:
             from src.database.services.pedido_oc_service import PedidoOCService
             

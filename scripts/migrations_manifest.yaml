@@ -1,0 +1,307 @@
+# ============================================================================
+# Manifest de Migraciones - Orden de Ejecución
+# ============================================================================
+# Cada migración se ejecuta una sola vez en el orden especificado.
+# NO modificar versiones ya aplicadas en producción.
+# Para agregar nuevas migraciones, agregar al final con versión incremental.
+# ============================================================================
+
+migrations:
+  # Base: Tablas fundamentales
+  - version: "001"
+    name: "create_despacho_tables"
+    file: "create_producto_staging_tables.sql"
+    description: "Crear tablas de staging para productos"
+    category: "base"
+
+  - version: "002"
+    name: "create_sap_tables"
+    file: "create_sap_tables.sql"
+    description: "Crear tablas para cache de productos SAP"
+    category: "base"
+
+  - version: "003"
+    name: "create_sku_homologacion"
+    file: "create_sku_homologacion_table.sql"
+    description: "Crear tabla de homologación de SKUs"
+    category: "base"
+
+  - version: "004"
+    name: "create_pedido_tables"
+    file: "create_pedido_tables.sql"
+    description: "Crear tablas principales de pedidos"
+    category: "base"
+    dependencies: []
+
+  - version: "005"
+    name: "create_pedido_estado_table"
+    file: "create_pedido_estado_table.sql"
+    description: "Crear tabla maestra de estados de pedido"
+    category: "base"
+    dependencies: ["004"]
+
+  - version: "006"
+    name: "create_distribucion_confirmada"
+    file: "create_distribucion_confirmada_table.sql"
+    description: "Crear tabla para distribución confirmada"
+    category: "base"
+
+  - version: "007"
+    name: "create_pedido_confirmacion_rayo"
+    file: "create_pedido_confirmacion_rayo_tables.sql"
+    description: "Crear tablas para confirmación El Rayo"
+    category: "base"
+
+  - version: "008"
+    name: "create_respuesta_proveedor_tables"
+    file: "add_respuesta_proveedor_tables.sql"
+    description: "Crear tablas para respuesta de proveedor"
+    category: "base"
+
+  - version: "009"
+    name: "create_pedido_sap_procesamiento"
+    file: "create_pedido_sap_procesamiento_table.sql"
+    description: "Crear tabla para procesamiento SAP"
+    category: "base"
+
+  - version: "010"
+    name: "create_remision_cabecera"
+    file: "create_remision_cabecera_table.sql"
+    description: "Crear tabla para remisiones"
+    category: "base"
+
+  - version: "011"
+    name: "create_sap_integration_logs"
+    file: "create_sap_integration_logs_table.sql"
+    description: "Crear tabla de logs de integración SAP"
+    category: "base"
+
+  - version: "012"
+    name: "create_user_preferences"
+    file: "create_user_preferences_table.sql"
+    description: "Crear tabla de preferencias de usuario"
+    category: "base"
+
+  - version: "013"
+    name: "create_bodega_sap_cache"
+    file: "add_bodega_sap_cache_table.sql"
+    description: "Crear tabla de cache de bodegas SAP"
+    category: "base"
+
+  - version: "014"
+    name: "create_homologacion_notificados"
+    file: "create_homologacion_notificados_table.sql"
+    description: "Crear tabla para notificaciones de homologación"
+    category: "base"
+
+  - version: "015"
+    name: "create_pedido_detalle_modificacion_columna"
+    file: "create_pedido_detalle_modificacion_columna_table.sql"
+    description: "Crear tabla para modificaciones de columnas en detalle"
+    category: "base"
+
+  # Alteraciones: Agregar columnas y campos
+  - version: "101"
+    name: "add_precio_unitario_sap"
+    file: "add_precio_unitario_sap_column.sql"
+    description: "Agregar columna precio_unitario_sap"
+    category: "alter"
+    dependencies: ["004"]
+
+  - version: "102"
+    name: "add_unidad_sap"
+    file: "add_unidad_sap_column.sql"
+    description: "Agregar columna unidad_sap"
+    category: "alter"
+
+  - version: "103"
+    name: "add_grupo_articulos"
+    file: "add_grupo_articulos_column.sql"
+    description: "Agregar columna grupo_articulos"
+    category: "alter"
+
+  - version: "104"
+    name: "add_codigo_bodega_orden_compra_cabecera"
+    file: "add_codigo_bodega_orden_compra.sql"
+    description: "Agregar codigo_bodega a orden_compra_cabecera"
+    category: "alter"
+
+  - version: "105"
+    name: "add_codigo_bodega_orden_compra_detalle"
+    file: "add_codigo_bodega_orden_compra_detalle.sql"
+    description: "Agregar codigo_bodega a orden_compra_detalle"
+    category: "alter"
+
+  - version: "106"
+    name: "add_doc_entry_and_pedido_id"
+    file: "add_doc_entry_and_pedido_id.sql"
+    description: "Agregar doc_entry y pedido_id a orden_compra_cabecera"
+    category: "alter"
+
+  - version: "107"
+    name: "add_respuesta_sap_fields"
+    file: "add_respuesta_sap_fields.sql"
+    description: "Agregar campos de respuesta SAP a orden_compra_cabecera"
+    category: "alter"
+
+  - version: "108"
+    name: "add_comentario_column"
+    file: "add_comentario_column.sql"
+    description: "Agregar columna comentario"
+    category: "alter"
+
+  - version: "109"
+    name: "add_campos_modificados_manual"
+    file: "add_campos_modificados_manual.sql"
+    description: "Agregar campos para modificaciones manuales"
+    category: "alter"
+
+  - version: "110"
+    name: "add_fila_origen_pedido"
+    file: "add_fila_origen_pedido.sql"
+    description: "Agregar fila_origen a pedido_detalle"
+    category: "alter"
+
+  - version: "111"
+    name: "add_audit_fields_pedido_detalle"
+    file: "add_audit_fields_pedido_detalle.sql"
+    description: "Agregar campos de auditoría a pedido_detalle"
+    category: "alter"
+
+  - version: "112"
+    name: "add_bodega_column"
+    file: "add_bodega_column.sql"
+    description: "Agregar columna bodega"
+    category: "alter"
+
+  - version: "113"
+    name: "add_es_bodega_column"
+    file: "add_es_bodega_column.sql"
+    description: "Agregar columna es_bodega"
+    category: "alter"
+
+  # Índices y optimizaciones
+  - version: "201"
+    name: "add_index_pedido_usuario_fecha"
+    file: "add_index_pedido_usuario_fecha.sql"
+    description: "Agregar índice en pedido por usuario y fecha"
+    category: "index"
+    dependencies: ["004"]
+
+  # Migraciones de datos
+  - version: "301"
+    name: "migrate_pedido_estado_id"
+    file: "migrate_pedido_estado_id.sql"
+    description: "Migrar columna estado a estado_id"
+    category: "data"
+    dependencies: ["004", "005"]
+
+  - version: "302"
+    name: "migrate_sku_homologacion_full"
+    file: "migrate_sku_homologacion_full.sql"
+    description: "Migración completa de homologación de SKUs"
+    category: "data"
+    dependencies: ["003"]
+
+  - version: "303"
+    name: "fix_unidad_conversion_precision"
+    file: "fix_unidad_conversion_precision.sql"
+    description: "Corregir precisión en conversión de unidades"
+    category: "data"
+
+  # Estados y configuración
+  - version: "401"
+    name: "add_estado_pedido"
+    file: "add_estado_pedido.sql"
+    description: "Agregar nuevos estados de pedido"
+    category: "config"
+    dependencies: ["005"]
+
+  - version: "402"
+    name: "add_estado_respuesta_pedido"
+    file: "add_estado_respuesta_pedido.sql"
+    description: "Agregar estados de respuesta de pedido"
+    category: "config"
+    dependencies: ["005"]
+
+  - version: "403"
+    name: "add_estado_nuevo_pedido"
+    file: "add_estado_nuevo_pedido.sql"
+    description: "Agregar estado NUEVO_PEDIDO"
+    category: "config"
+    dependencies: ["005"]
+
+  - version: "404"
+    name: "add_estado_confirmado_enviado"
+    file: "add_estado_confirmado_enviado.sql"
+    description: "Agregar estado CONFIRMADO_ENVIADO"
+    category: "config"
+    dependencies: ["005"]
+
+  - version: "405"
+    name: "add_estado_despachar_y_facturar"
+    file: "add_estado_despachar_y_facturar.sql"
+    description: "Agregar estado DESPACHAR_Y_FACTURAR"
+    category: "config"
+    dependencies: ["005"]
+
+  - version: "406"
+    name: "add_estado_finalizado"
+    file: "add_estado_finalizado.sql"
+    description: "Agregar estado FINALIZADO"
+    category: "config"
+    dependencies: ["005"]
+
+  - version: "407"
+    name: "renombrar_estado_4_a_confirmado"
+    file: "renombrar_estado_4_a_confirmado.sql"
+    description: "Renombrar estado 4 a CONFIRMADO"
+    category: "config"
+    dependencies: ["005"]
+
+  - version: "408"
+    name: "renombrar_estado_10_a_confirmado_redistribucion"
+    file: "renombrar_estado_10_a_confirmado_redistribucion.sql"
+    description: "Renombrar estado 10 a CONFIRMADO_REDISTRIBUCION"
+    category: "config"
+    dependencies: ["005"]
+
+  - version: "409"
+    name: "renumerar_estados_gestionar_3_redistribucion"
+    file: "renumerar_estados_gestionar_3_redistribucion.sql"
+    description: "Renumerar estados para GESTIONAR_PEDIDO"
+    category: "config"
+    dependencies: ["005"]
+    warning: "⚠️ Esta migración modifica IDs de estados. Ejecutar solo si se coordina con el código."
+
+  # SAP - Configuración de servidores vinculados
+  - version: "501"
+    name: "configure_sap_linked_server"
+    file: "configure_sap_linked_server.sql"
+    description: "Configurar servidor vinculado SAP"
+    category: "sap"
+    manual: true
+    warning: "⚠️ Requiere credenciales y permisos de administrador. Ejecutar manualmente."
+
+  - version: "502"
+    name: "configure_sap_linked_server_alternative"
+    file: "configure_sap_linked_server_alternative.sql"
+    description: "Configuración alternativa de servidor vinculado SAP"
+    category: "sap"
+    manual: true
+    warning: "⚠️ Solo si la configuración estándar falla."
+
+  # Ajustes de esquema - solo si se necesita revertir cambios
+  - version: "601"
+    name: "remove_bodega_column"
+    file: "remove_bodega_column.sql"
+    description: "Remover columna bodega (rollback)"
+    category: "rollback"
+    manual: true
+    skip_by_default: true
+
+  - version: "602"
+    name: "alter_tienda_codigo_size"
+    file: "alter_tienda_codigo_size.sql"
+    description: "Aumentar tamaño de columna tienda.codigo"
+    category: "alter"

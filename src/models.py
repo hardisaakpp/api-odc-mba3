@@ -848,6 +848,10 @@ class DistribucionPedidoResponse(BaseModel):
         description="Versión actual de la redistribución (0 = sin redistribución aún)",
     )
     estado_pedido: Optional[str] = None
+    puede_descartar: bool = Field(
+        default=False,
+        description="True solo si el pedido está en Borrador o Nuevo Pedido; deshabilitar 'Cancelar Pedido' desde Confirmado Enviado en adelante.",
+    )
     productos: List[DistribucionProductoResponse] = Field(default_factory=list)
 
 
@@ -1155,7 +1159,8 @@ class ProductoSAPProcesamientoItem(BaseModel):
     item_code_sap: Optional[str] = Field(None, description="ItemCode de SAP")
     pack_sap: Optional[str] = Field(None, description="Pack SAP (X1, X2, X3, etc.)")
     unidad_conversion: Optional[float] = Field(None, description="Factor de conversión")
-    unidad_sap: Optional[str] = Field(None, description="Unidad SAP")
+    unidad_original: Optional[str] = Field(None, description="Unidad del pedido (ej. DOCENA), desde pedido_detalle.pack")
+    unidad_sap: Optional[str] = Field(None, description="Unidad SAP (ej. PACK, UN)")
     cantidad_original: Optional[float] = Field(None, description="Cantidad en unidades originales")
     cantidad_sap: Optional[float] = Field(None, description="Cantidad convertida a unidades SAP")
     precio_unitario_original: Optional[float] = Field(None, description="Precio por unidad original")

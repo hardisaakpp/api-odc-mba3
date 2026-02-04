@@ -35,3 +35,5 @@ flower>=2.0.1  # Dashboard de monitoreo para Celery (opcional)
 # Dependencias para Fuzzy Matching (sistema híbrido de homologaciones)
 rapidfuzz>=3.0.0  # Librería rápida para fuzzy string matching
 
+# Dependencias para Sistema de Migraciones
+PyYAML>=6.0.1  # Para leer manifest de migraciones

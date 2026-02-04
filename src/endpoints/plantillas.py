@@ -13,7 +13,7 @@ from fastapi.responses import JSONResponse
 from src.database.connection import get_db_connection_context
 from src.database.repositories.pedido_repository import PedidoRepository
 from src.database.repositories.pedido_respuesta_repository import PedidoRespuestaRepository
-from src.database.pedido_estados import ESTADO_BORRADOR, ESTADO_NUEVO_PEDIDO
+from src.database.pedido_estados import ESTADOS_PUEDE_DESCARTAR
 from src.security.jwt_auth import verify_jwt_token, require_permission
 from src.exceptions import BusinessException
 from src.endpoints.pedidos.utils import validate_excel_file, get_user_id, MAX_FILE_SIZE
@@ -263,7 +263,7 @@ def register_plantillas_endpoints(app: FastAPI):
                     _eid = int(_eid) if _eid is not None else None
                 except (TypeError, ValueError):
                     _eid = None
-                pedido_completo["puede_descartar"] = _eid in (ESTADO_BORRADOR, ESTADO_NUEVO_PEDIDO)
+                pedido_completo["puede_descartar"] = _eid in ESTADOS_PUEDE_DESCARTAR
 
                 return JSONResponse(status_code=200, content=pedido_completo)
             

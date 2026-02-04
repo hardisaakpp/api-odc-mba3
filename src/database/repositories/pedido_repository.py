@@ -21,7 +21,7 @@ from typing import Dict, Any, List, Optional, Tuple
 from .pedido.pedido_cabecera_repository import PedidoCabeceraRepository
 from .pedido.pedido_detalle_repository import PedidoDetalleRepository
 from .pedido.pedido_tienda_repository import PedidoTiendaRepository
-from ..pedido_estados import ESTADO_BORRADOR, ESTADO_NUEVO_PEDIDO, estado_id_desde_legacy
+from ..pedido_estados import ESTADOS_PUEDE_DESCARTAR, estado_id_desde_legacy
 
 logger = logging.getLogger(__name__)
 
@@ -185,7 +185,7 @@ class PedidoRepository:
         estado_id = cabecera.get("estado_id")
         if estado_id is None:
             estado_id = estado_id_desde_legacy(cabecera.get("estado"))
-        if estado_id not in (ESTADO_BORRADOR, ESTADO_NUEVO_PEDIDO):
+        if estado_id not in ESTADOS_PUEDE_DESCARTAR:
             return (
                 False,
                 "estado_no_borrador",

@@ -1393,6 +1393,116 @@ Por favor, no responder a este correo.
         return False
 
 
+def send_pedido_descartado_notification(
+    pedido_id: str,
+    numero_pedido: Optional[str] = None,
+    usuario_id: Optional[str] = None,
+    fecha_ejecucion: Optional[datetime] = None
+) -> bool:
+    """
+    Envía notificación a El Rayo cuando se descarta (cancela) un pedido.
+
+    Se usa al procesar DELETE /api/pedidos/{pedido_id} desde Cargar Plantilla o Redistribución.
+    DESTINATARIO: EMAIL_TO_OPERACIONES (Operaciones/Despachos - El Rayo)
+
+    Args:
+        pedido_id: UUID del pedido descartado
+        numero_pedido: Número del pedido (opcional, para identificación)
+        usuario_id: Usuario que descartó el pedido (MABEL TRADING)
+        fecha_ejecucion: Fecha y hora del descarte (por defecto ahora)
+
+    Returns:
+        True si el email se envió correctamente, False en caso contrario
+    """
+    if not ENABLE_EMAIL_NOTIFICATIONS:
+        logger.debug("⏭️ Notificaciones por email deshabilitadas")
+        return False
+
+    if not fecha_ejecucion:
+        fecha_ejecucion = datetime.now()
+
+    try:
+        recipients = EMAIL_TO_OPERACIONES if isinstance(EMAIL_TO_OPERACIONES, list) else [EMAIL_TO_OPERACIONES] if EMAIL_TO_OPERACIONES else []
+
+        if not recipients:
+            logger.warning("⚠️ No hay destinatarios configurados para notificación de pedido descartado")
+            return False
+
+        msg = MIMEMultipart()
+        msg['From'] = f"{EMAIL_FROM_NAME} <{EMAIL_FROM}>"
+        msg['To'] = ", ".join(recipients)
+        msg['Subject'] = f"🚫 Pedido Descartado - {numero_pedido or pedido_id}"
+
+        body_html = f"""
+        <html>
+        <head>
+            <style>
+                body {{ font-family: Arial, sans-serif; line-height: 1.6; color: #333; }}
+                .container {{ max-width: 800px; margin: 0 auto; padding: 20px; }}
+                .header {{ background-color: #d32f2f; color: white; padding: 20px; text-align: center; border-radius: 5px 5px 0 0; }}
+                .content {{ background-color: #f9f9f9; padding: 20px; border: 1px solid #ddd; }}
+                .info-box {{ background-color: white; padding: 15px; margin: 20px 0; border-left: 4px solid #d32f2f; border-radius: 3px; }}
+                .info-box h3 {{ margin-top: 0; color: #d32f2f; }}
+                .footer {{ text-align: center; color: #999; font-size: 12px; margin-top: 30px; padding-top: 20px; border-top: 1px solid #ddd; }}
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <div class="header">
+                    <h2>🚫 Pedido Descartado</h2>
+                </div>
+                <div class="content">
+                    <p>Se ha cancelado y eliminado un pedido. El pedido fue descartado por MABEL TRADING y ya no está disponible.</p>
+                    <div class="info-box">
+                        <h3>Información</h3>
+                        <ul style="list-style: none; padding: 0;">
+                            <li><strong>Número de Pedido:</strong> {numero_pedido or 'N/A'}</li>
+                            <li><strong>Pedido ID:</strong> {pedido_id}</li>
+                            <li><strong>Usuario que descartó:</strong> {usuario_id or 'N/A'}</li>
+                            <li><strong>Fecha y hora:</strong> {fecha_ejecucion.strftime('%Y-%m-%d %H:%M:%S')}</li>
+                        </ul>
+                    </div>
+                    <p>Podrán volver a cargar el pedido desde cero si lo necesitan.</p>
+                </div>
+                <div class="footer">
+                    <p>Sistema MBA3 Consultas - Notificación de pedido descartado.</p>
+                </div>
+            </div>
+        </body>
+        </html>
+        """
+
+        body_text = f"""
+Pedido Descartado
+
+Se ha cancelado y eliminado un pedido. El pedido fue descartado por MABEL TRADING.
+
+- Número de Pedido: {numero_pedido or 'N/A'}
+- Pedido ID: {pedido_id}
+- Usuario que descartó: {usuario_id or 'N/A'}
+- Fecha y hora: {fecha_ejecucion.strftime('%Y-%m-%d %H:%M:%S')}
+
+Podrán volver a cargar el pedido desde cero si lo necesitan.
+        """
+
+        msg.attach(MIMEText(body_text.strip(), 'plain'))
+        msg.attach(MIMEText(body_html, 'html'))
+
+        with smtplib.SMTP(EMAIL_SMTP_SERVER, EMAIL_SMTP_PORT) as server:
+            if EMAIL_SMTP_PORT == 587:
+                server.starttls()
+            if EMAIL_SMTP_PASSWORD:
+                server.login(EMAIL_SMTP_USER, EMAIL_SMTP_PASSWORD)
+            server.send_message(msg, to_addrs=recipients)
+
+        logger.info(f"✅ Notificación de pedido descartado enviada a {', '.join(recipients)} (Pedido: {numero_pedido or pedido_id})")
+        return True
+
+    except Exception as e:
+        logger.error(f"❌ Error al enviar notificación de pedido descartado: {e}", exc_info=True)
+        return False
+
+
 def send_mabel_redistribucion_confirmacion_notification(
     pedido_id: str,
     numero_pedido: str,

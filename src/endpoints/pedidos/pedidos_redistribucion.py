@@ -16,6 +16,8 @@ from src.database.pedido_estados import (
     ESTADO_REDISTRIBUCION,
     ESTADO_REDISTRIBUIDO,
     ESTADO_PEDIDO_CONFIRMADO,
+    ESTADOS_PUEDE_DESCARTAR,
+    estado_id_desde_legacy,
 )
 from src.database.repositories.distribucion_confirmada_repository import DistribucionConfirmadaRepository
 from src.database.repositories.pedido_repository import PedidoRepository
@@ -130,11 +132,22 @@ def register_redistribucion_endpoints(app: FastAPI):
                     else:
                         productos_enriquecidos.append(producto_dist)
                 
+                cabecera = pedido_data["cabecera"]
+                _eid = cabecera.get("estado_id")
+                if _eid is None and cabecera.get("estado"):
+                    _eid = estado_id_desde_legacy(cabecera.get("estado"))
+                try:
+                    _eid = int(_eid) if _eid is not None else None
+                except (TypeError, ValueError):
+                    _eid = None
+                puede_descartar = _eid in ESTADOS_PUEDE_DESCARTAR  # Deshabilitar desde Confirmado Enviado en adelante
+                
                 return DistribucionPedidoResponse(
                     pedido_id=pedido_id,
-                    numero_pedido=pedido_data["cabecera"]["numero_pedido"],
+                    numero_pedido=cabecera["numero_pedido"],
                     version_actual=distribucion_data["version_actual"],
-                    estado_pedido=pedido_data["cabecera"].get("estado"),
+                    estado_pedido=cabecera.get("estado"),
+                    puede_descartar=puede_descartar,
                     productos=productos_enriquecidos
                 )
                 

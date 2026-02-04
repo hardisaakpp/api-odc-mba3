@@ -239,6 +239,7 @@ class PedidoSAPProcesamientoRepository:
                     ps.pedido_id,
                     ps.pedido_detalle_id,
                     pd.codigo_interno,
+                    pd.pack AS unidad_original,
                     ps.descripcion_producto,
                     ps.item_code_sap,
                     ps.pack_sap,
@@ -262,6 +263,14 @@ class PedidoSAPProcesamientoRepository:
                 ORDER BY pd.codigo_interno
             """, (pedido_id,))
             
+            def _norm_unit(v):
+                """Devuelve None si el valor es None o string vacío (para no mostrar N/A ni raya en Pack)."""
+                if v is None:
+                    return None
+                if isinstance(v, str) and not v.strip():
+                    return None
+                return v.strip() if isinstance(v, str) else v
+
             resultados = []
             for row in cursor.fetchall():
                 resultados.append({
@@ -269,23 +278,24 @@ class PedidoSAPProcesamientoRepository:
                     "pedido_id": str(row[1]),
                     "pedido_detalle_id": str(row[2]),
                     "codigo_interno": row[3],
-                    "descripcion_producto": row[4],
-                    "item_code_sap": row[5],
-                    "pack_sap": row[6],
-                    "unidad_conversion": float(row[7]) if row[7] else None,
-                    "unidad_sap": row[8],
-                    "cantidad_original": float(row[9]) if row[9] else None,
-                    "cantidad_sap": float(row[10]) if row[10] else None,
-                    "precio_unitario_original": float(row[11]) if row[11] else None,
-                    "precio_unitario_sap": float(row[12]) if row[12] else None,
-                    "total_linea_original": float(row[13]) if row[13] else None,
-                    "total_linea_sap": float(row[14]) if row[14] else None,
-                    "producto_homologado": bool(row[15]) if row[15] is not None else True,
-                    "tipo_problema": row[16],
-                    "item_code_sap_encontrado": row[17],
-                    "mensaje_error": row[18],
-                    "fecha_procesamiento": row[19],
-                    "procesado_por": row[20]
+                    "unidad_original": _norm_unit(row[4]),
+                    "descripcion_producto": row[5],
+                    "item_code_sap": row[6],
+                    "pack_sap": row[7],
+                    "unidad_conversion": float(row[8]) if row[8] else None,
+                    "unidad_sap": _norm_unit(row[9]),
+                    "cantidad_original": float(row[10]) if row[10] else None,
+                    "cantidad_sap": float(row[11]) if row[11] else None,
+                    "precio_unitario_original": float(row[12]) if row[12] else None,
+                    "precio_unitario_sap": float(row[13]) if row[13] else None,
+                    "total_linea_original": float(row[14]) if row[14] else None,
+                    "total_linea_sap": float(row[15]) if row[15] else None,
+                    "producto_homologado": bool(row[16]) if row[16] is not None else True,
+                    "tipo_problema": row[17],
+                    "item_code_sap_encontrado": row[18],
+                    "mensaje_error": row[19],
+                    "fecha_procesamiento": row[20],
+                    "procesado_por": row[21]
                 })
             
             return resultados

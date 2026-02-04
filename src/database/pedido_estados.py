@@ -29,6 +29,10 @@ ESTADO_FINALIZADO = 18  # Estado final del flujo; solo desde Despachar y Factura
 # Estado inicial al subir Excel o crear pedido (siempre id = 1)
 ESTADO_INICIAL = ESTADO_BORRADOR
 
+# Estados en los que se permite "Cancelar Pedido" (descartar). Desde Confirmado Enviado (12)
+# y cualquier estado en adelante el botón debe estar deshabilitado.
+ESTADOS_PUEDE_DESCARTAR = (ESTADO_BORRADOR, ESTADO_NUEVO_PEDIDO)
+
 # --- Conjuntos útiles para validaciones --------------------------------------
 # Estados en los que el pedido permite redistribución
 ESTADOS_PERMITEN_REDISTRIBUCION = frozenset({

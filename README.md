@@ -27,6 +27,10 @@ pip install -r requirements.txt
 # 4. Configurar variables de entorno
 # Crear archivo .env con las credenciales necesarias
 # Ver docs/CONFIGURACION.md para detalles
+
+# 5. Inicializar base de datos (primera vez)
+python scripts/migration_runner.py --dry-run  # Validar
+python scripts/migration_runner.py            # Ejecutar
 ```
 
 ### Iniciar Servidor
@@ -97,6 +101,7 @@ La documentación completa está organizada en el directorio `docs/`.
 ### 📖 Guías de Inicio
 - **[Índice de Documentación](docs/README.md)** ⭐ - Punto de entrada principal
 - **[Configuración](docs/CONFIGURACION.md)** - Setup completo de variables de entorno
+- **[Sistema de Migraciones](docs/DEPLOY_MIGRATIONS.md)** 🗄️ - Despliegue seguro de BD
 - **[Celery Quick Start](docs/CELERY_QUICKSTART.md)** 🚀 - Procesos automáticos en 5 pasos
 - **[Quick Start Homologaciones](docs/QUICKSTART_HOMOLOGACIONES.md)** 🚀 - SKU en 3 pasos
 
@@ -133,6 +138,34 @@ La documentación completa está organizada en el directorio `docs/`.
 - **POST `/homologaciones/sincronizar`** - Sincronizar con MBA3/SAP
 
 Ver [docs/ENDPOINTS.md](docs/ENDPOINTS.md) para documentación completa.
+
+## 🗄️ Migraciones de Base de Datos
+
+El proyecto usa un **sistema automatizado de migraciones** para despliegues seguros y trazables.
+
+```bash
+# Ver estado de migraciones
+python scripts/migration_runner.py --status
+
+# Validar sin ejecutar (dry-run)
+python scripts/migration_runner.py --dry-run
+
+# Ejecutar migraciones pendientes
+python scripts/migration_runner.py
+
+# Ejecutar solo migraciones base
+python scripts/migration_runner.py --category base
+```
+
+**Documentación completa:** [docs/DEPLOY_MIGRATIONS.md](docs/DEPLOY_MIGRATIONS.md)
+
+### Características
+- ✅ Trazabilidad completa (quién, cuándo, cuánto tardó)
+- ✅ Idempotencia (no ejecuta dos veces la misma migración)
+- ✅ Orden garantizado con dependencias
+- ✅ Dry-run para validación segura
+- ✅ Rollback automático en caso de error
+- ✅ Categorización para despliegues parciales
 
 ## 🛠️ Scripts Útiles
 

@@ -1520,6 +1520,7 @@ interface ProductoSAPProcesamientoItem {
   item_code_sap: string | null;
   pack_sap: string | null;
   unidad_conversion: number | null;
+  unidad_original: string | null;  // ⭐ Unidad del pedido (ej. DOCENA), desde pedido_detalle.pack
   unidad_sap: string | null;  // ⭐ Unidad SAP (ej: "PACK", "UN")
   cantidad_original: number | null;
   cantidad_sap: number | null;
@@ -1552,6 +1553,42 @@ interface EstadisticasProcesamientoSAP {
 El campo `descripcion_producto` ahora está disponible en la respuesta y puede ser:
 - ✅ `string` - Descripción del producto
 - ❌ `null` - Si no se encontró en SAP
+
+### Columna "Pack" (Productos Procesados)
+
+La columna **Pack** muestra la unidad del pedido y la unidad SAP. El backend envía:
+
+- **`unidad_original`**: Unidad del pedido (ej. DOCENA), desde `pedido_detalle.pack`. Puede ser `null`.
+- **`unidad_sap`**: Unidad SAP (ej. PACK, UN). Puede ser `null`.
+
+Los valores vacíos o en blanco se envían como `null` (no como string vacío). Para no mostrar N/A ni raya cuando no hay datos, en el frontend se recomienda:
+
+- Si **ambos** `unidad_original` y `unidad_sap` son `null` o falsy: **no mostrar nada** en la celda (celda vacía, sin guión ni texto).
+- Si solo uno tiene valor: mostrar solo ese valor (opcionalmente sin flecha).
+- Si ambos tienen valor: mostrar `unidad_original → unidad_sap` como hasta ahora.
+
+---
+
+## 2.1 Descartar vs Cancelar Pedido (mismo endpoint, parámetro distinto)
+
+En el frontend hay **dos acciones** que eliminan el pedido de la base de datos, con reglas de negocio distintas:
+
+| Acción | Pantalla | Comportamiento | Llamada API |
+|--------|----------|----------------|------------|
+| **Descartar** | Cargar Plantilla | Eliminar pedido. **No** enviar correo a EL RAYO. | `DELETE /api/pedidos/{pedido_id}` (sin query) o con `notificar_el_rayo=false` |
+| **Cancelar Pedido** | Redistribución | Eliminar pedido **y** notificar a EL RAYO por correo. | `DELETE /api/pedidos/{pedido_id}?notificar_el_rayo=true` |
+
+**Endpoint único:** `DELETE /api/pedidos/{pedido_id}`
+
+- **Query parameter:** `notificar_el_rayo` (boolean, opcional, default `false`).
+  - `false` o omitido: solo borra el pedido (usar desde **Descartar**).
+  - `true`: borra el pedido y envía correo a EL RAYO (usar desde **Cancelar Pedido**).
+
+El frontend debe:
+- **Descartar** (Cargar Plantilla): llamar `descartarPedido(pedidoId)` → `DELETE /api/pedidos/{id}` sin parámetro (o con `notificar_el_rayo=false`).
+- **Cancelar Pedido** (Redistribución): llamar `cancelarPedido(pedidoId)` → `DELETE /api/pedidos/{id}?notificar_el_rayo=true`.
+
+Así solo la acción "Cancelar Pedido" dispara el envío del correo a EL RAYO.
 
 ---
 

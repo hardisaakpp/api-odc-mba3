@@ -109,6 +109,7 @@ def register_sap_endpoints(app: FastAPI):
                         item_code_sap=proc.get("item_code_sap"),
                         pack_sap=proc.get("pack_sap"),
                         unidad_conversion=proc.get("unidad_conversion"),
+                        unidad_original=proc.get("unidad_original"),
                         unidad_sap=proc.get("unidad_sap"),
                         cantidad_original=proc.get("cantidad_original"),
                         cantidad_sap=proc.get("cantidad_sap"),

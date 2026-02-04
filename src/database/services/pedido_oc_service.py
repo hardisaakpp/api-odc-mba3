@@ -4,15 +4,18 @@ FASE 5: Generación de ODC desde pedido_sap_procesamiento_detalle (datos ya proc
 Similar a copy_despacho_to_orden_compra() pero para pedidos.
 """
 
+import json
 import logging
 import pyodbc
 from typing import Dict, Any, List, Optional
 from datetime import datetime
 
+from src.config import PROJECT_ROOT
 from ..connection import get_db_connection_context
 from ..repositories.pedido_repository import PedidoRepository
 from ..repositories.pedido_sap_procesamiento_repository import PedidoSAPProcesamientoRepository
 from ..repositories.orden_compra_repository import OrdenCompraRepository
+from ..mappers.sap_oc_mapper import SAPOCMapper
 
 logger = logging.getLogger(__name__)
 
@@ -392,6 +395,48 @@ class PedidoOCService:
             detalles_insertados = oc_repo.insert_detalles(oc_id, oc_detalles)
             result["detalles_insertados"] = detalles_insertados
             result["total_lineas"] = len(oc_detalles)
+            
+            # 10. Generar JSON SAP (para envío posterior y para debugging -2028)
+            try:
+                oc_cabecera_db = oc_repo.get_existing_cabecera(oc_id)
+                oc_detalles_db = oc_repo.get_detalles(oc_id)
+                if oc_cabecera_db and oc_detalles_db:
+                    warehouse_code = oc_cabecera_db.get("codigo_bodega") or codigo_bodega
+                    sap_request_json = SAPOCMapper.to_sap_purchase_order(
+                        oc_cabecera_db,
+                        oc_detalles_db,
+                        warehouse_code,
+                        usuario_id=oc_cabecera_db.get("creado_por"),
+                        pedido_id=oc_cabecera_db.get("pedido_id") or pedido_id,
+                    )
+                    result["sap_request_json"] = sap_request_json
+                    # Descargar ODC en JSON a output/ para pruebas
+                    try:
+                        output_dir = PROJECT_ROOT / "output"
+                        output_dir.mkdir(parents=True, exist_ok=True)
+                        out_file = output_dir / f"odc_{oc_id}.json"
+                        with open(out_file, "w", encoding="utf-8") as f:
+                            json.dump(sap_request_json, f, ensure_ascii=False, indent=2, default=str)
+                        logger.info(f"📥 ODC guardada en {out_file}")
+                    except Exception as e:
+                        logger.warning(f"⚠️ No se pudo guardar ODC en output/: {e}")
+                    # Log resumido en INFO para ver CardCode, ítems y bodegas sin DEBUG
+                    card = sap_request_json.get("CardCode", "")
+                    lineas = sap_request_json.get("DocumentLines", [])
+                    items = [ln.get("ItemCode") for ln in lineas]
+                    bodegas = list({ln.get("WarehouseCode") for ln in lineas if ln.get("WarehouseCode")})
+                    logger.info(
+                        f"📄 JSON SAP generado para ODC {oc_id}: CardCode={card}, "
+                        f"ItemCodes={items[:5]}{'...' if len(items) > 5 else ''}, "
+                        f"WarehouseCodes={bodegas}"
+                    )
+                    logger.debug(
+                        f"   Request SAP completo: {json.dumps(sap_request_json, ensure_ascii=False, default=str)[:2500]}"
+                    )
+            except ValueError as e:
+                logger.warning(f"⚠️ No se pudo generar JSON SAP al crear ODC (validación): {e}")
+            except Exception as e:
+                logger.warning(f"⚠️ No se pudo generar JSON SAP al crear ODC: {e}", exc_info=False)
             
             accion = "actualizada" if result.get("cabecera_actualizada") else "creada"
             logger.info(

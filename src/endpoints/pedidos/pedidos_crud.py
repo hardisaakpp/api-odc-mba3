@@ -12,13 +12,13 @@ from src.database.connection import get_db_connection_context
 from src.database.repositories.pedido_repository import PedidoRepository
 from src.database.repositories.pedido_respuesta_repository import PedidoRespuestaRepository
 from src.database.pedido_estados import (
-    ESTADO_BORRADOR,
-    ESTADO_NUEVO_PEDIDO,
     ESTADO_GESTIONAR_PEDIDO,
+    ESTADO_NUEVO_PEDIDO,
     ESTADO_REDISTRIBUCION,
     ESTADO_CONFIRMADO_ENVIADO,
     ESTADO_DESPACHAR_Y_FACTURAR,
     ESTADO_FINALIZADO,
+    ESTADOS_PUEDE_DESCARTAR,
 )
 from src.security.jwt_auth import verify_jwt_token, require_permission, require_any_permission
 from src.exceptions import BusinessException
@@ -419,7 +419,7 @@ def register_crud_endpoints(app: FastAPI):
                     _eid = int(_eid) if _eid is not None else None
                 except (TypeError, ValueError):
                     _eid = None
-                pedido["puede_descartar"] = _eid in (ESTADO_BORRADOR, ESTADO_NUEVO_PEDIDO)
+                pedido["puede_descartar"] = _eid in ESTADOS_PUEDE_DESCARTAR
 
                 return JSONResponse(status_code=200, content=pedido)
             
@@ -465,7 +465,7 @@ def register_crud_endpoints(app: FastAPI):
                     _eid = int(_eid) if _eid is not None else None
                 except (TypeError, ValueError):
                     _eid = None
-                pedido["puede_descartar"] = _eid in (ESTADO_BORRADOR, ESTADO_NUEVO_PEDIDO)
+                pedido["puede_descartar"] = _eid in ESTADOS_PUEDE_DESCARTAR
                 return JSONResponse(status_code=status.HTTP_200_OK, content=pedido)
         except HTTPException:
             raise
@@ -521,7 +521,7 @@ def register_crud_endpoints(app: FastAPI):
                     _eid = int(_eid) if _eid is not None else None
                 except (TypeError, ValueError):
                     _eid = None
-                pedido["puede_descartar"] = _eid in (ESTADO_BORRADOR, ESTADO_NUEVO_PEDIDO)
+                pedido["puede_descartar"] = _eid in ESTADOS_PUEDE_DESCARTAR
                 return JSONResponse(status_code=status.HTTP_200_OK, content=pedido)
         except HTTPException:
             raise
@@ -578,7 +578,7 @@ def register_crud_endpoints(app: FastAPI):
                     _eid = int(_eid) if _eid is not None else None
                 except (TypeError, ValueError):
                     _eid = None
-                pedido["puede_descartar"] = _eid in (ESTADO_BORRADOR, ESTADO_NUEVO_PEDIDO)
+                pedido["puede_descartar"] = _eid in ESTADOS_PUEDE_DESCARTAR
                 return JSONResponse(status_code=status.HTTP_200_OK, content=pedido)
         except HTTPException:
             raise
@@ -634,7 +634,7 @@ def register_crud_endpoints(app: FastAPI):
                     _eid = int(_eid) if _eid is not None else None
                 except (TypeError, ValueError):
                     _eid = None
-                pedido["puede_descartar"] = _eid in (ESTADO_BORRADOR, ESTADO_NUEVO_PEDIDO)
+                pedido["puede_descartar"] = _eid in ESTADOS_PUEDE_DESCARTAR
                 return JSONResponse(status_code=status.HTTP_200_OK, content=pedido)
         except HTTPException:
             raise
@@ -1021,19 +1021,26 @@ def register_crud_endpoints(app: FastAPI):
             )
 
     @app.delete("/api/pedidos/{pedido_id}", status_code=status.HTTP_204_NO_CONTENT, tags=["Pedidos"])
-    async def descartar_pedido(
-        pedido_id: str = Path(..., description="UUID del pedido a descartar"),
+    async def descartar_o_cancelar_pedido(
+        pedido_id: str = Path(..., description="UUID del pedido a eliminar"),
+        notificar_el_rayo: bool = Query(
+            False,
+            description="Si True, envía correo a EL RAYO notificando la cancelación (usar solo desde 'Cancelar Pedido' en Redistribución). Si False, solo elimina sin notificar (usar desde 'Descartar' en Cargar Plantilla).",
+        ),
         user: Dict = Depends(verify_jwt_token),
         _: None = Depends(require_any_permission(['odcsap.view', 'mabel.view']))
     ):
         """
-        Descartar (eliminar) un pedido en estado BORRADOR.
+        Eliminar un pedido (Descartar o Cancelar Pedido).
 
-        Solo se permite para pedidos en estado Borrador (estado_id = 1).
-        No se permite si el pedido tiene respuesta de proveedor, redistribución u orden de compra.
+        **Dos flujos en el frontend:**
+        - **Descartar** (Cargar Plantilla): llamar sin `notificar_el_rayo` o con `notificar_el_rayo=false`. Solo borra el pedido, **no** envía email a EL RAYO.
+        - **Cancelar Pedido** (Redistribución): llamar con `notificar_el_rayo=true`. Borra el pedido **y** envía correo a EL RAYO notificando la cancelación.
+
+        Solo se permite para pedidos en estado Borrador o Nuevo Pedido. No se permite si el pedido tiene respuesta de proveedor, redistribución u orden de compra.
 
         - **404**: Pedido no encontrado.
-        - **400**: Pedido no está en estado Borrador.
+        - **400**: Pedido no está en estado permitido.
         - **409**: Pedido tiene información asociada.
         - **204**: Pedido eliminado correctamente.
         """
@@ -1056,8 +1063,22 @@ def register_crud_endpoints(app: FastAPI):
                         status_code=status.HTTP_409_CONFLICT,
                         detail={"error": error_code, "message": message}
                     )
+                numero_pedido = None
+                if notificar_el_rayo:
+                    pedido_data = repo.get_pedido_completo(pedido_id)
+                    numero_pedido = (pedido_data.get("cabecera") or {}).get("numero_pedido") if pedido_data else None
                 repo.delete_pedido(pedido_id)
-            logger.info(f"✅ Pedido {pedido_id} descartado por usuario {user.get('username', 'UNKNOWN')}")
+                if notificar_el_rayo:
+                    try:
+                        from src.utils.email_notifier import send_pedido_descartado_notification
+                        send_pedido_descartado_notification(
+                            pedido_id=pedido_id,
+                            numero_pedido=numero_pedido,
+                            usuario_id=user.get("username") or user.get("sub"),
+                        )
+                    except Exception as notif_err:
+                        logger.warning(f"⚠️ No se pudo enviar notificación de pedido cancelado a EL RAYO: {notif_err}")
+            logger.info(f"✅ Pedido {pedido_id} eliminado por usuario {user.get('username', 'UNKNOWN')} (notificar_el_rayo={notificar_el_rayo})")
             return None
         except HTTPException:
             raise

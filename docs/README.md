@@ -9,6 +9,7 @@
 | Necesitas | Documento |
 |-----------|-----------|
 | Instalar y configurar el proyecto | [CONFIGURACION.md](CONFIGURACION.md) |
+| **Desplegar migraciones de BD** | **[DEPLOY_MIGRATIONS.md](DEPLOY_MIGRATIONS.md)** 🗄️ |
 | Activar procesos automáticos (Celery) | [CELERY_QUICKSTART.md](CELERY_QUICKSTART.md) |
 | Usar el sistema de homologaciones SKU | [HOMOLOGACIONES_SKU.md](HOMOLOGACIONES_SKU.md) |
 
@@ -42,20 +43,27 @@ Modelo de datos
 - Relaciones
 - Campos especiales
 
-### 5. **[CELERY_QUICKSTART.md](CELERY_QUICKSTART.md)** ⚡
+### 5. **[DEPLOY_MIGRATIONS.md](DEPLOY_MIGRATIONS.md)** 🚀
+Sistema de migraciones para producción
+- Despliegue seguro de BD
+- Trazabilidad completa
+- Dry-run y rollback
+- Proceso paso a paso
+
+### 6. **[CELERY_QUICKSTART.md](CELERY_QUICKSTART.md)** ⚡
 Procesos automáticos
 - Setup en 5 pasos
 - Ejecución
 - Monitoreo
 
-### 6. **[SEGURIDAD.md](SEGURIDAD.md)** 🔒
+### 7. **[SEGURIDAD.md](SEGURIDAD.md)** 🔒
 Configuración de seguridad
 - API Keys
 - Rate limiting
 - CORS
 - Autenticación JWT
 
-### 7. **[TESTING.md](TESTING.md)** 🧪
+### 8. **[TESTING.md](TESTING.md)** 🧪
 Pruebas y validación
 - Estructura de tests unitarios
 - Cómo ejecutar tests
@@ -63,7 +71,7 @@ Pruebas y validación
 - Comandos PowerShell para testing manual
 - Script automatizado en `scripts/test_endpoints.ps1`
 
-### 8. **[HOMOLOGACIONES_SKU.md](HOMOLOGACIONES_SKU.md)** 🏷️
+### 9. **[HOMOLOGACIONES_SKU.md](HOMOLOGACIONES_SKU.md)** 🏷️
 Sistema de homologaciones
 - Gestión de correspondencias SKU
 - 4 endpoints REST
@@ -99,6 +107,7 @@ docs/
 ├── ENDPOINTS.md                 ⭐ ESENCIAL
 ├── INTEGRACION_SAP.md           ⭐ ESENCIAL
 ├── ESTRUCTURA_BD_PEDIDOS.md     ⭐ ESENCIAL
+├── DEPLOY_MIGRATIONS.md         ⭐ ESENCIAL (NUEVO)
 ├── CELERY_QUICKSTART.md         ⭐ ESENCIAL
 ├── SEGURIDAD.md                 ⭐ ESENCIAL
 ├── TESTING.md                   ⭐ ESENCIAL
@@ -120,6 +129,7 @@ docs/
 | Pregunta | Respuesta |
 |----------|-----------|
 | ¿Cómo instalo el proyecto? | [CONFIGURACION.md](CONFIGURACION.md) |
+| **¿Cómo despliego migraciones?** | **[DEPLOY_MIGRATIONS.md](DEPLOY_MIGRATIONS.md)** 🚀 |
 | ¿Cuáles son los endpoints? | [ENDPOINTS.md](ENDPOINTS.md) |
 | ¿Cómo integro con SAP? | [INTEGRACION_SAP.md](INTEGRACION_SAP.md) |
 | ¿Cómo activo Celery? | [CELERY_QUICKSTART.md](CELERY_QUICKSTART.md) |
