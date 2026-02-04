@@ -20,7 +20,7 @@ from src.database.pedido_estados import (
 from src.database.repositories.distribucion_confirmada_repository import DistribucionConfirmadaRepository
 from src.database.repositories.pedido_repository import PedidoRepository
 from src.database.services.redistribucion_validator import RedistribucionValidator
-from src.security.jwt_auth import verify_jwt_token, require_permission
+from src.security.jwt_auth import verify_jwt_token, require_permission, require_any_permission
 from src.models import (
     DistribucionPedidoResponse,
     RedistribuirPedidoRequest,
@@ -51,7 +51,7 @@ def register_redistribucion_endpoints(app: FastAPI):
         pedido_id: str = Path(..., description="UUID del pedido"),
         version: Optional[int] = Query(None, ge=1, description="Versión específica (si no se especifica, obtiene la última)"),
         user: Dict = Depends(verify_jwt_token),
-        _: None = Depends(require_permission('mabel.view'))
+        _: None = Depends(require_any_permission(['odcsap.view', 'mabel.view']))
     ):
         """
         Obtiene la distribución confirmada de un pedido.
