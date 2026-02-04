@@ -248,9 +248,23 @@ def register_crud_endpoints(app: FastAPI):
         - `solo_usuario` (bool, default: true) - Si true, último pedido del usuario en esos estados; si false, último global.
 
         **Respuesta:** Objeto con cabecera básica (pedido_id, numero_pedido, estado, ...) o null.
+
+        **Comportamiento por permiso:**
+        - Usuario con solo odcsap.view (EL RAYO): se ignora solo_usuario y se devuelve siempre
+          el último pedido en estado para redistribución visible en el sistema (sin filtrar por
+          creado_por), para que pueda ver el pedido que acaba de confirmar un usuario MABEL.
+        - Usuario con mabel.view (MABEL): se respeta solo_usuario (true = último del usuario,
+          false = último global).
         """
         try:
-            user_id = get_user_id(user) if solo_usuario else None
+            permissions = user.get("permissions") or []
+            has_odcsap = "odcsap.view" in permissions
+            has_mabel = "mabel.view" in permissions
+            # EL RAYO (solo odcsap.view): siempre último global para que vea pedidos confirmados por MABEL
+            if has_odcsap and not has_mabel:
+                user_id = None
+            else:
+                user_id = get_user_id(user) if solo_usuario else None
             with get_db_connection_context() as conn:
                 repo = PedidoRepository(conn)
                 ultimo = repo.get_ultimo_pedido_respuesta_proveedor_cargada(usuario_id=user_id)
