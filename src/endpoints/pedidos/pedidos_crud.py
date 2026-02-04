@@ -896,7 +896,7 @@ def register_crud_endpoints(app: FastAPI):
         pedido_id: str = Path(..., description="UUID del pedido"),
         request_body: ModificarPedidoCabeceraRequest = Body(..., description="Datos de la cabecera a modificar"),
         user: Dict = Depends(verify_jwt_token),
-        _: None = Depends(require_permission('mabel.view'))
+        _: None = Depends(require_any_permission(['odcsap.view', 'mabel.view']))
     ):
         """
         Modifica la cabecera de un pedido (HU-03 - Modificación de pedidos).
