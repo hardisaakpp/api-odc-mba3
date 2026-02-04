@@ -9,7 +9,7 @@ from fastapi import FastAPI, Depends, HTTPException, Path, status
 
 from src.database.connection import get_db_connection_context
 from src.database.repositories.pedido_repository import PedidoRepository
-from src.security.jwt_auth import verify_jwt_token, require_permission
+from src.security.jwt_auth import verify_jwt_token, require_any_permission
 
 logger = logging.getLogger(__name__)
 
@@ -21,7 +21,7 @@ def register_odc_endpoints(app: FastAPI):
     async def crear_orden_compra_desde_pedido(
         identificador: str = Path(..., description="UUID del pedido o número de pedido (ej: 'P-12.55 - 12 - 2025')"),
         user: Dict = Depends(verify_jwt_token),
-        _: None = Depends(require_permission('odcsap.view'))
+        _: None = Depends(require_any_permission(['odcsap.view', 'mabel.view']))
     ):
         """Crea una orden de compra desde un pedido confirmado."""
         try:
