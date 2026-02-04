@@ -995,7 +995,7 @@ def register_redistribucion_endpoints(app: FastAPI):
         numero_pedido: str = Path(..., description="Número del pedido"),
         solo_lectura: Optional[str] = Query(None, description="Si es '1' o 'true', devuelve la última redistribución confirmada (para vista solo lectura)"),
         user: Dict = Depends(verify_jwt_token),
-        _: None = Depends(require_permission('mabel.view'))
+        _: None = Depends(require_any_permission(['odcsap.view', 'mabel.view']))
     ):
         """
         Obtiene los datos iniciales para la redistribución sincronizados con el pedido actualizado.
