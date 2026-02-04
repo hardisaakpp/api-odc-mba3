@@ -291,7 +291,7 @@ def register_ordenes_compra_endpoints(app: FastAPI):
         request: Request,
         estado: Optional[str] = Query(None, description="Filtrar por estado (PENDIENTE, ENVIADA, ERROR)"),
         user: dict = Depends(verify_jwt_token),
-        _: None = Depends(require_permission('mabel.view'))
+        _: None = Depends(require_any_permission(['odcsap.view', 'mabel.view']))
     ):
         """
         Endpoint ORDENES-COMPRA: Obtiene órdenes de compra desde la base de datos.
