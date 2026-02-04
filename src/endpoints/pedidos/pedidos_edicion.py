@@ -11,7 +11,7 @@ from fastapi.responses import JSONResponse
 from src.database.connection import get_db_connection_context
 from src.database.repositories.pedido_repository import PedidoRepository
 from src.database.pedido_estados import ESTADO_GESTIONAR_PEDIDO
-from src.security.jwt_auth import verify_jwt_token, require_permission
+from src.security.jwt_auth import verify_jwt_token, require_any_permission
 from src.models import (
     ActualizarCostoRequest,
     ActualizarTotalRequest,
@@ -51,7 +51,7 @@ def register_edicion_endpoints(app: FastAPI):
         pedido_detalle_id: str = Path(..., description="UUID del detalle del pedido"),
         request_body: ActualizarCostoRequest = Body(..., description="Datos del costo a actualizar"),
         user: Dict = Depends(verify_jwt_token),
-        _: None = Depends(require_permission('mabel.view'))
+        _: None = Depends(require_any_permission(['odcsap.view', 'mabel.view']))
     ):
         """Actualiza el costo unitario de una línea de detalle del pedido."""
         try:
@@ -114,7 +114,7 @@ def register_edicion_endpoints(app: FastAPI):
         pedido_detalle_id: str = Path(..., description="UUID del detalle del pedido"),
         request_body: ActualizarTotalRequest = Body(..., description="Datos del total a actualizar"),
         user: Dict = Depends(verify_jwt_token),
-        _: None = Depends(require_permission('mabel.view'))
+        _: None = Depends(require_any_permission(['odcsap.view', 'mabel.view']))
     ):
         """Actualiza el total de una línea de detalle del pedido."""
         try:
@@ -185,7 +185,7 @@ def register_edicion_endpoints(app: FastAPI):
         pedido_detalle_id: str = Path(..., description="UUID del detalle del pedido"),
         request_body: ActualizarComentarioRequest = Body(..., description="Datos del comentario a actualizar"),
         user: Dict = Depends(verify_jwt_token),
-        _: None = Depends(require_permission('mabel.view'))
+        _: None = Depends(require_any_permission(['odcsap.view', 'mabel.view']))
     ):
         """Actualiza el comentario de una línea de detalle del pedido."""
         try:
@@ -248,7 +248,7 @@ def register_edicion_endpoints(app: FastAPI):
         numero_pedido: str = Path(..., description="Número del pedido o pedido_id (UUID); el backend acepta ambos."),
         request_body: GuardarModificacionesColumnasRequest = Body(..., description="Datos de las modificaciones"),
         user: Dict = Depends(verify_jwt_token),
-        _: None = Depends(require_permission('mabel.view'))
+        _: None = Depends(require_any_permission(['odcsap.view', 'mabel.view']))
     ):
         """Guarda o actualiza las modificaciones de columnas para un pedido."""
         try:
@@ -302,7 +302,7 @@ def register_edicion_endpoints(app: FastAPI):
     async def obtener_modificaciones_columnas(
         numero_pedido: str = Path(..., description="Número del pedido o pedido_id (UUID); el backend acepta ambos."),
         user: Dict = Depends(verify_jwt_token),
-        _: None = Depends(require_permission('mabel.view'))
+        _: None = Depends(require_any_permission(['odcsap.view', 'mabel.view']))
     ):
         """Obtiene las modificaciones de columnas para un pedido."""
         try:
