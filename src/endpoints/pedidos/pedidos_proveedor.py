@@ -7,7 +7,7 @@ from typing import Dict
 from fastapi import FastAPI, UploadFile, File, Depends, HTTPException, Path, Body, status
 from fastapi.responses import JSONResponse
 
-from src.security.jwt_auth import verify_jwt_token, require_permission
+from src.security.jwt_auth import verify_jwt_token, require_permission, require_any_permission
 from src.models import (
     FormularioProveedorResponse,
     RespuestaProveedorRequest,
@@ -142,7 +142,7 @@ def register_proveedor_endpoints(app: FastAPI):
     async def crear_respuesta_desde_pedido(
         pedido_id: str = Path(..., description="UUID del pedido"),
         user: Dict = Depends(verify_jwt_token),
-        _: None = Depends(require_permission('mabel.view'))
+        _: None = Depends(require_any_permission(['odcsap.view', 'mabel.view']))
     ):
         """Guarda los cambios de EL RAYO, crea la respuesta del proveedor y deja el pedido en estado CONFIRMADO (confirmar = ir a redistribución)."""
         try:
