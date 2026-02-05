@@ -524,6 +524,91 @@ def register_plantillas_endpoints(app: FastAPI):
             )
     
     # ========================================================================
+    # NUEVO ENDPOINT: Buscar pedidos por número (para Filtros de búsqueda)
+    # ========================================================================
+    @app.get("/api/plantillas/buscar", tags=["Plantillas"])
+    async def buscar_pedidos_por_numero(
+        numero_pedido: Optional[str] = Query(None, description="Número de pedido a buscar (búsqueda parcial)"),
+        limit: int = Query(20, ge=1, le=100, description="Límite de resultados"),
+        user: Dict = Depends(verify_jwt_token),
+        _: None = Depends(require_permission('mabel.view'))
+    ):
+        """
+        Busca pedidos por número de pedido (búsqueda parcial).
+        
+        **Uso:** Este endpoint está diseñado para el input de búsqueda en la sección
+        "Filtros de búsqueda" de la página cargar-plantilla. Permite buscar pedidos
+        de forma independiente sin requerir otros filtros.
+        
+        **Comportamiento:**
+        - Si `numero_pedido` está vacío o no se proporciona, devuelve los últimos pedidos del usuario.
+        - Si `numero_pedido` tiene valor, busca pedidos cuyo número contenga el texto ingresado.
+        - Incluye pedidos en estado BORRADOR (útil para cargar-plantilla).
+        - Ordena por fecha de creación descendente.
+        
+        **Ejemplo de uso:**
+        ```
+        GET /api/plantillas/buscar?numero_pedido=P-12.08
+        GET /api/plantillas/buscar?numero_pedido=12 - 2025
+        GET /api/plantillas/buscar  (sin parámetro - devuelve últimos pedidos)
+        ```
+        
+        **Respuesta:**
+        ```json
+        {
+            "status": "success",
+            "data": [
+                {
+                    "pedido_id": "uuid",
+                    "numero_pedido": "P-12.08 - 12 - 2025",
+                    "fecha_pedido": "2025-01-21",
+                    "estado": "BORRADOR",
+                    "estado_id": 1,
+                    "proveedor_nombre": "...",
+                    "creado_en": "2025-01-21T10:30:00"
+                }
+            ],
+            "total": 5,
+            "query": "P-12.08"
+        }
+        ```
+        
+        Returns:
+            JSON con lista de pedidos que coinciden con la búsqueda
+        """
+        try:
+            user_id = get_user_id(user)
+            
+            with get_db_connection_context() as conn:
+                repo = PedidoRepository(conn)
+                
+                # Usar el método existente con filtros, incluyendo BORRADOR
+                resultado = repo.get_pedidos_con_filtros(
+                    numero_pedido=numero_pedido.strip() if numero_pedido else None,
+                    creado_por=user_id,  # Solo pedidos del usuario actual
+                    limit=limit,
+                    offset=0,
+                    excluir_borrador=False,  # Incluir BORRADOR para cargar-plantilla
+                )
+                
+                return JSONResponse(
+                    status_code=200,
+                    content={
+                        "status": "success",
+                        "data": resultado["data"],
+                        "total": resultado["total"],
+                        "query": numero_pedido.strip() if numero_pedido else None
+                    }
+                )
+                
+        except Exception as e:
+            logger.error(f"❌ Error al buscar pedidos: {e}", exc_info=True)
+            raise HTTPException(
+                status_code=500,
+                detail=f"Error interno al buscar pedidos: {str(e)}"
+            )
+    
+    # ========================================================================
     # NUEVO ENDPOINT: Health check del storage
     # ========================================================================
     @app.get("/api/plantillas/storage/health", tags=["Plantillas"])

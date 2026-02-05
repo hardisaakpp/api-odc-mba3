@@ -848,6 +848,158 @@ El endpoint `POST /api/plantillas/upload` devuelve:
 
 **Nota:** Si el usuario quiere ver el detalle completo del pedido, puede hacer clic en un botón/link que lo lleve a `/mba3-consultas/pedidos/{numero_pedido}`, pero esto debe ser una acción explícita del usuario, no una redirección automática.
 
+### 0.5.12.1 Búsqueda por Número de Pedido en Cargar Plantilla
+
+**Ruta:** `http://localhost:3000/mba3-consultas/cargar-plantilla`
+
+En la sección **"Filtros de búsqueda"** de la página `cargar-plantilla`, el campo **"Número de Pedido"** debe permitir buscar pedidos de forma independiente, sin requerir otros filtros.
+
+#### Endpoint de Búsqueda
+
+**`GET /api/plantillas/buscar`**
+
+| Parámetro | Tipo | Requerido | Descripción |
+|-----------|------|-----------|-------------|
+| `numero_pedido` | string | No | Texto a buscar (búsqueda parcial). Ej: `P-12.08`, `12 - 2025` |
+| `limit` | int | No | Límite de resultados (default: 20, max: 100) |
+
+**Comportamiento:**
+- **Búsqueda parcial:** Si el usuario escribe `P-12.08`, el endpoint buscará pedidos cuyo `numero_pedido` contenga ese texto (ej: `P-12.08 - 12 - 2025`, `P-12.08 - 01 - 2026`).
+- **Sin parámetro:** Si no se proporciona `numero_pedido`, devuelve los últimos pedidos del usuario.
+- **Incluye BORRADOR:** A diferencia de otros endpoints, este incluye pedidos en estado BORRADOR (útil para cargar-plantilla).
+- **Filtro por usuario:** Solo devuelve pedidos creados por el usuario autenticado.
+
+**Ejemplo de Respuesta:**
+```json
+{
+  "status": "success",
+  "data": [
+    {
+      "pedido_id": "AEDEC52D-D007-416F-8A09-9F0D31282EEE",
+      "numero_pedido": "P-12.08 - 12 - 2025",
+      "fecha_pedido": "2025-01-21",
+      "estado": "BORRADOR",
+      "estado_id": 1,
+      "proveedor_nombre": "TEXTILES EL RAYO S.A.",
+      "creado_en": "2025-01-21T10:30:00"
+    }
+  ],
+  "total": 1,
+  "query": "P-12.08"
+}
+```
+
+#### Implementación en Frontend
+
+**React/TypeScript:**
+```tsx
+const [searchQuery, setSearchQuery] = useState('');
+const [searchResults, setSearchResults] = useState([]);
+const [isSearching, setIsSearching] = useState(false);
+
+// Debounced search function
+const searchPedidos = useMemo(
+  () => debounce(async (query: string) => {
+    if (!query.trim()) {
+      setSearchResults([]);
+      return;
+    }
+    
+    setIsSearching(true);
+    try {
+      const params = new URLSearchParams({ numero_pedido: query.trim() });
+      const response = await fetch(`/api/plantillas/buscar?${params}`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      const data = await response.json();
+      
+      if (data.status === 'success') {
+        setSearchResults(data.data);
+      }
+    } catch (error) {
+      console.error('Error searching pedidos:', error);
+    } finally {
+      setIsSearching(false);
+    }
+  }, 300),
+  [token]
+);
+
+// Handle input change
+const handleSearchChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const value = e.target.value;
+  setSearchQuery(value);
+  searchPedidos(value);
+};
+
+// Handle selection
+const handleSelectPedido = (pedido: any) => {
+  const numeroPedido = pedido.numero_pedido;
+  navigate(`/mba3-consultas/cargar-plantilla/${encodeURIComponent(numeroPedido)}`);
+};
+```
+
+**Vue.js:**
+```vue
+<script setup lang="ts">
+import { ref, watch } from 'vue';
+import { useRouter } from 'vue-router';
+import { useDebounceFn } from '@vueuse/core';
+
+const router = useRouter();
+const searchQuery = ref('');
+const searchResults = ref([]);
+const isSearching = ref(false);
+
+const searchPedidos = useDebounceFn(async (query: string) => {
+  if (!query.trim()) {
+    searchResults.value = [];
+    return;
+  }
+  
+  isSearching.value = true;
+  try {
+    const params = new URLSearchParams({ numero_pedido: query.trim() });
+    const response = await fetch(`/api/plantillas/buscar?${params}`, {
+      headers: { 'Authorization': `Bearer ${token}` }
+    });
+    const data = await response.json();
+    
+    if (data.status === 'success') {
+      searchResults.value = data.data;
+    }
+  } finally {
+    isSearching.value = false;
+  }
+}, 300);
+
+watch(searchQuery, (value) => searchPedidos(value));
+
+const handleSelectPedido = (pedido: any) => {
+  const numeroPedido = pedido.numero_pedido;
+  router.push(`/mba3-consultas/cargar-plantilla/${encodeURIComponent(numeroPedido)}`);
+};
+</script>
+```
+
+#### Comportamiento Esperado
+
+1. **Campo independiente:** El campo "Número de Pedido" debe buscar sin esperar que se llenen otros filtros.
+2. **Búsqueda en tiempo real:** Al escribir, se debe hacer la búsqueda automáticamente (con debounce de ~300ms).
+3. **Mostrar resultados:** Mostrar un dropdown/lista con los pedidos encontrados.
+4. **Selección:** Al hacer clic en un resultado, navegar a `/mba3-consultas/cargar-plantilla/{numero_pedido}`.
+5. **Formato de número:** El formato típico es `P-12.08 - 12 - 2025`. La búsqueda funciona con cualquier parte del número.
+
+#### Checklist de Implementación
+
+- [ ] Conectar el input "Número de Pedido" al endpoint `GET /api/plantillas/buscar`
+- [ ] Implementar debounce (~300ms) para evitar múltiples llamadas
+- [ ] Mostrar indicador de carga mientras se busca
+- [ ] Mostrar dropdown/lista con resultados
+- [ ] Al seleccionar, navegar a la URL con el `numero_pedido` (usar `encodeURIComponent`)
+- [ ] El campo debe funcionar independientemente de otros filtros
+- [ ] Manejar caso cuando no hay resultados (mostrar mensaje apropiado)
+
 ### 0.5.13 Título de la Pantalla Proceso (`/mba3-consultas/proceso`)
 
 **Ruta:** `http://localhost:3000/mba3-consultas/proceso`
