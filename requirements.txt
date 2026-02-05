@@ -37,3 +37,6 @@ rapidfuzz>=3.0.0  # Librería rápida para fuzzy string matching
 
 # Dependencias para Sistema de Migraciones
 PyYAML>=6.0.1  # Para leer manifest de migraciones
+
+# Dependencias para Storage de Archivos (S3/MinIO)
+boto3>=1.34.0  # Cliente S3 compatible (funciona con MinIO)

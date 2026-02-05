@@ -1,5 +1,10 @@
 """
 Endpoints para gestión de plantillas Excel.
+
+Incluye:
+- Upload de plantillas Excel con almacenamiento en MinIO/S3
+- Descarga del archivo Excel original
+- Consulta del último pedido
 """
 
 import logging
@@ -7,16 +12,19 @@ import base64
 import json
 from typing import Dict, Optional
 from datetime import datetime
-from fastapi import FastAPI, UploadFile, File, Depends, HTTPException, Query, Form
-from fastapi.responses import JSONResponse
+from fastapi import FastAPI, UploadFile, File, Depends, HTTPException, Query, Form, Path
+from fastapi.responses import JSONResponse, StreamingResponse
+import io
 
 from src.database.connection import get_db_connection_context
 from src.database.repositories.pedido_repository import PedidoRepository
 from src.database.repositories.pedido_respuesta_repository import PedidoRespuestaRepository
+from src.database.repositories.archivo_plantilla_repository import ArchivoPlantillaRepository
 from src.database.pedido_estados import ESTADOS_PUEDE_DESCARTAR
 from src.security.jwt_auth import verify_jwt_token, require_permission
 from src.exceptions import BusinessException
 from src.endpoints.pedidos.utils import validate_excel_file, get_user_id, MAX_FILE_SIZE
+from src.config import ENABLE_FILE_STORAGE
 
 logger = logging.getLogger(__name__)
 
@@ -200,6 +208,69 @@ def register_plantillas_endpoints(app: FastAPI):
                     detail=f"Error al procesar plantilla: {resultado.get('errores', ['Error desconocido'])}"
                 )
             
+            # ================================================================
+            # NUEVO: Guardar archivo original en storage (MinIO/S3)
+            # ================================================================
+            archivo_guardado = False
+            if ENABLE_FILE_STORAGE and resultado.get("pedido_id"):
+                try:
+                    from src.services.file_storage_service import get_file_storage, FileStorageError
+                    
+                    storage = get_file_storage()
+                    
+                    # Guardar archivo en MinIO/S3
+                    storage_path = storage.guardar_archivo(
+                        contenido=content,
+                        pedido_id=resultado["pedido_id"],
+                        nombre_original=file.filename or "sin_nombre.xlsx",
+                        usuario_id=user_id
+                    )
+                    
+                    # Registrar referencia en BD
+                    with get_db_connection_context() as conn:
+                        archivo_repo = ArchivoPlantillaRepository(conn)
+                        archivo_repo.crear(
+                            pedido_id=resultado["pedido_id"],
+                            nombre_original=file.filename or "sin_nombre.xlsx",
+                            storage_path=storage_path,
+                            tamaño_bytes=file_size,
+                            subido_por=user_id
+                        )
+                    
+                    archivo_guardado = True
+                    response_data["archivo_original"] = {
+                        "guardado": True,
+                        "storage_path": storage_path,
+                        "descarga_disponible": True
+                    }
+                    
+                    logger.info(
+                        f"✅ Archivo Excel original guardado en storage: {storage_path}"
+                    )
+                    
+                except FileStorageError as e:
+                    # El storage falló pero el pedido se procesó correctamente
+                    # No bloqueamos la respuesta, solo advertimos
+                    logger.warning(f"⚠️ No se pudo guardar archivo en storage: {e}")
+                    response_data["archivo_original"] = {
+                        "guardado": False,
+                        "error": str(e),
+                        "descarga_disponible": False
+                    }
+                except Exception as e:
+                    logger.warning(f"⚠️ Error inesperado al guardar archivo: {e}")
+                    response_data["archivo_original"] = {
+                        "guardado": False,
+                        "error": "Error interno al guardar archivo",
+                        "descarga_disponible": False
+                    }
+            elif not ENABLE_FILE_STORAGE:
+                response_data["archivo_original"] = {
+                    "guardado": False,
+                    "mensaje": "Almacenamiento de archivos deshabilitado (ENABLE_FILE_STORAGE=false)",
+                    "descarga_disponible": False
+                }
+            
             # La carga Excel solo crea BORRADOR. El correo a EL RAYO se envía al hacer clic en "Enviar".
             return JSONResponse(status_code=200, content=response_data)
             
@@ -274,4 +345,221 @@ def register_plantillas_endpoints(app: FastAPI):
             raise HTTPException(
                 status_code=500,
                 detail=f"Error interno al obtener último pedido: {str(e)}"
+            )
+    
+    # ========================================================================
+    # NUEVO ENDPOINT: Descargar archivo Excel original
+    # ========================================================================
+    @app.get("/api/plantillas/{pedido_id}/descargar-original", tags=["Plantillas"])
+    async def descargar_plantilla_original(
+        pedido_id: str = Path(..., description="ID del pedido (GUID)"),
+        user: Dict = Depends(verify_jwt_token),
+        _: None = Depends(require_permission('mabel.view'))
+    ):
+        """
+        Descarga el archivo Excel original que fue subido para un pedido.
+        
+        Este endpoint permite a usuarios autorizados descargar el archivo Excel
+        tal como fue subido originalmente, sin modificaciones.
+        
+        **Requisitos:**
+        - El archivo debe existir en el storage (MinIO/S3)
+        - El usuario debe tener permiso 'mabel.view'
+        - ENABLE_FILE_STORAGE debe estar habilitado
+        
+        **Returns:**
+        - Archivo Excel (.xlsx) como descarga
+        - 404 si el archivo no existe
+        - 503 si el storage está deshabilitado
+        """
+        try:
+            # Verificar que el storage esté habilitado
+            if not ENABLE_FILE_STORAGE:
+                raise HTTPException(
+                    status_code=503,
+                    detail={
+                        "error": "storage_disabled",
+                        "message": "El almacenamiento de archivos está deshabilitado. Contacta al administrador."
+                    }
+                )
+            
+            user_id = get_user_id(user)
+            
+            # Buscar referencia del archivo en BD
+            with get_db_connection_context() as conn:
+                archivo_repo = ArchivoPlantillaRepository(conn)
+                archivo_info = archivo_repo.obtener_por_pedido_id(pedido_id)
+                
+                if not archivo_info:
+                    raise HTTPException(
+                        status_code=404,
+                        detail={
+                            "error": "not_found",
+                            "message": f"No se encontró archivo original para el pedido {pedido_id}"
+                        }
+                    )
+            
+            # Descargar archivo del storage
+            from src.services.file_storage_service import get_file_storage, FileStorageError
+            
+            try:
+                storage = get_file_storage()
+                contenido, metadata = storage.descargar_archivo(archivo_info["storage_path"])
+            except FileStorageError as e:
+                logger.error(f"Error al descargar archivo del storage: {e}")
+                raise HTTPException(
+                    status_code=500,
+                    detail={
+                        "error": "storage_error",
+                        "message": f"Error al recuperar el archivo: {str(e)}"
+                    }
+                )
+            
+            # Registrar la descarga
+            with get_db_connection_context() as conn:
+                archivo_repo = ArchivoPlantillaRepository(conn)
+                archivo_repo.registrar_descarga(
+                    archivo_id=archivo_info["archivo_id"],
+                    descargado_por=user_id
+                )
+            
+            logger.info(
+                f"✅ Archivo descargado: pedido_id={pedido_id}, "
+                f"archivo={archivo_info['nombre_original']}, usuario={user_id}"
+            )
+            
+            # Preparar nombre de descarga
+            nombre_descarga = archivo_info["nombre_original"]
+            
+            # Retornar archivo como stream
+            return StreamingResponse(
+                io.BytesIO(contenido),
+                media_type=archivo_info.get("content_type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
+                headers={
+                    "Content-Disposition": f'attachment; filename="{nombre_descarga}"',
+                    "Content-Length": str(len(contenido)),
+                    "X-Archivo-Id": str(archivo_info["archivo_id"]),
+                    "X-Pedido-Id": str(pedido_id),
+                    "X-Subido-Por": archivo_info["subido_por"],
+                    "X-Fecha-Subida": archivo_info["fecha_subida"] or ""
+                }
+            )
+            
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"Error al descargar plantilla original: {e}", exc_info=True)
+            raise HTTPException(
+                status_code=500,
+                detail=f"Error interno al descargar el archivo: {str(e)}"
+            )
+    
+    # ========================================================================
+    # NUEVO ENDPOINT: Verificar si existe archivo original
+    # ========================================================================
+    @app.get("/api/plantillas/{pedido_id}/info-archivo", tags=["Plantillas"])
+    async def info_archivo_plantilla(
+        pedido_id: str = Path(..., description="ID del pedido (GUID)"),
+        user: Dict = Depends(verify_jwt_token),
+        _: None = Depends(require_permission('mabel.view'))
+    ):
+        """
+        Obtiene información sobre el archivo Excel original de un pedido.
+        
+        Útil para verificar si existe el archivo antes de mostrar el botón
+        de descarga en el frontend.
+        
+        **Returns:**
+        - JSON con información del archivo o null si no existe
+        """
+        try:
+            if not ENABLE_FILE_STORAGE:
+                return JSONResponse(
+                    status_code=200,
+                    content={
+                        "existe": False,
+                        "storage_habilitado": False,
+                        "mensaje": "Almacenamiento de archivos deshabilitado"
+                    }
+                )
+            
+            with get_db_connection_context() as conn:
+                archivo_repo = ArchivoPlantillaRepository(conn)
+                archivo_info = archivo_repo.obtener_por_pedido_id(pedido_id)
+                
+                if not archivo_info:
+                    return JSONResponse(
+                        status_code=200,
+                        content={
+                            "existe": False,
+                            "storage_habilitado": True,
+                            "mensaje": "No hay archivo original disponible para este pedido"
+                        }
+                    )
+                
+                return JSONResponse(
+                    status_code=200,
+                    content={
+                        "existe": True,
+                        "storage_habilitado": True,
+                        "archivo": {
+                            "archivo_id": archivo_info["archivo_id"],
+                            "nombre_original": archivo_info["nombre_original"],
+                            "tamaño_bytes": archivo_info["tamaño_bytes"],
+                            "tamaño_mb": round(archivo_info["tamaño_bytes"] / (1024 * 1024), 2),
+                            "subido_por": archivo_info["subido_por"],
+                            "fecha_subida": archivo_info["fecha_subida"],
+                            "descargas": archivo_info["descargas"],
+                            "ultima_descarga": archivo_info["ultima_descarga"]
+                        },
+                        "url_descarga": f"/api/plantillas/{pedido_id}/descargar-original"
+                    }
+                )
+                
+        except Exception as e:
+            logger.error(f"Error al obtener info de archivo: {e}", exc_info=True)
+            raise HTTPException(
+                status_code=500,
+                detail=f"Error interno: {str(e)}"
+            )
+    
+    # ========================================================================
+    # NUEVO ENDPOINT: Health check del storage
+    # ========================================================================
+    @app.get("/api/plantillas/storage/health", tags=["Plantillas"])
+    async def storage_health_check(
+        user: Dict = Depends(verify_jwt_token),
+        _: None = Depends(require_permission('mabel.view'))
+    ):
+        """
+        Verifica el estado del servicio de almacenamiento de archivos.
+        
+        **Returns:**
+        - JSON con estado del storage (healthy/unhealthy/disabled)
+        """
+        try:
+            if not ENABLE_FILE_STORAGE:
+                return JSONResponse(
+                    status_code=200,
+                    content={
+                        "status": "disabled",
+                        "message": "Almacenamiento de archivos deshabilitado (ENABLE_FILE_STORAGE=false)"
+                    }
+                )
+            
+            from src.services.file_storage_service import get_file_storage
+            
+            storage = get_file_storage()
+            health = storage.health_check()
+            
+            return JSONResponse(status_code=200, content=health)
+            
+        except Exception as e:
+            logger.error(f"Error en health check de storage: {e}")
+            return JSONResponse(
+                status_code=200,
+                content={
+                    "status": "error",
+                    "message": str(e)
+                }
             )
