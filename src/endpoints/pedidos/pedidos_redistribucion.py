@@ -1810,15 +1810,14 @@ def register_redistribucion_endpoints(app: FastAPI):
                 ws_resumen['A1'] = "RESUMEN DE PRODUCTOS - CANTIDADES"
                 ws_resumen['A1'].font = title_font
                 ws_resumen['A1'].fill = title_fill
-                ws_resumen.merge_cells('A1:F1')
+                ws_resumen.merge_cells('A1:E1')
                 
                 # Encabezados
                 headers_resumen = [
-                    "Código Interno",
+                    "Código Producto",
                     "Descripción",
                     "Cantidad Solicitada",
                     "Cantidad Confirmada",
-                    "Cantidad Asignada",
                     "Diferencia"
                 ]
                 
@@ -1833,7 +1832,7 @@ def register_redistribucion_endpoints(app: FastAPI):
                 row = 4
                 total_solicitada = 0
                 total_confirmada = 0
-                total_asignada = 0
+                total_diferencia = 0
                 
                 # Enriquecer productos con información del pedido
                 productos_enriquecidos = []
@@ -1865,14 +1864,13 @@ def register_redistribucion_endpoints(app: FastAPI):
                     
                     total_solicitada += cantidad_solicitada
                     total_confirmada += cantidad_confirmada
-                    total_asignada += cantidad_asignada
+                    total_diferencia += diferencia
                     
                     ws_resumen.cell(row=row, column=1, value=codigo_interno)
                     ws_resumen.cell(row=row, column=2, value=descripcion)
                     ws_resumen.cell(row=row, column=3, value=cantidad_solicitada)
                     ws_resumen.cell(row=row, column=4, value=cantidad_confirmada)
-                    ws_resumen.cell(row=row, column=5, value=cantidad_asignada)
-                    ws_resumen.cell(row=row, column=6, value=diferencia)
+                    ws_resumen.cell(row=row, column=5, value=diferencia)
                     
                     row += 1
                 
@@ -1881,16 +1879,14 @@ def register_redistribucion_endpoints(app: FastAPI):
                 ws_resumen.cell(row=row, column=1, value="TOTALES").font = Font(bold=True)
                 ws_resumen.cell(row=row, column=3, value=total_solicitada).font = Font(bold=True)
                 ws_resumen.cell(row=row, column=4, value=total_confirmada).font = Font(bold=True)
-                ws_resumen.cell(row=row, column=5, value=total_asignada).font = Font(bold=True)
-                ws_resumen.cell(row=row, column=6, value=total_confirmada - total_asignada).font = Font(bold=True)
+                ws_resumen.cell(row=row, column=5, value=total_diferencia).font = Font(bold=True)
                 
                 # Ajustar anchos de columna
                 ws_resumen.column_dimensions['A'].width = 20
                 ws_resumen.column_dimensions['B'].width = 45
                 ws_resumen.column_dimensions['C'].width = 18
                 ws_resumen.column_dimensions['D'].width = 18
-                ws_resumen.column_dimensions['E'].width = 18
-                ws_resumen.column_dimensions['F'].width = 15
+                ws_resumen.column_dimensions['E'].width = 15
                 
                 # === HOJA 3: DISTRIBUCIÓN DETALLADA POR TIENDA ===
                 ws_detalle = wb.create_sheet("Distribución por Tienda")
@@ -1903,7 +1899,7 @@ def register_redistribucion_endpoints(app: FastAPI):
                 
                 # Encabezados
                 headers_detalle = [
-                    "Código Interno",
+                    "Código Producto",
                     "Descripción",
                     "Código Tienda",
                     "Nombre Tienda",

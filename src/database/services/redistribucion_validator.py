@@ -67,10 +67,9 @@ class RedistribucionValidator:
                         f"(tienda {distribucion['tienda_id']}: {cantidad_asignada}). Máximo permitido: 1,000,000"
                     )
         
-        # Validación 2: Validar que la suma total sea un entero (pero NO forzar que sea igual a cantidad confirmada)
-        # ⭐ MODIFICADO: Las bodegas y tiendas son independientes. El usuario puede modificar
-        # las cantidades en bodega y tiendas libremente sin que una afecte a la otra.
-        # Solo validamos que la suma sea un entero, pero no requerimos que coincida con cantidad confirmada.
+        # Validación 2: La suma de cantidades asignadas debe ser igual a la cantidad confirmada por el proveedor
+        # Esta validación garantiza consistencia entre backend y frontend (el botón Confirmar Redistribución
+        # solo se habilita cuando la diferencia es 0 para cada producto).
         for producto in productos_redistribucion:
             pedido_detalle_id = producto["pedido_detalle_id"]
             cantidad_asignada_total = sum(
@@ -87,10 +86,16 @@ class RedistribucionValidator:
                     f"(suma actual: {cantidad_asignada_total})"
                 )
             
-            # ⭐ ELIMINADO: Ya no se valida que la suma sea igual a cantidad confirmada
-            # Las bodegas y tiendas son independientes y pueden modificarse libremente
+            # Validar que la suma de cantidades asignadas sea igual a la cantidad confirmada
+            if cantidad_asignada_total != cantidad_confirmada_total:
+                diferencia = cantidad_confirmada_total - cantidad_asignada_total
+                errores.append(
+                    f"Producto {pedido_detalle_id}: La suma de cantidades asignadas ({cantidad_asignada_total}) "
+                    f"no coincide con la cantidad confirmada por el proveedor ({cantidad_confirmada_total}). "
+                    f"Diferencia: {diferencia}"
+                )
             
-            # Validar que la cantidad confirmada sea válida (solo para referencia, no afecta la validación)
+            # Validar que la cantidad confirmada sea válida
             if cantidad_confirmada_total < 0:
                 errores.append(
                     f"Producto {pedido_detalle_id}: La cantidad confirmada no puede ser negativa "
@@ -148,13 +153,8 @@ class RedistribucionValidator:
                     )
                 tiendas_vistas.add(tienda_id)
         
-        # Validación 5: El pedido debe tener respuesta del proveedor
-        if not respuestas_proveedor:
-            errores.append(
-                "El pedido no tiene respuesta del proveedor. Debe existir una confirmación antes de redistribuir."
-            )
-        
-        # Validación 6: Solo el estado REDISTRIBUCION permite confirmar redistribución
+        # Validación 5: Solo el estado REDISTRIBUCION (CONFIRMADO POR EL RAYO) permite confirmar redistribución
+        # Nota: Si el pedido está en este estado, la respuesta del proveedor ya existe (validación implícita)
         cabecera = pedido_data.get("cabecera", {})
         estado_id = cabecera.get("estado_id")
         if estado_id is None:
@@ -163,10 +163,10 @@ class RedistribucionValidator:
         if estado_id != ESTADO_REDISTRIBUCION:
             errores.append(
                 f"El estado del pedido ({estado_nombre}) no permite confirmar redistribución. "
-                "Solo se permite en estado CONFIRMADO."
+                "Solo se permite en estado CONFIRMADO POR EL RAYO."
             )
         
-        # Validación 7: Validar bodegas - las bodegas no pueden quedar negativas
+        # Validación 6: Validar bodegas - las bodegas no pueden quedar negativas
         # Cuando se redistribuye desde bodega a tiendas, la bodega debe tener suficiente inventario
         # Para esto necesitamos obtener información de bodegas del pedido original
         for detalle in pedido_data.get("detalles", []):
