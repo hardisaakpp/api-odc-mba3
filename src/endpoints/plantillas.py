@@ -20,7 +20,7 @@ from src.database.connection import get_db_connection_context
 from src.database.repositories.pedido_repository import PedidoRepository
 from src.database.repositories.pedido_respuesta_repository import PedidoRespuestaRepository
 from src.database.repositories.archivo_plantilla_repository import ArchivoPlantillaRepository
-from src.database.pedido_estados import ESTADOS_PUEDE_DESCARTAR
+from src.database.pedido_estados import ESTADOS_PUEDE_DESCARTAR, ESTADOS_PUEDE_CONFIRMAR_REDISTRIBUCION
 from src.security.jwt_auth import verify_jwt_token, require_permission
 from src.exceptions import BusinessException
 from src.endpoints.pedidos.utils import validate_excel_file, get_user_id, MAX_FILE_SIZE
@@ -335,6 +335,7 @@ def register_plantillas_endpoints(app: FastAPI):
                 except (TypeError, ValueError):
                     _eid = None
                 pedido_completo["puede_descartar"] = _eid in ESTADOS_PUEDE_DESCARTAR
+                pedido_completo["puede_confirmar_redistribucion"] = _eid in ESTADOS_PUEDE_CONFIRMAR_REDISTRIBUCION
 
                 return JSONResponse(status_code=200, content=pedido_completo)
             

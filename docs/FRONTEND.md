@@ -1691,11 +1691,60 @@ Cada elemento de `data` incluye `cabecera` (con `numero_pedido`, `fecha_pedido`,
 
 **Importante:** La redistribución solo se puede confirmar **una vez** por pedido. Tras el primer clic exitoso en "Confirmar Redistribución", el botón debe **deshabilitarse y permanecer deshabilitado** (no se permite confirmar de nuevo).
 
-En la pantalla de redistribución (`/mba3-consultas/pedidos/{numero_pedido}/redistribucion`), el botón **"Confirmar Redistribución"** debe deshabilitarse en estos casos:
+#### Flag del Backend: `puede_confirmar_redistribucion`
 
-1. **Al hacer clic** — deshabilitar de inmediato (evitar doble envío) y mostrar "Confirmando…" o spinner.
-2. **Tras un clic exitoso** — el botón debe **quedar deshabilitado para siempre** en esa vista (la acción solo se hace una vez).
-3. **Al cargar la vista** — si el pedido ya está en estado CONFIRMADO REDISTRIBUCION (o posterior), el botón debe mostrarse deshabilitado.
+**⭐ NUEVO:** El backend ahora incluye un flag explícito `puede_confirmar_redistribucion` en la respuesta de los endpoints que devuelven datos del pedido:
+
+- `GET /api/plantillas/{numero_pedido}`
+- `GET /api/plantillas/ultimo`
+- Otros endpoints que devuelven el pedido completo
+
+**Respuesta del backend:**
+```json
+{
+  "cabecera": { "estado_id": 4, "estado": "CONFIRMADO", ... },
+  "detalles": [...],
+  "puede_confirmar_redistribucion": true,  // ⭐ Usar este flag
+  "puede_descartar": false,
+  "puede_cancelar_pedido": true
+}
+```
+
+**Estados que permiten confirmar redistribución (`puede_confirmar_redistribucion: true`):**
+- `estado_id = 4` (REDISTRIBUCION / CONFIRMADO POR EL RAYO)
+- `estado_id = 5` (RESPUESTA_PROVEEDOR_CARGADA)
+- `estado_id = 6` (CONFIRMADO_PROVEEDOR)
+- `estado_id = 8` (EN_AJUSTE_MABEL)
+- `estado_id = 9` (REDISTRIBUIDO)
+
+**Estados que NO permiten confirmar redistribución (`puede_confirmar_redistribucion: false`):**
+- `estado_id = 10` (CONFIRMADO REDISTRIBUCION) - ya confirmado
+- `estado_id >= 11` (estados posteriores)
+- `estado_id = 19` (CANCELADO) - pedido cancelado
+
+#### Implementación Recomendada
+
+En la pantalla de redistribución (`/mba3-consultas/pedidos/{numero_pedido}/redistribucion`):
+
+```javascript
+// ✅ RECOMENDADO: Usar el flag del backend
+const isButtonDisabled = !pedido.puede_confirmar_redistribucion;
+
+// O alternativamente, validar el estado directamente:
+const isButtonDisabled = 
+  pedido.cabecera.estado_id >= 10 || 
+  pedido.cabecera.estado_id === 19;  // CANCELADO
+```
+
+**Comportamiento en el frontend:**
+
+| Acción | Comportamiento |
+|--------|----------------|
+| **Al cargar la vista** | Usar `puede_confirmar_redistribucion` del backend para determinar si mostrar el botón habilitado o deshabilitado. |
+| **Al hacer clic en "Confirmar Redistribución"** | Deshabilitar el botón **de inmediato**. Mostrar "Confirmando…" o spinner. Enviar `POST .../redistribucion/confirmar` con el body. |
+| **Si la petición es exitosa** | **Mantener el botón deshabilitado** (no volver a habilitar). Recargar el pedido para obtener el flag actualizado. |
+| **Si la petición falla** | Mostrar mensaje de error y **volver a habilitar el botón** para que el usuario pueda reintentar. |
+| **Después de cancelar pedido** | Recargar el pedido. El flag `puede_confirmar_redistribucion` será `false` y el botón se deshabilitará automáticamente. |
 
 **Endpoint a usar:** `POST /api/pedidos/{numero_pedido}/redistribucion/confirmar`
 
@@ -1703,24 +1752,11 @@ En la pantalla de redistribución (`/mba3-consultas/pedidos/{numero_pedido}/redi
 - **Body:** `RedistribucionConfirmarRequest` (p. ej. `{ "ajustes_detalle": [ ... ] }`).  
 - **Respuesta exitosa:** incluye `status: "success"`, `numero_pedido`, `message`, etc. **No incluye el pedido completo**; el backend actualiza el estado del pedido a **`CONFIRMADO REDISTRIBUCION`** (`estado_id` 10).
 
-**Comportamiento en el frontend:**
-
-| Acción | Comportamiento |
-|--------|----------------|
-| **Al hacer clic en "Confirmar Redistribución"** | Deshabilitar el botón **de inmediato**. Mostrar "Confirmando…" o spinner. Enviar `POST .../redistribucion/confirmar` con el body. |
-| **Si la petición es exitosa** | **Mantener el botón deshabilitado** (no volver a habilitar). Opción A: marcar en estado local que la redistribución ya se confirmó (p. ej. `redistribucionConfirmada = true`). Opción B: recargar el pedido desde el backend (GET pedido) para obtener `cabecera.estado === 'CONFIRMADO REDISTRIBUCION'` y que la condición de deshabilitado se cumpla por estado. |
-| **Si la petición falla** | Mostrar mensaje de error y **volver a habilitar el botón** para que el usuario pueda reintentar. |
-
-**Cuándo deshabilitar el botón (condición en código):**
-
-- `cabecera.estado_id === 10` o `cabecera.estado === 'CONFIRMADO REDISTRIBUCION'` (o `'PEDIDO_CONFIRMADO'`) → deshabilitar.
-- Cualquier estado posterior (p. ej. `PROCESADO_SAP`, `CONFIRMADO_ENVIADO`) → deshabilitar.
-- **O** un flag local tipo `redistribucionConfirmada === true` tras un clic exitoso (y no recargar la página sin recargar el pedido).
-
 **Resumen de implementación:**
 
-- **Al cargar la vista:** Deshabilitar el botón si `cabecera.estado_id === 10` o `cabecera.estado === 'CONFIRMADO REDISTRIBUCION'` (o estado posterior).
-- **Al hacer clic:** Deshabilitar el botón de inmediato; tras **éxito**, no volver a habilitarlo (actualizar estado local con flag o recargar pedido).
+- **Al cargar la vista:** Usar `puede_confirmar_redistribucion` del backend.
+- **Después de cancelar:** Recargar el pedido para obtener el flag actualizado (`false` para CANCELADO).
+- **Al hacer clic:** Deshabilitar el botón de inmediato; tras **éxito**, no volver a habilitarlo.
 - **Si la petición falla:** Rehabilitar el botón y mostrar el error.
 
 ---

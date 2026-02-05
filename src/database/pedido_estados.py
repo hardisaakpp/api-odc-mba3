@@ -43,6 +43,18 @@ ESTADOS_PUEDE_ELIMINAR = (ESTADO_GESTIONAR_PEDIDO,)
 # El botón debe estar habilitado solo cuando estado_id < ESTADO_PEDIDO_CONFIRMADO (10).
 ESTADO_LIMITE_CANCELAR_PEDIDO = ESTADO_PEDIDO_CONFIRMADO  # 10 - Confirmado redistribución
 
+# "Confirmar Redistribución": habilitar solo cuando el pedido está en estado que permite redistribución.
+# Estados que permiten confirmar redistribución (antes de CONFIRMADO REDISTRIBUCION y no CANCELADO)
+# NOTA: estado_id debe ser >= 4 (REDISTRIBUCION/CONFIRMADO) y < 10 (PEDIDO_CONFIRMADO) 
+# y NO debe ser CANCELADO (19)
+ESTADOS_PUEDE_CONFIRMAR_REDISTRIBUCION = frozenset({
+    ESTADO_REDISTRIBUCION,  # 4 - CONFIRMADO POR EL RAYO
+    ESTADO_RESPUESTA_PROVEEDOR_CARGADA,  # 5
+    ESTADO_CONFIRMADO_PROVEEDOR,  # 6
+    ESTADO_EN_AJUSTE_MABEL,  # 8
+    ESTADO_REDISTRIBUIDO,  # 9
+})
+
 # Desde Confirmado Enviado (12) en adelante no se permite ni Descartar ni Cancelar Pedido (DELETE rechazado).
 
 # --- Conjuntos útiles para validaciones --------------------------------------

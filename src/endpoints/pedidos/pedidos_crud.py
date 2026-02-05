@@ -25,6 +25,7 @@ from src.database.pedido_estados import (
     ESTADOS_PUEDE_DESCARTAR,
     ESTADOS_PUEDE_ELIMINAR,
     ESTADO_LIMITE_CANCELAR_PEDIDO,
+    ESTADOS_PUEDE_CONFIRMAR_REDISTRIBUCION,
 )
 from src.security.jwt_auth import verify_jwt_token, require_permission, require_any_permission
 from src.exceptions import BusinessException
@@ -429,6 +430,7 @@ def register_crud_endpoints(app: FastAPI):
                 pedido["puede_eliminar"] = _eid in ESTADOS_PUEDE_ELIMINAR
                 pedido["puede_cancelar_pedido"] = _eid is not None and _eid < ESTADO_LIMITE_CANCELAR_PEDIDO
                 pedido["puede_descargar_csv"] = _eid == ESTADO_REDISTRIBUCION  # Solo en estado CONFIRMADO (4)
+                pedido["puede_confirmar_redistribucion"] = _eid in ESTADOS_PUEDE_CONFIRMAR_REDISTRIBUCION
 
                 return JSONResponse(status_code=200, content=pedido)
             
@@ -478,6 +480,7 @@ def register_crud_endpoints(app: FastAPI):
                 pedido["puede_eliminar"] = _eid in ESTADOS_PUEDE_ELIMINAR
                 pedido["puede_cancelar_pedido"] = _eid is not None and _eid < ESTADO_LIMITE_CANCELAR_PEDIDO
                 pedido["puede_descargar_csv"] = _eid == ESTADO_REDISTRIBUCION  # Solo en estado CONFIRMADO (4)
+                pedido["puede_confirmar_redistribucion"] = _eid in ESTADOS_PUEDE_CONFIRMAR_REDISTRIBUCION
                 return JSONResponse(status_code=status.HTTP_200_OK, content=pedido)
         except HTTPException:
             raise
@@ -537,6 +540,7 @@ def register_crud_endpoints(app: FastAPI):
                 pedido["puede_eliminar"] = _eid in ESTADOS_PUEDE_ELIMINAR
                 pedido["puede_cancelar_pedido"] = _eid is not None and _eid < ESTADO_LIMITE_CANCELAR_PEDIDO
                 pedido["puede_descargar_csv"] = _eid == ESTADO_REDISTRIBUCION  # Solo en estado CONFIRMADO (4)
+                pedido["puede_confirmar_redistribucion"] = _eid in ESTADOS_PUEDE_CONFIRMAR_REDISTRIBUCION
                 return JSONResponse(status_code=status.HTTP_200_OK, content=pedido)
         except HTTPException:
             raise
@@ -597,6 +601,7 @@ def register_crud_endpoints(app: FastAPI):
                 pedido["puede_eliminar"] = _eid in ESTADOS_PUEDE_ELIMINAR
                 pedido["puede_cancelar_pedido"] = _eid is not None and _eid < ESTADO_LIMITE_CANCELAR_PEDIDO
                 pedido["puede_descargar_csv"] = _eid == ESTADO_REDISTRIBUCION  # Solo en estado CONFIRMADO (4)
+                pedido["puede_confirmar_redistribucion"] = _eid in ESTADOS_PUEDE_CONFIRMAR_REDISTRIBUCION
                 return JSONResponse(status_code=status.HTTP_200_OK, content=pedido)
         except HTTPException:
             raise
@@ -656,6 +661,7 @@ def register_crud_endpoints(app: FastAPI):
                 pedido["puede_eliminar"] = _eid in ESTADOS_PUEDE_ELIMINAR
                 pedido["puede_cancelar_pedido"] = _eid is not None and _eid < ESTADO_LIMITE_CANCELAR_PEDIDO
                 pedido["puede_descargar_csv"] = _eid == ESTADO_REDISTRIBUCION  # Solo en estado CONFIRMADO (4)
+                pedido["puede_confirmar_redistribucion"] = _eid in ESTADOS_PUEDE_CONFIRMAR_REDISTRIBUCION
                 return JSONResponse(status_code=status.HTTP_200_OK, content=pedido)
         except HTTPException:
             raise
