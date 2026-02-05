@@ -1463,20 +1463,19 @@ def register_crud_endpoints(app: FastAPI):
                 ws_detalles['A1'] = "DETALLES DE ARTÍCULOS"
                 ws_detalles['A1'].font = title_font
                 ws_detalles['A1'].fill = title_fill
-                ws_detalles.merge_cells('A1:I1')
+                ws_detalles.merge_cells('A1:H1')
                 
                 # Determinar si usamos datos de distribucion_confirmada o pedido_detalle
                 usar_distribucion_confirmada = estado_id == ESTADO_REDISTRIBUCION
                 
                 # Encabezados de la tabla de detalles
                 headers = [
-                    "Código Interno",
-                    "SKU SAP",
+                    "Código Producto",
                     "Descripción",
-                    "Cantidad Total",
+                    "Total Original",
                     "Costo Unitario",
-                    "Total",
-                    "Unidad",
+                    "Total Confirmado",
+                    "PACK",
                     "Código de Barras",
                     "Comentario"
                 ]
@@ -1596,18 +1595,17 @@ def register_crud_endpoints(app: FastAPI):
                         
                         # Escribir fila en Excel
                         ws_detalles.cell(row=row, column=1, value=codigo_interno)
-                        ws_detalles.cell(row=row, column=2, value=sku_sap)
-                        ws_detalles.cell(row=row, column=3, value=descripcion)
-                        ws_detalles.cell(row=row, column=4, value=cantidad)
-                        ws_detalles.cell(row=row, column=5, value=costo_unitario)
-                        ws_detalles.cell(row=row, column=6, value=total_linea)
-                        ws_detalles.cell(row=row, column=7, value=unidad)
-                        ws_detalles.cell(row=row, column=8, value=codigo_barras)
-                        ws_detalles.cell(row=row, column=9, value=comentario)
+                        ws_detalles.cell(row=row, column=2, value=descripcion)
+                        ws_detalles.cell(row=row, column=3, value=cantidad)
+                        ws_detalles.cell(row=row, column=4, value=costo_unitario)
+                        ws_detalles.cell(row=row, column=5, value=total_linea)
+                        ws_detalles.cell(row=row, column=6, value=unidad)
+                        ws_detalles.cell(row=row, column=7, value=codigo_barras)
+                        ws_detalles.cell(row=row, column=8, value=comentario)
                         
                         # Aplicar formato numérico
+                        ws_detalles.cell(row=row, column=4).number_format = '#,##0.00'
                         ws_detalles.cell(row=row, column=5).number_format = '#,##0.00'
-                        ws_detalles.cell(row=row, column=6).number_format = '#,##0.00'
                         
                         row += 1
                         
@@ -1694,18 +1692,17 @@ def register_crud_endpoints(app: FastAPI):
                         
                         # Escribir fila en Excel
                         ws_detalles.cell(row=row, column=1, value=codigo_interno)
-                        ws_detalles.cell(row=row, column=2, value=sku_sap)
-                        ws_detalles.cell(row=row, column=3, value=descripcion)
-                        ws_detalles.cell(row=row, column=4, value=cantidad)
-                        ws_detalles.cell(row=row, column=5, value=precio_unitario)
-                        ws_detalles.cell(row=row, column=6, value=total_linea)
-                        ws_detalles.cell(row=row, column=7, value=unidad)
-                        ws_detalles.cell(row=row, column=8, value=codigo_barras)
-                        ws_detalles.cell(row=row, column=9, value=comentario)
+                        ws_detalles.cell(row=row, column=2, value=descripcion)
+                        ws_detalles.cell(row=row, column=3, value=cantidad)
+                        ws_detalles.cell(row=row, column=4, value=precio_unitario)
+                        ws_detalles.cell(row=row, column=5, value=total_linea)
+                        ws_detalles.cell(row=row, column=6, value=unidad)
+                        ws_detalles.cell(row=row, column=7, value=codigo_barras)
+                        ws_detalles.cell(row=row, column=8, value=comentario)
                         
                         # Aplicar formato numérico
+                        ws_detalles.cell(row=row, column=4).number_format = '#,##0.00'
                         ws_detalles.cell(row=row, column=5).number_format = '#,##0.00'
-                        ws_detalles.cell(row=row, column=6).number_format = '#,##0.00'
                         
                         row += 1
                         
@@ -1719,20 +1716,19 @@ def register_crud_endpoints(app: FastAPI):
                 # Totales
                 row += 1
                 ws_detalles.cell(row=row, column=1, value="TOTALES").font = Font(bold=True)
-                ws_detalles.cell(row=row, column=4, value=total_cantidad).font = Font(bold=True)
-                ws_detalles.cell(row=row, column=6, value=total_valor).font = Font(bold=True)
-                ws_detalles.cell(row=row, column=6).number_format = '#,##0.00'
+                ws_detalles.cell(row=row, column=3, value=total_cantidad).font = Font(bold=True)
+                ws_detalles.cell(row=row, column=5, value=total_valor).font = Font(bold=True)
+                ws_detalles.cell(row=row, column=5).number_format = '#,##0.00'
                 
                 # Ajustar anchos de columna
-                ws_detalles.column_dimensions['A'].width = 15
-                ws_detalles.column_dimensions['B'].width = 15
-                ws_detalles.column_dimensions['C'].width = 40
-                ws_detalles.column_dimensions['D'].width = 12
-                ws_detalles.column_dimensions['E'].width = 15
-                ws_detalles.column_dimensions['F'].width = 15
-                ws_detalles.column_dimensions['G'].width = 12
-                ws_detalles.column_dimensions['H'].width = 20
-                ws_detalles.column_dimensions['I'].width = 30
+                ws_detalles.column_dimensions['A'].width = 18  # Código Producto
+                ws_detalles.column_dimensions['B'].width = 40  # Descripción
+                ws_detalles.column_dimensions['C'].width = 14  # Total Original
+                ws_detalles.column_dimensions['D'].width = 15  # Costo Unitario
+                ws_detalles.column_dimensions['E'].width = 16  # Total Confirmado
+                ws_detalles.column_dimensions['F'].width = 12  # PACK
+                ws_detalles.column_dimensions['G'].width = 20  # Código de Barras
+                ws_detalles.column_dimensions['H'].width = 30  # Comentario
                 
                 # === HOJA 3: DISTRIBUCIÓN POR TIENDAS ===
                 ws_distribucion = wb.create_sheet("Distribución por Tiendas")
@@ -1741,22 +1737,21 @@ def register_crud_endpoints(app: FastAPI):
                 ws_distribucion['A1'] = "DISTRIBUCIÓN POR TIENDAS"
                 ws_distribucion['A1'].font = title_font
                 ws_distribucion['A1'].fill = title_fill
-                ws_distribucion.merge_cells('A1:G1' if usar_distribucion_confirmada else 'A1:E1')
+                ws_distribucion.merge_cells('A1:F1' if usar_distribucion_confirmada else 'A1:E1')
                 
                 # Encabezados de distribución
                 if usar_distribucion_confirmada:
                     dist_headers = [
-                        "Código Interno",
+                        "Código Producto",
                         "Descripción",
                         "Código Tienda",
                         "Nombre Tienda",
                         "Cantidad Asignada",
-                        "Costo Unitario",
-                        "Subtotal"
+                        "Costo Unitario"
                     ]
                 else:
                     dist_headers = [
-                        "Código Interno",
+                        "Código Producto",
                         "Descripción",
                         "Código Tienda",
                         "Nombre Tienda",
@@ -1789,10 +1784,8 @@ def register_crud_endpoints(app: FastAPI):
                                 ws_distribucion.cell(row=row, column=4, value=dist.get("tienda_nombre", ""))
                                 ws_distribucion.cell(row=row, column=5, value=dist.get("cantidad_asignada", 0))
                                 ws_distribucion.cell(row=row, column=6, value=float(dist.get('costo_unitario_ajustado', 0.0) or 0.0))
-                                ws_distribucion.cell(row=row, column=7, value=float(dist.get('subtotal_ajustado', 0.0) or 0.0))
                                 
                                 ws_distribucion.cell(row=row, column=6).number_format = '#,##0.00'
-                                ws_distribucion.cell(row=row, column=7).number_format = '#,##0.00'
                             else:
                                 # Sin costos para otros estados
                                 ws_distribucion.cell(row=row, column=1, value=codigo_interno)

@@ -40,7 +40,7 @@ BEGIN
         (1,  N'BORRADOR',                        1,  1),
         (2,  N'NUEVO PEDIDO',                   2,  1),  -- Enviado a EL RAYO (notificación enviada)
         (3,  N'GESTIONAR PEDIDO',               3,  1),  -- Al hacer clic en Ver Detalle desde tabla Pedidos
-        (4,  N'CONFIRMADO',                   4,  1),  -- Tras confirmar (EL RAYO / ir a redistribución)
+        (4,  N'CONFIRMADO POR EL RAYO',       4,  1),  -- Tras confirmar (EL RAYO / ir a redistribución)
         (5,  N'RESPUESTA_PROVEEDOR_CARGADA',    5,  1),
         (6,  N'CONFIRMADO_PROVEEDOR',            6,  1),
         (7,  N'RECHAZADO_PROVEEDOR',            7,  1),

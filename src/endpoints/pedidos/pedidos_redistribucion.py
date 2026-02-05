@@ -1693,3 +1693,316 @@ def register_redistribucion_endpoints(app: FastAPI):
                 }
             )
     
+    @app.get("/api/pedidos/{pedido_id}/distribucion/descargar-excel", tags=["Pedidos - Redistribución"])
+    async def descargar_distribucion_excel(
+        pedido_id: str = Path(..., description="UUID del pedido"),
+        version: Optional[int] = Query(None, ge=1, description="Versión específica (si no se especifica, obtiene la última)"),
+        user: Dict = Depends(verify_jwt_token),
+        _: None = Depends(require_any_permission(['odcsap.view', 'mabel.view']))
+    ):
+        """
+        Descargar distribución confirmada del pedido en formato Excel (.xlsx).
+        
+        **Uso:**
+        - Interfaz: Pantalla de Redistribución (`/pedidos/{numero_pedido}/redistribucion`)
+        - Botón: "Descargar Distribución Excel"
+        
+        **Contenido del Excel:**
+        - Hoja 1: Información del pedido (cabecera)
+        - Hoja 2: Resumen de productos (cantidades solicitadas, confirmadas, asignadas)
+        - Hoja 3: Distribución detallada por tienda con costos
+        
+        **Query Parameters:**
+        - `version` (int, opcional): Versión específica a descargar. Si no se especifica, descarga la última versión.
+        
+        **Respuestas:**
+        - **200**: Archivo Excel descargado correctamente
+        - **404**: Pedido no encontrado o no tiene distribución confirmada
+        - **500**: Error interno
+        """
+        try:
+            from openpyxl import Workbook
+            from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+            import re
+            
+            with get_db_connection_context() as conn:
+                repo_dist = DistribucionConfirmadaRepository(conn)
+                repo_pedido = PedidoRepository(conn)
+                
+                # Obtener distribución confirmada
+                distribucion_data = repo_dist.get_distribucion_completa(pedido_id, version)
+                
+                if not distribucion_data or not distribucion_data.get("productos"):
+                    raise HTTPException(
+                        status_code=status.HTTP_404_NOT_FOUND,
+                        detail={
+                            "error": "not_found",
+                            "message": "No se encontró distribución confirmada para este pedido"
+                        }
+                    )
+                
+                # Obtener datos del pedido
+                pedido_data = repo_pedido.get_pedido_completo(pedido_id)
+                
+                if not pedido_data:
+                    raise HTTPException(
+                        status_code=status.HTTP_404_NOT_FOUND,
+                        detail={"error": "not_found", "message": "Pedido no encontrado"}
+                    )
+                
+                cabecera = pedido_data.get("cabecera", {})
+                
+                # Crear libro de Excel
+                wb = Workbook()
+                wb.remove(wb.active)  # Eliminar la hoja por defecto
+                
+                # Estilos
+                header_fill = PatternFill(start_color="4472C4", end_color="4472C4", fill_type="solid")
+                header_font = Font(bold=True, color="FFFFFF", size=12)
+                title_fill = PatternFill(start_color="D9E1F2", end_color="D9E1F2", fill_type="solid")
+                title_font = Font(bold=True, size=14)
+                border = Border(
+                    left=Side(style='thin'),
+                    right=Side(style='thin'),
+                    top=Side(style='thin'),
+                    bottom=Side(style='thin')
+                )
+                
+                # === HOJA 1: INFORMACIÓN DEL PEDIDO ===
+                ws_cabecera = wb.create_sheet("Información del Pedido")
+                
+                # Título
+                ws_cabecera['A1'] = "INFORMACIÓN DEL PEDIDO - DISTRIBUCIÓN CONFIRMADA"
+                ws_cabecera['A1'].font = title_font
+                ws_cabecera['A1'].fill = title_fill
+                ws_cabecera.merge_cells('A1:B1')
+                
+                # Datos de cabecera
+                row = 3
+                info_fields = [
+                    ("Número de Pedido", cabecera.get("numero_pedido", "N/A")),
+                    ("Pedido ID", pedido_id),
+                    ("Versión Redistribución", distribucion_data.get("version_actual", "N/A")),
+                    ("Estado", cabecera.get("estado_nombre", "N/A")),
+                    ("Fecha Pedido", cabecera.get("fecha_pedido", "N/A")),
+                    ("Fecha Entrega", cabecera.get("fecha_entrega", "N/A")),
+                    ("Proveedor", cabecera.get("proveedor_nombre", "N/A")),
+                    ("Comprador", cabecera.get("comprador_nombre", "N/A")),
+                    ("Forma de Pago", cabecera.get("forma_pago", "N/A")),
+                    ("ODC", cabecera.get("odc", "N/A")),
+                    ("Creado Por", cabecera.get("creado_por", "N/A")),
+                ]
+                
+                for field, value in info_fields:
+                    ws_cabecera[f'A{row}'] = field
+                    ws_cabecera[f'A{row}'].font = Font(bold=True)
+                    ws_cabecera[f'B{row}'] = value
+                    row += 1
+                
+                # Ajustar anchos de columna
+                ws_cabecera.column_dimensions['A'].width = 25
+                ws_cabecera.column_dimensions['B'].width = 50
+                
+                # === HOJA 2: RESUMEN DE PRODUCTOS ===
+                ws_resumen = wb.create_sheet("Resumen de Productos")
+                
+                # Título
+                ws_resumen['A1'] = "RESUMEN DE PRODUCTOS - CANTIDADES"
+                ws_resumen['A1'].font = title_font
+                ws_resumen['A1'].fill = title_fill
+                ws_resumen.merge_cells('A1:F1')
+                
+                # Encabezados
+                headers_resumen = [
+                    "Código Interno",
+                    "Descripción",
+                    "Cantidad Solicitada",
+                    "Cantidad Confirmada",
+                    "Cantidad Asignada",
+                    "Diferencia"
+                ]
+                
+                for col_num, header in enumerate(headers_resumen, 1):
+                    cell = ws_resumen.cell(row=3, column=col_num)
+                    cell.value = header
+                    cell.font = header_font
+                    cell.fill = header_fill
+                    cell.alignment = Alignment(horizontal='center', vertical='center')
+                    cell.border = border
+                
+                row = 4
+                total_solicitada = 0
+                total_confirmada = 0
+                total_asignada = 0
+                
+                # Enriquecer productos con información del pedido
+                productos_enriquecidos = []
+                for producto_dist in distribucion_data["productos"]:
+                    pedido_detalle_id = producto_dist["pedido_detalle_id"]
+                    
+                    # Buscar detalle en el pedido
+                    detalle_pedido = next(
+                        (d for d in pedido_data["detalles"] if d["pedido_detalle_id"] == pedido_detalle_id),
+                        None
+                    )
+                    
+                    if detalle_pedido:
+                        productos_enriquecidos.append({
+                            **producto_dist,
+                            "codigo_interno": detalle_pedido.get("codigo_interno"),
+                            "descripcion_sap": detalle_pedido.get("descripcion_sap"),
+                        })
+                    else:
+                        productos_enriquecidos.append(producto_dist)
+                
+                for producto in productos_enriquecidos:
+                    codigo_interno = producto.get("codigo_interno", "")
+                    descripcion = producto.get("descripcion_sap", "")
+                    cantidad_solicitada = producto.get("cantidad_solicitada_total", 0)
+                    cantidad_confirmada = producto.get("cantidad_confirmada_total", 0)
+                    cantidad_asignada = producto.get("cantidad_asignada_total", 0)
+                    diferencia = cantidad_confirmada - cantidad_asignada
+                    
+                    total_solicitada += cantidad_solicitada
+                    total_confirmada += cantidad_confirmada
+                    total_asignada += cantidad_asignada
+                    
+                    ws_resumen.cell(row=row, column=1, value=codigo_interno)
+                    ws_resumen.cell(row=row, column=2, value=descripcion)
+                    ws_resumen.cell(row=row, column=3, value=cantidad_solicitada)
+                    ws_resumen.cell(row=row, column=4, value=cantidad_confirmada)
+                    ws_resumen.cell(row=row, column=5, value=cantidad_asignada)
+                    ws_resumen.cell(row=row, column=6, value=diferencia)
+                    
+                    row += 1
+                
+                # Totales
+                row += 1
+                ws_resumen.cell(row=row, column=1, value="TOTALES").font = Font(bold=True)
+                ws_resumen.cell(row=row, column=3, value=total_solicitada).font = Font(bold=True)
+                ws_resumen.cell(row=row, column=4, value=total_confirmada).font = Font(bold=True)
+                ws_resumen.cell(row=row, column=5, value=total_asignada).font = Font(bold=True)
+                ws_resumen.cell(row=row, column=6, value=total_confirmada - total_asignada).font = Font(bold=True)
+                
+                # Ajustar anchos de columna
+                ws_resumen.column_dimensions['A'].width = 20
+                ws_resumen.column_dimensions['B'].width = 45
+                ws_resumen.column_dimensions['C'].width = 18
+                ws_resumen.column_dimensions['D'].width = 18
+                ws_resumen.column_dimensions['E'].width = 18
+                ws_resumen.column_dimensions['F'].width = 15
+                
+                # === HOJA 3: DISTRIBUCIÓN DETALLADA POR TIENDA ===
+                ws_detalle = wb.create_sheet("Distribución por Tienda")
+                
+                # Título
+                ws_detalle['A1'] = "DISTRIBUCIÓN DETALLADA POR TIENDA"
+                ws_detalle['A1'].font = title_font
+                ws_detalle['A1'].fill = title_fill
+                ws_detalle.merge_cells('A1:G1')
+                
+                # Encabezados
+                headers_detalle = [
+                    "Código Interno",
+                    "Descripción",
+                    "Código Tienda",
+                    "Nombre Tienda",
+                    "Cantidad Asignada",
+                    "Costo Unitario",
+                    "Observaciones"
+                ]
+                
+                for col_num, header in enumerate(headers_detalle, 1):
+                    cell = ws_detalle.cell(row=3, column=col_num)
+                    cell.value = header
+                    cell.font = header_font
+                    cell.fill = header_fill
+                    cell.alignment = Alignment(horizontal='center', vertical='center')
+                    cell.border = border
+                
+                row = 4
+                
+                # Escribir distribuciones detalladas
+                for producto in productos_enriquecidos:
+                    codigo_interno = producto.get("codigo_interno", "")
+                    descripcion = producto.get("descripcion_sap", "")
+                    distribuciones = producto.get("distribuciones", [])
+                    
+                    if distribuciones:
+                        for dist in distribuciones:
+                            ws_detalle.cell(row=row, column=1, value=codigo_interno)
+                            ws_detalle.cell(row=row, column=2, value=descripcion)
+                            ws_detalle.cell(row=row, column=3, value=dist.get("tienda_codigo", ""))
+                            ws_detalle.cell(row=row, column=4, value=dist.get("tienda_nombre", ""))
+                            ws_detalle.cell(row=row, column=5, value=dist.get("cantidad_asignada", 0))
+                            ws_detalle.cell(row=row, column=6, value=float(dist.get("costo_unitario_ajustado", 0.0)))
+                            ws_detalle.cell(row=row, column=7, value=dist.get("observaciones", ""))
+                            
+                            # Formato numérico
+                            ws_detalle.cell(row=row, column=6).number_format = '#,##0.00'
+                            
+                            row += 1
+                    else:
+                        # Sin distribución
+                        ws_detalle.cell(row=row, column=1, value=codigo_interno)
+                        ws_detalle.cell(row=row, column=2, value=descripcion)
+                        ws_detalle.cell(row=row, column=3, value="Sin distribución")
+                        row += 1
+                
+                # Ajustar anchos de columna
+                ws_detalle.column_dimensions['A'].width = 20
+                ws_detalle.column_dimensions['B'].width = 45
+                ws_detalle.column_dimensions['C'].width = 15
+                ws_detalle.column_dimensions['D'].width = 30
+                ws_detalle.column_dimensions['E'].width = 18
+                ws_detalle.column_dimensions['F'].width = 15
+                ws_detalle.column_dimensions['G'].width = 30
+                
+                # Agregar información de descarga
+                row = ws_cabecera.max_row + 2
+                ws_cabecera[f'A{row}'] = "Descargado por:"
+                ws_cabecera[f'A{row}'].font = Font(bold=True)
+                ws_cabecera[f'B{row}'] = user.get("username", "Desconocido")
+                
+                row += 1
+                ws_cabecera[f'A{row}'] = "Fecha de descarga:"
+                ws_cabecera[f'A{row}'].font = Font(bold=True)
+                ws_cabecera[f'B{row}'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                
+                # Guardar el libro de Excel en memoria
+                from io import BytesIO
+                excel_buffer = BytesIO()
+                wb.save(excel_buffer)
+                excel_buffer.seek(0)
+                
+                # Nombre del archivo
+                numero_pedido = cabecera.get("numero_pedido", pedido_id)
+                # Limpiar nombre para evitar caracteres inválidos en nombre de archivo
+                numero_pedido_safe = re.sub(r'[^\w\-_\. ]', '_', numero_pedido)
+                version_str = f"_v{distribucion_data.get('version_actual', 1)}"
+                filename = f"distribucion_{numero_pedido_safe}{version_str}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+                
+                logger.info(f"✅ Excel de distribución generado para pedido {pedido_id} ({numero_pedido}) por usuario {user.get('username', 'UNKNOWN')}")
+                
+                # Retornar archivo Excel
+                return StreamingResponse(
+                    excel_buffer,
+                    media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    headers={
+                        "Content-Disposition": f"attachment; filename={filename}",
+                        "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                    }
+                )
+                
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"❌ Error al generar Excel de distribución para pedido {pedido_id}: {e}", exc_info=True)
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail={
+                    "error": "internal_error",
+                    "message": f"Error al generar Excel de distribución: {str(e)}"
+                }
+            )
+    
