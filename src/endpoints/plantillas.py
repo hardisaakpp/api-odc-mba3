@@ -348,6 +348,111 @@ def register_plantillas_endpoints(app: FastAPI):
             )
     
     # ========================================================================
+    # NUEVO ENDPOINT: Listar pedidos para cargar-plantilla (incluye BORRADOR)
+    # ========================================================================
+    @app.get("/api/plantillas/pedidos", tags=["Plantillas"])
+    async def listar_pedidos_plantillas(
+        estado: Optional[str] = Query(None, description="Filtrar por estado del pedido"),
+        numero_pedido: Optional[str] = Query(None, description="Buscar por número de pedido (parcial)"),
+        limit: int = Query(10, ge=1, le=100, description="Límite de registros por página"),
+        offset: int = Query(0, ge=0, description="Offset para paginación"),
+        user: Dict = Depends(verify_jwt_token),
+        _: None = Depends(require_permission('mabel.view'))
+    ):
+        """
+        Lista pedidos para la página cargar-plantilla.
+        
+        **IMPORTANTE:** Este endpoint INCLUYE pedidos en estado BORRADOR, 
+        a diferencia de /api/pedidos que los excluye.
+        
+        **Uso:** Este endpoint está diseñado para el contenedor "Pedidos" de la página
+        cargar-plantilla. Muestra todos los pedidos del usuario actual, incluyendo
+        los que están en estado BORRADOR.
+        
+        **Query Parameters:**
+        - `estado` (string, opcional) - Filtrar por estado (ej: "BORRADOR", "NUEVO_PEDIDO")
+        - `numero_pedido` (string, opcional) - Búsqueda parcial por número de pedido
+        - `limit` (int, default: 10) - Límite de registros por página
+        - `offset` (int, default: 0) - Offset para paginación
+        
+        **Ejemplo:**
+        ```
+        GET /api/plantillas/pedidos?limit=10&offset=0
+        GET /api/plantillas/pedidos?estado=BORRADOR&limit=10&offset=0
+        GET /api/plantillas/pedidos?numero_pedido=P-12.08
+        ```
+        
+        **Respuesta:**
+        ```json
+        {
+            "status": "success",
+            "data": [
+                {
+                    "pedido_id": "uuid",
+                    "numero_pedido": "P-12.08 - 12 - 2025",
+                    "fecha_pedido": "2025-01-21",
+                    "estado": "BORRADOR",
+                    "estado_id": 1,
+                    "proveedor_nombre": "TEXTILES EL RAYO S.A.",
+                    "creado_en": "2025-01-21T10:30:00"
+                }
+            ],
+            "metadata": {
+                "total": 5,
+                "limit": 10,
+                "offset": 0,
+                "has_more": false
+            }
+        }
+        ```
+        
+        Returns:
+            JSON con lista de pedidos y metadata de paginación
+        """
+        try:
+            user_id = get_user_id(user)
+            
+            with get_db_connection_context() as conn:
+                repo = PedidoRepository(conn)
+                
+                # Listar pedidos del usuario INCLUYENDO BORRADOR
+                resultado = repo.get_pedidos_con_filtros(
+                    estado=estado,
+                    numero_pedido=numero_pedido.strip() if numero_pedido else None,
+                    creado_por=user_id,  # Solo pedidos del usuario actual
+                    limit=limit,
+                    offset=offset,
+                    excluir_borrador=False,  # INCLUIR BORRADOR para cargar-plantilla
+                )
+                
+                logger.info(
+                    f"📋 Listando pedidos para cargar-plantilla: "
+                    f"usuario={user_id}, total={resultado['total']}, "
+                    f"limit={limit}, offset={offset}"
+                )
+                
+                return JSONResponse(
+                    status_code=200,
+                    content={
+                        "status": "success",
+                        "data": resultado["data"],
+                        "metadata": {
+                            "total": resultado["total"],
+                            "limit": resultado["limit"],
+                            "offset": resultado["offset"],
+                            "has_more": resultado["has_more"]
+                        }
+                    }
+                )
+                
+        except Exception as e:
+            logger.error(f"❌ Error al listar pedidos para plantillas: {e}", exc_info=True)
+            raise HTTPException(
+                status_code=500,
+                detail=f"Error interno al listar pedidos: {str(e)}"
+            )
+    
+    # ========================================================================
     # NUEVO ENDPOINT: Descargar archivo Excel original
     # ========================================================================
     @app.get("/api/plantillas/{pedido_id}/descargar-original", tags=["Plantillas"])

@@ -848,7 +848,90 @@ El endpoint `POST /api/plantillas/upload` devuelve:
 
 **Nota:** Si el usuario quiere ver el detalle completo del pedido, puede hacer clic en un botón/link que lo lleve a `/mba3-consultas/pedidos/{numero_pedido}`, pero esto debe ser una acción explícita del usuario, no una redirección automática.
 
-### 0.5.12.1 Búsqueda por Número de Pedido en Cargar Plantilla
+### 0.5.12.1 Listado de Pedidos en Cargar Plantilla (Contenedor "Pedidos")
+
+**Ruta:** `http://localhost:3000/mba3-consultas/cargar-plantilla`
+
+#### Endpoint para Listar Pedidos (incluye BORRADOR)
+
+**⚠️ IMPORTANTE:** Para el contenedor "Pedidos" en la página cargar-plantilla, **NO usar** `GET /api/pedidos` ya que este endpoint excluye pedidos en estado BORRADOR.
+
+**Usar:** `GET /api/plantillas/pedidos`
+
+Este endpoint está diseñado específicamente para la página cargar-plantilla y **INCLUYE** pedidos en estado BORRADOR.
+
+| Parámetro | Tipo | Requerido | Descripción |
+|-----------|------|-----------|-------------|
+| `estado` | string | No | Filtrar por estado (ej: "BORRADOR", "NUEVO_PEDIDO") |
+| `numero_pedido` | string | No | Búsqueda parcial por número de pedido |
+| `limit` | int | No | Límite de resultados (default: 10, max: 100) |
+| `offset` | int | No | Offset para paginación (default: 0) |
+
+**Ejemplo de llamada:**
+```javascript
+GET /api/plantillas/pedidos?limit=10&offset=0
+```
+
+**Respuesta:**
+```json
+{
+  "status": "success",
+  "data": [
+    {
+      "pedido_id": "uuid",
+      "numero_pedido": "P-12.08 - 12 - 2025",
+      "fecha_pedido": "2025-01-21",
+      "estado": "BORRADOR",
+      "estado_id": 1,
+      "proveedor_nombre": "TEXTILES EL RAYO S.A.",
+      "creado_en": "2025-01-21T10:30:00"
+    }
+  ],
+  "metadata": {
+    "total": 5,
+    "limit": 10,
+    "offset": 0,
+    "has_more": false
+  }
+}
+```
+
+**Diferencias con `GET /api/pedidos`:**
+
+| Aspecto | `/api/pedidos` | `/api/plantillas/pedidos` |
+|---------|---------------|---------------------------|
+| Incluye BORRADOR | ❌ No | ✅ Sí |
+| Filtra por usuario | ❌ No (todos los usuarios) | ✅ Sí (solo del usuario actual) |
+| Uso recomendado | Listado general de pedidos | Página cargar-plantilla |
+
+#### Implementación en Frontend
+
+**Al cargar la página cargar-plantilla:**
+```javascript
+// Llamar al endpoint correcto para listar pedidos
+const loadPedidos = async () => {
+  try {
+    const response = await fetch('/api/plantillas/pedidos?limit=10&offset=0', {
+      headers: { 'Authorization': `Bearer ${token}` }
+    });
+    const data = await response.json();
+    
+    if (data.status === 'success') {
+      setPedidos(data.data);
+      setTotal(data.metadata.total);
+    }
+  } catch (error) {
+    console.error('Error loading pedidos:', error);
+  }
+};
+
+// Llamar al montar el componente
+useEffect(() => {
+  loadPedidos();
+}, []);
+```
+
+### 0.5.12.2 Búsqueda por Número de Pedido en Cargar Plantilla
 
 **Ruta:** `http://localhost:3000/mba3-consultas/cargar-plantilla`
 
