@@ -410,16 +410,16 @@ class PedidoOCService:
                         pedido_id=oc_cabecera_db.get("pedido_id") or pedido_id,
                     )
                     result["sap_request_json"] = sap_request_json
-                    # Descargar ODC en JSON a output/ para pruebas
-                    try:
-                        output_dir = PROJECT_ROOT / "output"
-                        output_dir.mkdir(parents=True, exist_ok=True)
-                        out_file = output_dir / f"odc_{oc_id}.json"
-                        with open(out_file, "w", encoding="utf-8") as f:
-                            json.dump(sap_request_json, f, ensure_ascii=False, indent=2, default=str)
-                        logger.info(f"📥 ODC guardada en {out_file}")
-                    except Exception as e:
-                        logger.warning(f"⚠️ No se pudo guardar ODC en output/: {e}")
+                    # DESACTIVADO: Descarga de ODC en JSON a output/ ya no es necesaria
+                    # try:
+                    #     output_dir = PROJECT_ROOT / "output"
+                    #     output_dir.mkdir(parents=True, exist_ok=True)
+                    #     out_file = output_dir / f"odc_{oc_id}.json"
+                    #     with open(out_file, "w", encoding="utf-8") as f:
+                    #         json.dump(sap_request_json, f, ensure_ascii=False, indent=2, default=str)
+                    #     logger.info(f"📥 ODC guardada en {out_file}")
+                    # except Exception as e:
+                    #     logger.warning(f"⚠️ No se pudo guardar ODC en output/: {e}")
                     # Log resumido en INFO para ver CardCode, ítems y bodegas sin DEBUG
                     card = sap_request_json.get("CardCode", "")
                     lineas = sap_request_json.get("DocumentLines", [])

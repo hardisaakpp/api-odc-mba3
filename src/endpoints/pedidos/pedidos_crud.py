@@ -431,6 +431,7 @@ def register_crud_endpoints(app: FastAPI):
                 pedido["puede_cancelar_pedido"] = _eid is not None and _eid < ESTADO_LIMITE_CANCELAR_PEDIDO
                 pedido["puede_descargar_csv"] = _eid == ESTADO_REDISTRIBUCION  # Solo en estado CONFIRMADO (4)
                 pedido["puede_confirmar_redistribucion"] = _eid in ESTADOS_PUEDE_CONFIRMAR_REDISTRIBUCION
+                pedido["puede_finalizar"] = _eid == ESTADO_DESPACHAR_Y_FACTURAR  # Solo en estado Despachar y Facturar (17)
 
                 return JSONResponse(status_code=200, content=pedido)
             
@@ -481,6 +482,7 @@ def register_crud_endpoints(app: FastAPI):
                 pedido["puede_cancelar_pedido"] = _eid is not None and _eid < ESTADO_LIMITE_CANCELAR_PEDIDO
                 pedido["puede_descargar_csv"] = _eid == ESTADO_REDISTRIBUCION  # Solo en estado CONFIRMADO (4)
                 pedido["puede_confirmar_redistribucion"] = _eid in ESTADOS_PUEDE_CONFIRMAR_REDISTRIBUCION
+                pedido["puede_finalizar"] = _eid == ESTADO_DESPACHAR_Y_FACTURAR  # Solo en estado Despachar y Facturar (17)
                 return JSONResponse(status_code=status.HTTP_200_OK, content=pedido)
         except HTTPException:
             raise
@@ -541,6 +543,7 @@ def register_crud_endpoints(app: FastAPI):
                 pedido["puede_cancelar_pedido"] = _eid is not None and _eid < ESTADO_LIMITE_CANCELAR_PEDIDO
                 pedido["puede_descargar_csv"] = _eid == ESTADO_REDISTRIBUCION  # Solo en estado CONFIRMADO (4)
                 pedido["puede_confirmar_redistribucion"] = _eid in ESTADOS_PUEDE_CONFIRMAR_REDISTRIBUCION
+                pedido["puede_finalizar"] = _eid == ESTADO_DESPACHAR_Y_FACTURAR  # Solo en estado Despachar y Facturar (17)
                 return JSONResponse(status_code=status.HTTP_200_OK, content=pedido)
         except HTTPException:
             raise
@@ -602,6 +605,7 @@ def register_crud_endpoints(app: FastAPI):
                 pedido["puede_cancelar_pedido"] = _eid is not None and _eid < ESTADO_LIMITE_CANCELAR_PEDIDO
                 pedido["puede_descargar_csv"] = _eid == ESTADO_REDISTRIBUCION  # Solo en estado CONFIRMADO (4)
                 pedido["puede_confirmar_redistribucion"] = _eid in ESTADOS_PUEDE_CONFIRMAR_REDISTRIBUCION
+                pedido["puede_finalizar"] = _eid == ESTADO_DESPACHAR_Y_FACTURAR  # Solo en estado Despachar y Facturar (17)
                 return JSONResponse(status_code=status.HTTP_200_OK, content=pedido)
         except HTTPException:
             raise
@@ -662,6 +666,7 @@ def register_crud_endpoints(app: FastAPI):
                 pedido["puede_cancelar_pedido"] = _eid is not None and _eid < ESTADO_LIMITE_CANCELAR_PEDIDO
                 pedido["puede_descargar_csv"] = _eid == ESTADO_REDISTRIBUCION  # Solo en estado CONFIRMADO (4)
                 pedido["puede_confirmar_redistribucion"] = _eid in ESTADOS_PUEDE_CONFIRMAR_REDISTRIBUCION
+                pedido["puede_finalizar"] = _eid == ESTADO_DESPACHAR_Y_FACTURAR  # Solo en estado Despachar y Facturar (17)
                 return JSONResponse(status_code=status.HTTP_200_OK, content=pedido)
         except HTTPException:
             raise
@@ -1133,6 +1138,7 @@ def register_crud_endpoints(app: FastAPI):
                     _eid = None
                 pedido_actualizado["puede_descartar"] = _eid in ESTADOS_PUEDE_DESCARTAR
                 pedido_actualizado["puede_cancelar_pedido"] = _eid is not None and _eid < ESTADO_LIMITE_CANCELAR_PEDIDO
+                pedido_actualizado["puede_finalizar"] = _eid == ESTADO_DESPACHAR_Y_FACTURAR  # Solo en estado Despachar y Facturar (17)
                 
                 logger.info(f"✅ Pedido {pedido_id} cancelado por usuario {user.get('username', 'UNKNOWN')}")
                 return JSONResponse(status_code=200, content=pedido_actualizado)
