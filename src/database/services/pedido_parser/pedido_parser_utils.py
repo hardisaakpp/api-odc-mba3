@@ -54,9 +54,9 @@ class PedidoParserUtils:
     CAMPOS_CRITICOS_CABECERA = ["numero_pedido", "CODIGO PEDIDO", "CÓDIGO PEDIDO"]
     
     # Constantes: Mapeo de columnas de producto
+    # NOTA: La columna "marca" fue eliminada de la plantilla Excel (2026-02-05)
     MAPEO_COLUMNAS_PRODUCTO = {
         'codigo producto': ('codigoproducto', 'codigo producto', 'producto', 'sku', 'codigo'),
-        'marca': ('marca',),
         'codigo barras': ('codigo de barras', 'codigo_barras', 'código de barras', 'codigo barras', 'ean'),
         'descripcion sap': ('descripcion sap', 'descripción sap', 'descripcion', 'descripción'),
         'pack': ('pack', 'unidad', 'unidad de empaque'),
@@ -82,9 +82,10 @@ class PedidoParserUtils:
     }
     
     # Constantes: Índices de columnas
-    INDICE_INICIO_TIENDAS = 13  # Columna N
-    INDICES_BODEGAS = [10, 11, 12]  # Columnas K, L, M
-    INDICES_PRODUCTO = list(range(10))  # Columnas A-J (0-9)
+    # NOTA: Ajustados tras eliminar columna "marca" de la plantilla (2026-02-05)
+    INDICE_INICIO_TIENDAS = 12  # Columna M (antes N)
+    INDICES_BODEGAS = [9, 10, 11]  # Columnas J, K, L (antes K, L, M)
+    INDICES_PRODUCTO = list(range(9))  # Columnas A-I (0-8, antes A-J 0-9)
     
     # Constantes: Prefijos y patrones
     PREFIJO_TIENDA_ANTIGUO = "roland "

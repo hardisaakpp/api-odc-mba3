@@ -105,18 +105,20 @@ Contiene líneas de artículos con distribución por tiendas:
 |---------|-------------|
 | A | Código Interno (producto en MBA3) |
 | B | Descripción |
-| C | Marca |
-| D | Pack |
-| E | Costo |
-| F | Descuento 1 |
-| N+ | Tiendas y Bodegas |
+| C | Pack |
+| D | Costo |
+| E | Descuento 1 |
+| F-I | Otros campos del producto |
+| J-L | Bodegas (RL-CD, OUT-CD, RG-CD) |
+| M+ | Tiendas |
+
+> **Nota (2026-02-05):** La columna "Marca" fue eliminada de la plantilla.
 
 **Ejemplo de Fila:**
 ```
-R5000.911.AJCL | Artículo | MARCA | 1 | 6.9 | - | 5 | 3 | 2 | ... | 3 | 2 | 1
-                                         ^   ^   ^       ^   ^       ^   ^   ^
-                                      Cant Cant Cant   Cant Cant   Cant Cant Cant
-                                      TDA1 TDA2 TDA3   RL-CD OUT-CD REG-CD
+R5000.911.AJCL | Artículo | 1 | 6.9 | - | ... | 5 | 3 | 2 | ... | 3 | 2 | 1
+                               ^   ^        ^   ^   ^       ^   ^   ^
+                             Pack Costo   RL-CD OUT-CD RG-CD Tiendas...
 ```
 
 ---

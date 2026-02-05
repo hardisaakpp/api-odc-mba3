@@ -688,9 +688,9 @@ def register_crud_endpoints(app: FastAPI):
         **Formato esperado (Template_Pedido_Inicial_v1.0.xlsx):**
         - **Hoja 1: "cabecera"** - Formato clave-valor (Campo | Valor | Ejemplo)
         - **Hoja 2: "detalle"** - Formato tabular con:
-          - Columnas A-J: Información del producto (CODIGO PRODUCTO, MARCA, CODIGO BARRAS, etc.)
-          - Columnas K-M: Bodegas centrales (RL-CD, OUT-CD, REG-CD) - NO incluidas en SUBTOTAL
-          - Columnas N+: Tiendas individuales - SÍ incluidas en SUBTOTAL (parsea hasta última columna con información)
+          - Columnas A-I: Información del producto (CODIGO PRODUCTO, CODIGO BARRAS, DESCRIPCION, etc.)
+          - Columnas J-L: Bodegas centrales (RL-CD, OUT-CD, RG-CD) - NO incluidas en SUBTOTAL
+          - Columnas M+: Tiendas individuales - SÍ incluidas en SUBTOTAL (parsea hasta última columna con información)
         
         **Solo parsing técnico:** lee, normaliza y valida estructura.
         NO aplica reglas de negocio, NO consolida duplicados.
@@ -701,7 +701,7 @@ def register_crud_endpoints(app: FastAPI):
         - Tamaño máximo: 10 MB
         - Hojas obligatorias: "cabecera" y "detalle" (en minúsculas)
         - Columnas obligatorias en detalle: CODIGO PRODUCTO (columna A)
-        - Parsea desde columna N (índice 13) hasta la última columna con información
+        - Parsea desde columna M (índice 12) hasta la última columna con información
         
         **Estructura de respuesta:**
         ```json

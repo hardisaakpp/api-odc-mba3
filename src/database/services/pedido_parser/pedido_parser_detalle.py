@@ -259,9 +259,8 @@ class PedidoParserDetalle:
             "codigo_interno": codigo_producto
         }
         
-        if 'marca' in columnas_producto:
-            marca_val = row.get(columnas_producto['marca'])
-            info_producto["marca"] = str(marca_val).strip() if marca_val is not None and not pd.isna(marca_val) else None
+        # NOTA: La columna "marca" fue eliminada de la plantilla Excel (2026-02-05)
+        # El campo se mantiene en BD para datos históricos, pero ya no se lee del Excel
         
         if 'codigo barras' in columnas_producto:
             codigo_barras_val = row.get(columnas_producto['codigo barras'])
@@ -340,7 +339,7 @@ class PedidoParserDetalle:
                     ultima_columna_idx = col_idx
                     break
         
-        logger.info(f"📊 Rango de columnas: Producto (0-9), Bodegas (10-12), Tiendas ({inicio_tiendas_idx}-{ultima_columna_idx})")
+        logger.info(f"📊 Rango de columnas: Producto (0-8), Bodegas (9-11), Tiendas ({inicio_tiendas_idx}-{ultima_columna_idx})")
         
         for col_idx, col_name in enumerate(df_detalle.columns):
             if col_idx >= inicio_tiendas_idx and col_idx <= ultima_columna_idx:

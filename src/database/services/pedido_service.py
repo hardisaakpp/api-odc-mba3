@@ -87,7 +87,7 @@ class PedidoService:
         
         Formato esperado:
         - Hoja 1: "cabecera" (formato clave-valor: Campo | Valor | Ejemplo)
-        - Hoja 2: "detalle" (formato tabular con columnas A-J producto, K-M bodegas, N+ tiendas)
+        - Hoja 2: "detalle" (formato tabular con columnas A-I producto, J-L bodegas, M+ tiendas)
         
         Solo parsing técnico: lee, normaliza y valida estructura.
         NO aplica reglas de negocio, NO consolida duplicados.

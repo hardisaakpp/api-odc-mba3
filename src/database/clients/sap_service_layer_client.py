@@ -861,6 +861,282 @@ class SAPServiceLayerClient:
             logger.error(f"❌ Error inesperado al consultar stock de {item_code} en {warehouse_code}: {e}", exc_info=True)
             return None
     
+    def get_business_partner(self, card_code: str) -> Optional[Dict[str, Any]]:
+        """
+        Consulta un Business Partner (proveedor/cliente) en SAP Service Layer.
+        
+        Usa el endpoint: GET /BusinessPartners('CARD_CODE')
+        
+        Args:
+            card_code: Código del socio de negocios (ej: "P1790389219001")
+        
+        Returns:
+            Diccionario con información del BP si existe:
+            {
+                "CardCode": str,
+                "CardName": str,
+                "CardType": str,  # "cSupplier", "cCustomer"
+                "Valid": str,  # "tYES", "tNO"
+                "Frozen": str,  # "tYES", "tNO"
+                ...
+            }
+            O None si hay error de conexión.
+            Retorna {"_error": True, "_error_type": "no_existe"} si el BP no existe.
+        """
+        if not self.enabled:
+            logger.debug("⏭️ Consulta de Business Partner deshabilitada")
+            return None
+        
+        if not self._ensure_session():
+            logger.error("❌ No se pudo establecer sesión con SAP Service Layer")
+            return None
+        
+        try:
+            # Escapar caracteres especiales para OData
+            card_code_escaped = card_code.replace("'", "''")
+            
+            url = f"{self.base_url}/BusinessPartners('{card_code_escaped}')"
+            
+            headers = {
+                "Content-Type": "application/json",
+                "Cookie": f"B1SESSION={self.session_id}"
+            }
+            
+            logger.debug(f"🔍 Consultando Business Partner: {card_code}...")
+            
+            # Usar el sistema de fallback TLS existente
+            if self.working_session:
+                response = self.working_session.get(url, headers=headers, timeout=self.timeout)
+            else:
+                response, _ = self._try_request_with_fallback("GET", url, headers=headers)
+                if response is None:
+                    logger.error("❌ No se pudo consultar Business Partner en SAP")
+                    return None
+            
+            if response.status_code == 200:
+                data = response.json()
+                logger.info(
+                    f"✅ Business Partner encontrado: {card_code} - "
+                    f"{data.get('CardName', 'N/A')} ({data.get('CardType', 'N/A')})"
+                )
+                return data
+            elif response.status_code == 404:
+                logger.warning(f"⚠️ Business Partner no encontrado: {card_code}")
+                return {
+                    "_error": True,
+                    "_error_type": "no_existe",
+                    "_error_message": f"Business Partner '{card_code}' no existe en SAP"
+                }
+            else:
+                error_msg = f"Error al consultar Business Partner: {response.status_code}"
+                try:
+                    error_body = response.json()
+                    error_detail = error_body.get("error", {})
+                    if isinstance(error_detail.get("message"), dict):
+                        error_msg = error_detail.get("message", {}).get("value", error_msg)
+                    elif isinstance(error_detail.get("message"), str):
+                        error_msg = error_detail.get("message", error_msg)
+                except Exception:
+                    error_msg = f"{error_msg} - {response.text[:200]}"
+                
+                logger.error(f"❌ {error_msg}")
+                return {
+                    "_error": True,
+                    "_error_type": "error",
+                    "_error_message": error_msg
+                }
+                
+        except requests.exceptions.RequestException as e:
+            logger.error(f"❌ Error de conexión al consultar Business Partner: {e}")
+            return None
+        except Exception as e:
+            logger.error(f"❌ Error inesperado al consultar Business Partner {card_code}: {e}", exc_info=True)
+            return None
+    
+    def get_item(self, item_code: str) -> Optional[Dict[str, Any]]:
+        """
+        Consulta un artículo (Item) en SAP Service Layer.
+        
+        Usa el endpoint: GET /Items('ITEM_CODE')
+        
+        Args:
+            item_code: Código del artículo (ej: "MTF123.9", "R5082-15.1012")
+        
+        Returns:
+            Diccionario con información del artículo si existe:
+            {
+                "ItemCode": str,
+                "ItemName": str,
+                "PurchaseItem": str,  # "tYES" si es comprable, "tNO" si no
+                "SalesItem": str,  # "tYES" si es vendible
+                "InventoryItem": str,  # "tYES" si maneja inventario
+                "Valid": str,  # "tYES", "tNO"
+                "Frozen": str,  # "tYES", "tNO"
+                "ItemType": str,  # "itItems", "itService"
+                ...
+            }
+            O None si hay error de conexión.
+            Retorna {"_error": True, "_error_type": "no_existe"} si el artículo no existe.
+        """
+        if not self.enabled:
+            logger.debug("⏭️ Consulta de Item deshabilitada")
+            return None
+        
+        if not self._ensure_session():
+            logger.error("❌ No se pudo establecer sesión con SAP Service Layer")
+            return None
+        
+        try:
+            # Escapar caracteres especiales para OData
+            item_code_escaped = item_code.replace("'", "''")
+            
+            url = f"{self.base_url}/Items('{item_code_escaped}')"
+            
+            headers = {
+                "Content-Type": "application/json",
+                "Cookie": f"B1SESSION={self.session_id}"
+            }
+            
+            logger.debug(f"🔍 Consultando Item: {item_code}...")
+            
+            # Usar el sistema de fallback TLS existente
+            if self.working_session:
+                response = self.working_session.get(url, headers=headers, timeout=self.timeout)
+            else:
+                response, _ = self._try_request_with_fallback("GET", url, headers=headers)
+                if response is None:
+                    logger.error("❌ No se pudo consultar Item en SAP")
+                    return None
+            
+            if response.status_code == 200:
+                data = response.json()
+                is_purchase = data.get('PurchaseItem', 'tNO')
+                is_valid = data.get('Valid', 'tNO')
+                is_frozen = data.get('Frozen', 'tNO')
+                
+                # Log compacto con información relevante
+                logger.info(
+                    f"✅ Item encontrado: {item_code} - "
+                    f"Comprable={is_purchase}, Valid={is_valid}, Frozen={is_frozen}"
+                )
+                return data
+            elif response.status_code == 404:
+                logger.warning(f"⚠️ Item no encontrado: {item_code}")
+                return {
+                    "_error": True,
+                    "_error_type": "no_existe",
+                    "_error_message": f"Item '{item_code}' no existe en SAP"
+                }
+            else:
+                error_msg = f"Error al consultar Item: {response.status_code}"
+                try:
+                    error_body = response.json()
+                    error_detail = error_body.get("error", {})
+                    if isinstance(error_detail.get("message"), dict):
+                        error_msg = error_detail.get("message", {}).get("value", error_msg)
+                    elif isinstance(error_detail.get("message"), str):
+                        error_msg = error_detail.get("message", error_msg)
+                except Exception:
+                    error_msg = f"{error_msg} - {response.text[:200]}"
+                
+                logger.error(f"❌ {error_msg}")
+                return {
+                    "_error": True,
+                    "_error_type": "error",
+                    "_error_message": error_msg
+                }
+                
+        except requests.exceptions.RequestException as e:
+            logger.error(f"❌ Error de conexión al consultar Item: {e}")
+            return None
+        except Exception as e:
+            logger.error(f"❌ Error inesperado al consultar Item {item_code}: {e}", exc_info=True)
+            return None
+    
+    def validate_item_in_warehouse(
+        self, 
+        item_code: str, 
+        warehouse_code: str
+    ) -> Dict[str, Any]:
+        """
+        Valida que un artículo exista y esté configurado en una bodega específica.
+        
+        Combina get_item() + get_stock_by_warehouse() para validación completa.
+        
+        Args:
+            item_code: Código del artículo
+            warehouse_code: Código de la bodega
+        
+        Returns:
+            {
+                "valid": bool,
+                "item_exists": bool,
+                "is_purchase_item": bool,
+                "warehouse_configured": bool,
+                "stock": float o None,
+                "errors": List[str]
+            }
+        """
+        result = {
+            "valid": False,
+            "item_exists": False,
+            "is_purchase_item": False,
+            "warehouse_configured": False,
+            "stock": None,
+            "errors": []
+        }
+        
+        # 1. Validar que el artículo existe
+        item = self.get_item(item_code)
+        
+        if item is None:
+            result["errors"].append(f"Error de conexión al validar artículo {item_code}")
+            return result
+        
+        if item.get("_error"):
+            if item.get("_error_type") == "no_existe":
+                result["errors"].append(f"Artículo '{item_code}' no existe en SAP")
+            else:
+                result["errors"].append(item.get("_error_message", f"Error al validar {item_code}"))
+            return result
+        
+        result["item_exists"] = True
+        
+        # 2. Validar que sea artículo de compra
+        if item.get("PurchaseItem") != "tYES":
+            result["errors"].append(
+                f"Artículo '{item_code}' no está habilitado para compra (PurchaseItem={item.get('PurchaseItem')})"
+            )
+            return result
+        
+        result["is_purchase_item"] = True
+        
+        # 3. Validar que el artículo está configurado en la bodega
+        try:
+            stock_info = self.get_stock_by_warehouse(item_code, warehouse_code)
+            
+            if stock_info is None:
+                result["errors"].append(f"Error de conexión al validar bodega {warehouse_code}")
+                return result
+            
+            # get_stock_by_warehouse retorna info de bodega si está configurada
+            result["warehouse_configured"] = True
+            result["stock"] = stock_info.get("InStock", 0)
+            result["valid"] = True
+            
+        except Exception as e:
+            # SAPDataMasterError indica que el artículo no está en la bodega
+            from src.exceptions import SAPDataMasterError
+            if isinstance(e, SAPDataMasterError):
+                result["errors"].append(
+                    f"Artículo '{item_code}' no está configurado en bodega '{warehouse_code}'. "
+                    f"Bodegas disponibles: {', '.join(e.available_warehouses) if e.available_warehouses else 'ninguna'}"
+                )
+            else:
+                result["errors"].append(f"Error al validar artículo en bodega: {str(e)}")
+        
+        return result
+    
     def logout(self) -> bool:
         """
         Cierra la sesión en SAP Service Layer.

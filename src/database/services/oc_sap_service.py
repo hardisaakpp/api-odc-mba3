@@ -237,6 +237,40 @@ class OCSAPService:
                 for warning in validacion["warnings"]:
                     logger.warning(warning)
             
+            # 3.5. Prevalidación contra SAP Service Layer (datos maestros)
+            # Valida que proveedor, artículos y bodegas existan en SAP antes de crear la OC
+            logger.info("🔍 Paso 3.5: Prevalidación contra SAP Service Layer...")
+            prevalidacion = self._precheck_against_service_layer(oc_cabecera, oc_detalles)
+            
+            if not prevalidacion["valid"]:
+                # Construir mensaje de error detallado
+                errores_prevalidacion = prevalidacion.get("errors", [])
+                error_msg = f"Prevalidación SAP falló: {'; '.join(errores_prevalidacion)}"
+                
+                result["error"] = error_msg
+                result["error_message"] = error_msg
+                result["error_source"] = "SAP_VALIDATION"
+                result["prevalidacion_detalle"] = prevalidacion.get("detalle_validacion")
+                result["prevalidacion_resumen"] = prevalidacion.get("resumen")
+                
+                logger.error(f"❌ {error_msg}")
+                try:
+                    oc_repo.update_estado(
+                        oc_id,
+                        "ERROR",
+                        respuesta_sap=error_msg,
+                        error_message=error_msg,
+                        error_source="SAP_VALIDATION"
+                    )
+                except Exception:
+                    pass
+                return result
+            
+            # Log warnings de prevalidación si existen
+            if prevalidacion.get("warnings"):
+                for warning in prevalidacion["warnings"]:
+                    logger.warning(f"⚠️ Prevalidación: {warning}")
+            
             # 4. Convertir a formato JSON de SAP
             try:
                 purchase_order_json = SAPOCMapper.to_sap_purchase_order(
@@ -724,6 +758,158 @@ class OCSAPService:
             "valid": len(errors) == 0,
             "errors": errors,
             "warnings": warnings
+        }
+    
+    def _precheck_against_service_layer(
+        self,
+        oc_cabecera: Dict[str, Any],
+        oc_detalles: List[Dict[str, Any]]
+    ) -> Dict[str, Any]:
+        """
+        Valida datos maestros contra SAP Service Layer ANTES de crear la OC.
+        
+        Esta validación consulta directamente Service Layer para detectar problemas
+        que causarían errores genéricos (-2028) al intentar crear la Purchase Order.
+        
+        Validaciones:
+        1. Proveedor (CardCode) existe en BusinessPartners
+        2. Cada artículo (ItemCode) existe en Items
+        3. Cada artículo es de compra (PurchaseItem = "tYES")
+        4. Cada artículo está configurado en su bodega destino
+        
+        Args:
+            oc_cabecera: Datos de cabecera de la OC
+            oc_detalles: Lista de detalles de la OC
+            
+        Returns:
+            {
+                "valid": bool,
+                "errors": List[str],  # Errores que bloquean la creación
+                "warnings": List[str],  # Advertencias (no bloquean)
+                "detalle_validacion": {
+                    "proveedor": {...},
+                    "articulos": {...}
+                }
+            }
+        """
+        errors = []
+        warnings = []
+        detalle = {
+            "proveedor": {},
+            "articulos": {}
+        }
+        
+        logger.info("🔍 Iniciando prevalidación contra SAP Service Layer...")
+        
+        # ============================================================
+        # 1. Validar Proveedor (Business Partner)
+        # ============================================================
+        proveedor = oc_cabecera.get("proveedor", "").strip()
+        if proveedor:
+            # Agregar prefijo 'P' si no lo tiene (convención SAP para proveedores)
+            card_code = proveedor if proveedor.startswith('P') else f"P{proveedor}"
+            
+            logger.debug(f"🔍 Validando proveedor: {card_code}")
+            bp_info = self.sap_client.get_business_partner(card_code)
+            
+            if bp_info is None:
+                errors.append(f"Error de conexión al validar proveedor '{card_code}'")
+                detalle["proveedor"] = {"error": "conexion", "card_code": card_code}
+            elif bp_info.get("_error"):
+                if bp_info.get("_error_type") == "no_existe":
+                    errors.append(f"Proveedor '{card_code}' no existe en SAP BusinessPartners")
+                else:
+                    errors.append(bp_info.get("_error_message", f"Error al validar proveedor {card_code}"))
+                detalle["proveedor"] = {"error": bp_info.get("_error_type"), "card_code": card_code}
+            else:
+                # Validar que no esté congelado
+                if bp_info.get("Frozen") == "tYES":
+                    errors.append(f"Proveedor '{card_code}' está CONGELADO en SAP (Frozen=tYES)")
+                    detalle["proveedor"] = {"error": "congelado", "card_code": card_code}
+                elif bp_info.get("Valid") == "tNO":
+                    errors.append(f"Proveedor '{card_code}' no está activo en SAP (Valid=tNO)")
+                    detalle["proveedor"] = {"error": "inactivo", "card_code": card_code}
+                else:
+                    detalle["proveedor"] = {
+                        "valid": True,
+                        "card_code": card_code,
+                        "card_name": bp_info.get("CardName"),
+                        "card_type": bp_info.get("CardType")
+                    }
+                    logger.info(f"✅ Proveedor validado: {card_code} - {bp_info.get('CardName')}")
+        
+        # ============================================================
+        # 2. Validar Artículos (Items) y Bodegas
+        # ============================================================
+        articulos_validados = 0
+        articulos_con_error = 0
+        
+        for idx, detalle_linea in enumerate(oc_detalles, start=1):
+            sku = detalle_linea.get("sku_sap", "").strip()
+            cantidad = float(detalle_linea.get("cantidad_sap", 0))
+            bodega = (detalle_linea.get("codigo_bodega") or detalle_linea.get("warehouse_code") or "").strip()
+            
+            # Omitir líneas sin cantidad
+            if cantidad <= 0:
+                continue
+            
+            if not sku:
+                errors.append(f"Línea {idx}: SKU vacío")
+                articulos_con_error += 1
+                continue
+            
+            logger.debug(f"🔍 Validando línea {idx}: {sku} en bodega {bodega}")
+            
+            # Validar artículo + bodega usando el método combinado
+            validacion_item = self.sap_client.validate_item_in_warehouse(sku, bodega)
+            
+            detalle["articulos"][sku] = {
+                "linea": idx,
+                "bodega": bodega,
+                "cantidad": cantidad,
+                "validacion": validacion_item
+            }
+            
+            if not validacion_item["valid"]:
+                articulos_con_error += 1
+                for error in validacion_item["errors"]:
+                    errors.append(f"Línea {idx} ({sku}): {error}")
+            else:
+                articulos_validados += 1
+                # Advertir si hay stock bajo (menos del solicitado)
+                stock = validacion_item.get("stock", 0)
+                if stock is not None and stock < cantidad:
+                    warnings.append(
+                        f"Línea {idx} ({sku}): Stock disponible ({stock}) es menor que la cantidad solicitada ({cantidad})"
+                    )
+        
+        # ============================================================
+        # Resumen de validación
+        # ============================================================
+        total_lineas = articulos_validados + articulos_con_error
+        
+        if errors:
+            logger.warning(
+                f"⚠️ Prevalidación Service Layer: {len(errors)} error(es) encontrado(s). "
+                f"Artículos: {articulos_validados}/{total_lineas} válidos"
+            )
+        else:
+            logger.info(
+                f"✅ Prevalidación Service Layer exitosa: "
+                f"Proveedor OK, {articulos_validados}/{total_lineas} artículos validados"
+            )
+        
+        return {
+            "valid": len(errors) == 0,
+            "errors": errors,
+            "warnings": warnings,
+            "detalle_validacion": detalle,
+            "resumen": {
+                "proveedor_validado": detalle["proveedor"].get("valid", False),
+                "articulos_validados": articulos_validados,
+                "articulos_con_error": articulos_con_error,
+                "total_lineas": total_lineas
+            }
         }
     
     def enviar_ocs_pendientes(
