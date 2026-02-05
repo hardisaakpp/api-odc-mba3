@@ -661,11 +661,8 @@ class SAPServiceLayerClient:
         """
         Consulta el stock disponible (InStock) y UomCode de un artículo en una bodega específica.
         
-        ⭐ CORRECCIÓN: Usa navegación desde Items ya que el endpoint independiente no existe.
-        SAP no permite filtrar dentro de la navegación, por lo que se filtra en el cliente.
-        
-        Usa el endpoint de SAP Service Layer:
-        GET /Items('ITEM_CODE')/ItemWarehouseInfoCollection
+        ⭐ CORRECCIÓN SAP B1 9.3: Usa GET /Items('X') y extrae ItemWarehouseInfoCollection
+        del objeto completo, ya que el endpoint de navegación no funciona en todas las versiones.
         
         Args:
             item_code: Código del artículo en SAP (ej: "R5000.1012-3")
@@ -680,8 +677,8 @@ class SAPServiceLayerClient:
                 "Locked": str o None,  # Estado de bloqueo (tYES/tNO)
                 "IsCommited": float  # Stock comprometido
             }
-            O None si hay error.
-            Retorna {"InStock": 0.0, "UomCode": None} si no existe información de bodega.
+            O None si hay error de conexión.
+            Lanza SAPDataMasterError si el artículo no tiene bodegas configuradas.
         """
         if not self.enabled:
             logger.debug("⏭️ Consulta de stock deshabilitada")
@@ -693,15 +690,12 @@ class SAPServiceLayerClient:
         
         try:
             # Escapar caracteres especiales para OData
-            # SAP Service Layer requiere escapar comillas simples duplicándolas
             item_code_escaped = item_code.replace("'", "''")
             
-            # ⭐ CORRECCIÓN: Usar navegación desde Items (el endpoint independiente no existe)
-            # Endpoint correcto: /Items('ITEM_CODE')/ItemWarehouseInfoCollection
-            # Nota: SAP no permite filtrar dentro de la navegación, por lo que filtramos en el cliente
-            url = (
-                f"{self.base_url}/Items('{item_code_escaped}')/ItemWarehouseInfoCollection"
-            )
+            # ⭐ CORRECCIÓN SAP B1 9.3: Usar GET /Items('X') completo
+            # El endpoint de navegación /Items('X')/ItemWarehouseInfoCollection 
+            # no funciona correctamente en algunas versiones de SAP B1
+            url = f"{self.base_url}/Items('{item_code_escaped}')"
             
             headers = {
                 "Content-Type": "application/json",
@@ -722,8 +716,9 @@ class SAPServiceLayerClient:
             if response.status_code == 200:
                 data = response.json()
                 
-                # ⭐ AJUSTE: Service Layer SIEMPRE retorna objeto con "value" (array)
-                warehouses = data.get("value", [])
+                # ⭐ CORRECCIÓN: Extraer ItemWarehouseInfoCollection del objeto Item
+                # SAP B1 9.3 retorna el array embebido, NO dentro de "value"
+                warehouses = data.get("ItemWarehouseInfoCollection", [])
                 
                 # 🔍 LOGGING COMPACTO: Solo información esencial
                 bodegas_codes = [wh.get('WarehouseCode', 'N/A') for wh in warehouses] if warehouses else []
@@ -736,8 +731,7 @@ class SAPServiceLayerClient:
                 # 🔍 LOGGING DETALLADO: Solo en modo DEBUG
                 logger.debug(
                     f"📦 RESPUESTA CRUDA SAP para {item_code}: URL={url}, "
-                    f"Keys={list(data.keys()) if isinstance(data, dict) else 'N/A'}, "
-                    f"Respuesta completa={data}"
+                    f"Keys={list(data.keys()) if isinstance(data, dict) else 'N/A'}"
                 )
                 
                 if not warehouses:
@@ -857,6 +851,9 @@ class SAPServiceLayerClient:
         except requests.exceptions.RequestException as e:
             logger.error(f"❌ Error de conexión al consultar stock: {e}")
             return None
+        except SAPDataMasterError:
+            # Propagar errores de datos maestros para que el llamador pueda manejarlos
+            raise
         except Exception as e:
             logger.error(f"❌ Error inesperado al consultar stock de {item_code} en {warehouse_code}: {e}", exc_info=True)
             return None
@@ -1124,16 +1121,20 @@ class SAPServiceLayerClient:
             result["stock"] = stock_info.get("InStock", 0)
             result["valid"] = True
             
-        except Exception as e:
-            # SAPDataMasterError indica que el artículo no está en la bodega
-            from src.exceptions import SAPDataMasterError
-            if isinstance(e, SAPDataMasterError):
+        except SAPDataMasterError as e:
+            # El artículo no está configurado en la bodega especificada
+            if e.available_warehouses:
                 result["errors"].append(
                     f"Artículo '{item_code}' no está configurado en bodega '{warehouse_code}'. "
-                    f"Bodegas disponibles: {', '.join(e.available_warehouses) if e.available_warehouses else 'ninguna'}"
+                    f"Bodegas disponibles: {', '.join(e.available_warehouses)}"
                 )
             else:
-                result["errors"].append(f"Error al validar artículo en bodega: {str(e)}")
+                result["errors"].append(
+                    f"Artículo '{item_code}' no tiene bodegas configuradas en SAP. "
+                    f"Contacte a logística para dar de alta el artículo en la bodega '{warehouse_code}'."
+                )
+        except Exception as e:
+            result["errors"].append(f"Error inesperado al validar artículo en bodega: {str(e)}")
         
         return result
     
