@@ -351,6 +351,172 @@ No usar `permissions.includes('mabel.view')` ni lógica distinta a la capability
 
 **Regla de oro:** Frontend NO deduce permisos. Backend es la única autoridad sobre capabilities.
 
+#### 0.5.7.4 Botón "Listado Pedidos Originales" — permiso `mabel.view`
+
+El botón **"Listado Pedidos Originales"** en la sección **"Información ODC"** permite a los usuarios ver, descargar y eliminar los archivos Excel originales que han subido al sistema.
+
+**Reglas exactas:**
+
+- La capability `can_view_plantillas_originales` es `true` si el usuario tiene el permiso `mabel.view` o es admin.
+- El botón **solo debe mostrarse** si `capabilities.can_view_plantillas_originales === true`.
+- Al hacer clic, debe abrir un modal/vista con el listado de archivos Excel originales del usuario.
+
+**Mapeo:**
+
+| Permiso       | Capability                      | Botón                        |
+|---------------|---------------------------------|------------------------------|
+| `mabel.view`  | `can_view_plantillas_originales`| Listado Pedidos Originales   |
+
+**Implementación en frontend:**
+
+```tsx
+{capabilities.can_view_plantillas_originales && (
+  <Button onClick={handleOpenListadoOriginales}>
+    Listado Pedidos Originales
+  </Button>
+)}
+```
+
+**Endpoints disponibles:**
+
+1. **`GET /api/plantillas/archivos`** - Lista archivos Excel originales del usuario
+   
+   **Query Parameters:**
+   - `limit` (int, default: 50) - Cantidad máxima de archivos
+   - `solo_activos` (bool, default: true) - Solo mostrar archivos activos
+
+   **Respuesta:**
+   ```json
+   {
+     "status": "success",
+     "data": [
+       {
+         "archivo_id": 1,
+         "pedido_id": "uuid-del-pedido",
+         "numero_pedido": "P-12.08 - 12 - 2025",
+         "nombre_original": "plantilla_enero.xlsx",
+         "tamaño_bytes": 45678,
+         "tamaño_mb": 0.04,
+         "subido_por": "usuario@empresa.com",
+         "fecha_subida": "2025-01-21T10:30:00",
+         "activo": true,
+         "descargas": 3,
+         "ultima_descarga": "2025-01-22T15:00:00",
+         "url_descarga": "/api/plantillas/{pedido_id}/descargar-original"
+       }
+     ],
+     "metadata": {
+       "total": 15,
+       "limit": 50,
+       "storage_habilitado": true
+     }
+   }
+   ```
+
+2. **`GET /api/plantillas/{pedido_id}/descargar-original`** - Descarga el archivo Excel
+   - Retorna el archivo como `StreamingResponse` con headers de descarga
+
+3. **`DELETE /api/plantillas/archivos/{archivo_id}`** - Elimina un archivo
+   
+   **Query Parameters:**
+   - `eliminar_fisicamente` (bool, default: false) - Si es true, elimina también del storage MinIO
+
+   **Respuesta:**
+   ```json
+   {
+     "status": "success",
+     "message": "Archivo eliminado correctamente",
+     "archivo_id": 123,
+     "nombre_archivo": "plantilla.xlsx",
+     "eliminacion_fisica": false
+   }
+   ```
+
+**Interfaz del modal/vista sugerida:**
+
+```tsx
+// Componente ListadoPedidosOriginales
+function ListadoPedidosOriginales({ isOpen, onClose }) {
+  const [archivos, setArchivos] = useState([]);
+  const [loading, setLoading] = useState(true);
+  
+  useEffect(() => {
+    if (isOpen) {
+      fetchArchivos();
+    }
+  }, [isOpen]);
+  
+  const fetchArchivos = async () => {
+    setLoading(true);
+    const response = await fetch('/api/plantillas/archivos');
+    const data = await response.json();
+    setArchivos(data.data);
+    setLoading(false);
+  };
+  
+  const handleDescargar = (pedidoId) => {
+    window.open(`/api/plantillas/${pedidoId}/descargar-original`, '_blank');
+  };
+  
+  const handleEliminar = async (archivoId) => {
+    if (confirm('¿Estás seguro de eliminar este archivo?')) {
+      await fetch(`/api/plantillas/archivos/${archivoId}`, { method: 'DELETE' });
+      fetchArchivos(); // Recargar lista
+    }
+  };
+  
+  return (
+    <Modal isOpen={isOpen} onClose={onClose} title="Listado Pedidos Originales">
+      {loading ? (
+        <Spinner />
+      ) : archivos.length === 0 ? (
+        <p>No hay archivos Excel originales disponibles.</p>
+      ) : (
+        <Table>
+          <thead>
+            <tr>
+              <th>Pedido</th>
+              <th>Archivo</th>
+              <th>Tamaño</th>
+              <th>Fecha</th>
+              <th>Descargas</th>
+              <th>Acciones</th>
+            </tr>
+          </thead>
+          <tbody>
+            {archivos.map(archivo => (
+              <tr key={archivo.archivo_id}>
+                <td>{archivo.numero_pedido}</td>
+                <td>{archivo.nombre_original}</td>
+                <td>{archivo.tamaño_mb} MB</td>
+                <td>{formatDate(archivo.fecha_subida)}</td>
+                <td>{archivo.descargas}</td>
+                <td>
+                  <Button onClick={() => handleDescargar(archivo.pedido_id)}>
+                    📥 Descargar
+                  </Button>
+                  <Button onClick={() => handleEliminar(archivo.archivo_id)} variant="danger">
+                    🗑️ Eliminar
+                  </Button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </Table>
+      )}
+    </Modal>
+  );
+}
+```
+
+**Comportamiento esperado:**
+
+- Usuario con `mabel.view` → ve el botón "Listado Pedidos Originales" en la sección Información ODC.
+- Usuario sin `mabel.view` → no ve el botón.
+- Solo se muestran los archivos subidos por el usuario autenticado.
+- El usuario puede descargar cualquier archivo de su lista.
+- El usuario puede eliminar cualquier archivo de su lista (soft delete por defecto).
+
 ### 0.5.8 Pantalla "Detalle del Pedido - EL RAYO" (`/mba3-consultas/pedidos/{id}`)
 
 **Ruta:** `http://localhost:3000/mba3-consultas/pedidos/{numero_pedido}` (ej. `P-12.21 - 12 - 2025`).

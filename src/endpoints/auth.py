@@ -63,6 +63,8 @@ def _map_permissions_to_capabilities(permissions: list, roles: list) -> Dict[str
         "can_view_odc": is_admin,
         "can_review_pedido": is_admin or has_perm('mabel.view') or has_perm('odcsap.view'),
         "can_confirm_pedido": is_admin or has_perm('mabel.view') or has_perm('odcsap.view'),
+        # Ver/gestionar archivos Excel originales (Listado Pedidos Originales)
+        "can_view_plantillas_originales": is_admin or has_perm('mabel.view'),
     }
     
     # Logging de debug solo en desarrollo
@@ -125,7 +127,8 @@ def register_auth_endpoints(app: FastAPI):
             "mabel_view": false,
             "can_view_odc": false,
             "can_review_pedido": true,
-            "can_confirm_pedido": true
+            "can_confirm_pedido": true,
+            "can_view_plantillas_originales": true
           }
         }
         ```
@@ -166,6 +169,9 @@ def register_auth_endpoints(app: FastAPI):
 
         **Botones del módulo MABEL** (Cargar Plantilla, Redistribución, Procesamiento SAP, Procesos, Homologaciones):
         - Todos visibles **solo si** `capabilities.mabel_view === true` (permiso `mabel.view`; sin admin override).
+
+        **Botón "Listado Pedidos Originales"** (sección Información ODC):
+        - Visible **solo si** `capabilities.can_view_plantillas_originales === true` (permiso `mabel.view` o admin).
         """
         try:
             # Extraer roles y permisos

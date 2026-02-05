@@ -715,6 +715,310 @@ def register_plantillas_endpoints(app: FastAPI):
             )
     
     # ========================================================================
+    # NUEVO ENDPOINT: Listar archivos Excel originales del usuario
+    # ========================================================================
+    @app.get("/api/plantillas/archivos", tags=["Plantillas - Archivos Originales"])
+    async def listar_archivos_originales(
+        limit: int = Query(50, ge=1, le=200, description="Límite de registros"),
+        solo_activos: bool = Query(True, description="Solo mostrar archivos activos"),
+        user: Dict = Depends(verify_jwt_token),
+        _: None = Depends(require_permission('mabel.view'))
+    ):
+        """
+        Lista los archivos Excel originales subidos por el usuario.
+        
+        **Uso:** Este endpoint está diseñado para el botón "Listado Pedidos Originales"
+        en la sección "Información ODC". Muestra todos los archivos Excel que el usuario
+        ha subido y que están almacenados en MinIO/S3.
+        
+        **Funcionalidad:**
+        - Lista archivos del usuario autenticado
+        - Incluye información del pedido asociado (número de pedido)
+        - Permite filtrar solo archivos activos o todos
+        - Ordena por fecha de subida descendente (más recientes primero)
+        
+        **Query Parameters:**
+        - `limit` (int, default: 50) - Cantidad máxima de archivos a retornar
+        - `solo_activos` (bool, default: true) - Si es true, solo retorna archivos no eliminados
+        
+        **Ejemplo de uso:**
+        ```
+        GET /api/plantillas/archivos
+        GET /api/plantillas/archivos?limit=100&solo_activos=false
+        ```
+        
+        **Respuesta:**
+        ```json
+        {
+            "status": "success",
+            "data": [
+                {
+                    "archivo_id": 1,
+                    "pedido_id": "uuid-del-pedido",
+                    "numero_pedido": "P-12.08 - 12 - 2025",
+                    "nombre_original": "plantilla_enero.xlsx",
+                    "tamaño_bytes": 45678,
+                    "tamaño_mb": 0.04,
+                    "subido_por": "usuario@empresa.com",
+                    "fecha_subida": "2025-01-21T10:30:00",
+                    "activo": true,
+                    "descargas": 3,
+                    "ultima_descarga": "2025-01-22T15:00:00",
+                    "url_descarga": "/api/plantillas/{pedido_id}/descargar-original"
+                }
+            ],
+            "metadata": {
+                "total": 15,
+                "limit": 50,
+                "storage_habilitado": true
+            }
+        }
+        ```
+        
+        **Returns:**
+        - JSON con lista de archivos y metadata
+        - 503 si el storage está deshabilitado
+        """
+        try:
+            # Verificar que el storage esté habilitado
+            if not ENABLE_FILE_STORAGE:
+                return JSONResponse(
+                    status_code=200,
+                    content={
+                        "status": "warning",
+                        "message": "El almacenamiento de archivos está deshabilitado",
+                        "data": [],
+                        "metadata": {
+                            "total": 0,
+                            "limit": limit,
+                            "storage_habilitado": False
+                        }
+                    }
+                )
+            
+            user_id = get_user_id(user)
+            
+            with get_db_connection_context() as conn:
+                archivo_repo = ArchivoPlantillaRepository(conn)
+                
+                # Obtener archivos del usuario
+                archivos = archivo_repo.listar_por_usuario(
+                    usuario_id=user_id,
+                    limit=limit,
+                    solo_activos=solo_activos
+                )
+                
+                # Enriquecer datos para el frontend
+                archivos_enriquecidos = []
+                for archivo in archivos:
+                    archivos_enriquecidos.append({
+                        "archivo_id": archivo["archivo_id"],
+                        "pedido_id": archivo["pedido_id"],
+                        "numero_pedido": archivo.get("numero_pedido"),
+                        "nombre_original": archivo["nombre_original"],
+                        "tamaño_bytes": archivo["tamaño_bytes"],
+                        "tamaño_mb": round(archivo["tamaño_bytes"] / (1024 * 1024), 2) if archivo["tamaño_bytes"] else 0,
+                        "subido_por": archivo["subido_por"],
+                        "fecha_subida": archivo["fecha_subida"],
+                        "activo": archivo["activo"],
+                        "descargas": archivo["descargas"],
+                        "ultima_descarga": archivo["ultima_descarga"],
+                        "url_descarga": f"/api/plantillas/{archivo['pedido_id']}/descargar-original"
+                    })
+                
+                logger.info(
+                    f"📋 Listando archivos originales: usuario={user_id}, "
+                    f"total={len(archivos_enriquecidos)}, limit={limit}, solo_activos={solo_activos}"
+                )
+                
+                return JSONResponse(
+                    status_code=200,
+                    content={
+                        "status": "success",
+                        "data": archivos_enriquecidos,
+                        "metadata": {
+                            "total": len(archivos_enriquecidos),
+                            "limit": limit,
+                            "storage_habilitado": True
+                        }
+                    }
+                )
+                
+        except Exception as e:
+            logger.error(f"❌ Error al listar archivos originales: {e}", exc_info=True)
+            raise HTTPException(
+                status_code=500,
+                detail=f"Error interno al listar archivos: {str(e)}"
+            )
+    
+    # ========================================================================
+    # NUEVO ENDPOINT: Eliminar archivo Excel original
+    # ========================================================================
+    @app.delete("/api/plantillas/archivos/{archivo_id}", tags=["Plantillas - Archivos Originales"])
+    async def eliminar_archivo_original(
+        archivo_id: int = Path(..., description="ID del archivo a eliminar"),
+        eliminar_fisicamente: bool = Query(False, description="Si es true, elimina también del storage (MinIO)"),
+        user: Dict = Depends(verify_jwt_token),
+        _: None = Depends(require_permission('mabel.view'))
+    ):
+        """
+        Elimina un archivo Excel original.
+        
+        **Comportamiento por defecto (soft delete):**
+        - Marca el archivo como inactivo en la base de datos (activo=0)
+        - El archivo permanece en MinIO/S3 para auditoría
+        - El archivo ya no aparecerá en el listado
+        
+        **Eliminación física (opcional):**
+        - Si `eliminar_fisicamente=true`, también se elimina del storage MinIO/S3
+        - Esta operación es irreversible
+        - Usar con precaución
+        
+        **Validaciones:**
+        - Solo el usuario que subió el archivo puede eliminarlo
+        - El archivo debe existir y estar activo
+        
+        **Query Parameters:**
+        - `eliminar_fisicamente` (bool, default: false) - Si es true, elimina también del storage
+        
+        **Ejemplo de uso:**
+        ```
+        DELETE /api/plantillas/archivos/123
+        DELETE /api/plantillas/archivos/123?eliminar_fisicamente=true
+        ```
+        
+        **Respuesta exitosa:**
+        ```json
+        {
+            "status": "success",
+            "message": "Archivo eliminado correctamente",
+            "archivo_id": 123,
+            "eliminacion_fisica": false
+        }
+        ```
+        
+        **Returns:**
+        - JSON con confirmación de eliminación
+        - 404 si el archivo no existe
+        - 403 si el usuario no tiene permiso para eliminar el archivo
+        """
+        try:
+            # Verificar que el storage esté habilitado
+            if not ENABLE_FILE_STORAGE:
+                raise HTTPException(
+                    status_code=503,
+                    detail={
+                        "error": "storage_disabled",
+                        "message": "El almacenamiento de archivos está deshabilitado"
+                    }
+                )
+            
+            user_id = get_user_id(user)
+            
+            with get_db_connection_context() as conn:
+                archivo_repo = ArchivoPlantillaRepository(conn)
+                
+                # Buscar el archivo por ID
+                cursor = conn.cursor()
+                cursor.execute("""
+                    SELECT archivo_id, pedido_id, nombre_original, storage_path, 
+                           subido_por, activo
+                    FROM archivo_plantilla
+                    WHERE archivo_id = ?
+                """, (archivo_id,))
+                row = cursor.fetchone()
+                
+                if not row:
+                    raise HTTPException(
+                        status_code=404,
+                        detail={
+                            "error": "not_found",
+                            "message": f"Archivo con ID {archivo_id} no encontrado"
+                        }
+                    )
+                
+                archivo_info = {
+                    "archivo_id": row[0],
+                    "pedido_id": row[1],
+                    "nombre_original": row[2],
+                    "storage_path": row[3],
+                    "subido_por": row[4],
+                    "activo": row[5]
+                }
+                
+                # Verificar que el usuario sea el dueño del archivo
+                if archivo_info["subido_por"] != user_id:
+                    # Verificar si es admin (puede eliminar cualquier archivo)
+                    user_roles = user.get("roles", [])
+                    is_admin = any('admin' in str(r).lower() for r in user_roles)
+                    
+                    if not is_admin:
+                        raise HTTPException(
+                            status_code=403,
+                            detail={
+                                "error": "forbidden",
+                                "message": "No tienes permiso para eliminar este archivo. Solo el usuario que lo subió puede eliminarlo."
+                            }
+                        )
+                
+                # Verificar que el archivo esté activo
+                if not archivo_info["activo"]:
+                    return JSONResponse(
+                        status_code=200,
+                        content={
+                            "status": "warning",
+                            "message": "El archivo ya estaba eliminado",
+                            "archivo_id": archivo_id
+                        }
+                    )
+                
+                # Soft delete en BD
+                archivo_repo.eliminar(archivo_id)
+                
+                # Si se solicita eliminación física, eliminar del storage
+                eliminacion_storage = False
+                if eliminar_fisicamente and archivo_info["storage_path"]:
+                    try:
+                        from src.services.file_storage_service import get_file_storage, FileStorageError
+                        
+                        storage = get_file_storage()
+                        storage.eliminar_archivo(archivo_info["storage_path"])
+                        eliminacion_storage = True
+                        
+                        logger.info(
+                            f"🗑️ Archivo eliminado físicamente del storage: {archivo_info['storage_path']}"
+                        )
+                    except FileStorageError as e:
+                        logger.warning(f"⚠️ No se pudo eliminar del storage: {e}")
+                        # No fallar si el storage ya no tiene el archivo
+                
+                logger.info(
+                    f"🗑️ Archivo eliminado: archivo_id={archivo_id}, "
+                    f"nombre={archivo_info['nombre_original']}, usuario={user_id}, "
+                    f"eliminacion_fisica={eliminar_fisicamente}"
+                )
+                
+                return JSONResponse(
+                    status_code=200,
+                    content={
+                        "status": "success",
+                        "message": "Archivo eliminado correctamente",
+                        "archivo_id": archivo_id,
+                        "nombre_archivo": archivo_info["nombre_original"],
+                        "eliminacion_fisica": eliminacion_storage
+                    }
+                )
+                
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"❌ Error al eliminar archivo: {e}", exc_info=True)
+            raise HTTPException(
+                status_code=500,
+                detail=f"Error interno al eliminar archivo: {str(e)}"
+            )
+    
+    # ========================================================================
     # NUEVO ENDPOINT: Health check del storage
     # ========================================================================
     @app.get("/api/plantillas/storage/health", tags=["Plantillas"])
