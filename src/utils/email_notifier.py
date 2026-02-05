@@ -1393,6 +1393,118 @@ Por favor, no responder a este correo.
         return False
 
 
+def send_pedido_cancelado_notification(
+    pedido_id: str,
+    numero_pedido: Optional[str] = None,
+    usuario_id: Optional[str] = None,
+    fecha_ejecucion: Optional[datetime] = None
+) -> bool:
+    """
+    Envía notificación a El Rayo cuando se cancela un pedido (cambia estado a CANCELADO).
+
+    Se usa al procesar POST /api/pedidos/{pedido_id}/cancelar desde Redistribución.
+    DESTINATARIO: EMAIL_TO_OPERACIONES (Operaciones/Despachos - El Rayo)
+
+    Args:
+        pedido_id: UUID del pedido cancelado
+        numero_pedido: Número del pedido (opcional, para identificación)
+        usuario_id: Usuario que canceló el pedido (MABEL TRADING)
+        fecha_ejecucion: Fecha y hora de la cancelación (por defecto ahora)
+
+    Returns:
+        True si el email se envió correctamente, False en caso contrario
+    """
+    if not ENABLE_EMAIL_NOTIFICATIONS:
+        logger.debug("⏭️ Notificaciones por email deshabilitadas")
+        return False
+
+    if not fecha_ejecucion:
+        fecha_ejecucion = datetime.now()
+
+    try:
+        recipients = EMAIL_TO_OPERACIONES if isinstance(EMAIL_TO_OPERACIONES, list) else [EMAIL_TO_OPERACIONES] if EMAIL_TO_OPERACIONES else []
+
+        if not recipients:
+            logger.warning("⚠️ No hay destinatarios configurados para notificación de pedido descartado")
+            return False
+
+        msg = MIMEMultipart()
+        msg['From'] = f"{EMAIL_FROM_NAME} <{EMAIL_FROM}>"
+        msg['To'] = ", ".join(recipients)
+        msg['Subject'] = f"🚫 Pedido Cancelado - {numero_pedido or pedido_id}"
+
+        body_html = f"""
+        <html>
+        <head>
+            <style>
+                body {{ font-family: Arial, sans-serif; line-height: 1.6; color: #333; }}
+                .container {{ max-width: 800px; margin: 0 auto; padding: 20px; }}
+                .header {{ background-color: #d32f2f; color: white; padding: 20px; text-align: center; border-radius: 5px 5px 0 0; }}
+                .content {{ background-color: #f9f9f9; padding: 20px; border: 1px solid #ddd; }}
+                .info-box {{ background-color: white; padding: 15px; margin: 20px 0; border-left: 4px solid #d32f2f; border-radius: 3px; }}
+                .info-box h3 {{ margin-top: 0; color: #d32f2f; }}
+                .footer {{ text-align: center; color: #999; font-size: 12px; margin-top: 30px; padding-top: 20px; border-top: 1px solid #ddd; }}
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <div class="header">
+                    <h2>🚫 Pedido Cancelado</h2>
+                </div>
+                <div class="content">
+                    <p>Se ha cancelado un pedido. El estado del pedido ha cambiado a <strong>CANCELADO</strong>.</p>
+                    <div class="info-box">
+                        <h3>Información</h3>
+                        <ul style="list-style: none; padding: 0;">
+                            <li><strong>Número de Pedido:</strong> {numero_pedido or 'N/A'}</li>
+                            <li><strong>Pedido ID:</strong> {pedido_id}</li>
+                            <li><strong>Usuario que canceló:</strong> {usuario_id or 'N/A'}</li>
+                            <li><strong>Fecha y hora:</strong> {fecha_ejecucion.strftime('%Y-%m-%d %H:%M:%S')}</li>
+                            <li><strong>Nuevo Estado:</strong> CANCELADO</li>
+                        </ul>
+                    </div>
+                    <p>El pedido permanece en el sistema con estado CANCELADO y no será procesado.</p>
+                </div>
+                <div class="footer">
+                    <p>Sistema MBA3 Consultas - Notificación de pedido cancelado.</p>
+                </div>
+            </div>
+        </body>
+        </html>
+        """
+
+        body_text = f"""
+Pedido Cancelado
+
+Se ha cancelado un pedido. El estado del pedido ha cambiado a CANCELADO.
+
+- Número de Pedido: {numero_pedido or 'N/A'}
+- Pedido ID: {pedido_id}
+- Usuario que canceló: {usuario_id or 'N/A'}
+- Fecha y hora: {fecha_ejecucion.strftime('%Y-%m-%d %H:%M:%S')}
+- Nuevo Estado: CANCELADO
+
+El pedido permanece en el sistema con estado CANCELADO y no será procesado.
+        """
+
+        msg.attach(MIMEText(body_text.strip(), 'plain'))
+        msg.attach(MIMEText(body_html, 'html'))
+
+        with smtplib.SMTP(EMAIL_SMTP_SERVER, EMAIL_SMTP_PORT) as server:
+            if EMAIL_SMTP_PORT == 587:
+                server.starttls()
+            if EMAIL_SMTP_PASSWORD:
+                server.login(EMAIL_SMTP_USER, EMAIL_SMTP_PASSWORD)
+            server.send_message(msg, to_addrs=recipients)
+
+        logger.info(f"✅ Notificación de pedido cancelado enviada a {', '.join(recipients)} (Pedido: {numero_pedido or pedido_id})")
+        return True
+
+    except Exception as e:
+        logger.error(f"❌ Error al enviar notificación de pedido cancelado: {e}", exc_info=True)
+        return False
+
+
 def send_pedido_descartado_notification(
     pedido_id: str,
     numero_pedido: Optional[str] = None,
@@ -1400,9 +1512,9 @@ def send_pedido_descartado_notification(
     fecha_ejecucion: Optional[datetime] = None
 ) -> bool:
     """
-    Envía notificación a El Rayo cuando se descarta (cancela) un pedido.
+    Envía notificación a El Rayo cuando se descarta (elimina) un pedido.
 
-    Se usa al procesar DELETE /api/pedidos/{pedido_id} desde Cargar Plantilla o Redistribución.
+    Se usa al procesar DELETE /api/pedidos/{pedido_id} desde Cargar Plantilla (solo Borrador/Nuevo Pedido).
     DESTINATARIO: EMAIL_TO_OPERACIONES (Operaciones/Despachos - El Rayo)
 
     Args:
@@ -1452,7 +1564,7 @@ def send_pedido_descartado_notification(
                     <h2>🚫 Pedido Descartado</h2>
                 </div>
                 <div class="content">
-                    <p>Se ha cancelado y eliminado un pedido. El pedido fue descartado por MABEL TRADING y ya no está disponible.</p>
+                    <p>Se ha descartado y eliminado un pedido completamente de la base de datos.</p>
                     <div class="info-box">
                         <h3>Información</h3>
                         <ul style="list-style: none; padding: 0;">
@@ -1462,7 +1574,7 @@ def send_pedido_descartado_notification(
                             <li><strong>Fecha y hora:</strong> {fecha_ejecucion.strftime('%Y-%m-%d %H:%M:%S')}</li>
                         </ul>
                     </div>
-                    <p>Podrán volver a cargar el pedido desde cero si lo necesitan.</p>
+                    <p>El pedido ya no está disponible en el sistema. Podrán volver a cargarlo desde cero si lo necesitan.</p>
                 </div>
                 <div class="footer">
                     <p>Sistema MBA3 Consultas - Notificación de pedido descartado.</p>
@@ -1475,14 +1587,14 @@ def send_pedido_descartado_notification(
         body_text = f"""
 Pedido Descartado
 
-Se ha cancelado y eliminado un pedido. El pedido fue descartado por MABEL TRADING.
+Se ha descartado y eliminado un pedido completamente de la base de datos.
 
 - Número de Pedido: {numero_pedido or 'N/A'}
 - Pedido ID: {pedido_id}
 - Usuario que descartó: {usuario_id or 'N/A'}
 - Fecha y hora: {fecha_ejecucion.strftime('%Y-%m-%d %H:%M:%S')}
 
-Podrán volver a cargar el pedido desde cero si lo necesitan.
+El pedido ya no está disponible en el sistema. Podrán volver a cargarlo desde cero si lo necesitan.
         """
 
         msg.attach(MIMEText(body_text.strip(), 'plain'))
@@ -1681,5 +1793,122 @@ Por favor, no responder a este correo.
         
     except Exception as e:
         logger.error(f"❌ Error al enviar notificación de redistribución confirmada: {e}", exc_info=True)
+        return False
+
+
+def send_pedido_eliminado_mabel_notification(
+    pedido_id: str,
+    numero_pedido: Optional[str] = None,
+    usuario_id: Optional[str] = None,
+    fecha_ejecucion: Optional[datetime] = None
+) -> bool:
+    """
+    Envía notificación a MABEL TRADING cuando se elimina un pedido desde Detalle del Pedido.
+
+    Se usa al procesar DELETE /api/pedidos/{pedido_id}/eliminar (botón "Eliminar Pedido").
+    DESTINATARIO: EMAIL_MABEL_TRADING (Usuario MABEL TRADING)
+
+    Args:
+        pedido_id: UUID del pedido eliminado
+        numero_pedido: Número del pedido (opcional, para identificación)
+        usuario_id: Usuario que eliminó el pedido (MABEL TRADING)
+        fecha_ejecucion: Fecha y hora de la eliminación (por defecto ahora)
+
+    Returns:
+        True si el email se envió correctamente, False en caso contrario
+    """
+    if not ENABLE_EMAIL_NOTIFICATIONS:
+        logger.debug("⏭️ Notificaciones por email deshabilitadas")
+        return False
+
+    if not fecha_ejecucion:
+        fecha_ejecucion = datetime.now()
+
+    try:
+        # Usar EMAIL_MABEL_TRADING
+        recipients = [EMAIL_MABEL_TRADING] if isinstance(EMAIL_MABEL_TRADING, str) else EMAIL_MABEL_TRADING
+
+        if not recipients:
+            logger.warning("⚠️ No hay destinatarios de MABEL TRADING configurados")
+            return False
+
+        msg = MIMEMultipart()
+        msg['From'] = f"{EMAIL_FROM_NAME} <{EMAIL_FROM}>"
+        msg['To'] = ", ".join(recipients)
+        msg['Subject'] = f"✅ Pedido Eliminado - {numero_pedido or pedido_id}"
+
+        body_html = f"""
+        <html>
+        <head>
+            <style>
+                body {{ font-family: Arial, sans-serif; line-height: 1.6; color: #333; }}
+                .container {{ max-width: 800px; margin: 0 auto; padding: 20px; }}
+                .header {{ background-color: #28a745; color: white; padding: 20px; text-align: center; border-radius: 5px 5px 0 0; }}
+                .content {{ background-color: #f9f9f9; padding: 20px; border: 1px solid #ddd; }}
+                .info-box {{ background-color: white; padding: 15px; margin: 20px 0; border-left: 4px solid #28a745; border-radius: 3px; }}
+                .info-box h3 {{ margin-top: 0; color: #28a745; }}
+                .footer {{ text-align: center; color: #999; font-size: 12px; margin-top: 30px; padding-top: 20px; border-top: 1px solid #ddd; }}
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <div class="header">
+                    <h2>✅ Pedido Eliminado Exitosamente</h2>
+                </div>
+                <div class="content">
+                    <p>Se ha eliminado un pedido desde la interfaz de Detalle del Pedido.</p>
+                    <div class="info-box">
+                        <h3>📋 Información del Pedido Eliminado</h3>
+                        <ul style="list-style: none; padding: 0;">
+                            <li><strong>Número de Pedido:</strong> {numero_pedido or 'N/A'}</li>
+                            <li><strong>Pedido ID:</strong> {pedido_id}</li>
+                            <li><strong>Usuario que eliminó:</strong> {usuario_id or 'N/A'}</li>
+                            <li><strong>Fecha y hora:</strong> {fecha_ejecucion.strftime('%Y-%m-%d %H:%M:%S')}</li>
+                            <li><strong>Estado al eliminar:</strong> Gestionar Pedido</li>
+                        </ul>
+                    </div>
+                    <p>El pedido ha sido eliminado completamente del sistema.</p>
+                    <p><strong>Nota:</strong> Esta es una operación irreversible. Si necesita crear el pedido nuevamente, deberá cargarlo desde cero.</p>
+                </div>
+                <div class="footer">
+                    <p>Sistema MBA3 Consultas - Notificación de pedido eliminado.</p>
+                </div>
+            </div>
+        </body>
+        </html>
+        """
+
+        body_text = f"""
+Pedido Eliminado Exitosamente
+
+Se ha eliminado un pedido desde la interfaz de Detalle del Pedido.
+
+Información del Pedido Eliminado:
+- Número de Pedido: {numero_pedido or 'N/A'}
+- Pedido ID: {pedido_id}
+- Usuario que eliminó: {usuario_id or 'N/A'}
+- Fecha y hora: {fecha_ejecucion.strftime('%Y-%m-%d %H:%M:%S')}
+- Estado al eliminar: Gestionar Pedido
+
+El pedido ha sido eliminado completamente del sistema.
+
+Nota: Esta es una operación irreversible. Si necesita crear el pedido nuevamente, deberá cargarlo desde cero.
+        """
+
+        msg.attach(MIMEText(body_text.strip(), 'plain'))
+        msg.attach(MIMEText(body_html, 'html'))
+
+        with smtplib.SMTP(EMAIL_SMTP_SERVER, EMAIL_SMTP_PORT) as server:
+            if EMAIL_SMTP_PORT == 587:
+                server.starttls()
+            if EMAIL_SMTP_PASSWORD:
+                server.login(EMAIL_SMTP_USER, EMAIL_SMTP_PASSWORD)
+            server.send_message(msg, to_addrs=recipients)
+
+        logger.info(f"✅ Notificación de pedido eliminado enviada a MABEL TRADING {', '.join(recipients)} (Pedido: {numero_pedido or pedido_id})")
+        return True
+
+    except Exception as e:
+        logger.error(f"❌ Error al enviar notificación de pedido eliminado a MABEL TRADING: {e}", exc_info=True)
         return False
 

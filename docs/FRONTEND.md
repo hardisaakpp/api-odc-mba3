@@ -1569,26 +1569,44 @@ Los valores vacíos o en blanco se envían como `null` (no como string vacío). 
 
 ---
 
-## 2.1 Descartar vs Cancelar Pedido (mismo endpoint, parámetro distinto)
+## 2.1 Descartar vs Cancelar Pedido
 
-En el frontend hay **dos acciones** que eliminan el pedido de la base de datos, con reglas de negocio distintas:
+En el frontend hay **dos acciones** con comportamientos distintos:
 
 | Acción | Pantalla | Comportamiento | Llamada API |
 |--------|----------|----------------|------------|
-| **Descartar** | Cargar Plantilla | Eliminar pedido. **No** enviar correo a EL RAYO. | `DELETE /api/pedidos/{pedido_id}` (sin query) o con `notificar_el_rayo=false` |
-| **Cancelar Pedido** | Redistribución | Eliminar pedido **y** notificar a EL RAYO por correo. | `DELETE /api/pedidos/{pedido_id}?notificar_el_rayo=true` |
+| **Descartar** | Cargar Plantilla | **Elimina** el pedido de la base de datos. **No** envía correo a EL RAYO. | `DELETE /api/pedidos/{pedido_id}` |
+| **Cancelar Pedido** | Redistribución | **Cambia el estado** del pedido a **CANCELADO** (estado_id = 19). **Sí** envía correo a EL RAYO. El pedido permanece en la BD. | `POST /api/pedidos/{pedido_id}/cancelar` |
 
-**Endpoint único:** `DELETE /api/pedidos/{pedido_id}`
+### Descartar (Cargar Plantilla)
 
-- **Query parameter:** `notificar_el_rayo` (boolean, opcional, default `false`).
-  - `false` o omitido: solo borra el pedido (usar desde **Descartar**).
-  - `true`: borra el pedido y envía correo a EL RAYO (usar desde **Cancelar Pedido**).
+**Endpoint:** `DELETE /api/pedidos/{pedido_id}`
 
-El frontend debe:
-- **Descartar** (Cargar Plantilla): llamar `descartarPedido(pedidoId)` → `DELETE /api/pedidos/{id}` sin parámetro (o con `notificar_el_rayo=false`).
-- **Cancelar Pedido** (Redistribución): llamar `cancelarPedido(pedidoId)` → `DELETE /api/pedidos/{id}?notificar_el_rayo=true`.
+- **Comportamiento:** Elimina completamente el pedido de la base de datos.
+- **Restricciones:** Solo permitido en estado **Borrador** o **Nuevo Pedido** (estado_id 1 o 2) y sin datos asociados.
+- **Notificación:** **No** envía correo a EL RAYO.
+- **Uso:** `descartarPedido(pedidoId)` → `DELETE /api/pedidos/{id}`
 
-Así solo la acción "Cancelar Pedido" dispara el envío del correo a EL RAYO.
+### Cancelar Pedido (Redistribución)
+
+**Endpoint:** `POST /api/pedidos/{pedido_id}/cancelar`
+
+- **Comportamiento:** 
+  - Cambia el estado del pedido a **CANCELADO** (estado_id = 19).
+  - El pedido **permanece en la base de datos** con estado CANCELADO.
+  - Envía correo a EL RAYO notificando la cancelación.
+- **Restricciones:** Solo permitido en estados **anteriores** a Confirmado redistribución (estado_id < 10).
+- **Respuesta:** Devuelve el pedido actualizado con estado CANCELADO.
+- **Uso:** `cancelarPedido(pedidoId)` → `POST /api/pedidos/{id}/cancelar`
+
+### Cuándo deshabilitar "Cancelar Pedido"
+
+El botón **"Cancelar Pedido"** debe deshabilitarse desde el estado **Confirmado redistribución** (estado_id ≥ 10) en adelante. Para ello el backend expone:
+
+- **`GET /api/pedidos/{id}/distribucion`**: campo `puede_descartar` — `true` si estado_id < 10, `false` desde Confirmado redistribución en adelante.
+- **`GET /api/pedidos/{id}`** (y respuestas de pedido completo): campo **`puede_cancelar_pedido`** — `true` si estado_id < 10, `false` desde Confirmado redistribución en adelante.
+
+Usar `puede_descartar` (distribucion) o `puede_cancelar_pedido` (pedido completo) para habilitar/deshabilitar el botón "Cancelar Pedido".
 
 ---
 

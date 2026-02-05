@@ -21,7 +21,7 @@ from typing import Dict, Any, List, Optional, Tuple
 from .pedido.pedido_cabecera_repository import PedidoCabeceraRepository
 from .pedido.pedido_detalle_repository import PedidoDetalleRepository
 from .pedido.pedido_tienda_repository import PedidoTiendaRepository
-from ..pedido_estados import ESTADOS_PUEDE_DESCARTAR, estado_id_desde_legacy
+from ..pedido_estados import ESTADO_LIMITE_CANCELAR_PEDIDO, ESTADOS_PUEDE_DESCARTAR, ESTADOS_PUEDE_ELIMINAR, estado_id_desde_legacy
 
 logger = logging.getLogger(__name__)
 
@@ -168,13 +168,20 @@ class PedidoRepository:
         """
         return self.cabecera_repo.tiene_pedidos()
 
-    def validar_puede_descartar(self, pedido_id: str) -> Tuple[bool, str, str]:
+    def validar_puede_descartar(
+        self, pedido_id: str, es_cancelar_pedido: bool = False
+    ) -> Tuple[bool, str, str]:
         """
-        Valida si un pedido puede descartarse (eliminarse).
-        Solo se permite para pedidos en estado BORRADOR o NUEVO PEDIDO y sin datos aguas abajo.
+        Valida si un pedido puede eliminarse (Descartar o Cancelar Pedido).
+
+        - Descartar (Cargar Plantilla): es_cancelar_pedido=False. Solo estados Borrador o Nuevo Pedido.
+        - Cancelar Pedido (Redistribución): es_cancelar_pedido=True. Solo estados anteriores a Confirmado redistribución (estado_id < 10).
+
+        En ambos casos no debe tener datos asociados (respuesta proveedor, redistribución confirmada, orden de compra)
+        salvo que se implemente borrado en cascada para Cancelar Pedido.
 
         Returns:
-            (ok, error_code, message): ok=True si puede descartarse;
+            (ok, error_code, message): ok=True si puede eliminarse;
             si ok=False, error_code y message para la respuesta HTTP.
         """
         pedido = self.cabecera_repo.get_pedido_completo(pedido_id)
@@ -185,12 +192,27 @@ class PedidoRepository:
         estado_id = cabecera.get("estado_id")
         if estado_id is None:
             estado_id = estado_id_desde_legacy(cabecera.get("estado"))
-        if estado_id not in ESTADOS_PUEDE_DESCARTAR:
-            return (
-                False,
-                "estado_no_borrador",
-                "El pedido no puede descartarse porque no está en estado Borrador o Nuevo Pedido.",
-            )
+        try:
+            estado_id = int(estado_id) if estado_id is not None else None
+        except (TypeError, ValueError):
+            estado_id = None
+
+        if es_cancelar_pedido:
+            # Cancelar Pedido: permitir solo estados anteriores a Confirmado redistribución (10)
+            if estado_id is None or estado_id >= ESTADO_LIMITE_CANCELAR_PEDIDO:
+                return (
+                    False,
+                    "estado_no_permitido",
+                    "El pedido no puede cancelarse porque está en estado Confirmado redistribución o posterior.",
+                )
+        else:
+            # Descartar: solo Borrador (1) o Nuevo Pedido (2)
+            if estado_id not in ESTADOS_PUEDE_DESCARTAR:
+                return (
+                    False,
+                    "estado_no_borrador",
+                    "El pedido no puede descartarse porque no está en estado Borrador o Nuevo Pedido.",
+                )
 
         cursor = self.conn.cursor()
         try:
@@ -210,6 +232,59 @@ class PedidoRepository:
                             False,
                             "tiene_datos_asociados",
                             "El pedido tiene información asociada (respuesta de proveedor, redistribución u orden de compra) y no puede descartarse.",
+                        )
+                except pyodbc.Error:
+                    pass
+            return (True, "", "")
+        finally:
+            cursor.close()
+
+    def validar_puede_eliminar(self, pedido_id: str) -> tuple[bool, str, str]:
+        """
+        Valida si un pedido puede eliminarse con el botón "Eliminar Pedido" (Detalle del Pedido).
+        
+        Solo permite eliminar si:
+        - El pedido está en estado GESTIONAR PEDIDO (3)
+        - No tiene respuesta de proveedor, redistribución confirmada u orden de compra
+        
+        Returns:
+            Tupla: (puede_eliminar, codigo_error, mensaje_error)
+        """
+        pedido_completo = self.cabecera_repo.get_pedido_completo(pedido_id)
+        if not pedido_completo:
+            return (False, "not_found", "Pedido no encontrado.")
+        
+        # Obtener estado_id de la cabecera
+        cabecera = pedido_completo.get("cabecera", {})
+        estado_id = cabecera.get("estado_id")
+        
+        # Validar estado: solo GESTIONAR PEDIDO (3)
+        if estado_id not in ESTADOS_PUEDE_ELIMINAR:
+            return (
+                False,
+                "estado_no_permitido",
+                "El pedido no puede eliminarse porque no está en estado Gestionar Pedido.",
+            )
+        
+        # Validar que no tenga datos asociados
+        cursor = self.conn.cursor()
+        try:
+            for table, col in [
+                ("pedido_respuesta_proveedor", "pedido_id"),
+                ("distribucion_confirmada", "pedido_id"),
+                ("orden_compra_cabecera", "pedido_id"),
+            ]:
+                try:
+                    cursor.execute(
+                        f"SELECT COUNT(*) FROM {table} WHERE {col} = ?",
+                        (pedido_id,),
+                    )
+                    row = cursor.fetchone()
+                    if row and (row[0] or 0) > 0:
+                        return (
+                            False,
+                            "tiene_datos_asociados",
+                            "El pedido tiene información asociada (respuesta de proveedor, redistribución u orden de compra) y no puede eliminarse.",
                         )
                 except pyodbc.Error:
                     pass

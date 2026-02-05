@@ -16,7 +16,7 @@ from src.database.pedido_estados import (
     ESTADO_REDISTRIBUCION,
     ESTADO_REDISTRIBUIDO,
     ESTADO_PEDIDO_CONFIRMADO,
-    ESTADOS_PUEDE_DESCARTAR,
+    ESTADO_LIMITE_CANCELAR_PEDIDO,
     estado_id_desde_legacy,
 )
 from src.database.repositories.distribucion_confirmada_repository import DistribucionConfirmadaRepository
@@ -140,7 +140,8 @@ def register_redistribucion_endpoints(app: FastAPI):
                     _eid = int(_eid) if _eid is not None else None
                 except (TypeError, ValueError):
                     _eid = None
-                puede_descartar = _eid in ESTADOS_PUEDE_DESCARTAR  # Deshabilitar desde Confirmado Enviado en adelante
+                # Deshabilitar "Cancelar Pedido" desde Confirmado redistribución (estado 10) en adelante
+                puede_descartar = _eid is not None and _eid < ESTADO_LIMITE_CANCELAR_PEDIDO
                 
                 return DistribucionPedidoResponse(
                     pedido_id=pedido_id,

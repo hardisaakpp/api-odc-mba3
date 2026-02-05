@@ -25,13 +25,25 @@ ESTADO_EN_PROCESO = 15
 ESTADO_COMPLETADO = 16
 ESTADO_DESPACHAR_Y_FACTURAR = 17  # Manual: desde Confirmado y Enviado (ODC enviada a SAP)
 ESTADO_FINALIZADO = 18  # Estado final del flujo; solo desde Despachar y Facturar
+ESTADO_CANCELADO = 19  # Pedido cancelado por MABEL TRADING desde Redistribución
 
 # Estado inicial al subir Excel o crear pedido (siempre id = 1)
 ESTADO_INICIAL = ESTADO_BORRADOR
 
-# Estados en los que se permite "Cancelar Pedido" (descartar). Desde Confirmado Enviado (12)
-# y cualquier estado en adelante el botón debe estar deshabilitado.
+# Estados en los que se permite "Descartar" (Cargar Plantilla): solo Borrador y Nuevo Pedido.
+# - Borrador (1): sin notificar
+# - Nuevo Pedido (2): notifica a EL RAYO
 ESTADOS_PUEDE_DESCARTAR = (ESTADO_BORRADOR, ESTADO_NUEVO_PEDIDO)
+
+# Estados en los que se permite "Eliminar Pedido" (Detalle del Pedido): solo Gestionar Pedido.
+# - Gestionar Pedido (3): sin notificar
+ESTADOS_PUEDE_ELIMINAR = (ESTADO_GESTIONAR_PEDIDO,)
+
+# "Cancelar Pedido" (Redistribución): deshabilitar desde Confirmado redistribución (10) en adelante.
+# El botón debe estar habilitado solo cuando estado_id < ESTADO_PEDIDO_CONFIRMADO (10).
+ESTADO_LIMITE_CANCELAR_PEDIDO = ESTADO_PEDIDO_CONFIRMADO  # 10 - Confirmado redistribución
+
+# Desde Confirmado Enviado (12) en adelante no se permite ni Descartar ni Cancelar Pedido (DELETE rechazado).
 
 # --- Conjuntos útiles para validaciones --------------------------------------
 # Estados en los que el pedido permite redistribución
@@ -77,6 +89,7 @@ ESTADO_IDS_VALIDOS = frozenset({
     ESTADO_COMPLETADO,
     ESTADO_DESPACHAR_Y_FACTURAR,
     ESTADO_FINALIZADO,
+    ESTADO_CANCELADO,
 })
 
 # --- Mapping legacy string → id (solo para migración / compat temporal) -------
@@ -106,6 +119,7 @@ LEGACY_STRING_TO_ID = {
     "DESPACHAR Y FACTURAR": ESTADO_DESPACHAR_Y_FACTURAR,
     "DESPACHAR_Y_FACTURAR": ESTADO_DESPACHAR_Y_FACTURAR,
     "FINALIZADO": ESTADO_FINALIZADO,
+    "CANCELADO": ESTADO_CANCELADO,
 }
 
 

@@ -15,19 +15,24 @@ Los estados del pedido se identifican por **`estado_id`** (número). El **nombre
 | id | nombre (editable) | orden | Uso típico |
 |----|-------------------|-------|------------|
 | 1  | BORRADOR | 1  | Estado inicial (ex PENDIENTE_CONFIRMACION_PROVEEDOR) |
-| 2  | RESPUESTA_PROVEEDOR_CARGADA | 2  | Respuesta del proveedor cargada |
-| 3  | EN_REVISION | 3  | En revisión interna |
-| 4  | CONFIRMADO_PROVEEDOR | 4  | Aprobado por revisión |
-| 5  | RECHAZADO_PROVEEDOR | 5  | Rechazado |
-| 6  | EN_AJUSTE_MABEL | 6  | En ajuste MABEL (redistribución) |
-| 7  | REDISTRIBUIDO | 7  | Redistribución aplicada |
-| 8  | PEDIDO_CONFIRMADO | 8  | Pedido confirmado (redistribución confirmada) |
-| 9  | PROCESADO_SAP | 9  | Procesado en SAP |
-| 10 | CONFIRMADO_ENVIADO | 10 | Todas las ODC enviadas a SAP |
-| 11 | PENDIENTE_LOGISTICA | 11 | OC OK, ST pendiente/error |
-| 12 | ERROR_DATOS_MAESTROS | 12 | Error en datos maestros |
-| 13 | EN_PROCESO | 13 | En proceso |
-| 14 | COMPLETADO | 14 | Completado |
+| 2  | NUEVO PEDIDO | 2  | Enviado a EL RAYO (notificación enviada) |
+| 3  | GESTIONAR PEDIDO | 3  | Al hacer clic en Ver Detalle desde tabla Pedidos |
+| 4  | CONFIRMADO | 4  | Redistribución (tras confirmar respuesta EL RAYO) |
+| 5  | RESPUESTA_PROVEEDOR_CARGADA | 5  | Respuesta del proveedor cargada |
+| 6  | CONFIRMADO_PROVEEDOR | 6  | Aprobado por proveedor |
+| 7  | RECHAZADO_PROVEEDOR | 7  | Rechazado por proveedor |
+| 8  | EN_AJUSTE_MABEL | 8  | En ajuste MABEL (redistribución) |
+| 9  | REDISTRIBUIDO | 9  | Redistribución aplicada |
+| 10 | CONFIRMADO REDISTRIBUCION | 10 | Pedido confirmado (redistribución confirmada) |
+| 11 | PROCESADO_SAP | 11 | Procesado en SAP |
+| 12 | CONFIRMADO_ENVIADO | 12 | Todas las ODC enviadas a SAP |
+| 13 | PENDIENTE_LOGISTICA | 13 | OC OK, ST pendiente/error |
+| 14 | ERROR_DATOS_MAESTROS | 14 | Error en datos maestros |
+| 15 | EN_PROCESO | 15 | En proceso |
+| 16 | COMPLETADO | 16 | Completado |
+| 17 | DESPACHAR Y FACTURAR | 17 | Manual: desde Confirmado y Enviado (ODC enviada a SAP) |
+| 18 | FINALIZADO | 18 | Estado final del flujo; solo desde Despachar y Facturar |
+| 19 | CANCELADO | 19 | Pedido cancelado por MABEL TRADING desde Redistribución |
 
 El **id es semántico** (no depende del orden en BD). El **orden** es solo para visualización (listas, filtros).
 
@@ -40,19 +45,29 @@ Para migración y compatibilidad temporal:
 | String legacy (columna `estado`) | estado_id |
 |----------------------------------|-----------|
 | PENDIENTE_CONFIRMACION_PROVEEDOR | 1 (BORRADOR) |
-| RESPUESTA_PROVEEDOR_CARGADA     | 2 |
-| EN_REVISION                     | 3 |
-| CONFIRMADO_PROVEEDOR            | 4 |
-| RECHAZADO_PROVEEDOR             | 5 |
-| EN_AJUSTE_MABEL                 | 6 |
-| REDISTRIBUIDO                   | 7 |
-| PEDIDO_CONFIRMADO               | 8 |
-| PROCESADO_SAP                   | 9 |
-| CONFIRMADO_ENVIADO              | 10 |
-| PENDIENTE_LOGISTICA             | 11 |
-| ERROR_DATOS_MAESTROS            | 12 |
-| EN_PROCESO                      | 13 |
-| COMPLETADO                      | 14 |
+| BORRADOR                         | 1 |
+| NUEVO_PEDIDO                    | 2 |
+| GESTIONAR_PEDIDO                | 3 |
+| EN_REVISION                     | 4 (REDISTRIBUCION) |
+| REDISTRIBUCION                  | 4 |
+| CONFIRMADO                      | 4 |
+| RESPUESTA_PROVEEDOR_CARGADA     | 5 |
+| CONFIRMADO_PROVEEDOR            | 6 |
+| RECHAZADO_PROVEEDOR             | 7 |
+| EN_AJUSTE_MABEL                 | 8 |
+| REDISTRIBUIDO                   | 9 |
+| PEDIDO_CONFIRMADO               | 10 |
+| CONFIRMADO REDISTRIBUCION       | 10 |
+| PROCESADO_SAP                   | 11 |
+| CONFIRMADO_ENVIADO              | 12 |
+| PENDIENTE_LOGISTICA             | 13 |
+| ERROR_DATOS_MAESTROS            | 14 |
+| EN_PROCESO                      | 15 |
+| COMPLETADO                      | 16 |
+| DESPACHAR Y FACTURAR            | 17 |
+| DESPACHAR_Y_FACTURAR            | 17 |
+| FINALIZADO                      | 18 |
+| CANCELADO                       | 19 |
 | *(cualquier otro o NULL)*       | 1 (BORRADOR) |
 
 ---

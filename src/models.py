@@ -850,7 +850,7 @@ class DistribucionPedidoResponse(BaseModel):
     estado_pedido: Optional[str] = None
     puede_descartar: bool = Field(
         default=False,
-        description="True solo si el pedido está en Borrador o Nuevo Pedido; deshabilitar 'Cancelar Pedido' desde Confirmado Enviado en adelante.",
+        description="True si el pedido está antes de Confirmado redistribución (estado_id < 10); deshabilitar botón 'Cancelar Pedido' desde Confirmado redistribución en adelante.",
     )
     productos: List[DistribucionProductoResponse] = Field(default_factory=list)
 

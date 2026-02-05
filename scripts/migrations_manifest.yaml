@@ -305,3 +305,10 @@ migrations:
     file: "alter_tienda_codigo_size.sql"
     description: "Aumentar tamaño de columna tienda.codigo"
     category: "alter"
+
+  - version: "603"
+    name: "add_estado_cancelado"
+    file: "add_estado_cancelado.sql"
+    description: "Agregar estado CANCELADO (id=19) a pedido_estado"
+    category: "estado"
+    dependencies: ["005"]
