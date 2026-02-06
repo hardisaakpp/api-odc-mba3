@@ -222,7 +222,7 @@ class PedidoOCService:
             
             # 1.1. Validar estado del pedido (debe estar en un estado válido para generar ODC)
             estado_pedido = pedido_cabecera.get("estado")
-            estados_validos = ["CONFIRMADO_PROVEEDOR", "PEDIDO_CONFIRMADO", "CONFIRMADO REDISTRIBUCION", "PROCESADO_SAP"]
+            estados_validos = ["CONFIRMADO_PROVEEDOR", "PEDIDO_CONFIRMADO", "CONFIRMADO REDISTRIBUCION"]
             if estado_pedido not in estados_validos:
                 raise ValueError(
                     f"El pedido {pedido_id} no está en un estado válido para generar ODC. "
