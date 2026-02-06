@@ -583,6 +583,7 @@ def register_ordenes_compra_endpoints(app: FastAPI):
             has_more = page_num < total_pages
             
             # Preparar respuesta con formato de paginación basada en página
+            # Referencia: docs/NAMING_CONVENTIONS.md (camelCase para metadatos de paginación)
             response_data = {
                 "status": "success",
                 "data": data,
@@ -591,7 +592,7 @@ def register_ordenes_compra_endpoints(app: FastAPI):
                     "page": page_num,
                     "pageSize": page_size,
                     "totalPages": total_pages,
-                    "has_more": has_more
+                    "hasMore": has_more
                 }
             }
             

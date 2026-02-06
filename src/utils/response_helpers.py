@@ -143,7 +143,7 @@ def paginated_response(
     """
     Genera una respuesta JSON paginada estandarizada.
     
-    Formato:
+    Formato (camelCase para compatibilidad con frontend):
     {
         "success": true,
         "message": "...",
@@ -151,13 +151,15 @@ def paginated_response(
         "pagination": {
             "total": 100,
             "page": 1,
-            "page_size": 20,
-            "total_pages": 5,
-            "has_next": true,
-            "has_prev": false
+            "pageSize": 20,
+            "totalPages": 5,
+            "hasNext": true,
+            "hasPrev": false
         },
         "metadata": {...}  // opcional
     }
+    
+    Referencia: docs/NAMING_CONVENTIONS.md
     
     Args:
         data: Lista de items de la página actual
@@ -175,7 +177,7 @@ def paginated_response(
         {
             "success": True,
             "data": [{"id": 1}, {"id": 2}],
-            "pagination": {"total": 100, "page": 1, ...}
+            "pagination": {"total": 100, "page": 1, "pageSize": 2, ...}
         }
     """
     total_pages = (total + page_size - 1) // page_size if page_size > 0 else 0
@@ -187,10 +189,10 @@ def paginated_response(
         "pagination": {
             "total": total,
             "page": page,
-            "page_size": page_size,
-            "total_pages": total_pages,
-            "has_next": page < total_pages,
-            "has_prev": page > 1
+            "pageSize": page_size,        # camelCase para frontend
+            "totalPages": total_pages,     # camelCase para frontend
+            "hasNext": page < total_pages, # camelCase para frontend
+            "hasPrev": page > 1            # camelCase para frontend
         }
     }
     

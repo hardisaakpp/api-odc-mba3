@@ -31,6 +31,7 @@ from src.security.jwt_auth import verify_jwt_token, require_permission, require_
 from src.exceptions import BusinessException
 from src.logging_config import log_business_operation, get_correlation_id_from_request
 from src.utils.audit_context import get_audit_context, ORIGEN_WEB
+from src.schemas import READ_RESPONSES, WRITE_RESPONSES
 from src.models import (
     ModificarPedidoCabeceraRequest,
     ModificarPedidoCabeceraResponse,
@@ -45,7 +46,7 @@ logger = logging.getLogger(__name__)
 def register_crud_endpoints(app: FastAPI):
     """Registra los endpoints CRUD de pedidos."""
     
-    @app.get("/api/pedidos", tags=["Pedidos"])
+    @app.get("/api/pedidos", tags=["Pedidos"], responses=READ_RESPONSES)
     async def listar_pedidos(
         estado: Optional[str] = Query(None, description="Filtrar por estado del pedido"),
         fecha_desde: Optional[str] = Query(None, description="Filtrar desde fecha (YYYY-MM-DD)"),

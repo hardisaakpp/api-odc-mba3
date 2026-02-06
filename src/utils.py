@@ -35,6 +35,11 @@ def normalizar_codigo_producto(codigo: Optional[str]) -> str:
         
     Returns:
         Código normalizado (string vacío si codigo es None o vacío)
+    
+    Note:
+        Existe versión SQL equivalente: dbo.fn_normalizar_codigo
+        Ver: scripts/migrations/create_fn_normalizar_codigo.sql
+        Mantener ambas sincronizadas si se modifica la lógica.
     """
     if not codigo:
         return ""
