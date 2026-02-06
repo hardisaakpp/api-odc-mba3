@@ -218,7 +218,8 @@ class PedidoCabeceraRepository:
             pedido_id: UUID del pedido
             
         Returns:
-            Dict con cabecera, detalles (con sus tiendas), o None si no existe
+            Dict con cabecera, detalles (con sus tiendas), o None si no existe.
+            Si el pedido está en estado CONFIRMADO_ENVIADO, incluye numero_oc_sap y doc_entry.
         """
         cursor = self.conn.cursor()
         
@@ -267,6 +268,11 @@ class PedidoCabeceraRepository:
             )
             detalles = self.utils.obtener_detalles_pedido(cursor, pedido_id)
             
+            # Si el pedido está en estado CONFIRMADO_ENVIADO, obtener datos de SAP
+            estado_id = cabecera.get("estado_id")
+            if estado_id == ESTADO_CONFIRMADO_ENVIADO:
+                cabecera = self._agregar_datos_sap_a_cabecera(cursor, pedido_id, cabecera)
+            
             return {
                 "cabecera": cabecera,
                 "detalles": detalles
@@ -286,7 +292,8 @@ class PedidoCabeceraRepository:
             numero_pedido: Número de pedido (business key)
             
         Returns:
-            Dict con cabecera, detalles (con sus tiendas), o None si no existe
+            Dict con cabecera, detalles (con sus tiendas), o None si no existe.
+            Si el pedido está en estado CONFIRMADO_ENVIADO, incluye numero_oc_sap y doc_entry.
         """
         cursor = self.conn.cursor()
         
@@ -335,6 +342,11 @@ class PedidoCabeceraRepository:
                 row, tiene_estado or tiene_estado_id, tiene_estado_id
             )
             detalles = self.utils.obtener_detalles_pedido(cursor, pedido_id)
+            
+            # Si el pedido está en estado CONFIRMADO_ENVIADO, obtener datos de SAP
+            estado_id = cabecera.get("estado_id")
+            if estado_id == ESTADO_CONFIRMADO_ENVIADO:
+                cabecera = self._agregar_datos_sap_a_cabecera(cursor, pedido_id, cabecera)
             
             return {
                 "cabecera": cabecera,
@@ -399,6 +411,46 @@ class PedidoCabeceraRepository:
             raise
         finally:
             cursor.close()
+
+    def _agregar_datos_sap_a_cabecera(
+        self, cursor: pyodbc.Cursor, pedido_id: str, cabecera: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """
+        Agrega numero_oc_sap y doc_entry a la cabecera del pedido.
+        
+        Obtiene estos datos de la orden de compra asociada al pedido.
+        Si hay múltiples órdenes de compra, toma la primera (más antigua).
+        
+        Args:
+            cursor: Cursor de base de datos activo
+            pedido_id: UUID del pedido
+            cabecera: Diccionario con datos de cabecera existentes
+            
+        Returns:
+            Cabecera actualizada con numero_oc_sap y doc_entry (pueden ser None)
+        """
+        try:
+            cursor.execute("""
+                SELECT TOP 1 numero_oc_sap, doc_entry
+                FROM orden_compra_cabecera
+                WHERE pedido_id = ?
+                ORDER BY created_at ASC
+            """, (pedido_id,))
+            
+            row = cursor.fetchone()
+            if row:
+                cabecera["numero_oc_sap"] = row[0]
+                cabecera["doc_entry"] = row[1]
+            else:
+                cabecera["numero_oc_sap"] = None
+                cabecera["doc_entry"] = None
+                
+        except Exception as e:
+            logger.warning(f"⚠️ No se pudieron obtener datos SAP para pedido {pedido_id}: {e}")
+            cabecera["numero_oc_sap"] = None
+            cabecera["doc_entry"] = None
+            
+        return cabecera
 
     def delete(self, pedido_id: str, cursor: Optional[pyodbc.Cursor] = None) -> bool:
         """
