@@ -38,6 +38,7 @@ if str(src_dir) not in sys.path:
 
 from src.endpoints import create_endpoints
 from src.middleware.exception_handlers import setup_exception_handlers
+from src.middleware.request_logging import setup_request_logging
 from src.config import (
     ENABLE_CORS_RESTRICTION,
     CORS_ALLOWED_ORIGINS,
@@ -141,6 +142,9 @@ setup_rate_limiting(app)
 
 # Configurar exception handlers centralizados
 setup_exception_handlers(app)
+
+# Configurar logging de requests (Buenas Prácticas - Sección 5: Logs obligatorios)
+setup_request_logging(app)
 
 # Registrar todos los endpoints
 create_endpoints(app)

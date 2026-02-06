@@ -51,7 +51,19 @@ from .email_notifier import (
     send_plantilla_upload_notification
 )
 
+# Exportar helpers de respuestas estandarizadas (Buenas Prácticas - Sección 4)
+from .response_helpers import (
+    success_response,
+    error_response,
+    paginated_response,
+    validation_error_response,
+    not_found_response,
+    business_error_response,
+    ErrorCodes
+)
+
 __all__ = [
+    # Funciones de utils.py
     "get_source_from_headers",
     "normalize_query",
     "validate_query",
@@ -59,9 +71,18 @@ __all__ = [
     "save_query_to_file",
     "normalizar_codigo_producto",
     "validar_longitud_minima_codigo",
+    # Email notifier
     "send_migration_notification",
     "send_error_notification",
     "send_homologacion_notification",
     "send_oc_ready_for_dispatch_notification",
-    "send_plantilla_upload_notification"
+    "send_plantilla_upload_notification",
+    # Response helpers (Buenas Prácticas)
+    "success_response",
+    "error_response",
+    "paginated_response",
+    "validation_error_response",
+    "not_found_response",
+    "business_error_response",
+    "ErrorCodes",
 ]
