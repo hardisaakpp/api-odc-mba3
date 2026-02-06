@@ -11,11 +11,12 @@ Mantiene la misma interfaz pública para compatibilidad hacia atrás.
 CHANGELOG:
 - 2026-01-08: Refactorizado como facade que delega a repositorios especializados
 - 2026-01-08: Movidas utilidades de serialización a common.serialization
+- 2026-02-06: Agregado soporte para campos de auditoría (Buenas Prácticas - Sección 3)
 """
 
 import logging
 import pyodbc
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, TYPE_CHECKING
 
 # Importar repositorios especializados
 from .despacho.despacho_cabecera_repository import DespachoCabeceraRepository
@@ -24,6 +25,9 @@ from .despacho.despacho_query_repository import DespachoQueryRepository
 
 # Re-exportar utilidades para compatibilidad hacia atrás
 from .common.serialization import serialize_date, serialize_decimal
+
+if TYPE_CHECKING:
+    from src.utils.audit_context import AuditContext
 
 logger = logging.getLogger(__name__)
 
@@ -66,31 +70,59 @@ class DespachoRepository:
         """
         return self.cabecera_repo.get_by_id(despacho_id)
 
-    def insert_cabecera(self, datos_cabecera: Dict[str, Any]) -> str:
+    def insert_cabecera(
+        self, 
+        datos_cabecera: Dict[str, Any],
+        audit_context: Optional["AuditContext"] = None
+    ) -> str:
         """
         Inserta un registro en despacho_cabecera.
         
         DELEGADO a DespachoCabeceraRepository.
+        
+        Args:
+            datos_cabecera: Diccionario con datos de cabecera
+            audit_context: Contexto de auditoría opcional (Buenas Prácticas - Sección 3)
         """
-        return self.cabecera_repo.insert(datos_cabecera)
+        return self.cabecera_repo.insert(datos_cabecera, audit_context=audit_context)
 
-    def update_cabecera(self, despacho_id: str, datos_cabecera: Dict[str, Any]) -> bool:
+    def update_cabecera(
+        self, 
+        despacho_id: str, 
+        datos_cabecera: Dict[str, Any],
+        audit_context: Optional["AuditContext"] = None
+    ) -> bool:
         """
         Actualiza un registro existente en despacho_cabecera.
 
         DELEGADO a DespachoCabeceraRepository.
+        
+        Args:
+            despacho_id: UUID del despacho a actualizar
+            datos_cabecera: Diccionario con datos actualizados
+            audit_context: Contexto de auditoría opcional (Buenas Prácticas - Sección 3)
         """
-        return self.cabecera_repo.update(despacho_id, datos_cabecera)
+        return self.cabecera_repo.update(despacho_id, datos_cabecera, audit_context=audit_context)
 
     # ========== Métodos de Detalle (delegados) ==========
 
-    def insert_detalles(self, despacho_id: str, detalles: List[Dict[str, Any]]) -> int:
+    def insert_detalles(
+        self, 
+        despacho_id: str, 
+        detalles: List[Dict[str, Any]],
+        audit_context: Optional["AuditContext"] = None
+    ) -> int:
         """
         Inserta múltiples líneas de detalle en despacho_detalle.
 
         DELEGADO a DespachoDetalleRepository.
+        
+        Args:
+            despacho_id: UUID de la cabecera de despacho
+            detalles: Lista de diccionarios con datos de detalle
+            audit_context: Contexto de auditoría opcional (Buenas Prácticas - Sección 3)
         """
-        return self.detalle_repo.insert_many(despacho_id, detalles)
+        return self.detalle_repo.insert_many(despacho_id, detalles, audit_context=audit_context)
 
     def get_detalles(self, despacho_id: str) -> List[Dict[str, Any]]:
         """

@@ -3,13 +3,18 @@ Repositorio especializado para operaciones de despacho_cabecera.
 
 CHANGELOG:
 - 2026-01-08: Extraído de despacho_repository.py
+- 2026-02-06: Agregado soporte para campos de auditoría (Buenas Prácticas - Sección 3)
 """
 
 import logging
 import pyodbc
-from typing import Optional, Dict, Any
+from datetime import datetime
+from typing import Optional, Dict, Any, TYPE_CHECKING
 
 from ..common.serialization import serialize_date
+
+if TYPE_CHECKING:
+    from src.utils.audit_context import AuditContext
 
 logger = logging.getLogger(__name__)
 
@@ -97,12 +102,17 @@ class DespachoCabeceraRepository:
         finally:
             cursor.close()
 
-    def insert(self, datos_cabecera: Dict[str, Any]) -> str:
+    def insert(
+        self, 
+        datos_cabecera: Dict[str, Any],
+        audit_context: Optional["AuditContext"] = None
+    ) -> str:
         """
         Inserta un registro en despacho_cabecera.
 
         Args:
             datos_cabecera: Diccionario con datos de cabecera (sin despacho_id)
+            audit_context: Contexto de auditoría opcional (Buenas Prácticas - Sección 3)
 
         Returns:
             despacho_id (UUID) generado
@@ -123,6 +133,15 @@ class DespachoCabeceraRepository:
                 raise ValueError("No se pudo generar UUID para despacho_id")
             despacho_id = str(uuid_result[0])
 
+            # Campos de auditoría (Buenas Prácticas - Sección 3)
+            creado_por = None
+            origen = None
+            ip_origen = None
+            if audit_context:
+                creado_por = audit_context.get_creado_por()
+                origen = audit_context.origen
+                ip_origen = audit_context.ip_origen
+
             sql = """
             INSERT INTO despacho_cabecera (
                 despacho_id, empresa, codigo_cliente, fecha_despacho,
@@ -130,8 +149,9 @@ class DespachoCabeceraRepository:
                 numero_factura, tipo_documento, orden_compra, orden_compra_cliente,
                 remision_facturada, num_id_factura_relacionada, fecha_factura,
                 codigo_despacho, codigo_bodega, confirmado,
+                creado_por, origen, ip_origen,
                 created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, GETDATE(), GETDATE())
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, GETDATE(), GETDATE())
             """
 
             values = (
@@ -153,6 +173,9 @@ class DespachoCabeceraRepository:
                 datos_cabecera["codigo_despacho"],
                 datos_cabecera.get("codigo_bodega"),
                 datos_cabecera.get("confirmado", 0),
+                creado_por,
+                origen,
+                ip_origen,
             )
 
             cursor.execute(sql, values)
@@ -169,7 +192,12 @@ class DespachoCabeceraRepository:
         finally:
             cursor.close()
 
-    def update(self, despacho_id: str, datos_cabecera: Dict[str, Any]) -> bool:
+    def update(
+        self, 
+        despacho_id: str, 
+        datos_cabecera: Dict[str, Any],
+        audit_context: Optional["AuditContext"] = None
+    ) -> bool:
         """
         Actualiza un registro existente en despacho_cabecera.
 
@@ -178,6 +206,7 @@ class DespachoCabeceraRepository:
         Args:
             despacho_id: UUID del despacho a actualizar
             datos_cabecera: Diccionario con datos actualizados (sin despacho_id)
+            audit_context: Contexto de auditoría opcional (Buenas Prácticas - Sección 3)
 
         Returns:
             True si se actualizó correctamente
@@ -200,6 +229,13 @@ class DespachoCabeceraRepository:
                 else:
                     merged[key] = existing[key]
 
+            # Campos de auditoría (Buenas Prácticas - Sección 3)
+            modificado_por = None
+            modificado_fecha = None
+            if audit_context:
+                modificado_por = audit_context.get_modificado_por()
+                modificado_fecha = datetime.utcnow()
+
             sql = """
             UPDATE despacho_cabecera SET
                 empresa = ?, codigo_cliente = ?, fecha_despacho = ?,
@@ -208,6 +244,7 @@ class DespachoCabeceraRepository:
                 orden_compra = ?, orden_compra_cliente = ?, remision_facturada = ?,
                 num_id_factura_relacionada = ?, fecha_factura = ?,
                 codigo_despacho = ?, codigo_bodega = ?, confirmado = ?,
+                modificado_por = ?, modificado_fecha = ?,
                 updated_at = GETDATE()
             WHERE despacho_id = ?
             """
@@ -219,6 +256,7 @@ class DespachoCabeceraRepository:
                 merged["orden_compra"], merged["orden_compra_cliente"], merged["remision_facturada"],
                 merged["num_id_factura_relacionada"], merged["fecha_factura"],
                 merged["codigo_despacho"], merged.get("codigo_bodega"), merged.get("confirmado", 0),
+                modificado_por, modificado_fecha,
                 despacho_id,
             )
 

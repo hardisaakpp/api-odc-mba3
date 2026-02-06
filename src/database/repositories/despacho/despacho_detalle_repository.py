@@ -3,13 +3,17 @@ Repositorio especializado para operaciones de despacho_detalle.
 
 CHANGELOG:
 - 2026-01-08: Extraído de despacho_repository.py
+- 2026-02-06: Agregado soporte para campos de auditoría (Buenas Prácticas - Sección 3)
 """
 
 import logging
 import pyodbc
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional, TYPE_CHECKING
 
 from ..common.serialization import serialize_decimal
+
+if TYPE_CHECKING:
+    from src.utils.audit_context import AuditContext
 
 logger = logging.getLogger(__name__)
 
@@ -26,13 +30,19 @@ class DespachoDetalleRepository:
         """
         self.conn = conn
 
-    def insert_many(self, despacho_id: str, detalles: List[Dict[str, Any]]) -> int:
+    def insert_many(
+        self, 
+        despacho_id: str, 
+        detalles: List[Dict[str, Any]],
+        audit_context: Optional["AuditContext"] = None
+    ) -> int:
         """
         Inserta múltiples líneas de detalle en despacho_detalle.
 
         Args:
             despacho_id: UUID de la cabecera de despacho
             detalles: Lista de diccionarios con datos de detalle
+            audit_context: Contexto de auditoría opcional (Buenas Prácticas - Sección 3)
 
         Returns:
             Número de líneas insertadas
@@ -43,14 +53,24 @@ class DespachoDetalleRepository:
         cursor = self.conn.cursor()
         inserted_count = 0
 
+        # Campos de auditoría (Buenas Prácticas - Sección 3)
+        creado_por = None
+        origen = None
+        ip_origen = None
+        if audit_context:
+            creado_por = audit_context.get_creado_por()
+            origen = audit_context.origen
+            ip_origen = audit_context.ip_origen
+
         try:
             sql = """
             INSERT INTO despacho_detalle (
                 detalle_id, despacho_id, sku, cantidad_docena_mba3,
                 subtotal_sap, cantidad_pack_sap, unidad_sap,
                 precio_unitario_mba3, descuento, total_linea_mba3,
-                impuesto, nombre_producto, tipo_linea, precio_unitario_sap
-            ) VALUES (NEWID(), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                impuesto, nombre_producto, tipo_linea, precio_unitario_sap,
+                creado_por, origen, ip_origen
+            ) VALUES (NEWID(), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """
 
             for detalle in detalles:
@@ -69,6 +89,9 @@ class DespachoDetalleRepository:
                         detalle.get("nombre_producto"),
                         detalle.get("tipo_linea"),
                         detalle.get("precio_unitario_sap"),
+                        creado_por,
+                        origen,
+                        ip_origen,
                     )
 
                     cursor.execute(sql, values)

@@ -8,7 +8,7 @@ import csv
 import io
 from typing import Dict, Optional
 from datetime import datetime
-from fastapi import FastAPI, UploadFile, File, Depends, HTTPException, Path, Query, Body, status
+from fastapi import FastAPI, UploadFile, File, Depends, HTTPException, Path, Query, Body, status, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from src.database.connection import get_db_connection_context
@@ -30,6 +30,7 @@ from src.database.pedido_estados import (
 from src.security.jwt_auth import verify_jwt_token, require_permission, require_any_permission
 from src.exceptions import BusinessException
 from src.logging_config import log_business_operation, get_correlation_id_from_request
+from src.utils.audit_context import get_audit_context, ORIGEN_WEB
 from src.models import (
     ModificarPedidoCabeceraRequest,
     ModificarPedidoCabeceraResponse,
@@ -1099,6 +1100,7 @@ def register_crud_endpoints(app: FastAPI):
 
     @app.post("/api/pedidos/{pedido_id}/cancelar", tags=["Pedidos"])
     async def cancelar_pedido(
+        request: Request,
         pedido_id: str = Path(..., description="UUID del pedido a cancelar"),
         user: Dict = Depends(verify_jwt_token),
         _: None = Depends(require_permission('mabel.view'))
@@ -1123,6 +1125,9 @@ def register_crud_endpoints(app: FastAPI):
         - **400**: Pedido no está en estado permitido para cancelar.
         - **500**: Error interno.
         """
+        # Crear contexto de auditoría (Buenas Prácticas - Sección 3)
+        audit = get_audit_context(request, user, origen=ORIGEN_WEB)
+        
         try:
             with get_db_connection_context() as conn:
                 repo = PedidoRepository(conn)
@@ -1157,8 +1162,8 @@ def register_crud_endpoints(app: FastAPI):
                         }
                     )
                 
-                # Cambiar estado a CANCELADO
-                repo.update_estado(pedido_id, ESTADO_CANCELADO)
+                # Cambiar estado a CANCELADO (con campos de auditoría)
+                repo.update_estado(pedido_id, ESTADO_CANCELADO, audit_context=audit)
                 
                 # Obtener pedido actualizado
                 pedido_actualizado = repo.get_pedido_completo(pedido_id)

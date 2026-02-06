@@ -1,11 +1,14 @@
 """
 Endpoints de redistribución de pedidos.
+
+CHANGELOG:
+- 2026-02-06: Agregado soporte para AuditContext (Buenas Prácticas - Sección 3)
 """
 
 import logging
 import json
 from typing import Dict, Optional, Any
-from fastapi import FastAPI, Depends, HTTPException, Path, Query, Body, status
+from fastapi import FastAPI, Depends, HTTPException, Path, Query, Body, status, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from datetime import datetime
 import pandas as pd
@@ -23,6 +26,7 @@ from src.database.repositories.distribucion_confirmada_repository import Distrib
 from src.database.repositories.pedido_repository import PedidoRepository
 from src.database.services.redistribucion_validator import RedistribucionValidator
 from src.security.jwt_auth import verify_jwt_token, require_permission, require_any_permission
+from src.utils.audit_context import get_audit_context, ORIGEN_WEB
 from src.models import (
     DistribucionPedidoResponse,
     RedistribuirPedidoRequest,
@@ -166,6 +170,7 @@ def register_redistribucion_endpoints(app: FastAPI):
     
     @app.post("/api/pedidos/{pedido_id}/redistribuir", tags=["Pedidos - Redistribución"])
     async def redistribuir_pedido(
+        request: Request,
         pedido_id: str = Path(..., description="UUID del pedido"),
         request_body: RedistribuirPedidoRequest = Body(..., description="Datos de la redistribución"),
         user: Dict = Depends(verify_jwt_token),
@@ -300,15 +305,19 @@ def register_redistribucion_endpoints(app: FastAPI):
                         }
                     )
                 
+                # Crear contexto de auditoría (Buenas Prácticas - Sección 3)
+                audit = get_audit_context(request, user, origen=ORIGEN_WEB)
+                
                 # Crear redistribución
                 resultado = repo_dist.crear_redistribucion(
                     pedido_id=pedido_id,
                     productos_redistribucion=productos_redistribucion,
-                    usuario=user_id
+                    usuario=user_id,
+                    audit_context=audit
                 )
                 
                 # Actualizar estado del pedido a CONFIRMADO (solo este estado permite Confirmar Redistribución)
-                repo_pedido.update_estado(pedido_id, ESTADO_REDISTRIBUCION)
+                repo_pedido.update_estado(pedido_id, ESTADO_REDISTRIBUCION, audit_context=audit)
                 
                 logger.info(f"✅ Redistribución creada para pedido {pedido_id} por usuario {user_id}")
                 
@@ -341,6 +350,7 @@ def register_redistribucion_endpoints(app: FastAPI):
              response_model=ConfirmarRedistribucionResponse,
              tags=["Pedidos - Redistribución"])
     async def confirmar_redistribucion(
+        request: Request,
         pedido_id: str = Path(..., description="UUID del pedido"),
         request_body: ConfirmarRedistribucionRequest = Body(..., description="Datos de confirmación"),
         user: Dict = Depends(verify_jwt_token),
@@ -419,15 +429,19 @@ def register_redistribucion_endpoints(app: FastAPI):
                         }
                     )
                 
+                # Crear contexto de auditoría (Buenas Prácticas - Sección 3)
+                audit = get_audit_context(request, user, origen=ORIGEN_WEB)
+                
                 # Confirmar redistribución
                 resultado = repo_dist.confirmar_redistribucion(
                     pedido_id=pedido_id,
                     version=request_body.version,
-                    usuario=user_id
+                    usuario=user_id,
+                    audit_context=audit
                 )
                 
                 # Actualizar estado del pedido a 'REDISTRIBUIDO' (endpoint interno)
-                repo_pedido.update_estado(pedido_id, ESTADO_REDISTRIBUIDO)
+                repo_pedido.update_estado(pedido_id, ESTADO_REDISTRIBUIDO, audit_context=audit)
                 estado_nuevo = "REDISTRIBUIDO"
                 
                 logger.info(f"✅ Redistribución confirmada para pedido {pedido_id} por usuario {user_id}")
@@ -753,8 +767,15 @@ def register_redistribucion_endpoints(app: FastAPI):
         
         **Funcionalidad:**
         - Guarda la redistribución como borrador (no la confirma)
-        - Permite recuperar el borrador más tarde
-        - Pasa el pedido a estado CONFIRMADO para permitir luego Confirmar Redistribución
+        - Permite recuperar el borrador más tarde para continuar editando
+        - **NO cambia el estado del pedido** (solo persiste los datos)
+        - El cambio de estado ocurre únicamente al usar "Confirmar Redistribución"
+        
+        **Uso típico:**
+        - El usuario hace ajustes en la redistribución
+        - Hace clic en "Guardar Borrador" para no perder su progreso
+        - Puede cerrar/refrescar la página y volver más tarde
+        - Al volver, el frontend debe llamar a GET .../borrador para restaurar los datos
         
         **Request:**
         ```json
@@ -861,9 +882,11 @@ def register_redistribucion_endpoints(app: FastAPI):
                 """, (pedido_id, ajustes_json, user_id, pedido_id, pedido_id, numero_pedido, ajustes_json, user_id))
                 
                 conn.commit()
-
-                # Pasar a CONFIRMADO para que el usuario pueda luego Confirmar Redistribución
-                repo_pedido.update_estado(pedido_id, ESTADO_REDISTRIBUCION)
+                
+                # NOTA: NO cambiamos el estado del pedido aquí.
+                # "Guardar Borrador" solo persiste los ajustes para que el usuario
+                # pueda continuar su trabajo más tarde sin perder el progreso.
+                # El cambio de estado ocurre únicamente al "Confirmar Redistribución".
                 
                 logger.info(f"✅ Borrador guardado para pedido {numero_pedido} por usuario {user_id}")
                 
@@ -938,13 +961,14 @@ def register_redistribucion_endpoints(app: FastAPI):
                 
                 row = cursor.fetchone()
                 
+                # Si no hay borrador guardado, devolver respuesta vacía (no 404)
+                # Esto facilita el manejo en el frontend
                 if not row:
-                    raise HTTPException(
-                        status_code=status.HTTP_404_NOT_FOUND,
-                        detail={
-                            "error": "borrador_not_found",
-                            "message": "No se encontró un borrador guardado para este pedido"
-                        }
+                    return BorradorResponse(
+                        status="success",
+                        ajustes_detalle=[],
+                        fecha_guardado=None,
+                        message="No hay borrador guardado para este pedido"
                     )
                 
                 ajustes_json = row[0]
@@ -1266,6 +1290,7 @@ def register_redistribucion_endpoints(app: FastAPI):
              response_model=ConfirmarRedistribucionResponseFrontend,
              tags=["Pedidos - Redistribución"])
     async def confirmar_redistribucion_frontend(
+        request: Request,
         numero_pedido: str = Path(..., description="Número del pedido"),
         request_body: RedistribucionConfirmarRequest = Body(..., description="Datos de confirmación de redistribución"),
         user: Dict = Depends(verify_jwt_token),
@@ -1451,22 +1476,27 @@ def register_redistribucion_endpoints(app: FastAPI):
                         }
                     )
                 
+                # Crear contexto de auditoría (Buenas Prácticas - Sección 3)
+                audit = get_audit_context(request, user, origen=ORIGEN_WEB)
+                
                 # Crear redistribución
                 resultado = repo_dist.crear_redistribucion(
                     pedido_id=pedido_id,
                     productos_redistribucion=productos_redistribucion,
-                    usuario=user_id
+                    usuario=user_id,
+                    audit_context=audit
                 )
                 
                 # Confirmar redistribución
                 resultado_confirmacion = repo_dist.confirmar_redistribucion(
                     pedido_id=pedido_id,
                     version=resultado["version"],
-                    usuario=user_id
+                    usuario=user_id,
+                    audit_context=audit
                 )
                 
                 # Actualizar estado del pedido a "CONFIRMADO REDISTRIBUCION" (específico para confirmación desde frontend)
-                repo_pedido.update_estado(pedido_id, ESTADO_PEDIDO_CONFIRMADO)
+                repo_pedido.update_estado(pedido_id, ESTADO_PEDIDO_CONFIRMADO, audit_context=audit)
                 
                 # Calcular resumen
                 total_productos = len(request_body.ajustes_detalle)
@@ -2009,6 +2039,7 @@ def register_redistribucion_endpoints(app: FastAPI):
     @app.post("/api/pedidos/{numero_pedido}/proceso-completo-sap",
              tags=["Pedidos - Redistribución"])
     async def proceso_completo_sap(
+        request: Request,
         numero_pedido: str = Path(..., description="Número del pedido"),
         request_body: RedistribucionConfirmarRequest = Body(..., description="Datos de redistribución"),
         user: Dict = Depends(verify_jwt_token),
@@ -2222,22 +2253,27 @@ def register_redistribucion_endpoints(app: FastAPI):
                             }
                         )
                     
+                    # Crear contexto de auditoría (Buenas Prácticas - Sección 3)
+                    audit = get_audit_context(request, user, origen=ORIGEN_WEB)
+                    
                     # Crear redistribución
                     resultado_crear = repo_dist.crear_redistribucion(
                         pedido_id=pedido_id,
                         productos_redistribucion=productos_redistribucion,
-                        usuario=user_id
+                        usuario=user_id,
+                        audit_context=audit
                     )
                     
                     # Confirmar redistribución
                     resultado_confirmar = repo_dist.confirmar_redistribucion(
                         pedido_id=pedido_id,
                         version=resultado_crear["version"],
-                        usuario=user_id
+                        usuario=user_id,
+                        audit_context=audit
                     )
                     
                     # Actualizar estado del pedido
-                    repo_pedido.update_estado(pedido_id, ESTADO_PEDIDO_CONFIRMADO)
+                    repo_pedido.update_estado(pedido_id, ESTADO_PEDIDO_CONFIRMADO, audit_context=audit)
                     
                     # Calcular resumen
                     total_productos = len(request_body.ajustes_detalle)

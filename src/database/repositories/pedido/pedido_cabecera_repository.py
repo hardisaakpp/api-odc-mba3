@@ -2,13 +2,14 @@
 Repositorio especializado para operaciones de pedido (cabecera).
 
 CHANGELOG:
+- 2026-02-06: Agregado soporte para campos de auditoría (origen, ip_origen, modificado_por, modificado_fecha)
 - 2026-01-23: Extraído de pedido_repository.py
 """
 
 import logging
 import pyodbc
-from typing import Dict, Any, List, Optional
-from datetime import date
+from typing import Dict, Any, List, Optional, TYPE_CHECKING
+from datetime import date, datetime
 
 from .pedido_utils import PedidoUtils
 
@@ -21,6 +22,10 @@ from src.database.pedido_estados import (
     ESTADO_CANCELADO,
     estado_id_desde_legacy,
 )
+
+# Import para type hints sin dependencia circular
+if TYPE_CHECKING:
+    from src.utils.audit_context import AuditContext
 
 logger = logging.getLogger(__name__)
 
@@ -38,12 +43,14 @@ class PedidoCabeceraRepository:
         self.conn = conn
         self.utils = PedidoUtils(conn)
 
-    def insert(self, datos_cabecera: Dict[str, Any]) -> str:
+    def insert(self, datos_cabecera: Dict[str, Any], audit_context: Optional["AuditContext"] = None) -> str:
         """
         Inserta un registro en pedido.
         
         Args:
             datos_cabecera: Diccionario con datos de cabecera (sin pedido_id)
+                Puede incluir campos de auditoría: origen, ip_origen
+            audit_context: Contexto de auditoría opcional (Buenas Prácticas - Sección 3)
             
         Returns:
             pedido_id (UUID) generado
@@ -52,6 +59,15 @@ class PedidoCabeceraRepository:
             Exception: Si falla la inserción
         """
         datos_cabecera_normalizado = dict(datos_cabecera)
+        
+        # Aplicar campos de auditoría si se proporciona contexto
+        if audit_context:
+            if not datos_cabecera_normalizado.get("creado_por"):
+                datos_cabecera_normalizado["creado_por"] = audit_context.get_creado_por()
+            if not datos_cabecera_normalizado.get("origen"):
+                datos_cabecera_normalizado["origen"] = audit_context.origen
+            if not datos_cabecera_normalizado.get("ip_origen"):
+                datos_cabecera_normalizado["ip_origen"] = audit_context.ip_origen
         
         if "fecha_pedido" in datos_cabecera_normalizado:
             datos_cabecera_normalizado["fecha_pedido"] = self.utils.normalizar_fecha(
@@ -79,6 +95,7 @@ class PedidoCabeceraRepository:
                 estado_id = datos_cabecera_normalizado.get("estado_id", ESTADO_BORRADOR)
                 if isinstance(estado_id, str):
                     estado_id = estado_id_desde_legacy(estado_id)
+                # SQL con campos de auditoría (origen, ip_origen) - Buenas Prácticas Sección 3
                 sql = """
                 INSERT INTO pedido (
                     pedido_id,
@@ -95,8 +112,10 @@ class PedidoCabeceraRepository:
                     archivo_nombre,
                     creado_por,
                     estado_id,
+                    origen,
+                    ip_origen,
                     creado_en
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, GETDATE())
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, GETDATE())
                 """
                 values = (
                     pedido_id,
@@ -113,6 +132,8 @@ class PedidoCabeceraRepository:
                     datos_cabecera_normalizado.get("archivo_nombre"),
                     datos_cabecera_normalizado.get("creado_por"),
                     estado_id,
+                    datos_cabecera_normalizado.get("origen"),  # Campo de auditoría
+                    datos_cabecera_normalizado.get("ip_origen"),  # Campo de auditoría
                 )
             elif tiene_estado:
                 sql = """
@@ -359,13 +380,19 @@ class PedidoCabeceraRepository:
         finally:
             cursor.close()
 
-    def update_estado(self, pedido_id: str, estado: int | str) -> bool:
+    def update_estado(
+        self, 
+        pedido_id: str, 
+        estado: int | str,
+        audit_context: Optional["AuditContext"] = None
+    ) -> bool:
         """
         Actualiza el estado de un pedido.
 
         Args:
             pedido_id: UUID del pedido
             estado: Nuevo estado_id (int) o nombre legacy (str); se normaliza a estado_id.
+            audit_context: Contexto de auditoría opcional (Buenas Prácticas - Sección 3)
 
         Returns:
             True si se actualizó correctamente, False si no existe el pedido o no hay columna estado/estado_id.
@@ -376,24 +403,38 @@ class PedidoCabeceraRepository:
             tiene_estado = self.utils.tiene_columna_estado(cursor)
 
             estado_id = int(estado) if isinstance(estado, int) else estado_id_desde_legacy(estado)
+            
+            # Campos de auditoría (Buenas Prácticas - Sección 3)
+            modificado_por = audit_context.get_modificado_por() if audit_context else None
+            modificado_fecha = datetime.utcnow()
 
             if tiene_estado_id:
                 # COALESCE evita NULL en p.estado si no existe la fila en pedido_estado (ej. estado nuevo no migrado)
+                # Incluye campos de auditoría: modificado_por, modificado_fecha
                 cursor.execute("""
-                    UPDATE p SET p.estado_id = ?, p.estado = COALESCE(pe.nombre, CAST(? AS NVARCHAR(100)))
+                    UPDATE p SET 
+                        p.estado_id = ?, 
+                        p.estado = COALESCE(pe.nombre, CAST(? AS NVARCHAR(100))),
+                        p.modificado_por = COALESCE(?, p.modificado_por),
+                        p.modificado_fecha = ?
                     FROM pedido p
                     LEFT JOIN pedido_estado pe ON pe.id = ?
                     WHERE p.pedido_id = ?
-                """, (estado_id, estado_id, estado_id, pedido_id))
+                """, (estado_id, estado_id, modificado_por, modificado_fecha, estado_id, pedido_id))
             elif tiene_estado:
                 cursor.execute(
                     "SELECT nombre FROM pedido_estado WHERE id = ?", (estado_id,)
                 )
                 nom = cursor.fetchone()
                 nombre = nom[0] if nom and nom[0] else str(estado_id)
+                # Incluye campos de auditoría
                 cursor.execute("""
-                    UPDATE pedido SET estado = ? WHERE pedido_id = ?
-                """, (nombre, pedido_id))
+                    UPDATE pedido SET 
+                        estado = ?,
+                        modificado_por = COALESCE(?, modificado_por),
+                        modificado_fecha = ?
+                    WHERE pedido_id = ?
+                """, (nombre, modificado_por, modificado_fecha, pedido_id))
             else:
                 logger.warning("⚠️ Columna 'estado'/'estado_id' no existe en tabla pedido.")
                 return False

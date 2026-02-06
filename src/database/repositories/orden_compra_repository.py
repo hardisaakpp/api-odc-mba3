@@ -1,12 +1,19 @@
 """
 Repositorio para operaciones CRUD de órdenes de compra en SQL Server.
+
+CHANGELOG:
+- 2026-02-06: Agregado soporte para campos de auditoría (Buenas Prácticas - Sección 3)
 """
 
 import logging
 import pyodbc
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, TYPE_CHECKING
+from datetime import datetime
 
 from .common.serialization import serialize_date
+
+if TYPE_CHECKING:
+    from src.utils.audit_context import AuditContext
 
 logger = logging.getLogger(__name__)
 
@@ -104,12 +111,17 @@ class OrdenCompraRepository:
         finally:
             cursor.close()
     
-    def insert_cabecera(self, datos_cabecera: Dict[str, Any]) -> str:
+    def insert_cabecera(
+        self, 
+        datos_cabecera: Dict[str, Any],
+        audit_context: Optional["AuditContext"] = None
+    ) -> str:
         """
         Inserta un registro en orden_compra_cabecera.
         
         Args:
             datos_cabecera: Diccionario con datos de cabecera (sin oc_id)
+            audit_context: Contexto de auditoría opcional (Buenas Prácticas - Sección 3)
             
         Returns:
             oc_id (UUID) generado
@@ -131,6 +143,15 @@ class OrdenCompraRepository:
             # Inicializar estado como 'PENDIENTE' si no se proporciona
             estado = datos_cabecera.get("estado", "PENDIENTE")
             
+            # Campos de auditoría (Buenas Prácticas - Sección 3)
+            creado_por = None
+            origen = None
+            ip_origen = None
+            if audit_context:
+                creado_por = audit_context.get_creado_por()
+                origen = audit_context.origen
+                ip_origen = audit_context.ip_origen
+            
             sql = """
             INSERT INTO orden_compra_cabecera (
                 oc_id,
@@ -141,8 +162,11 @@ class OrdenCompraRepository:
                 referencia_despacho,
                 codigo_bodega,
                 estado,
+                creado_por,
+                origen,
+                ip_origen,
                 created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, GETDATE())
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, GETDATE())
             """
             
             values = (
@@ -154,6 +178,9 @@ class OrdenCompraRepository:
                 datos_cabecera.get("referencia_despacho"),
                 datos_cabecera.get("codigo_bodega"),
                 estado,
+                creado_por,
+                origen,
+                ip_origen,
             )
             
             cursor.execute(sql, values)
@@ -170,13 +197,19 @@ class OrdenCompraRepository:
         finally:
             cursor.close()
     
-    def insert_detalles(self, oc_id: str, detalles: List[Dict[str, Any]]) -> int:
+    def insert_detalles(
+        self, 
+        oc_id: str, 
+        detalles: List[Dict[str, Any]],
+        audit_context: Optional["AuditContext"] = None
+    ) -> int:
         """
         Inserta múltiples líneas de detalle en orden_compra_detalle.
         
         Args:
             oc_id: UUID de la cabecera de orden de compra
             detalles: Lista de diccionarios con datos de detalle
+            audit_context: Contexto de auditoría opcional (Buenas Prácticas - Sección 3)
             
         Returns:
             Número de líneas insertadas
@@ -186,6 +219,15 @@ class OrdenCompraRepository:
         
         cursor = self.conn.cursor()
         inserted_count = 0
+        
+        # Campos de auditoría (Buenas Prácticas - Sección 3)
+        creado_por = None
+        origen = None
+        ip_origen = None
+        if audit_context:
+            creado_por = audit_context.get_creado_por()
+            origen = audit_context.origen
+            ip_origen = audit_context.ip_origen
         
         try:
             sql = """
@@ -199,8 +241,11 @@ class OrdenCompraRepository:
                 precio_unitario,
                 total_linea,
                 cantidad_origen,
-                codigo_bodega
-            ) VALUES (NEWID(), ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                codigo_bodega,
+                creado_por,
+                origen,
+                ip_origen
+            ) VALUES (NEWID(), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """
             
             for detalle in detalles:
@@ -215,6 +260,9 @@ class OrdenCompraRepository:
                         detalle.get("total_linea"),
                         detalle.get("cantidad_origen"),
                         detalle.get("codigo_bodega"),  # ⭐ NUEVO: Persistir bodega por línea
+                        creado_por,
+                        origen,
+                        ip_origen,
                     )
                     
                     cursor.execute(sql, values)
@@ -625,7 +673,8 @@ class OrdenCompraRepository:
         respuesta_sap: Optional[str] = None,
         error_message: Optional[str] = None,
         error_code: Optional[str] = None,
-        error_source: Optional[str] = None
+        error_source: Optional[str] = None,
+        audit_context: Optional["AuditContext"] = None
     ) -> bool:
         """
         Actualiza el estado de una orden de compra y respuesta de SAP.
@@ -642,6 +691,7 @@ class OrdenCompraRepository:
             error_message: Mensaje de error si falla (opcional)
             error_code: Código de error de SAP (opcional)
             error_source: Origen del error (SAP, BACKEND, SAP_CONNECTION) (opcional)
+            audit_context: Contexto de auditoría opcional (Buenas Prácticas - Sección 3)
             
         Returns:
             True si se actualizó correctamente, False en caso contrario
@@ -655,6 +705,13 @@ class OrdenCompraRepository:
             
             # Siempre actualizar fecha_procesado cuando se cambia el estado
             set_clauses.append("fecha_procesado = GETDATE()")
+            
+            # Campos de auditoría (Buenas Prácticas - Sección 3)
+            if audit_context:
+                set_clauses.append("modificado_por = ?")
+                values.append(audit_context.get_modificado_por())
+                set_clauses.append("modificado_fecha = ?")
+                values.append(datetime.utcnow())
             
             if numero_oc_sap is not None:
                 set_clauses.append("numero_oc_sap = ?")

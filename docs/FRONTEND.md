@@ -1925,6 +1925,162 @@ const isButtonDisabled =
 - **Al hacer clic:** Deshabilitar el botón de inmediato; tras **éxito**, no volver a habilitarlo.
 - **Si la petición falla:** Rehabilitar el botón y mostrar el error.
 
+### 1.3.2 Gestión del botón "Guardar Borrador"
+
+El botón **"Guardar Borrador"** permite al usuario guardar el progreso de su trabajo en la redistribución **sin confirmarla definitivamente**.
+
+#### Comportamiento
+
+| Característica | Descripción |
+|---------------|-------------|
+| **¿Cambia el estado del pedido?** | **NO**. Solo persiste los datos en la base de datos. |
+| **¿Se puede usar múltiples veces?** | **SÍ**. El usuario puede guardar su progreso cuantas veces quiera. |
+| **¿Persiste al refrescar la página?** | **SÍ**. El frontend debe recuperar el borrador al cargar la vista. |
+| **¿Persiste si el token expira?** | **SÍ**. Los datos están en la BD, no en memoria. |
+
+#### Endpoints
+
+**Guardar borrador:**
+
+```
+POST /api/pedidos/{numero_pedido}/redistribucion/borrador
+```
+
+**Body:**
+```json
+{
+  "ajustes_detalle": [
+    {
+      "codigo_producto": "R225.1012.BCO",
+      "descripcion": "Producto ejemplo",
+      "cantidad_solicitada": 100,
+      "cantidad_confirmada": 80,
+      "cantidad_ajustada": 75,
+      "distribucion_tiendas": [
+        {"tienda_codigo": "T001", "tienda_nombre": "Tienda 1", "cantidad": 50},
+        {"tienda_codigo": "T002", "tienda_nombre": "Tienda 2", "cantidad": 25}
+      ],
+      "costo_original": 25.50,
+      "costo_ajustado": 25.50,
+      "cambio_precio": false
+    }
+  ]
+}
+```
+
+**Respuesta:**
+```json
+{
+  "status": "success",
+  "message": "Borrador guardado exitosamente",
+  "pedido_id": "uuid-del-pedido",
+  "numero_pedido": "P-12.06 - 12 - 2025",
+  "fecha_guardado": "2025-01-15T10:30:00Z"
+}
+```
+
+**Recuperar borrador (al cargar la vista):**
+
+```
+GET /api/pedidos/{numero_pedido}/redistribucion/borrador
+```
+
+**Respuesta:**
+```json
+{
+  "status": "success",
+  "ajustes_detalle": [...],
+  "fecha_guardado": "2025-01-15T10:30:00Z"
+}
+```
+
+**Respuesta si no hay borrador guardado:**
+```json
+{
+  "status": "success",
+  "ajustes_detalle": [],
+  "fecha_guardado": null,
+  "message": "No hay borrador guardado para este pedido"
+}
+```
+
+#### Implementación en el Frontend
+
+**Al cargar la vista de redistribución:**
+
+```javascript
+// 1. Cargar datos del pedido
+const pedido = await fetchPedido(numeroPedido);
+
+// 2. Intentar recuperar borrador guardado
+try {
+  const borrador = await fetch(`/api/pedidos/${encodeURIComponent(numeroPedido)}/redistribucion/borrador`);
+  const data = await borrador.json();
+  
+  if (data.status === 'success' && data.ajustes_detalle?.length > 0) {
+    // Restaurar los ajustes del borrador
+    setAjustesDetalle(data.ajustes_detalle);
+    showNotification(`Borrador recuperado (guardado el ${formatDate(data.fecha_guardado)})`);
+  } else {
+    // No hay borrador, usar datos iniciales del pedido
+    setAjustesDetalle(pedido.detalles);
+  }
+} catch (error) {
+  // Error al recuperar borrador, usar datos iniciales
+  setAjustesDetalle(pedido.detalles);
+}
+```
+
+**Al hacer clic en "Guardar Borrador":**
+
+```javascript
+const handleGuardarBorrador = async () => {
+  try {
+    setGuardando(true);
+    
+    const response = await fetch(
+      `/api/pedidos/${encodeURIComponent(numeroPedido)}/redistribucion/borrador`,
+      {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ ajustes_detalle: ajustesDetalle })
+      }
+    );
+    
+    const data = await response.json();
+    
+    if (data.status === 'success') {
+      showSuccessNotification('Borrador guardado exitosamente');
+    } else {
+      throw new Error(data.message || 'Error al guardar borrador');
+    }
+  } catch (error) {
+    showErrorNotification(error.message);
+  } finally {
+    setGuardando(false);
+  }
+};
+```
+
+#### Diferencia entre "Guardar Borrador" y "Confirmar Redistribución"
+
+| Acción | Endpoint | Cambia estado | Efecto |
+|--------|----------|---------------|--------|
+| **Guardar Borrador** | `POST .../borrador` | **NO** | Solo persiste los ajustes. El usuario puede seguir editando. |
+| **Confirmar Redistribución** | `POST .../confirmar` | **SÍ** (a estado 10) | Confirma definitivamente. No se puede modificar después. |
+
+#### Checklist de Implementación
+
+- [ ] Al cargar la vista, llamar a `GET .../borrador` para recuperar ajustes guardados
+- [ ] Si hay borrador, mostrar notificación indicando la fecha de guardado
+- [ ] Al hacer clic en "Guardar Borrador", enviar `POST .../borrador`
+- [ ] Mostrar indicador de carga mientras se guarda
+- [ ] Mostrar notificación de éxito/error
+- [ ] El botón siempre está habilitado (no depende del estado del pedido)
+
 ---
 
 ## 2. Interfaz "Productos Procesados"

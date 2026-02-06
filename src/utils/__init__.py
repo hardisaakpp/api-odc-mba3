@@ -62,6 +62,23 @@ from .response_helpers import (
     ErrorCodes
 )
 
+# Exportar contexto de auditoría (Buenas Prácticas - Sección 3)
+from .audit_context import (
+    AuditContext,
+    get_audit_context,
+    get_celery_audit_context,
+    get_system_audit_context,
+    get_client_ip,
+    get_username_from_user,
+    ORIGEN_API,
+    ORIGEN_WEB,
+    ORIGEN_EXCEL,
+    ORIGEN_CELERY,
+    ORIGEN_MANUAL,
+    ORIGEN_LEGACY,
+    ORIGEN_SYSTEM,
+)
+
 __all__ = [
     # Funciones de utils.py
     "get_source_from_headers",
@@ -77,7 +94,7 @@ __all__ = [
     "send_homologacion_notification",
     "send_oc_ready_for_dispatch_notification",
     "send_plantilla_upload_notification",
-    # Response helpers (Buenas Prácticas)
+    # Response helpers (Buenas Prácticas - Sección 4)
     "success_response",
     "error_response",
     "paginated_response",
@@ -85,4 +102,18 @@ __all__ = [
     "not_found_response",
     "business_error_response",
     "ErrorCodes",
+    # Audit context (Buenas Prácticas - Sección 3)
+    "AuditContext",
+    "get_audit_context",
+    "get_celery_audit_context",
+    "get_system_audit_context",
+    "get_client_ip",
+    "get_username_from_user",
+    "ORIGEN_API",
+    "ORIGEN_WEB",
+    "ORIGEN_EXCEL",
+    "ORIGEN_CELERY",
+    "ORIGEN_MANUAL",
+    "ORIGEN_LEGACY",
+    "ORIGEN_SYSTEM",
 ]

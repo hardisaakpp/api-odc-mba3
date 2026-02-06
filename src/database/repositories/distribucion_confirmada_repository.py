@@ -1,13 +1,19 @@
 """
 Repositorio para operaciones de distribución confirmada (FASE 4).
 Maneja la redistribución realizada por MABEL TRADING después de la confirmación del proveedor.
+
+CHANGELOG:
+- 2026-02-06: Agregado soporte para AuditContext (Buenas Prácticas - Sección 3)
 """
 
 import logging
 import pyodbc
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, TYPE_CHECKING
 from datetime import datetime
 from decimal import Decimal
+
+if TYPE_CHECKING:
+    from src.utils.audit_context import AuditContext
 
 logger = logging.getLogger(__name__)
 
@@ -240,7 +246,8 @@ class DistribucionConfirmadaRepository:
         self,
         pedido_id: str,
         productos_redistribucion: List[Dict[str, Any]],
-        usuario: Optional[str] = None
+        usuario: Optional[str] = None,
+        audit_context: Optional["AuditContext"] = None
     ) -> Dict[str, Any]:
         """
         Crea una nueva versión de redistribución.
@@ -252,11 +259,20 @@ class DistribucionConfirmadaRepository:
                     "pedido_detalle_id": "...",
                     "distribuciones": [{"tienda_id": "...", "cantidad_asignada": 10}, ...]
                 }, ...]
-            usuario: Usuario que realiza la redistribución
+            usuario: Usuario que realiza la redistribución (deprecated, usar audit_context)
+            audit_context: Contexto de auditoría opcional (Buenas Prácticas - Sección 3)
             
         Returns:
             Diccionario con el resultado de la operación
         """
+        # Priorizar audit_context sobre usuario para campos de auditoría
+        creado_por = usuario
+        origen = None
+        ip_origen = None
+        if audit_context:
+            creado_por = audit_context.get_creado_por()
+            origen = audit_context.origen
+            ip_origen = audit_context.ip_origen
         cursor = self.conn.cursor()
         
         try:
@@ -391,8 +407,10 @@ class DistribucionConfirmadaRepository:
                             version,
                             estado,
                             creado_por,
+                            origen,
+                            ip_origen,
                             fecha_creacion
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'PENDIENTE', ?, ?)
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'PENDIENTE', ?, ?, ?, ?)
                     """, (
                         pedido_id,
                         pedido_detalle_id,
@@ -405,7 +423,9 @@ class DistribucionConfirmadaRepository:
                         subtotal_original,
                         subtotal_ajustado,
                         nueva_version,
-                        usuario,
+                        creado_por,
+                        origen,
+                        ip_origen,
                         fecha_creacion
                     ))
                     
@@ -432,7 +452,8 @@ class DistribucionConfirmadaRepository:
         self,
         pedido_id: str,
         version: Optional[int] = None,
-        usuario: Optional[str] = None
+        usuario: Optional[str] = None,
+        audit_context: Optional["AuditContext"] = None
     ) -> Dict[str, Any]:
         """
         Confirma una redistribución, cambiando su estado a 'CONFIRMADO'.
@@ -440,12 +461,18 @@ class DistribucionConfirmadaRepository:
         Args:
             pedido_id: UUID del pedido
             version: Versión a confirmar (si None, confirma la última)
-            usuario: Usuario que confirma
+            usuario: Usuario que confirma (deprecated, usar audit_context)
+            audit_context: Contexto de auditoría opcional (Buenas Prácticas - Sección 3)
             
         Returns:
             Diccionario con el resultado de la operación
         """
         cursor = self.conn.cursor()
+        
+        # Priorizar audit_context sobre usuario
+        modificado_por = usuario
+        if audit_context:
+            modificado_por = audit_context.get_modificado_por()
         
         try:
             if version is None:
@@ -462,7 +489,7 @@ class DistribucionConfirmadaRepository:
                     modificado_por = ?,
                     fecha_modificacion = ?
                 WHERE pedido_id = ? AND version = ?
-            """, (usuario, fecha_modificacion, pedido_id, version))
+            """, (modificado_por, fecha_modificacion, pedido_id, version))
             
             rows_affected = cursor.rowcount
             

@@ -9,13 +9,17 @@ REFACTORIZADO: Ahora delega a repositorios especializados:
 Mantiene la misma interfaz pública para compatibilidad hacia atrás.
 
 CHANGELOG:
+- 2026-02-06: Agregado soporte para AuditContext en métodos delegados (Buenas Prácticas - Sección 3)
 - 2026-01-23: Refactorizado como facade que delega a repositorios especializados
 - 2026-01-23: Movidas utilidades compartidas a pedido.pedido_utils
 """
 
 import logging
 import pyodbc
-from typing import Dict, Any, List, Optional, Tuple
+from typing import Dict, Any, List, Optional, Tuple, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from src.utils.audit_context import AuditContext
 
 # Importar repositorios especializados
 from .pedido.pedido_cabecera_repository import PedidoCabeceraRepository
@@ -49,13 +53,21 @@ class PedidoRepository:
 
     # ========== Métodos de Cabecera (delegados) ==========
 
-    def insert_cabecera(self, datos_cabecera: Dict[str, Any]) -> str:
+    def insert_cabecera(
+        self, 
+        datos_cabecera: Dict[str, Any], 
+        audit_context: Optional["AuditContext"] = None
+    ) -> str:
         """
         Inserta un registro en pedido.
         
+        Args:
+            datos_cabecera: Diccionario con datos de cabecera
+            audit_context: Contexto de auditoría opcional (Buenas Prácticas - Sección 3)
+        
         DELEGADO a PedidoCabeceraRepository.
         """
-        return self.cabecera_repo.insert(datos_cabecera)
+        return self.cabecera_repo.insert(datos_cabecera, audit_context=audit_context)
 
     def update_cabecera(self, pedido_id: str, datos_cabecera: Dict[str, Any]) -> bool:
         """
@@ -65,12 +77,23 @@ class PedidoRepository:
         """
         return self.cabecera_repo.update(pedido_id, datos_cabecera)
 
-    def update_estado(self, pedido_id: str, estado: "int | str") -> bool:
+    def update_estado(
+        self, 
+        pedido_id: str, 
+        estado: "int | str",
+        audit_context: Optional["AuditContext"] = None
+    ) -> bool:
         """
         Actualiza el estado de un pedido.
-        estado: estado_id (int) o nombre legacy (str). DELEGADO a PedidoCabeceraRepository.
+        
+        Args:
+            pedido_id: UUID del pedido
+            estado: estado_id (int) o nombre legacy (str)
+            audit_context: Contexto de auditoría opcional (Buenas Prácticas - Sección 3)
+            
+        DELEGADO a PedidoCabeceraRepository.
         """
-        return self.cabecera_repo.update_estado(pedido_id, estado)
+        return self.cabecera_repo.update_estado(pedido_id, estado, audit_context=audit_context)
 
     def get_pedido_completo(self, pedido_id: str) -> Optional[Dict[str, Any]]:
         """
