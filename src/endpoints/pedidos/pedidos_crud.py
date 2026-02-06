@@ -172,17 +172,12 @@ def register_crud_endpoints(app: FastAPI):
         _: None = Depends(require_any_permission(['odcsap.view', 'mabel.view']))
     ):
         """
-        Lista pedidos aptos para redistribución, ordenados por creado_en DESC.
+        Lista pedidos para la pantalla Revisar Redistribución, ordenados por creado_en DESC.
         
-        **Filtro de estados:** Solo incluye pedidos con estado >= "CONFIRMADO POR EL RAYO" (estado_id=4).
+        **Filtro de estados:** Solo incluye pedidos enviados.
         
-        **Estados excluidos:**
-        - BORRADOR (1)
-        - NUEVO PEDIDO (2)
-        - GESTIONAR PEDIDO (3)
-        - CANCELADO (19)
-        
-        **Estados incluidos:** Todos los demás a partir de CONFIRMADO POR EL RAYO (4).
+        **Estado incluido:**
+        - CONFIRMADO_ENVIADO (12)
 
         **Query Parameters:**
         - `page` (int, default: 1) - Número de página
@@ -268,15 +263,12 @@ def register_crud_endpoints(app: FastAPI):
         _: None = Depends(require_any_permission(['odcsap.view', 'mabel.view']))
     ):
         """
-        Obtiene el último pedido apto para redistribución: estado >= "CONFIRMADO POR EL RAYO" (4).
+        Obtiene el último pedido para la pantalla Revisar Redistribución.
         
-        **Filtro de estados:** Solo incluye pedidos con estado_id >= 4 y != 19 (CANCELADO).
+        **Filtro de estados:** Solo incluye pedidos enviados.
         
-        **Estados excluidos:**
-        - BORRADOR (1)
-        - NUEVO PEDIDO (2)
-        - GESTIONAR PEDIDO (3)
-        - CANCELADO (19)
+        **Estado incluido:**
+        - CONFIRMADO_ENVIADO (12)
         
         Para la pantalla Revisar Redistribución: al entrar en /redistribucion sin número de pedido,
         el front llama a este endpoint y, si hay resultado, redirige a
@@ -289,8 +281,7 @@ def register_crud_endpoints(app: FastAPI):
 
         **Comportamiento por permiso:**
         - Usuario con solo odcsap.view (EL RAYO): se ignora solo_usuario y se devuelve siempre
-          el último pedido en estado para redistribución visible en el sistema (sin filtrar por
-          creado_por), para que pueda ver el pedido que acaba de confirmar un usuario MABEL.
+          el último pedido visible en el sistema (sin filtrar por creado_por).
         - Usuario con mabel.view (MABEL): se respeta solo_usuario (true = último del usuario,
           false = último global).
         """
