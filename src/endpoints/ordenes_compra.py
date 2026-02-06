@@ -13,7 +13,7 @@ from fastapi.responses import JSONResponse
 from src.utils import get_source_from_headers
 from src.database.repositories.orden_compra_repository import OrdenCompraRepository
 from src.database.repositories.sap_integration_log_repository import SAPIntegrationLogRepository
-from src.database.connection import get_db_connection
+from src.database.connection import get_db_connection, get_db_connection_context
 from src.database.clients.sap_client import SAPClient
 from src.security.jwt_auth import verify_jwt_token, require_permission, require_any_permission
 
@@ -690,86 +690,83 @@ def register_ordenes_compra_endpoints(app: FastAPI):
         logger.info("=" * 70)
         
         try:
-            conn = get_db_connection()
-            oc_repo = OrdenCompraRepository(conn)
-            
-            # Verificar que la OC existe antes de eliminar
-            existing = oc_repo.get_existing_cabecera(oc_id)
-            if not existing:
-                conn.close()
-                logger.warning(f"⚠️ Orden de compra no encontrada: {oc_id}")
-                return JSONResponse(
-                    status_code=404,
-                    content={
-                        "status": "error",
-                        "message": "Orden de compra no encontrada",
-                        "oc_id": oc_id
-                    },
-                    headers={
-                        "X-Source": source,
-                        "X-Endpoint": "DELETE-ORDEN-COMPRA"
-                    }
-                )
-            
-            # Validar que la ODC no fue creada desde un despacho (no se puede eliminar)
-            if existing.get("despacho_id"):
-                conn.close()
-                logger.warning(f"⚠️ No se puede eliminar orden de compra creada desde despacho: {oc_id}")
-                return JSONResponse(
-                    status_code=403,
-                    content={
-                        "status": "error",
-                        "message": "No se puede eliminar una orden de compra creada desde un despacho",
-                        "oc_id": oc_id,
-                        "despacho_id": existing.get("despacho_id")
-                    },
-                    headers={
-                        "X-Source": source,
-                        "X-Endpoint": "DELETE-ORDEN-COMPRA"
-                    }
-                )
-            
-            # Obtener número de detalles antes de eliminar (para el log)
-            detalles = oc_repo.get_detalles(oc_id)
-            num_detalles = len(detalles)
-            
-            # Eliminar la orden de compra (detalles y cabecera)
-            eliminada = oc_repo.delete_cabecera(oc_id)
-            
-            conn.close()
-            
-            if eliminada:
-                logger.info(f"✅ Orden de compra eliminada: {oc_id} ({num_detalles} detalles)")
+            # Usar context manager para garantizar transacción y cierre de conexión
+            with get_db_connection_context() as conn:
+                oc_repo = OrdenCompraRepository(conn)
                 
-                return JSONResponse(
-                    status_code=200,
-                    content={
-                        "status": "success",
-                        "message": "Orden de compra eliminada exitosamente",
-                        "oc_id": oc_id,
-                        "detalles_eliminados": num_detalles
-                    },
-                    headers={
-                        "X-Source": source,
-                        "X-Endpoint": "DELETE-ORDEN-COMPRA",
-                        "X-OC-ID": oc_id,
-                        "X-Detalles-Eliminados": str(num_detalles)
-                    }
-                )
-            else:
-                logger.warning(f"⚠️ No se pudo eliminar orden de compra: {oc_id}")
-                return JSONResponse(
-                    status_code=500,
-                    content={
-                        "status": "error",
-                        "message": "No se pudo eliminar la orden de compra",
-                        "oc_id": oc_id
-                    },
-                    headers={
-                        "X-Source": source,
-                        "X-Endpoint": "DELETE-ORDEN-COMPRA"
-                    }
-                )
+                # Verificar que la OC existe antes de eliminar
+                existing = oc_repo.get_existing_cabecera(oc_id)
+                if not existing:
+                    logger.warning(f"⚠️ Orden de compra no encontrada: {oc_id}")
+                    return JSONResponse(
+                        status_code=404,
+                        content={
+                            "status": "error",
+                            "message": "Orden de compra no encontrada",
+                            "oc_id": oc_id
+                        },
+                        headers={
+                            "X-Source": source,
+                            "X-Endpoint": "DELETE-ORDEN-COMPRA"
+                        }
+                    )
+                
+                # Validar que la ODC no fue creada desde un despacho (no se puede eliminar)
+                if existing.get("despacho_id"):
+                    logger.warning(f"⚠️ No se puede eliminar orden de compra creada desde despacho: {oc_id}")
+                    return JSONResponse(
+                        status_code=403,
+                        content={
+                            "status": "error",
+                            "message": "No se puede eliminar una orden de compra creada desde un despacho",
+                            "oc_id": oc_id,
+                            "despacho_id": existing.get("despacho_id")
+                        },
+                        headers={
+                            "X-Source": source,
+                            "X-Endpoint": "DELETE-ORDEN-COMPRA"
+                        }
+                    )
+                
+                # Obtener número de detalles antes de eliminar (para el log)
+                detalles = oc_repo.get_detalles(oc_id)
+                num_detalles = len(detalles)
+                
+                # Eliminar la orden de compra (detalles y cabecera)
+                eliminada = oc_repo.delete_cabecera(oc_id)
+                
+                if eliminada:
+                    logger.info(f"✅ Orden de compra eliminada: {oc_id} ({num_detalles} detalles)")
+                    
+                    return JSONResponse(
+                        status_code=200,
+                        content={
+                            "status": "success",
+                            "message": "Orden de compra eliminada exitosamente",
+                            "oc_id": oc_id,
+                            "detalles_eliminados": num_detalles
+                        },
+                        headers={
+                            "X-Source": source,
+                            "X-Endpoint": "DELETE-ORDEN-COMPRA",
+                            "X-OC-ID": oc_id,
+                            "X-Detalles-Eliminados": str(num_detalles)
+                        }
+                    )
+                else:
+                    logger.warning(f"⚠️ No se pudo eliminar orden de compra: {oc_id}")
+                    return JSONResponse(
+                        status_code=500,
+                        content={
+                            "status": "error",
+                            "message": "No se pudo eliminar la orden de compra",
+                            "oc_id": oc_id
+                        },
+                        headers={
+                            "X-Source": source,
+                            "X-Endpoint": "DELETE-ORDEN-COMPRA"
+                        }
+                    )
             
         except Exception as e:
             logger.error(f"❌ Error al eliminar orden de compra {oc_id}: {e}", exc_info=True)
@@ -869,81 +866,80 @@ def register_ordenes_compra_endpoints(app: FastAPI):
             logger.info(f"   IDs: {oc_ids_list}")
             logger.info("=" * 70)
             
-            conn = get_db_connection()
-            oc_repo = OrdenCompraRepository(conn)
-            
-            # Procesar cada orden
-            resultados = []
-            eliminadas = 0
-            errores = 0
-            no_encontradas = 0
-            no_permitidas = 0
-            
-            for oc_id_item in oc_ids_list:
-                try:
-                    # Verificar que existe
-                    existing = oc_repo.get_existing_cabecera(oc_id_item)
-                    if not existing:
-                        no_encontradas += 1
-                        logger.warning(f"⚠️ Orden de compra no encontrada: {oc_id_item}")
-                        resultados.append({
-                            "oc_id": oc_id_item,
-                            "status": "not_found",
-                            "message": "Orden de compra no encontrada",
-                            "detalles_eliminados": 0
-                        })
-                        continue
-                    
-                    # Validar que la ODC no fue creada desde un despacho (no se puede eliminar)
-                    if existing.get("despacho_id"):
-                        no_permitidas += 1
-                        logger.warning(f"⚠️ No se puede eliminar orden de compra creada desde despacho: {oc_id_item}")
-                        resultados.append({
-                            "oc_id": oc_id_item,
-                            "status": "forbidden",
-                            "message": "No se puede eliminar una orden de compra creada desde un despacho",
-                            "despacho_id": existing.get("despacho_id"),
-                            "detalles_eliminados": 0
-                        })
-                        continue
-                    
-                    # Obtener número de detalles antes de eliminar
-                    detalles = oc_repo.get_detalles(oc_id_item)
-                    num_detalles = len(detalles)
-                    
-                    # Eliminar
-                    eliminada = oc_repo.delete_cabecera(oc_id_item)
-                    
-                    if eliminada:
-                        eliminadas += 1
-                        logger.info(f"   ✅ OC eliminada: {oc_id_item} ({num_detalles} detalles)")
-                        resultados.append({
-                            "oc_id": oc_id_item,
-                            "status": "success",
-                            "message": "Orden de compra eliminada exitosamente",
-                            "detalles_eliminados": num_detalles
-                        })
-                    else:
+            # Usar context manager para garantizar transacción y cierre de conexión
+            with get_db_connection_context() as conn:
+                oc_repo = OrdenCompraRepository(conn)
+                
+                # Procesar cada orden
+                resultados = []
+                eliminadas = 0
+                errores = 0
+                no_encontradas = 0
+                no_permitidas = 0
+                
+                for oc_id_item in oc_ids_list:
+                    try:
+                        # Verificar que existe
+                        existing = oc_repo.get_existing_cabecera(oc_id_item)
+                        if not existing:
+                            no_encontradas += 1
+                            logger.warning(f"⚠️ Orden de compra no encontrada: {oc_id_item}")
+                            resultados.append({
+                                "oc_id": oc_id_item,
+                                "status": "not_found",
+                                "message": "Orden de compra no encontrada",
+                                "detalles_eliminados": 0
+                            })
+                            continue
+                        
+                        # Validar que la ODC no fue creada desde un despacho (no se puede eliminar)
+                        if existing.get("despacho_id"):
+                            no_permitidas += 1
+                            logger.warning(f"⚠️ No se puede eliminar orden de compra creada desde despacho: {oc_id_item}")
+                            resultados.append({
+                                "oc_id": oc_id_item,
+                                "status": "forbidden",
+                                "message": "No se puede eliminar una orden de compra creada desde un despacho",
+                                "despacho_id": existing.get("despacho_id"),
+                                "detalles_eliminados": 0
+                            })
+                            continue
+                        
+                        # Obtener número de detalles antes de eliminar
+                        detalles = oc_repo.get_detalles(oc_id_item)
+                        num_detalles = len(detalles)
+                        
+                        # Eliminar
+                        eliminada = oc_repo.delete_cabecera(oc_id_item)
+                        
+                        if eliminada:
+                            eliminadas += 1
+                            logger.info(f"   ✅ OC eliminada: {oc_id_item} ({num_detalles} detalles)")
+                            resultados.append({
+                                "oc_id": oc_id_item,
+                                "status": "success",
+                                "message": "Orden de compra eliminada exitosamente",
+                                "detalles_eliminados": num_detalles
+                            })
+                        else:
+                            errores += 1
+                            logger.warning(f"   ⚠️ No se pudo eliminar OC: {oc_id_item}")
+                            resultados.append({
+                                "oc_id": oc_id_item,
+                                "status": "error",
+                                "message": "No se pudo eliminar la orden de compra",
+                                "detalles_eliminados": 0
+                            })
+                            
+                    except Exception as e:
                         errores += 1
-                        logger.warning(f"   ⚠️ No se pudo eliminar OC: {oc_id_item}")
+                        logger.error(f"   ❌ Error al eliminar OC {oc_id_item}: {e}")
                         resultados.append({
                             "oc_id": oc_id_item,
                             "status": "error",
-                            "message": "No se pudo eliminar la orden de compra",
+                            "message": str(e),
                             "detalles_eliminados": 0
                         })
-                        
-                except Exception as e:
-                    errores += 1
-                    logger.error(f"   ❌ Error al eliminar OC {oc_id_item}: {e}")
-                    resultados.append({
-                        "oc_id": oc_id_item,
-                        "status": "error",
-                        "message": str(e),
-                        "detalles_eliminados": 0
-                    })
-            
-            conn.close()
             
             # Determinar status general
             status_general = "success" if errores == 0 and no_encontradas == 0 and no_permitidas == 0 else "partial"
@@ -1210,8 +1206,8 @@ def register_ordenes_compra_endpoints(app: FastAPI):
             
             # Obtener información del detalle actual antes de actualizar
             def obtener_y_actualizar_sku():
-                conn = get_db_connection()
-                try:
+                # Usar context manager para garantizar transacción y cierre de conexión
+                with get_db_connection_context() as conn:
                     oc_repo = OrdenCompraRepository(conn)
                     
                     # Obtener detalles para verificar que existe y obtener SKU anterior
@@ -1251,8 +1247,6 @@ def register_ordenes_compra_endpoints(app: FastAPI):
                     invalidate_ordenes_compra_cache()
                     
                     return sku_anterior
-                finally:
-                    conn.close()
             
             # Ejecutar actualización en thread pool
             sku_anterior = await asyncio.to_thread(obtener_y_actualizar_sku)

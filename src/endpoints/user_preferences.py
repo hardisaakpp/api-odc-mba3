@@ -8,7 +8,7 @@ from fastapi import FastAPI, Request, HTTPException, Depends
 from fastapi.responses import JSONResponse
 
 from src.database.repositories.user_preferences_repository import UserPreferencesRepository
-from src.database.connection import get_db_connection
+from src.database.connection import get_db_connection, get_db_connection_context
 from src.security.jwt_auth import verify_jwt_token
 from src.models import (
     SavePreferencesRequest,
@@ -344,20 +344,20 @@ def register_user_preferences_endpoints(app: FastAPI):
         
         logger.debug(f"   Collapsed value: {prefs.collapsed} (type: {type(prefs.collapsed)})")
         
-        conn = None
         try:
-            conn = get_db_connection()
-            repository = UserPreferencesRepository(conn)
-            
-            repository.save_sidebar_preferences(
-                user_id,
-                prefs.model_dump(exclude_none=True)
-            )
-            
-            return {
-                "success": True,
-                "message": "Preferencias del sidebar guardadas correctamente"
-            }
+            # Usar context manager para garantizar transacción y cierre de conexión
+            with get_db_connection_context() as conn:
+                repository = UserPreferencesRepository(conn)
+                
+                repository.save_sidebar_preferences(
+                    user_id,
+                    prefs.model_dump(exclude_none=True)
+                )
+                
+                return {
+                    "success": True,
+                    "message": "Preferencias del sidebar guardadas correctamente"
+                }
             
         except HTTPException:
             raise
@@ -367,9 +367,6 @@ def register_user_preferences_endpoints(app: FastAPI):
                 status_code=500,
                 detail=f"Error al guardar preferencias del sidebar: {str(e)}"
             )
-        finally:
-            if conn:
-                conn.close()
     
     @app.get("/api/users/preferences/{table_id}", 
              response_model=PreferencesResponse,
@@ -571,26 +568,26 @@ def register_user_preferences_endpoints(app: FastAPI):
                 detail="Debe haber al menos una columna en columnOrder"
             )
         
-        conn = None
         try:
-            conn = get_db_connection()
-            repository = UserPreferencesRepository(conn)
-            
-            # Convertir a dict para el repositorio
-            prefs_dict = prefs.model_dump(exclude_none=True)
-            logger.debug(f"   Preferences dict: {prefs_dict}")
-            
-            repository.save_table_preferences(
-                user_id,
-                table_id,
-                prefs_dict
-            )
-            
-            logger.info(f"✅ Preferencias guardadas exitosamente para usuario {user_id}, tabla {table_id}")
-            return {
-                "success": True,
-                "message": "Preferencias guardadas correctamente"
-            }
+            # Usar context manager para garantizar transacción y cierre de conexión
+            with get_db_connection_context() as conn:
+                repository = UserPreferencesRepository(conn)
+                
+                # Convertir a dict para el repositorio
+                prefs_dict = prefs.model_dump(exclude_none=True)
+                logger.debug(f"   Preferences dict: {prefs_dict}")
+                
+                repository.save_table_preferences(
+                    user_id,
+                    table_id,
+                    prefs_dict
+                )
+                
+                logger.info(f"✅ Preferencias guardadas exitosamente para usuario {user_id}, tabla {table_id}")
+                return {
+                    "success": True,
+                    "message": "Preferencias guardadas correctamente"
+                }
             
         except HTTPException:
             raise
@@ -608,9 +605,6 @@ def register_user_preferences_endpoints(app: FastAPI):
                 status_code=500,
                 detail=f"Error al guardar preferencias: {str(e)}"
             )
-        finally:
-            if conn:
-                conn.close()
     
     @app.delete("/api/users/preferences/{table_id}",
                 tags=["Preferencias de Usuario"])
@@ -650,22 +644,22 @@ def register_user_preferences_endpoints(app: FastAPI):
             logger.error(f"❌ Error al obtener user_id: {e.detail}")
             raise
         
-        conn = None
         try:
-            conn = get_db_connection()
-            repository = UserPreferencesRepository(conn)
-            deleted = repository.delete_table_preferences(user_id, table_id)
-            
-            if not deleted:
-                raise HTTPException(
-                    status_code=404,
-                    detail=f"No se encontraron preferencias para la tabla {table_id}"
-                )
-            
-            return {
-                "success": True,
-                "message": "Preferencias eliminadas correctamente"
-            }
+            # Usar context manager para garantizar transacción y cierre de conexión
+            with get_db_connection_context() as conn:
+                repository = UserPreferencesRepository(conn)
+                deleted = repository.delete_table_preferences(user_id, table_id)
+                
+                if not deleted:
+                    raise HTTPException(
+                        status_code=404,
+                        detail=f"No se encontraron preferencias para la tabla {table_id}"
+                    )
+                
+                return {
+                    "success": True,
+                    "message": "Preferencias eliminadas correctamente"
+                }
             
         except HTTPException:
             raise
@@ -675,7 +669,4 @@ def register_user_preferences_endpoints(app: FastAPI):
                 status_code=500,
                 detail=f"Error al eliminar preferencias: {str(e)}"
             )
-        finally:
-            if conn:
-                conn.close()
 
