@@ -29,6 +29,7 @@ from src.database.pedido_estados import (
 )
 from src.security.jwt_auth import verify_jwt_token, require_permission, require_any_permission
 from src.exceptions import BusinessException
+from src.logging_config import log_business_operation, get_correlation_id_from_request
 from src.models import (
     ModificarPedidoCabeceraRequest,
     ModificarPedidoCabeceraResponse,
@@ -946,11 +947,33 @@ def register_crud_endpoints(app: FastAPI):
                 else:
                     status_code = 500
             
+            # Log funcional estandarizado (Buenas Prácticas - Sección 5)
+            log_business_operation(
+                operation="crear_pedido_manual",
+                id_usuario=user.get('username', usuario_id),
+                id_transaccion=resultado.get("pedido_id"),
+                id_tienda=datos_pedido.get("codigo_tienda"),
+                monto=datos_pedido.get("monto_total"),
+                success=(resultado["status"] == "success"),
+                detalles={
+                    "numero_pedido": resultado.get("numero_pedido"),
+                    "total_articulos": len(datos_pedido.get("articulos", [])),
+                    "proveedor": datos_pedido.get("razon_social")
+                }
+            )
+            
             return JSONResponse(status_code=status_code, content=resultado)
             
         except HTTPException:
             raise
         except Exception as e:
+            # Log funcional de error
+            log_business_operation(
+                operation="crear_pedido_manual",
+                id_usuario=user.get('username', 'UNKNOWN'),
+                success=False,
+                detalles={"error": str(e)}
+            )
             logger.error(f"❌ Error al crear pedido manual: {e}", exc_info=True)
             raise HTTPException(
                 status_code=500,
@@ -1162,12 +1185,33 @@ def register_crud_endpoints(app: FastAPI):
                 pedido_actualizado["puede_cancelar_pedido"] = _eid is not None and _eid < ESTADO_LIMITE_CANCELAR_PEDIDO
                 pedido_actualizado["puede_finalizar"] = _eid == ESTADO_DESPACHAR_Y_FACTURAR  # Solo en estado Despachar y Facturar (17)
                 
-                logger.info(f"✅ Pedido {pedido_id} cancelado por usuario {user.get('username', 'UNKNOWN')}")
+                # Log funcional estandarizado (Buenas Prácticas - Sección 5)
+                log_business_operation(
+                    operation="cancelar_pedido",
+                    id_usuario=user.get('username', 'UNKNOWN'),
+                    id_transaccion=pedido_id,
+                    id_tienda=cabecera.get("codigo_tienda"),
+                    success=True,
+                    detalles={
+                        "numero_pedido": numero_pedido,
+                        "estado_anterior": estado_id,
+                        "estado_nuevo": ESTADO_CANCELADO
+                    }
+                )
+                
                 return JSONResponse(status_code=200, content=pedido_actualizado)
                 
         except HTTPException:
             raise
         except Exception as e:
+            # Log funcional de error
+            log_business_operation(
+                operation="cancelar_pedido",
+                id_usuario=user.get('username', 'UNKNOWN'),
+                id_transaccion=pedido_id,
+                success=False,
+                detalles={"error": str(e)}
+            )
             logger.error(f"❌ Error al cancelar pedido {pedido_id}: {e}", exc_info=True)
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,

@@ -27,14 +27,21 @@ from pathlib import Path
 from dotenv import load_dotenv
 load_dotenv("/opt/odc-sap/.env")
 
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
-
 # Agregar el directorio src al PYTHONPATH si no está
 # Esto permite ejecutar el script directamente con: python src/api_server.py
 src_dir = Path(__file__).parent
 if str(src_dir) not in sys.path:
     sys.path.insert(0, str(src_dir))
+
+# IMPORTANTE: Configurar logging ANTES de importar otros módulos de src
+# Esto asegura que todos los loggers usen la configuración correcta
+# (Buenas Prácticas - Sección 5: Logs obligatorios)
+from src.logging_config import setup_logging
+setup_logging()
+logger = logging.getLogger(__name__)
+
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 from src.endpoints import create_endpoints
 from src.middleware.exception_handlers import setup_exception_handlers
@@ -47,13 +54,6 @@ from src.config import (
     ENABLE_SQL_SERVER_STORAGE
 )
 from src.security.rate_limit import setup_rate_limiting
-
-# Configurar logging
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - %(message)s"
-)
-logger = logging.getLogger(__name__)
 
 # Crear aplicación FastAPI
 app = FastAPI(

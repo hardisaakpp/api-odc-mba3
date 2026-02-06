@@ -15,6 +15,9 @@ output/
 debug/
 *.log
 
+# Directorio de logs de la aplicación
+logs/
+
 # Testing
 .pytest_cache/
 .coverage
