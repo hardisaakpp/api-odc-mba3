@@ -17,6 +17,7 @@ from src.database.pedido_estados import (
     ESTADO_REDISTRIBUCION,
     ESTADO_CONFIRMADO_PROVEEDOR,
     ESTADO_PEDIDO_CONFIRMADO,
+    ESTADO_CANCELADO,
     estado_id_desde_legacy,
 )
 
@@ -681,6 +682,7 @@ class PedidoCabeceraRepository:
         limit: Optional[int] = None,
         offset: Optional[int] = None,
         excluir_borrador: bool = False,
+        solo_redistribucion: bool = False,
     ) -> Dict[str, Any]:
         """
         Obtiene pedidos con filtros y paginación.
@@ -689,6 +691,8 @@ class PedidoCabeceraRepository:
             estado: estado_id (int) o nombre legacy (str) para filtrar
             fecha_desde, fecha_hasta, proveedor_nombre, numero_pedido, creado_por, limit, offset
             excluir_borrador: si True, excluye pedidos en estado BORRADOR (estado_id=1)
+            solo_redistribucion: si True, solo incluye pedidos aptos para redistribución
+                (estado_id >= 4 "CONFIRMADO POR EL RAYO" y estado_id != 19 "CANCELADO")
         """
         cursor = self.conn.cursor()
         try:
@@ -716,6 +720,18 @@ class PedidoCabeceraRepository:
                     params.append(ESTADO_BORRADOR)
                 else:
                     where_conditions.append("(p.estado IS NULL OR (p.estado <> N'BORRADOR' AND p.estado <> N'PENDIENTE_CONFIRMACION_PROVEEDOR'))")
+
+            # Filtro para vista de redistribución: solo pedidos con estado >= 4 (CONFIRMADO POR EL RAYO)
+            # y excluir CANCELADO (19)
+            if solo_redistribucion and (tiene_estado_id or tiene_estado):
+                if tiene_estado_id:
+                    where_conditions.append("p.estado_id >= ?")
+                    params.append(ESTADO_REDISTRIBUCION)
+                    where_conditions.append("p.estado_id <> ?")
+                    params.append(ESTADO_CANCELADO)
+                else:
+                    # Fallback para bases de datos sin columna estado_id
+                    where_conditions.append("p.estado NOT IN (N'BORRADOR', N'NUEVO_PEDIDO', N'GESTIONAR_PEDIDO', N'PENDIENTE_CONFIRMACION_PROVEEDOR', N'CANCELADO')")
 
             if fecha_desde:
                 where_conditions.append("CAST(p.fecha_pedido AS DATE) >= CAST(? AS DATE)")
@@ -845,7 +861,16 @@ class PedidoCabeceraRepository:
         solo_redistribucion_confirmada: bool = False
     ) -> Dict[str, Any]:
         """
-        Obtiene pedidos en estado confirmado (estado_id 6 CONFIRMADO_PROVEEDOR o 10 CONFIRMADO REDISTRIBUCION), ordenados por creado_en DESC.
+        Obtiene pedidos aptos para redistribución: estado_id >= 4 (CONFIRMADO POR EL RAYO)
+        y estado_id != 19 (CANCELADO), ordenados por creado_en DESC.
+        
+        Solo se muestran pedidos a partir del estado "CONFIRMADO POR EL RAYO" (estado_id=4),
+        excluyendo: BORRADOR (1), NUEVO PEDIDO (2), GESTIONAR PEDIDO (3) y CANCELADO (19).
+        
+        Args:
+            limit: Límite de registros
+            offset: Desplazamiento para paginación
+            solo_redistribucion_confirmada: Si True, solo pedidos con estado CONFIRMADO REDISTRIBUCION (10)
         """
         cursor = self.conn.cursor()
         try:
@@ -859,8 +884,12 @@ class PedidoCabeceraRepository:
                     where_clause = "p.estado_id = ?"
                     params_list: List[Any] = [ESTADO_PEDIDO_CONFIRMADO]
                 else:
-                    where_clause = "p.estado_id IN (?, ?)"
-                    params_list = [ESTADO_CONFIRMADO_PROVEEDOR, ESTADO_PEDIDO_CONFIRMADO]
+                    # Filtrar por estado_id >= ESTADO_REDISTRIBUCION (4) y != ESTADO_CANCELADO (19)
+                    # Esto incluye: CONFIRMADO POR EL RAYO (4), RESPUESTA_PROVEEDOR_CARGADA (5),
+                    # CONFIRMADO_PROVEEDOR (6), REDISTRIBUIDO (9), PEDIDO_CONFIRMADO (10), etc.
+                    # Excluye: BORRADOR (1), NUEVO_PEDIDO (2), GESTIONAR_PEDIDO (3), CANCELADO (19)
+                    where_clause = "p.estado_id >= ? AND p.estado_id != ?"
+                    params_list = [ESTADO_REDISTRIBUCION, ESTADO_CANCELADO]
                 params: List[Any] = list(params_list)
                 count_query = f"SELECT COUNT(*) FROM pedido p WHERE {where_clause}"
                 cursor.execute(count_query, params)
@@ -880,12 +909,15 @@ class PedidoCabeceraRepository:
                     ORDER BY p.creado_en DESC
                 """
             else:
+                # Fallback para bases de datos sin columna estado_id (usando campo estado string)
                 if solo_redistribucion_confirmada:
                     where_clause = "p.estado IN (?, ?)"
                     params_list = ["PEDIDO_CONFIRMADO", "CONFIRMADO REDISTRIBUCION"]
                 else:
-                    where_clause = "p.estado IN (?, ?, ?)"
-                    params_list = ["CONFIRMADO_PROVEEDOR", "PEDIDO_CONFIRMADO", "CONFIRMADO REDISTRIBUCION"]
+                    # Incluir todos los estados válidos para redistribución (desde CONFIRMADO POR EL RAYO)
+                    # Excluir: BORRADOR, NUEVO_PEDIDO, GESTIONAR_PEDIDO, CANCELADO
+                    where_clause = "p.estado NOT IN (?, ?, ?, ?, ?)"
+                    params_list = ["BORRADOR", "NUEVO_PEDIDO", "GESTIONAR_PEDIDO", "PENDIENTE_CONFIRMACION_PROVEEDOR", "CANCELADO"]
                 params = list(params_list)
                 count_query = f"SELECT COUNT(*) FROM pedido p WHERE {where_clause}"
                 cursor.execute(count_query, params)
@@ -1114,10 +1146,14 @@ class PedidoCabeceraRepository:
         self, usuario_id: Optional[str] = None
     ) -> Optional[Dict[str, Any]]:
         """
-        Obtiene el último pedido con estado CONFIRMADO (4) o CONFIRMADO REDISTRIBUCION (10).
+        Obtiene el último pedido apto para redistribución: estado_id >= 4 (CONFIRMADO POR EL RAYO)
+        y estado_id != 19 (CANCELADO).
+        
         Usado en pantalla Revisar Redistribución: al entrar en /redistribucion se carga el último
-        pedido que esté listo para redistribuir (CONFIRMADO) o ya con redistribución confirmada
-        (CONFIRMADO REDISTRIBUCION) para poder visualizarlo.
+        pedido que esté listo para redistribuir o ya con redistribución confirmada.
+        
+        Solo incluye pedidos a partir del estado "CONFIRMADO POR EL RAYO" (estado_id=4),
+        excluyendo: BORRADOR (1), NUEVO PEDIDO (2), GESTIONAR PEDIDO (3) y CANCELADO (19).
         """
         cursor = self.conn.cursor()
         try:
@@ -1127,6 +1163,7 @@ class PedidoCabeceraRepository:
                 return None
 
             if tiene_estado_id:
+                # Filtrar por estado_id >= ESTADO_REDISTRIBUCION (4) y != ESTADO_CANCELADO (19)
                 if usuario_id is not None:
                     cursor.execute("""
                         SELECT TOP 1
@@ -1136,9 +1173,9 @@ class PedidoCabeceraRepository:
                             p.creado_por, p.estado_id, pe.nombre AS estado_nombre, p.creado_en
                         FROM pedido p
                         LEFT JOIN pedido_estado pe ON pe.id = p.estado_id
-                        WHERE p.estado_id IN (?, ?) AND p.creado_por = ?
+                        WHERE p.estado_id >= ? AND p.estado_id != ? AND p.creado_por = ?
                         ORDER BY p.creado_en DESC
-                    """, (ESTADO_REDISTRIBUCION, ESTADO_PEDIDO_CONFIRMADO, usuario_id))
+                    """, (ESTADO_REDISTRIBUCION, ESTADO_CANCELADO, usuario_id))
                 else:
                     cursor.execute("""
                         SELECT TOP 1
@@ -1148,10 +1185,12 @@ class PedidoCabeceraRepository:
                             p.creado_por, p.estado_id, pe.nombre AS estado_nombre, p.creado_en
                         FROM pedido p
                         LEFT JOIN pedido_estado pe ON pe.id = p.estado_id
-                        WHERE p.estado_id IN (?, ?)
+                        WHERE p.estado_id >= ? AND p.estado_id != ?
                         ORDER BY p.creado_en DESC
-                    """, (ESTADO_REDISTRIBUCION, ESTADO_PEDIDO_CONFIRMADO))
+                    """, (ESTADO_REDISTRIBUCION, ESTADO_CANCELADO))
             else:
+                # Fallback para bases de datos sin columna estado_id (usando campo estado string)
+                # Excluir estados: BORRADOR, NUEVO_PEDIDO, GESTIONAR_PEDIDO, CANCELADO
                 if usuario_id is not None:
                     cursor.execute("""
                         SELECT TOP 1
@@ -1160,9 +1199,9 @@ class PedidoCabeceraRepository:
                             comprador_codigo, origen_traslado, serie, archivo_nombre,
                             creado_por, estado, creado_en
                         FROM pedido
-                        WHERE estado IN (?, ?, ?) AND creado_por = ?
+                        WHERE estado NOT IN (?, ?, ?, ?, ?) AND creado_por = ?
                         ORDER BY creado_en DESC
-                    """, ("CONFIRMADO", "CONFIRMADO REDISTRIBUCION", "PEDIDO_CONFIRMADO", usuario_id))
+                    """, ("BORRADOR", "NUEVO_PEDIDO", "GESTIONAR_PEDIDO", "PENDIENTE_CONFIRMACION_PROVEEDOR", "CANCELADO", usuario_id))
                 else:
                     cursor.execute("""
                         SELECT TOP 1
@@ -1171,9 +1210,9 @@ class PedidoCabeceraRepository:
                             comprador_codigo, origen_traslado, serie, archivo_nombre,
                             creado_por, estado, creado_en
                         FROM pedido
-                        WHERE estado IN (?, ?, ?)
+                        WHERE estado NOT IN (?, ?, ?, ?, ?)
                         ORDER BY creado_en DESC
-                    """, ("CONFIRMADO", "CONFIRMADO REDISTRIBUCION", "PEDIDO_CONFIRMADO"))
+                    """, ("BORRADOR", "NUEVO_PEDIDO", "GESTIONAR_PEDIDO", "PENDIENTE_CONFIRMACION_PROVEEDOR", "CANCELADO"))
 
             row = cursor.fetchone()
             if not row:

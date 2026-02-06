@@ -107,15 +107,20 @@ class PedidoRepository:
         limit: Optional[int] = None,
         offset: Optional[int] = None,
         excluir_borrador: bool = False,
+        solo_redistribucion: bool = False,
     ) -> Dict[str, Any]:
         """
         Obtiene pedidos con filtros y paginación.
         
         DELEGADO a PedidoCabeceraRepository.
+        
+        Args:
+            solo_redistribucion: si True, solo incluye pedidos aptos para redistribución
+                (estado_id >= 4 "CONFIRMADO POR EL RAYO" y estado_id != 19 "CANCELADO")
         """
         return self.cabecera_repo.get_pedidos_con_filtros(
             estado, fecha_desde, fecha_hasta, proveedor_nombre,
-            numero_pedido, creado_por, limit, offset, excluir_borrador
+            numero_pedido, creado_por, limit, offset, excluir_borrador, solo_redistribucion
         )
 
     def get_pedidos_confirmados(

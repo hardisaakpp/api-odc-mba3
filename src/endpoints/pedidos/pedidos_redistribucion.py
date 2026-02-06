@@ -2002,3 +2002,472 @@ def register_redistribucion_endpoints(app: FastAPI):
                 }
             )
     
+    # ============================================================================
+    # ENDPOINT PROCESO COMPLETO: Redistribución + ODC + Envío a SAP
+    # ============================================================================
+    
+    @app.post("/api/pedidos/{numero_pedido}/proceso-completo-sap",
+             tags=["Pedidos - Redistribución"])
+    async def proceso_completo_sap(
+        numero_pedido: str = Path(..., description="Número del pedido"),
+        request_body: RedistribucionConfirmarRequest = Body(..., description="Datos de redistribución"),
+        user: Dict = Depends(verify_jwt_token),
+        _: None = Depends(require_permission('mabel.view'))
+    ):
+        """
+        Proceso completo: Redistribución + Generar ODC + Enviar a SAP.
+        
+        Este endpoint ejecuta los 3 pasos necesarios para enviar una ODC a SAP
+        en una sola operación:
+        
+        **Paso 1: Confirmar Redistribución**
+        - Valida y confirma la redistribución de cantidades por tienda
+        - Actualiza estado del pedido a 'CONFIRMADO REDISTRIBUCION'
+        - Procesa homologaciones con SAP
+        
+        **Paso 2: Generar ODC**
+        - Crea la orden de compra desde el pedido confirmado
+        - Genera el JSON para SAP Service Layer
+        - Estado ODC: PENDIENTE
+        
+        **Paso 3: Enviar a SAP**
+        - Envía la ODC a SAP Service Layer
+        - Actualiza estado ODC a 'ENVIADA' o 'ERROR'
+        - Registra DocNum y DocEntry si es exitoso
+        
+        **Request:**
+        ```json
+        {
+            "ajustes_detalle": [
+                {
+                    "codigo_producto": "R225.1012.BCO",
+                    "cantidad_solicitada": 100,
+                    "cantidad_confirmada": 80,
+                    "cantidad_ajustada": 75,
+                    "distribucion_tiendas": [
+                        {"tienda_codigo": "T001", "tienda_nombre": "Tienda 1", "cantidad": 50}
+                    ],
+                    "costo_original": 25.50,
+                    "costo_ajustado": 25.50
+                }
+            ]
+        }
+        ```
+        
+        **Response exitosa:**
+        ```json
+        {
+            "status": "success",
+            "message": "Proceso completado. ODC enviada a SAP con DocNum: 12345",
+            "pedido_id": "...",
+            "numero_pedido": "P-12.01 - 12 - 2025",
+            "redistribucion": {...},
+            "odc_generada": {...},
+            "envio_sap": {
+                "oc_id": "...",
+                "success": true,
+                "doc_num": 12345,
+                "doc_entry": 54321
+            }
+        }
+        ```
+        
+        **Manejo de errores:**
+        - Si falla en cualquier paso, retorna el paso_fallido y error_detalle
+        - Los pasos anteriores exitosos se mantienen (no hay rollback automático)
+        """
+        from src.models import ProcesoCompletoSAPResponse, ProcesoCompletoSAPDetalleODC
+        
+        user_id = get_user_id(user)
+        
+        logger.info("=" * 70)
+        logger.info(f"🚀 PROCESO COMPLETO SAP iniciado para pedido: {numero_pedido}")
+        logger.info(f"   Usuario: {user_id}")
+        logger.info("=" * 70)
+        
+        # Variables para el resultado
+        resultado_redistribucion = None
+        resultado_odc = None
+        resultado_envio_sap = None
+        resumen = None
+        paso_fallido = None
+        error_detalle = None
+        pedido_id = None
+        
+        try:
+            with get_db_connection_context() as conn:
+                repo_pedido = PedidoRepository(conn)
+                repo_dist = DistribucionConfirmadaRepository(conn)
+                
+                # ================================================================
+                # PASO 0: Obtener pedido
+                # ================================================================
+                pedido_data = repo_pedido.get_pedido_completo_por_numero(numero_pedido)
+                
+                if not pedido_data:
+                    raise HTTPException(
+                        status_code=status.HTTP_404_NOT_FOUND,
+                        detail={
+                            "error": "pedido_not_found",
+                            "message": f"No se encontró el pedido con número: {numero_pedido}"
+                        }
+                    )
+                
+                pedido_id = pedido_data["cabecera"]["pedido_id"]
+                
+                # ================================================================
+                # PASO 1: Confirmar Redistribución
+                # ================================================================
+                logger.info("📋 PASO 1/3: Confirmando redistribución...")
+                
+                try:
+                    # Convertir AjusteDetalle a estructura interna
+                    productos_redistribucion = []
+                    
+                    for ajuste in request_body.ajustes_detalle:
+                        # Buscar pedido_detalle_id por codigo_producto
+                        detalle_pedido = next(
+                            (d for d in pedido_data["detalles"] 
+                             if d.get("codigo_interno") == ajuste.codigo_producto),
+                            None
+                        )
+                        
+                        if not detalle_pedido:
+                            raise HTTPException(
+                                status_code=status.HTTP_400_BAD_REQUEST,
+                                detail={
+                                    "error": "producto_not_found",
+                                    "message": f"No se encontró el producto con código: {ajuste.codigo_producto}"
+                                }
+                            )
+                        
+                        # Sincronizar costos con los valores actuales del pedido
+                        costo_actual = detalle_pedido.get("costo_doc_sin_iva")
+                        if costo_actual is not None:
+                            ajuste.costo_original = costo_actual
+                            ajuste.costo_ajustado = costo_actual
+                        
+                        # Sincronizar cantidad confirmada con el total actual del pedido
+                        total_actual = detalle_pedido.get("total")
+                        if total_actual is not None:
+                            try:
+                                cantidad_confirmada_actual = int(float(total_actual))
+                                ajuste.cantidad_confirmada = cantidad_confirmada_actual
+                            except (ValueError, TypeError):
+                                pass
+                        
+                        # Convertir distribuciones de tienda
+                        distribuciones = []
+                        cursor = conn.cursor()
+                        for dist_tienda in ajuste.distribucion_tiendas:
+                            cursor.execute("""
+                                SELECT tienda_id FROM tienda WHERE codigo = ?
+                            """, (dist_tienda.tienda_codigo,))
+                            row = cursor.fetchone()
+                            
+                            if not row:
+                                raise HTTPException(
+                                    status_code=status.HTTP_400_BAD_REQUEST,
+                                    detail={
+                                        "error": "tienda_not_found",
+                                        "message": f"No se encontró la tienda con código: {dist_tienda.tienda_codigo}"
+                                    }
+                                )
+                            
+                            distribuciones.append({
+                                "tienda_id": str(row[0]),
+                                "cantidad_asignada": dist_tienda.cantidad
+                            })
+                        
+                        productos_redistribucion.append({
+                            "pedido_detalle_id": detalle_pedido["pedido_detalle_id"],
+                            "distribuciones": distribuciones
+                        })
+                    
+                    # Obtener respuestas del proveedor para validación
+                    cursor = conn.cursor()
+                    cursor.execute("""
+                        SELECT 
+                            rpd.pedido_detalle_id,
+                            rpd.cantidad_solicitada_total,
+                            rpd.cantidad_confirmada_total
+                        FROM pedido_respuesta_proveedor_detalle rpd
+                        INNER JOIN pedido_respuesta_proveedor rp ON rpd.respuesta_id = rp.respuesta_id
+                        WHERE rp.pedido_id = ?
+                        ORDER BY rp.version DESC, rp.fecha_respuesta DESC
+                    """, (pedido_id,))
+                    
+                    respuestas_proveedor = {}
+                    for row in cursor.fetchall():
+                        respuestas_proveedor[str(row[0])] = {
+                            "cantidad_solicitada_total": row[1],
+                            "cantidad_confirmada_total": row[2]
+                        }
+                    
+                    # Validar redistribución
+                    validator = RedistribucionValidator()
+                    es_valido, errores = validator.validar_redistribucion(
+                        pedido_data,
+                        productos_redistribucion,
+                        respuestas_proveedor
+                    )
+                    
+                    if not es_valido:
+                        raise HTTPException(
+                            status_code=status.HTTP_400_BAD_REQUEST,
+                            detail={
+                                "error": "validation_error",
+                                "message": "La redistribución no cumple con las reglas de negocio",
+                                "errores": errores
+                            }
+                        )
+                    
+                    # Crear redistribución
+                    resultado_crear = repo_dist.crear_redistribucion(
+                        pedido_id=pedido_id,
+                        productos_redistribucion=productos_redistribucion,
+                        usuario=user_id
+                    )
+                    
+                    # Confirmar redistribución
+                    resultado_confirmar = repo_dist.confirmar_redistribucion(
+                        pedido_id=pedido_id,
+                        version=resultado_crear["version"],
+                        usuario=user_id
+                    )
+                    
+                    # Actualizar estado del pedido
+                    repo_pedido.update_estado(pedido_id, ESTADO_PEDIDO_CONFIRMADO)
+                    
+                    # Calcular resumen
+                    total_productos = len(request_body.ajustes_detalle)
+                    total_cantidad_solicitada = sum(a.cantidad_solicitada for a in request_body.ajustes_detalle)
+                    total_cantidad_confirmada = sum(a.cantidad_confirmada for a in request_body.ajustes_detalle)
+                    total_cantidad_ajustada = sum(a.cantidad_ajustada for a in request_body.ajustes_detalle)
+                    diferencia_cantidad = total_cantidad_ajustada - total_cantidad_confirmada
+                    
+                    total_costo_original = sum(
+                        (a.cantidad_solicitada * (a.costo_original or 0)) 
+                        for a in request_body.ajustes_detalle
+                    ) or None
+                    
+                    total_costo_ajustado = sum(
+                        (a.cantidad_ajustada * (a.costo_ajustado or 0)) 
+                        for a in request_body.ajustes_detalle
+                    ) or None
+                    
+                    diferencia_costo = (
+                        total_costo_ajustado - total_costo_original 
+                        if total_costo_ajustado is not None and total_costo_original is not None 
+                        else None
+                    )
+                    
+                    resumen = ResumenConfirmacion(
+                        total_productos=total_productos,
+                        total_cantidad_solicitada=total_cantidad_solicitada,
+                        total_cantidad_confirmada=total_cantidad_confirmada,
+                        total_cantidad_ajustada=total_cantidad_ajustada,
+                        total_costo_original=total_costo_original,
+                        total_costo_ajustado=total_costo_ajustado,
+                        diferencia_cantidad=diferencia_cantidad,
+                        diferencia_costo=diferencia_costo
+                    )
+                    
+                    resultado_redistribucion = {
+                        "version_confirmada": resultado_crear["version"],
+                        "productos_redistribuidos": total_productos,
+                        "estado_pedido": "CONFIRMADO REDISTRIBUCION"
+                    }
+                    
+                    logger.info(f"✅ PASO 1/3 completado: Redistribución confirmada (versión {resultado_crear['version']})")
+                    
+                    # Procesar con SAP (homologaciones)
+                    try:
+                        from src.database.services.pedido_sap_service import procesar_pedido_con_sap
+                        from src.database.services.homologacion_service import HomologacionService
+                        
+                        homologacion_service = HomologacionService()
+                        resultado_sap = procesar_pedido_con_sap(
+                            pedido_id=pedido_id,
+                            usuario_id=user_id,
+                            homologacion_service=homologacion_service,
+                            continue_on_error=True
+                        )
+                        logger.info(f"   Procesamiento SAP: {resultado_sap.get('productos_procesados', 0)} productos procesados")
+                    except Exception as sap_error:
+                        logger.warning(f"⚠️ Error en procesamiento SAP (no crítico): {sap_error}")
+                    
+                except HTTPException:
+                    raise
+                except Exception as e:
+                    paso_fallido = "redistribucion"
+                    error_detalle = str(e)
+                    logger.error(f"❌ Error en PASO 1 (Redistribución): {e}", exc_info=True)
+                    raise HTTPException(
+                        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                        detail={
+                            "error": "redistribucion_error",
+                            "message": f"Error al confirmar redistribución: {str(e)}",
+                            "paso_fallido": "redistribucion"
+                        }
+                    )
+                
+                # ================================================================
+                # PASO 2: Generar ODC
+                # ================================================================
+                logger.info("📦 PASO 2/3: Generando ODC...")
+                
+                try:
+                    from src.database.services.pedido_oc_service import PedidoOCService
+                    
+                    service = PedidoOCService()
+                    resultado_oc = service.crear_oc_desde_pedido_confirmado(
+                        pedido_id=pedido_id,
+                        usuario_id=user_id
+                    )
+                    
+                    oc_id = resultado_oc.get("oc_id")
+                    
+                    resultado_odc = {
+                        "oc_id": oc_id,
+                        "proveedor": resultado_oc.get("proveedor"),
+                        "detalles_insertados": resultado_oc.get("detalles_insertados", 0),
+                        "estado": "PENDIENTE"
+                    }
+                    
+                    logger.info(f"✅ PASO 2/3 completado: ODC generada (ID: {oc_id[:8]}...)")
+                    
+                except Exception as e:
+                    paso_fallido = "generar_odc"
+                    error_detalle = str(e)
+                    logger.error(f"❌ Error en PASO 2 (Generar ODC): {e}", exc_info=True)
+                    
+                    # Retornar respuesta parcial con redistribución exitosa pero ODC fallida
+                    return ProcesoCompletoSAPResponse(
+                        status="partial",
+                        message=f"Redistribución exitosa, pero falló la generación de ODC: {str(e)}",
+                        pedido_id=pedido_id,
+                        numero_pedido=numero_pedido,
+                        redistribucion=resultado_redistribucion,
+                        odc_generada=None,
+                        envio_sap=None,
+                        resumen=resumen,
+                        fecha_proceso=datetime.now(),
+                        paso_fallido="generar_odc",
+                        error_detalle=str(e)
+                    )
+                
+                # ================================================================
+                # PASO 3: Enviar a SAP
+                # ================================================================
+                logger.info("🚀 PASO 3/3: Enviando ODC a SAP...")
+                
+                try:
+                    from src.database.services.oc_sap_service import OCSAPService
+                    from src.database.repositories.orden_compra_repository import OrdenCompraRepository
+                    
+                    oc_repo = OrdenCompraRepository(conn)
+                    oc_sap_service = OCSAPService()
+                    
+                    resultado_sap_envio = oc_sap_service.enviar_oc_a_sap(
+                        oc_repo=oc_repo,
+                        oc_id=oc_id,
+                        warehouse_code=None  # Se determina automáticamente
+                    )
+                    
+                    success = resultado_sap_envio.get("success", False)
+                    doc_entry = resultado_sap_envio.get("doc_entry")
+                    doc_num = resultado_sap_envio.get("doc_num")
+                    error = resultado_sap_envio.get("error")
+                    error_code = resultado_sap_envio.get("error_code")
+                    
+                    resultado_envio_sap = ProcesoCompletoSAPDetalleODC(
+                        oc_id=oc_id,
+                        proveedor=resultado_odc.get("proveedor"),
+                        success=success,
+                        doc_entry=doc_entry,
+                        doc_num=doc_num,
+                        error=error,
+                        error_code=error_code
+                    )
+                    
+                    if success:
+                        logger.info(f"✅ PASO 3/3 completado: ODC enviada a SAP (DocNum: {doc_num})")
+                        
+                        # Enviar notificación por email (no crítico)
+                        try:
+                            from src.utils.email_notifier import send_mabel_redistribucion_confirmacion_notification
+                            send_mabel_redistribucion_confirmacion_notification(
+                                pedido_id=pedido_id,
+                                numero_pedido=numero_pedido,
+                                usuario_mabel=user_id,
+                                version_confirmada=resultado_redistribucion.get("version_confirmada"),
+                                total_productos=resumen.total_productos if resumen else 0,
+                                total_cantidad_ajustada=resumen.total_cantidad_ajustada if resumen else 0
+                            )
+                        except Exception:
+                            pass
+                        
+                        return ProcesoCompletoSAPResponse(
+                            status="success",
+                            message=f"Proceso completado exitosamente. ODC enviada a SAP con DocNum: {doc_num}",
+                            pedido_id=pedido_id,
+                            numero_pedido=numero_pedido,
+                            redistribucion=resultado_redistribucion,
+                            odc_generada=resultado_odc,
+                            envio_sap=resultado_envio_sap,
+                            resumen=resumen,
+                            fecha_proceso=datetime.now(),
+                            paso_fallido=None,
+                            error_detalle=None
+                        )
+                    else:
+                        logger.error(f"❌ PASO 3/3 fallido: Error al enviar ODC a SAP: {error}")
+                        
+                        return ProcesoCompletoSAPResponse(
+                            status="partial",
+                            message=f"Redistribución y ODC generadas, pero falló el envío a SAP: {error}",
+                            pedido_id=pedido_id,
+                            numero_pedido=numero_pedido,
+                            redistribucion=resultado_redistribucion,
+                            odc_generada=resultado_odc,
+                            envio_sap=resultado_envio_sap,
+                            resumen=resumen,
+                            fecha_proceso=datetime.now(),
+                            paso_fallido="envio_sap",
+                            error_detalle=error
+                        )
+                    
+                except Exception as e:
+                    paso_fallido = "envio_sap"
+                    error_detalle = str(e)
+                    logger.error(f"❌ Error en PASO 3 (Enviar a SAP): {e}", exc_info=True)
+                    
+                    return ProcesoCompletoSAPResponse(
+                        status="partial",
+                        message=f"Redistribución y ODC generadas, pero falló el envío a SAP: {str(e)}",
+                        pedido_id=pedido_id,
+                        numero_pedido=numero_pedido,
+                        redistribucion=resultado_redistribucion,
+                        odc_generada=resultado_odc,
+                        envio_sap=None,
+                        resumen=resumen,
+                        fecha_proceso=datetime.now(),
+                        paso_fallido="envio_sap",
+                        error_detalle=str(e)
+                    )
+                
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"❌ Error general en proceso completo SAP: {e}", exc_info=True)
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail={
+                    "error": "internal_error",
+                    "message": f"Error interno en proceso completo SAP: {str(e)}",
+                    "paso_fallido": paso_fallido or "desconocido",
+                    "error_detalle": error_detalle or str(e)
+                }
+            )
+    

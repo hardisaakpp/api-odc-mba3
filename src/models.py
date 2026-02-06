@@ -1366,3 +1366,94 @@ class ModificarPedidoCabeceraResponse(BaseModel):
     pedido_id: str = Field(..., description="UUID del pedido modificado")
     campos_modificados: List[str] = Field(default_factory=list, description="Lista de campos que fueron modificados")
 
+
+# =============================================================================
+# MODELOS PROCESO COMPLETO SAP (Botón "Enviar ODC a SAP")
+# =============================================================================
+
+class ProcesoCompletoSAPDetalleODC(BaseModel):
+    """Detalle de la ODC en el proceso completo."""
+    
+    oc_id: str = Field(..., description="UUID de la orden de compra")
+    proveedor: Optional[str] = Field(None, description="CardCode del proveedor")
+    success: bool = Field(..., description="Si el envío a SAP fue exitoso")
+    doc_entry: Optional[int] = Field(None, description="DocEntry de SAP (si éxito)")
+    doc_num: Optional[int] = Field(None, description="DocNum de SAP (si éxito)")
+    error: Optional[str] = Field(None, description="Mensaje de error (si falló)")
+    error_code: Optional[str] = Field(None, description="Código de error de SAP")
+
+
+class ProcesoCompletoSAPResponse(BaseModel):
+    """
+    Modelo para respuesta del proceso completo: Redistribución + ODC + Envío a SAP.
+    
+    Este modelo contiene el resultado consolidado de los 3 pasos:
+    1. Confirmar redistribución
+    2. Generar ODC
+    3. Enviar a SAP
+    """
+    
+    status: str = Field(..., description="Estado general: 'success', 'partial' o 'error'")
+    message: str = Field(..., description="Mensaje descriptivo del resultado")
+    
+    # Información del pedido
+    pedido_id: str = Field(..., description="UUID del pedido procesado")
+    numero_pedido: str = Field(..., description="Número del pedido")
+    
+    # Paso 1: Redistribución
+    redistribucion: Optional[dict] = Field(None, description="Resultado de la confirmación de redistribución")
+    
+    # Paso 2: Generar ODC
+    odc_generada: Optional[dict] = Field(None, description="Resultado de la generación de ODC")
+    
+    # Paso 3: Enviar a SAP
+    envio_sap: Optional[ProcesoCompletoSAPDetalleODC] = Field(None, description="Resultado del envío a SAP")
+    
+    # Resumen
+    resumen: Optional[ResumenConfirmacion] = Field(None, description="Resumen de cantidades y costos")
+    
+    # Timestamps
+    fecha_proceso: datetime = Field(default_factory=datetime.now, description="Fecha y hora del proceso")
+    
+    # Errores parciales (si el proceso falló en algún paso)
+    paso_fallido: Optional[str] = Field(None, description="Nombre del paso donde falló (si aplica)")
+    error_detalle: Optional[str] = Field(None, description="Detalle del error (si aplica)")
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "status": "success",
+                "message": "Proceso completado exitosamente. ODC enviada a SAP con DocNum: 12345",
+                "pedido_id": "550e8400-e29b-41d4-a716-446655440000",
+                "numero_pedido": "P-12.01 - 12 - 2025",
+                "redistribucion": {
+                    "version_confirmada": 1,
+                    "productos_redistribuidos": 5
+                },
+                "odc_generada": {
+                    "oc_id": "660e8400-e29b-41d4-a716-446655440001",
+                    "detalles_insertados": 8
+                },
+                "envio_sap": {
+                    "oc_id": "660e8400-e29b-41d4-a716-446655440001",
+                    "proveedor": "P1234567890001",
+                    "success": True,
+                    "doc_entry": 54321,
+                    "doc_num": 12345
+                },
+                "resumen": {
+                    "total_productos": 5,
+                    "total_cantidad_solicitada": 500,
+                    "total_cantidad_confirmada": 450,
+                    "total_cantidad_ajustada": 450,
+                    "total_costo_original": 5000.00,
+                    "total_costo_ajustado": 4500.00,
+                    "diferencia_cantidad": -50,
+                    "diferencia_costo": -500.00
+                },
+                "fecha_proceso": "2025-01-15T10:30:00Z",
+                "paso_fallido": None,
+                "error_detalle": None
+            }
+        }
+

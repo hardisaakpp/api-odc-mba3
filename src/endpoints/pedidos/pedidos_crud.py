@@ -53,6 +53,10 @@ def register_crud_endpoints(app: FastAPI):
         creado_por: Optional[str] = Query(None, description="Filtrar por usuario que creó el pedido"),
         limit: Optional[int] = Query(50, description="Límite de registros por página"),
         offset: Optional[int] = Query(0, description="Offset para paginación"),
+        solo_redistribucion: Optional[str] = Query(
+            None,
+            description="Si 'true', solo pedidos aptos para redistribución (estado >= CONFIRMADO POR EL RAYO, excluye CANCELADO)"
+        ),
         user: Dict = Depends(verify_jwt_token),
         _: None = Depends(require_any_permission(['odcsap.view', 'mabel.view']))
     ):
@@ -74,11 +78,14 @@ def register_crud_endpoints(app: FastAPI):
         - `creado_por` (string, opcional) - Filtrar por usuario que creó el pedido
         - `limit` (int, default: 50) - Límite de registros por página
         - `offset` (int, default: 0) - Offset para paginación
+        - `solo_redistribucion` (string, opcional) - Si "true", solo pedidos aptos para redistribución
+          (estado >= "CONFIRMADO POR EL RAYO" y != "CANCELADO"). Para la vista /redistribucion.
         
         **Ejemplo:**
         ```
         GET /api/pedidos?estado=PENDIENTE_CONFIRMACION_PROVEEDOR&limit=20&offset=0
         GET /api/pedidos?fecha_desde=2025-01-01&fecha_hasta=2025-01-31&proveedor_nombre=RAYO
+        GET /api/pedidos?solo_redistribucion=true&limit=10  # Para vista de redistribución
         ```
         
         **Respuesta:**
@@ -108,6 +115,12 @@ def register_crud_endpoints(app: FastAPI):
             JSON con lista de pedidos y metadata de paginación
         """
         try:
+            # Parsear parámetro solo_redistribucion
+            filtrar_redistribucion = (
+                solo_redistribucion is not None
+                and str(solo_redistribucion).lower() in ("true", "1")
+            )
+            
             with get_db_connection_context() as conn:
                 repo = PedidoRepository(conn)
                 resultado = repo.get_pedidos_con_filtros(
@@ -120,6 +133,7 @@ def register_crud_endpoints(app: FastAPI):
                     limit=limit,
                     offset=offset,
                     excluir_borrador=True,
+                    solo_redistribucion=filtrar_redistribucion,
                 )
                 
                 return JSONResponse(
@@ -158,8 +172,17 @@ def register_crud_endpoints(app: FastAPI):
         _: None = Depends(require_any_permission(['odcsap.view', 'mabel.view']))
     ):
         """
-        Lista pedidos en estado confirmado, ordenados por creado_en DESC.
-        Para pantalla Redistribución: lista de pedidos confirmados y/o con redistribución confirmada.
+        Lista pedidos aptos para redistribución, ordenados por creado_en DESC.
+        
+        **Filtro de estados:** Solo incluye pedidos con estado >= "CONFIRMADO POR EL RAYO" (estado_id=4).
+        
+        **Estados excluidos:**
+        - BORRADOR (1)
+        - NUEVO PEDIDO (2)
+        - GESTIONAR PEDIDO (3)
+        - CANCELADO (19)
+        
+        **Estados incluidos:** Todos los demás a partir de CONFIRMADO POR EL RAYO (4).
 
         **Query Parameters:**
         - `page` (int, default: 1) - Número de página
@@ -239,20 +262,28 @@ def register_crud_endpoints(app: FastAPI):
     async def get_ultimo_pedido_redistribucion(
         solo_usuario: Optional[bool] = Query(
             True,
-            description="Si true, último pedido CONFIRMADO o CONFIRMADO REDISTRIBUCION del usuario; si false, último en todo el sistema"
+            description="Si true, último pedido apto para redistribución del usuario; si false, último en todo el sistema"
         ),
         user: Dict = Depends(verify_jwt_token),
         _: None = Depends(require_any_permission(['odcsap.view', 'mabel.view']))
     ):
         """
-        Obtiene el último pedido con estado CONFIRMADO (4) o CONFIRMADO REDISTRIBUCION (10).
+        Obtiene el último pedido apto para redistribución: estado >= "CONFIRMADO POR EL RAYO" (4).
+        
+        **Filtro de estados:** Solo incluye pedidos con estado_id >= 4 y != 19 (CANCELADO).
+        
+        **Estados excluidos:**
+        - BORRADOR (1)
+        - NUEVO PEDIDO (2)
+        - GESTIONAR PEDIDO (3)
+        - CANCELADO (19)
+        
         Para la pantalla Revisar Redistribución: al entrar en /redistribucion sin número de pedido,
         el front llama a este endpoint y, si hay resultado, redirige a
-        /pedidos/{numero_pedido}/redistribucion. Así se pueden visualizar tanto pedidos listos
-        para redistribuir (CONFIRMADO) como ya con redistribución confirmada (CONFIRMADO REDISTRIBUCION).
+        /pedidos/{numero_pedido}/redistribucion.
 
         **Query Parameters:**
-        - `solo_usuario` (bool, default: true) - Si true, último pedido del usuario en esos estados; si false, último global.
+        - `solo_usuario` (bool, default: true) - Si true, último pedido del usuario; si false, último global.
 
         **Respuesta:** Objeto con cabecera básica (pedido_id, numero_pedido, estado, ...) o null.
 
