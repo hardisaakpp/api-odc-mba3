@@ -4,6 +4,8 @@ Test rápido de integración para verificar la refactorización de pedido_valida
 import sys
 sys.path.insert(0, '.')
 
+from datetime import date, timedelta
+
 from src.database.services.pedido_validator import PedidoValidator, ValidationIssue, ValidationSeverity
 
 def test_basico():
@@ -19,10 +21,13 @@ def test_basico():
 
     # Test 1: Validar cabecera válida
     print("\n[1/4] Test validar_cabecera con datos válidos...")
+    # Usar fechas relativas para evitar fallos por fecha pasada
+    fecha_pedido = date.today().isoformat()
+    fecha_entrega = (date.today() + timedelta(days=7)).isoformat()
     cabecera_valida = {
         "numero_pedido": "PED-001",
-        "fecha_pedido": "2026-01-08",
-        "fecha_entrega": "2026-01-15"
+        "fecha_pedido": fecha_pedido,
+        "fecha_entrega": fecha_entrega
     }
     issues = validator.validar_cabecera(cabecera_valida, row_number=1)
     assert len(issues) == 0, f"No debería haber issues, pero se encontraron: {issues}"
@@ -51,7 +56,7 @@ def test_basico():
         "total": 12.0
     }
     distribuciones = [
-        {"codigo_tienda": "T001", "cantidad": 5}
+        {"tienda_codigo": "T001", "cantidad": 5}
     ]
     issues = validator.validar_detalle(detalle, distribuciones, row_number=2)
     # Puede haber warnings pero no debería haber errores críticos

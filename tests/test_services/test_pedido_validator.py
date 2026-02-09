@@ -259,11 +259,12 @@ class TestPedidoValidatorCompleto:
     
     def test_validar_pedido_completo_valido(self):
         """Test que valida un pedido completo válido."""
+        from datetime import date
         validator = PedidoValidator(tiendas_permitidas=["T001", "T002"])
         
         cabecera = {
             "numero_pedido": "P-001",
-            "fecha_pedido": "2025-01-21",
+            "fecha_pedido": date.today().isoformat(),
             "fecha_entrega": "INMEDIATO"
         }
         

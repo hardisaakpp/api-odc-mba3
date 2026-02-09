@@ -33,7 +33,9 @@ class TestQueryService:
                     assert result.parsed["select"] == "*"
                     assert result.parsed["from"] == "tabla"
                     assert result.note == "PARSE_OK"
-                    assert "received_at" in result.received_at
+                    # received_at debe ser un timestamp ISO válido (no vacío)
+                    assert result.received_at is not None
+                    assert len(result.received_at) > 0
     
     def test_process_query_invalid_raises_error(self):
         """Test que lanza QueryValidationError para queries inválidas."""

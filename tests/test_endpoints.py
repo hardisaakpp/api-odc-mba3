@@ -28,8 +28,8 @@ class TestConsultarEndpoint:
         # Nota: Este test puede fallar si MBA3 no está disponible
         # pero verifica que el endpoint existe
         response = client.get("/consultar")
-        # Acepta 200 (éxito) o 503 (servicio no disponible)
-        assert response.status_code in [200, 503, 500]
+        # Acepta 200 (éxito), 401 (JWT requerido), 503 (servicio no disponible) o 500 (error)
+        assert response.status_code in [200, 401, 503, 500]
 
 
 class TestProcesarOCEndpoint:
@@ -38,8 +38,8 @@ class TestProcesarOCEndpoint:
     def test_procesar_oc_endpoint_exists(self, client: TestClient):
         """Verifica que el endpoint existe."""
         response = client.get("/procesar-oc")
-        # Acepta 200 (éxito) o 500 (error de BD)
-        assert response.status_code in [200, 500]
+        # Acepta 200 (éxito), 401 (JWT requerido) o 500 (error de BD)
+        assert response.status_code in [200, 401, 500]
 
 
 class TestIntegrarSAPEndpoint:
@@ -48,6 +48,6 @@ class TestIntegrarSAPEndpoint:
     def test_integrar_sap_endpoint_exists(self, client: TestClient):
         """Verifica que el endpoint existe."""
         response = client.post("/integrar-sap")
-        # Acepta 200, 400 (SAP deshabilitado) o 500 (error)
-        assert response.status_code in [200, 400, 500]
+        # Acepta 200, 400 (SAP deshabilitado), 401 (JWT requerido) o 500 (error)
+        assert response.status_code in [200, 400, 401, 500]
 

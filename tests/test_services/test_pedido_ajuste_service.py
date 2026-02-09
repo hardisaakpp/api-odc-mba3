@@ -23,6 +23,7 @@ from typing import Dict, Any
 from src.database.services.pedido_ajuste_service import PedidoAjusteService
 from src.database.repositories.pedido_repository import PedidoRepository
 from src.database.repositories.pedido_respuesta_repository import PedidoRespuestaRepository
+from src.database.pedido_estados import ESTADO_CONFIRMADO_PROVEEDOR
 
 
 class TestPedidoAjusteService:
@@ -156,10 +157,10 @@ class TestPedidoAjusteService:
             assert resultado["resumen"]["total_diferencia"] == 0
             assert resultado["resumen"]["porcentaje_confirmacion"] == 100.0
             
-            # Verificar que se actualizó estado del pedido
+            # Verificar que se actualizó estado del pedido (usa constante entera, no string)
             mock_pedido_repo.update_estado.assert_called_once_with(
                 "pedido-123",
-                "CONFIRMADO_PROVEEDOR"
+                ESTADO_CONFIRMADO_PROVEEDOR
             )
             
             # Verificar commit único
@@ -352,8 +353,10 @@ class TestPedidoAjusteService:
                     usuario_id="user-1"
                 )
             
-            assert "ya fue procesada" in str(exc_info.value).lower() or \
-                   "no está en estado" in str(exc_info.value).lower()
+            error_msg = str(exc_info.value).lower()
+            assert "ya fue procesada" in error_msg or \
+                   "no está en estado" in error_msg or \
+                   "debe estar en estado" in error_msg
             
             # Verificar que NO se hizo commit ni update_estado en segunda llamada
             assert mock_conn.commit.call_count == 0

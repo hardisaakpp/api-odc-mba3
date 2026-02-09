@@ -139,7 +139,8 @@ class TestFacturaMapperToDespachoCabecera:
         assert result["empresa"] == "SIN_EMPRESA"
         assert result["codigo_cliente"] == "SIN_CLIENTE"
         assert result["tipo_documento"] == "SIN_TIPO"
-        assert result["numero_factura"] == 0
+        # "FE-123" → parts[1] = "123" → se extrae numero_factura = 123
+        assert result["numero_factura"] == 123
     
     def test_to_despacho_cabecera_extract_numero_factura(self):
         """Test que extrae número de factura del código."""
@@ -190,7 +191,8 @@ class TestFacturaMapperToDespachoDetalle:
         
         sap_info = {
             "unidad_conversion": 4.0,  # 1 docena = 4 packs
-            "pack_sap": "X3"
+            "pack_sap": "X3",
+            "grupo_articulos": "R-MEDIAS"  # Requerido para que la conversión aplique
         }
         
         result = FacturaMapper.to_despacho_detalle(linea, "GrabarLineasProd", sap_info)

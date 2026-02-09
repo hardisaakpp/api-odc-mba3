@@ -344,6 +344,27 @@ class PedidoParserTiendas:
                 logger.warning("⚠️ Columnas requeridas no encontradas en hoja 'Tiendas'")
                 return {}
             
+            # Validación de sincronización: ID TIENDA ↔ NOMBRE TIENDA
+            filas_desincronizadas = []
+            for fila_idx in range(2, ws.max_row + 1):
+                codigo_bruto = ws.cell(row=fila_idx, column=(col_codigo + 1)).value
+                nombre_bruto = ws.cell(row=fila_idx, column=(col_nombre + 1)).value if col_nombre is not None else None
+                
+                has_codigo = bool(codigo_bruto is not None and str(codigo_bruto).strip())
+                has_nombre = bool(nombre_bruto is not None and str(nombre_bruto).strip())
+                
+                # Si tiene uno pero no el otro, es error de sincronización
+                if has_codigo != has_nombre:
+                    filas_desincronizadas.append(fila_idx)
+            
+            if filas_desincronizadas:
+                filas_str = ", ".join(str(f) for f in filas_desincronizadas)
+                raise ValueError(
+                    f"Error de sincronización entre ID TIENDA y NOMBRE TIENDA. "
+                    f"Filas problemáticas: {filas_str}. "
+                    f"Si hay información en la columna ID TIENDA debe haber en NOMBRE TIENDA y viceversa."
+                )
+            
             for fila_idx in range(2, ws.max_row + 1):
                 codigo_bruto = ws.cell(row=fila_idx, column=(col_codigo + 1)).value
                 nombre_bruto = ws.cell(row=fila_idx, column=(col_nombre + 1)).value if col_nombre is not None else None
@@ -382,6 +403,9 @@ class PedidoParserTiendas:
             logger.info(f"✅ Catálogo de tiendas cargado: {len(catalogo)} tiendas")
             return catalogo
             
+        except ValueError:
+            # Re-raise ValueError (validaciones de negocio como sincronización ID/NOMBRE)
+            raise
         except Exception as e:
             logger.error(f"❌ Error al leer hoja 'Tiendas': {e}", exc_info=True)
             return {}
