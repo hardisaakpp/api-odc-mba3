@@ -74,10 +74,7 @@ def get_db_connection() -> pyodbc.Connection:
             raise ValueError("No se pudo obtener el nombre de la base de datos actual")
         current_db = db_result[0]
         
-        logger.info(f"✅ Conexión a SQL Server establecida")
-        logger.info(f"   Servidor: {SQL_SERVER_SERVER}")
-        logger.info(f"   Base de datos configurada: {SQL_SERVER_DATABASE}")
-        logger.info(f"   Base de datos actual: {current_db}")
+        logger.debug(f"✅ Conexión a SQL Server establecida ({SQL_SERVER_SERVER}/{current_db})")
         
         if current_db.lower() != SQL_SERVER_DATABASE.lower():
             logger.warning(

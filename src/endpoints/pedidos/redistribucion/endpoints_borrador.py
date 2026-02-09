@@ -86,7 +86,15 @@ def register_borrador_endpoints(app: FastAPI):
                 repo_pedido = PedidoRepository(conn)
                 repo_borrador = RedistribucionBorradorRepository(conn)
 
-                pedido_data = obtener_pedido_o_404(repo_pedido, numero_pedido, es_numero=True)
+                pedido_data = repo_pedido.get_pedido_completo_por_numero(numero_pedido)
+
+                if not pedido_data:
+                    return BorradorResponse(
+                        status="success",
+                        ajustes_detalle=[],
+                        fecha_guardado=None,
+                        message="No se encontró el pedido, no hay borrador disponible"
+                    )
 
                 pedido_id = pedido_data["cabecera"]["pedido_id"]
 

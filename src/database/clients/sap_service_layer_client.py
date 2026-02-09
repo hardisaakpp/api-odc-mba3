@@ -720,18 +720,10 @@ class SAPServiceLayerClient:
                 # SAP B1 9.3 retorna el array embebido, NO dentro de "value"
                 warehouses = data.get("ItemWarehouseInfoCollection", [])
                 
-                # 🔍 LOGGING COMPACTO: Solo información esencial
-                bodegas_codes = [wh.get('WarehouseCode', 'N/A') for wh in warehouses] if warehouses else []
-                logger.info(
-                    f"🔍 {item_code} → ItemWarehouseInfoCollection: "
-                    f"{'VACÍO' if not warehouses else f'{len(warehouses)} bodega(s)'} | "
-                    f"WhsCodes: {bodegas_codes if bodegas_codes else 'NINGUNO'}"
-                )
-                
-                # 🔍 LOGGING DETALLADO: Solo en modo DEBUG
+                # 🔍 LOGGING COMPACTO: Solo conteo de bodegas (no listar las 210+)
                 logger.debug(
-                    f"📦 RESPUESTA CRUDA SAP para {item_code}: URL={url}, "
-                    f"Keys={list(data.keys()) if isinstance(data, dict) else 'N/A'}"
+                    f"🔍 {item_code} → ItemWarehouseInfoCollection: "
+                    f"{'VACÍO' if not warehouses else f'{len(warehouses)} bodega(s)'}"
                 )
                 
                 if not warehouses:
@@ -754,11 +746,10 @@ class SAPServiceLayerClient:
                         warehouse_info = wh
                         break
                 
-                # 🔍 LOGGING COMPACTO: Búsqueda de bodega específica
+                # 🔍 LOGGING COMPACTO: Resultado de búsqueda de bodega (sin listar las 210+)
                 logger.info(
                     f"🔍 {item_code} → Búsqueda {warehouse_code}: "
-                    f"{'ENCONTRADA' if warehouse_info else 'NO ENCONTRADA'} | "
-                    f"Disponibles: {bodegas_encontradas if bodegas_encontradas else 'NINGUNA'}"
+                    f"{'ENCONTRADA' if warehouse_info else f'NO ENCONTRADA (entre {len(bodegas_encontradas)} bodegas)'}"
                 )
                 
                 if not warehouse_info:

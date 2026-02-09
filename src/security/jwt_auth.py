@@ -168,13 +168,10 @@ def _extract_permissions(data: Dict[str, Any]) -> list:
             elif isinstance(value, str):
                 permissions.append(value)
     
-    # Logging de debug solo en desarrollo
-    if ENVIRONMENT == "development":
-        if permissions:
-            logger.debug(f"🔍 [DEBUG EXTRACT] Permisos encontrados: {permissions}")
-        else:
-            logger.debug(f"🔍 [DEBUG EXTRACT] ⚠️ No se encontraron permisos en el token")
-            logger.debug(f"🔍 [DEBUG EXTRACT] Claves disponibles: {list(data.keys())}")
+    # Logging de debug solo cuando NO se encuentran permisos (caso anómalo)
+    if ENVIRONMENT == "development" and not permissions:
+        logger.debug(f"🔍 [DEBUG EXTRACT] ⚠️ No se encontraron permisos en el token")
+        logger.debug(f"🔍 [DEBUG EXTRACT] Claves disponibles: {list(data.keys())}")
     
     return permissions
 
@@ -215,23 +212,9 @@ def require_permission(permission_key: str, legacy_permission: Optional[str] = N
         roles = user.get('roles', [])
         username = user.get('username', 'unknown')
         
-        # Logging de debug solo en desarrollo
-        if ENVIRONMENT == "development":
-            logger.debug("=" * 80)
-            logger.debug(f"🔍 [DEBUG PERMISSION] Validando permiso para usuario: {username}")
-            logger.debug(f"🔍 [DEBUG PERMISSION] Permiso requerido: '{permission_key}'")
-            if legacy_permission:
-                logger.debug(f"🔍 [DEBUG PERMISSION] Permiso legacy (backward compat): '{legacy_permission}'")
-            logger.debug(f"🔍 [DEBUG PERMISSION] Roles del usuario: {roles}")
-            logger.debug(f"🔍 [DEBUG PERMISSION] Permisos disponibles en el token: {permissions}")
-            logger.debug(f"🔍 [DEBUG PERMISSION] Tipo de permisos: {type(permissions)}")
-        
         # ✅ Permitir acceso automático a usuarios con rol 'Admin'
         is_admin = 'Admin' in roles or 'Admin' in permissions
         if is_admin:
-            if ENVIRONMENT == "development":
-                logger.debug(f"✅ [DEBUG PERMISSION] Usuario {username} es Admin - acceso permitido automáticamente")
-                logger.debug("=" * 80)
             return
         
         # Verificar permiso específico primero
@@ -247,11 +230,6 @@ def require_permission(permission_key: str, legacy_permission: Optional[str] = N
                     f"pero no tiene '{permission_key}'. Considerar migrar permisos en el Core."
                 )
         
-        if ENVIRONMENT == "development":
-            logger.debug(f"🔍 [DEBUG PERMISSION] ¿Permiso específico encontrado? {has_specific}")
-            if legacy_permission:
-                logger.debug(f"🔍 [DEBUG PERMISSION] ¿Permiso legacy encontrado? {has_legacy}")
-        
         if not (has_specific or has_legacy):
             logger.warning(
                 f"❌ Permiso denegado: usuario {username} "
@@ -260,17 +238,10 @@ def require_permission(permission_key: str, legacy_permission: Optional[str] = N
             )
             if ENVIRONMENT == "development":
                 logger.debug(f"🔍 [DEBUG PERMISSION] Permisos disponibles: {permissions}")
-                logger.debug(f"🔍 [DEBUG PERMISSION] Comparación exacta falló. Verificar formato del permiso.")
-                logger.debug("=" * 80)
             raise HTTPException(
                 status_code=403,
                 detail=f"Permiso denegado: se requiere '{permission_key}'. Permisos disponibles: {permissions}"
             )
-        
-        if ENVIRONMENT == "development":
-            permiso_usado = permission_key if has_specific else legacy_permission
-            logger.debug(f"✅ [DEBUG PERMISSION] Permiso '{permiso_usado}' validado correctamente")
-            logger.debug("=" * 80)
     
     return permission_checker
 
@@ -302,8 +273,6 @@ def require_any_permission(permission_keys: List[str]):
         permissions = user.get('permissions', [])
         roles = user.get('roles', [])
         username = user.get('username', 'unknown')
-        if ENVIRONMENT == "development":
-            logger.debug(f"🔍 [DEBUG PERMISSION] require_any: {permission_keys} for {username}")
         is_admin = 'Admin' in roles or 'Admin' in permissions
         if is_admin:
             return
