@@ -2,8 +2,8 @@
 Endpoints de notificaciones en tiempo real (SSE).
 
 Proporciona:
-- GET /api/notificaciones/stream  → Conexión SSE para recibir notificaciones en tiempo real
-- GET /api/notificaciones/status  → Estado del sistema de notificaciones (listeners activos)
+- GET /notificaciones/stream  → Conexión SSE para recibir notificaciones en tiempo real
+- GET /notificaciones/status  → Estado del sistema de notificaciones (listeners activos)
 
 El frontend se conecta al stream SSE al iniciar sesión y recibe notificaciones
 dirigidas según los permisos del usuario autenticado.
@@ -33,7 +33,7 @@ HEARTBEAT_INTERVAL = 30
 def register_notificaciones_endpoints(app: FastAPI):
     """Registra los endpoints de notificaciones en tiempo real."""
 
-    @app.get("/api/notificaciones/stream", tags=["Notificaciones"])
+    @app.get("/notificaciones/stream", tags=["Notificaciones"])
     async def stream_notificaciones(
         request: Request,
         user: Dict = Depends(verify_jwt_token),
@@ -148,7 +148,7 @@ def register_notificaciones_endpoints(app: FastAPI):
             },
         )
 
-    @app.get("/api/notificaciones/status", tags=["Notificaciones"])
+    @app.get("/notificaciones/status", tags=["Notificaciones"])
     async def notificaciones_status(
         user: Dict = Depends(verify_jwt_token),
     ):
