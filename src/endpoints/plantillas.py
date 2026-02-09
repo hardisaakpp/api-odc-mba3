@@ -21,7 +21,7 @@ from src.database.repositories.pedido_repository import PedidoRepository
 from src.database.repositories.pedido_respuesta_repository import PedidoRespuestaRepository
 from src.database.repositories.archivo_plantilla_repository import ArchivoPlantillaRepository
 from src.database.pedido_estados import ESTADOS_PUEDE_DESCARTAR, ESTADOS_PUEDE_CONFIRMAR_REDISTRIBUCION
-from src.security.jwt_auth import verify_jwt_token, require_permission
+from src.security.jwt_auth import verify_jwt_token, require_permission, require_any_permission
 from src.exceptions import BusinessException
 from src.endpoints.pedidos.utils import validate_excel_file, get_user_id, MAX_FILE_SIZE
 from src.config import ENABLE_FILE_STORAGE
@@ -460,7 +460,7 @@ def register_plantillas_endpoints(app: FastAPI):
     async def descargar_plantilla_original(
         pedido_id: str = Path(..., description="ID del pedido (GUID)"),
         user: Dict = Depends(verify_jwt_token),
-        _: None = Depends(require_permission('mabel.view'))
+        _: None = Depends(require_any_permission(['mabel.view', 'odcsap.view']))
     ):
         """
         Descarga el archivo Excel original que fue subido para un pedido.
@@ -567,7 +567,7 @@ def register_plantillas_endpoints(app: FastAPI):
     async def info_archivo_plantilla(
         pedido_id: str = Path(..., description="ID del pedido (GUID)"),
         user: Dict = Depends(verify_jwt_token),
-        _: None = Depends(require_permission('mabel.view'))
+        _: None = Depends(require_any_permission(['mabel.view', 'odcsap.view']))
     ):
         """
         Obtiene información sobre el archivo Excel original de un pedido.
