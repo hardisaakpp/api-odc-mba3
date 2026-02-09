@@ -177,6 +177,26 @@ def register_proveedor_endpoints(app: FastAPI):
             
             logger.info(f"✅ Cambios guardados y respuesta creada para pedido {pedido_id}. Estado: CONFIRMADO")
             
+            # 📢 Notificación en tiempo real a MABEL TRADING
+            if resultado.get("status") == "success" and transicion_a_confirmado:
+                try:
+                    from src.utils.notification_manager import notification_manager, NotificationType
+                    from src.database.connection import get_db_connection_context as _get_conn
+                    from src.database.repositories.pedido_repository import PedidoRepository as _PedidoRepo
+                    with _get_conn() as _conn:
+                        _repo = _PedidoRepo(_conn)
+                        _pedido = _repo.get_pedido_completo(pedido_id)
+                        _num = (_pedido.get("cabecera") or {}).get("numero_pedido", "") if _pedido else ""
+                    await notification_manager.notify(
+                        target_permission="mabel.view",
+                        title="EL RAYO confirmó tu pedido",
+                        message=f"El pedido {_num} ha sido confirmado por EL RAYO y está listo para redistribución.",
+                        notification_type=NotificationType.SUCCESS,
+                        metadata={"pedido_id": pedido_id, "numero_pedido": _num, "accion": "pedido_confirmado_rayo"},
+                    )
+                except Exception as notif_err:
+                    logger.warning(f"⚠️ Error al enviar notificación en tiempo real: {notif_err}")
+            
             # Enviar email solo cuando el pedido acaba de pasar a CONFIRMADO en esta petición (no si ya estaba CONFIRMADO)
             transicion_a_confirmado = estado_id_antes is not None and estado_id_antes != ESTADO_REDISTRIBUCION
             if (

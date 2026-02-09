@@ -18,6 +18,7 @@ from .homologaciones_sku import register_homologaciones_sku_endpoints
 from .cruce_productos import register_cruce_productos_endpoints
 from .plantillas import register_plantillas_endpoints
 from .pedidos import register_pedidos_endpoints
+from .notificaciones import register_notificaciones_endpoints
 
 
 def create_endpoints(app: FastAPI):
@@ -65,3 +66,6 @@ def create_endpoints(app: FastAPI):
     
     # Registrar endpoints de pedidos (refactorizado - 29 endpoints)
     register_pedidos_endpoints(app)
+    
+    # Registrar endpoints de notificaciones en tiempo real (SSE)
+    register_notificaciones_endpoints(app)

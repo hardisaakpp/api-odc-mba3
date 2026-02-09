@@ -446,6 +446,20 @@ def register_redistribucion_endpoints(app: FastAPI):
                 
                 logger.info(f"✅ Redistribución confirmada para pedido {pedido_id} por usuario {user_id}")
                 
+                # 📢 Notificación en tiempo real a EL RAYO
+                try:
+                    from src.utils.notification_manager import notification_manager, NotificationType
+                    _numero_pedido = pedido_data["cabecera"].get("numero_pedido", "")
+                    await notification_manager.notify(
+                        target_permission="odcsap.view",
+                        title="Redistribución confirmada por MABEL TRADING",
+                        message=f"La redistribución del pedido {_numero_pedido} ha sido confirmada.",
+                        notification_type=NotificationType.SUCCESS,
+                        metadata={"pedido_id": pedido_id, "numero_pedido": _numero_pedido, "accion": "redistribucion_confirmada"},
+                    )
+                except Exception as notif_err:
+                    logger.warning(f"⚠️ Error al enviar notificación en tiempo real: {notif_err}")
+                
                 # NUEVO: Procesar pedido con SAP (similar a MIGRAR pero para pedidos)
                 logger.info("=" * 70)
                 logger.info("🔄 PROCESANDO: Consultando SAP y procesando productos del pedido...")
@@ -1533,6 +1547,19 @@ def register_redistribucion_endpoints(app: FastAPI):
                 )
                 
                 logger.info(f"✅ Redistribución confirmada para pedido {numero_pedido} por usuario {user_id}")
+                
+                # 📢 Notificación en tiempo real a EL RAYO
+                try:
+                    from src.utils.notification_manager import notification_manager, NotificationType
+                    await notification_manager.notify(
+                        target_permission="odcsap.view",
+                        title="Redistribución confirmada por MABEL TRADING",
+                        message=f"La redistribución del pedido {numero_pedido} ha sido confirmada.",
+                        notification_type=NotificationType.SUCCESS,
+                        metadata={"pedido_id": pedido_id, "numero_pedido": numero_pedido, "accion": "redistribucion_confirmada"},
+                    )
+                except Exception as notif_err:
+                    logger.warning(f"⚠️ Error al enviar notificación en tiempo real: {notif_err}")
                 
                 # NUEVO: Procesar pedido con SAP (similar a MIGRAR pero para pedidos)
                 logger.info("=" * 70)

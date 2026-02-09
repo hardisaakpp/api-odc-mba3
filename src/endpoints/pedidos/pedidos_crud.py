@@ -558,6 +558,7 @@ def register_crud_endpoints(app: FastAPI):
                     )
                 repo.update_estado(pedido_id, ESTADO_REDISTRIBUCION)
                 pedido = repo.get_pedido_completo(pedido_id)
+                numero_pedido = pedido.get("cabecera", {}).get("numero_pedido", "")
                 _eid = pedido.get("cabecera", {}).get("estado_id")
                 try:
                     _eid = int(_eid) if _eid is not None else None
@@ -569,6 +570,20 @@ def register_crud_endpoints(app: FastAPI):
                 pedido["puede_descargar_csv"] = _eid == ESTADO_REDISTRIBUCION  # Solo en estado CONFIRMADO (4)
                 pedido["puede_confirmar_redistribucion"] = _eid in ESTADOS_PUEDE_CONFIRMAR_REDISTRIBUCION
                 pedido["puede_finalizar"] = _eid == ESTADO_DESPACHAR_Y_FACTURAR  # Solo en estado Despachar y Facturar (17)
+                
+                # 📢 Notificación en tiempo real a MABEL TRADING
+                try:
+                    from src.utils.notification_manager import notification_manager, NotificationType
+                    await notification_manager.notify(
+                        target_permission="mabel.view",
+                        title="EL RAYO confirmó tu pedido",
+                        message=f"El pedido {numero_pedido} ha sido confirmado por EL RAYO y está listo para redistribución.",
+                        notification_type=NotificationType.SUCCESS,
+                        metadata={"pedido_id": pedido_id, "numero_pedido": numero_pedido, "accion": "pedido_confirmado_rayo"},
+                    )
+                except Exception as notif_err:
+                    logger.warning(f"⚠️ Error al enviar notificación en tiempo real: {notif_err}")
+                
                 return JSONResponse(status_code=status.HTTP_200_OK, content=pedido)
         except HTTPException:
             raise
@@ -620,6 +635,7 @@ def register_crud_endpoints(app: FastAPI):
                     )
                 repo.update_estado(pedido_id, ESTADO_DESPACHAR_Y_FACTURAR)
                 pedido = repo.get_pedido_completo(pedido_id)
+                numero_pedido = pedido.get("cabecera", {}).get("numero_pedido", "")
                 _eid = pedido.get("cabecera", {}).get("estado_id")
                 try:
                     _eid = int(_eid) if _eid is not None else None
@@ -631,6 +647,20 @@ def register_crud_endpoints(app: FastAPI):
                 pedido["puede_descargar_csv"] = _eid == ESTADO_REDISTRIBUCION  # Solo en estado CONFIRMADO (4)
                 pedido["puede_confirmar_redistribucion"] = _eid in ESTADOS_PUEDE_CONFIRMAR_REDISTRIBUCION
                 pedido["puede_finalizar"] = _eid == ESTADO_DESPACHAR_Y_FACTURAR  # Solo en estado Despachar y Facturar (17)
+                
+                # 📢 Notificación en tiempo real a ambos roles
+                try:
+                    from src.utils.notification_manager import notification_manager, NotificationType
+                    await notification_manager.notify_multiple(
+                        target_permissions=["odcsap.view", "mabel.view"],
+                        title="Pedido listo para despacho",
+                        message=f"El pedido {numero_pedido} ha sido marcado como Despachar y Facturar.",
+                        notification_type=NotificationType.INFO,
+                        metadata={"pedido_id": pedido_id, "numero_pedido": numero_pedido, "accion": "despachar_y_facturar"},
+                    )
+                except Exception as notif_err:
+                    logger.warning(f"⚠️ Error al enviar notificación en tiempo real: {notif_err}")
+                
                 return JSONResponse(status_code=status.HTTP_200_OK, content=pedido)
         except HTTPException:
             raise
@@ -681,6 +711,7 @@ def register_crud_endpoints(app: FastAPI):
                     )
                 repo.update_estado(pedido_id, ESTADO_FINALIZADO)
                 pedido = repo.get_pedido_completo(pedido_id)
+                numero_pedido = pedido.get("cabecera", {}).get("numero_pedido", "")
                 _eid = pedido.get("cabecera", {}).get("estado_id")
                 try:
                     _eid = int(_eid) if _eid is not None else None
@@ -692,6 +723,20 @@ def register_crud_endpoints(app: FastAPI):
                 pedido["puede_descargar_csv"] = _eid == ESTADO_REDISTRIBUCION  # Solo en estado CONFIRMADO (4)
                 pedido["puede_confirmar_redistribucion"] = _eid in ESTADOS_PUEDE_CONFIRMAR_REDISTRIBUCION
                 pedido["puede_finalizar"] = _eid == ESTADO_DESPACHAR_Y_FACTURAR  # Solo en estado Despachar y Facturar (17)
+                
+                # 📢 Notificación en tiempo real a ambos roles
+                try:
+                    from src.utils.notification_manager import notification_manager, NotificationType
+                    await notification_manager.notify_multiple(
+                        target_permissions=["odcsap.view", "mabel.view"],
+                        title="Pedido finalizado",
+                        message=f"El pedido {numero_pedido} ha sido marcado como Finalizado.",
+                        notification_type=NotificationType.SUCCESS,
+                        metadata={"pedido_id": pedido_id, "numero_pedido": numero_pedido, "accion": "pedido_finalizado"},
+                    )
+                except Exception as notif_err:
+                    logger.warning(f"⚠️ Error al enviar notificación en tiempo real: {notif_err}")
+                
                 return JSONResponse(status_code=status.HTTP_200_OK, content=pedido)
         except HTTPException:
             raise
@@ -1073,6 +1118,21 @@ def register_crud_endpoints(app: FastAPI):
             service = PedidoService()
             usuario_id = get_user_id(user)
             resultado = service.enviar_pedido(pedido_id=pedido_id, usuario_id=usuario_id)
+            
+            # 📢 Notificación en tiempo real a EL RAYO
+            try:
+                from src.utils.notification_manager import notification_manager, NotificationType
+                numero_pedido = resultado.get("numero_pedido", "")
+                await notification_manager.notify(
+                    target_permission="odcsap.view",
+                    title="Ingresa pedido de MABEL TRADING",
+                    message=f"Se ha recibido el pedido {numero_pedido}. Revisa el detalle para gestionarlo.",
+                    notification_type=NotificationType.INFO,
+                    metadata={"pedido_id": pedido_id, "numero_pedido": numero_pedido, "accion": "pedido_enviado"},
+                )
+            except Exception as notif_err:
+                logger.warning(f"⚠️ Error al enviar notificación en tiempo real: {notif_err}")
+            
             return JSONResponse(
                 status_code=status.HTTP_200_OK,
                 content=resultado
@@ -1170,7 +1230,7 @@ def register_crud_endpoints(app: FastAPI):
                 pedido_actualizado = repo.get_pedido_completo(pedido_id)
                 numero_pedido = (pedido_actualizado.get("cabecera") or {}).get("numero_pedido")
                 
-                # Notificar a EL RAYO
+                # Notificar a EL RAYO (email)
                 try:
                     from src.utils.email_notifier import send_pedido_cancelado_notification
                     send_pedido_cancelado_notification(
@@ -1180,6 +1240,19 @@ def register_crud_endpoints(app: FastAPI):
                     )
                 except Exception as notif_err:
                     logger.warning(f"⚠️ No se pudo enviar notificación de pedido cancelado a EL RAYO: {notif_err}")
+                
+                # 📢 Notificación en tiempo real a EL RAYO
+                try:
+                    from src.utils.notification_manager import notification_manager, NotificationType
+                    await notification_manager.notify(
+                        target_permission="odcsap.view",
+                        title="Pedido cancelado por MABEL TRADING",
+                        message=f"El pedido {numero_pedido} ha sido cancelado.",
+                        notification_type=NotificationType.WARNING,
+                        metadata={"pedido_id": pedido_id, "numero_pedido": numero_pedido, "accion": "pedido_cancelado"},
+                    )
+                except Exception as notif_err:
+                    logger.warning(f"⚠️ Error al enviar notificación en tiempo real: {notif_err}")
                 
                 # Calcular flags de UI
                 _eid = pedido_actualizado.get("cabecera", {}).get("estado_id")
@@ -1317,6 +1390,19 @@ def register_crud_endpoints(app: FastAPI):
                         logger.info(f"📧 Notificación de pedido descartado enviada a EL RAYO (estado_id={estado_id})")
                     except Exception as notif_err:
                         logger.warning(f"⚠️ No se pudo enviar notificación de pedido descartado a EL RAYO: {notif_err}")
+                    
+                    # 📢 Notificación en tiempo real a EL RAYO
+                    try:
+                        from src.utils.notification_manager import notification_manager, NotificationType
+                        await notification_manager.notify(
+                            target_permission="odcsap.view",
+                            title="Pedido descartado por MABEL TRADING",
+                            message=f"El pedido {numero_pedido or pedido_id} ha sido descartado.",
+                            notification_type=NotificationType.WARNING,
+                            metadata={"pedido_id": pedido_id, "numero_pedido": numero_pedido, "accion": "pedido_descartado"},
+                        )
+                    except Exception as notif_err:
+                        logger.warning(f"⚠️ Error al enviar notificación en tiempo real: {notif_err}")
                 else:
                     logger.info(f"⏭️ No se envía notificación (estado={estado_id}, notificar_el_rayo={notificar_el_rayo})")
                     
@@ -1396,7 +1482,7 @@ def register_crud_endpoints(app: FastAPI):
                 # Eliminar el pedido
                 repo.delete_pedido(pedido_id)
                 
-                # Enviar notificación a MABEL TRADING
+                # Enviar notificación a MABEL TRADING (email)
                 try:
                     from src.utils.email_notifier import send_pedido_eliminado_mabel_notification
                     send_pedido_eliminado_mabel_notification(
@@ -1407,6 +1493,19 @@ def register_crud_endpoints(app: FastAPI):
                     logger.info(f"📧 Notificación de pedido eliminado enviada a MABEL TRADING")
                 except Exception as notif_err:
                     logger.warning(f"⚠️ No se pudo enviar notificación de pedido eliminado a MABEL TRADING: {notif_err}")
+                
+                # 📢 Notificación en tiempo real a MABEL TRADING
+                try:
+                    from src.utils.notification_manager import notification_manager, NotificationType
+                    await notification_manager.notify(
+                        target_permission="mabel.view",
+                        title="Pedido eliminado por EL RAYO",
+                        message=f"El pedido {numero_pedido or pedido_id} ha sido eliminado desde gestión.",
+                        notification_type=NotificationType.WARNING,
+                        metadata={"pedido_id": pedido_id, "numero_pedido": numero_pedido, "accion": "pedido_eliminado"},
+                    )
+                except Exception as notif_err:
+                    logger.warning(f"⚠️ Error al enviar notificación en tiempo real: {notif_err}")
                 
                 logger.info(f"✅ Pedido {pedido_id} eliminado desde Detalle del Pedido (botón Eliminar) por usuario {user.get('username', 'UNKNOWN')} (estado_id={estado_id}, numero_pedido={numero_pedido})")
                 
