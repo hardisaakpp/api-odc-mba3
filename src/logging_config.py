@@ -80,12 +80,15 @@ class JsonFormatter(logging.Formatter):
         }
         
         # Agregar campos extra si existen
-        if hasattr(record, 'correlation_id'):
-            log_data['correlation_id'] = record.correlation_id
-        if hasattr(record, 'user'):
-            log_data['user'] = record.user
-        if hasattr(record, 'extra_data'):
-            log_data['data'] = record.extra_data
+        correlation_id = getattr(record, 'correlation_id', None)
+        if correlation_id is not None:
+            log_data['correlation_id'] = correlation_id
+        user = getattr(record, 'user', None)
+        if user is not None:
+            log_data['user'] = user
+        extra_data = getattr(record, 'extra_data', None)
+        if extra_data is not None:
+            log_data['data'] = extra_data
         
         # Agregar excepción si existe
         if record.exc_info:
@@ -300,7 +303,7 @@ def log_business_operation(
     message = " - ".join(message_parts)
     
     # Crear registro con datos extra
-    extra = {'extra_data': log_data}
+    extra: Dict[str, Any] = {'extra_data': log_data}
     if id_transaccion:
         extra['correlation_id'] = id_transaccion
     if id_usuario:

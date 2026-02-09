@@ -36,7 +36,7 @@ ESTADOS_PUEDE_ELIMINAR = (ESTADO_GESTIONAR_PEDIDO,)
 
 # "Cancelar Pedido" (Redistribución): deshabilitar desde Confirmado redistribución (10) en adelante.
 # El botón debe estar habilitado solo cuando estado_id < ESTADO_PEDIDO_CONFIRMADO (10).
-ESTADO_LIMITE_CANCELAR_PEDIDO = ESTADO_PEDIDO_CONFIRMADO  # 10 - Confirmado redistribución
+ESTADO_LIMITE_CANCELAR_PEDIDO: int = ESTADO_PEDIDO_CONFIRMADO  # 10 - Confirmado redistribución
 
 # "Confirmar Redistribución": habilitar solo cuando el pedido está en estado que permite redistribución.
 # Estados que permiten confirmar redistribución (antes de CONFIRMADO REDISTRIBUCION y no CANCELADO)

@@ -1811,7 +1811,9 @@ def register_redistribucion_endpoints(app: FastAPI):
                 
                 # Crear libro de Excel
                 wb = Workbook()
-                wb.remove(wb.active)  # Eliminar la hoja por defecto
+                default_sheet = wb.active
+                if default_sheet is not None:
+                    wb.remove(default_sheet)  # Eliminar la hoja por defecto
                 
                 # Estilos
                 header_fill = PatternFill(start_color="4472C4", end_color="4472C4", fill_type="solid")
@@ -2390,6 +2392,8 @@ def register_redistribucion_endpoints(app: FastAPI):
                     )
                     
                     oc_id = resultado_oc.get("oc_id")
+                    if not oc_id:
+                        raise ValueError("El servicio no retornó un oc_id válido")
                     
                     resultado_odc = {
                         "oc_id": oc_id,

@@ -121,6 +121,7 @@ class FileStorageService:
     
     def _ensure_bucket_exists(self):
         """Crea el bucket si no existe."""
+        assert self._client is not None, "El cliente S3 no está inicializado"
         try:
             self._client.head_bucket(Bucket=self._bucket)
             logger.debug(f"Bucket '{self._bucket}' existe")

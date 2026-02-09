@@ -172,7 +172,7 @@ COMMON_RESPONSES = {
 }
 
 # Respuestas para endpoints de lectura (GET)
-READ_RESPONSES = {
+READ_RESPONSES: Dict[int | str, Dict[str, Any]] = {
     401: COMMON_RESPONSES[401],
     403: COMMON_RESPONSES[403],
     404: COMMON_RESPONSES[404],
@@ -180,7 +180,7 @@ READ_RESPONSES = {
 }
 
 # Respuestas para endpoints de escritura (POST, PUT, DELETE)
-WRITE_RESPONSES = {
+WRITE_RESPONSES: Dict[int | str, Dict[str, Any]] = {
     400: COMMON_RESPONSES[400],
     401: COMMON_RESPONSES[401],
     403: COMMON_RESPONSES[403],
@@ -190,7 +190,7 @@ WRITE_RESPONSES = {
 }
 
 # Respuestas para endpoints que interactúan con servicios externos (SAP, MBA3)
-EXTERNAL_SERVICE_RESPONSES = {
+EXTERNAL_SERVICE_RESPONSES: Dict[int | str, Dict[str, Any]] = {
     400: COMMON_RESPONSES[400],
     401: COMMON_RESPONSES[401],
     403: COMMON_RESPONSES[403],

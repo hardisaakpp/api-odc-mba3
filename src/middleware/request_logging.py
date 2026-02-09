@@ -149,6 +149,7 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
         if response:
             response.headers["X-Correlation-ID"] = correlation_id
         
+        assert response is not None, "Response no debería ser None si no hubo excepción"
         return response
     
     def _extract_username_from_jwt(self, request: Request) -> str:

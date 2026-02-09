@@ -497,6 +497,8 @@ def register_crud_endpoints(app: FastAPI):
                 if estado_id == ESTADO_NUEVO_PEDIDO:
                     repo.update_estado(pedido_id, ESTADO_GESTIONAR_PEDIDO)
                     pedido = repo.get_pedido_completo(pedido_id)
+                if pedido is None:
+                    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail={"error": "not_found", "message": "No se encontró el pedido."})
                 _eid = pedido.get("cabecera", {}).get("estado_id")
                 try:
                     _eid = int(_eid) if _eid is not None else None
@@ -558,6 +560,8 @@ def register_crud_endpoints(app: FastAPI):
                     )
                 repo.update_estado(pedido_id, ESTADO_REDISTRIBUCION)
                 pedido = repo.get_pedido_completo(pedido_id)
+                if pedido is None:
+                    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail={"error": "not_found", "message": "No se encontró el pedido."})
                 numero_pedido = pedido.get("cabecera", {}).get("numero_pedido", "")
                 _eid = pedido.get("cabecera", {}).get("estado_id")
                 try:
@@ -635,6 +639,8 @@ def register_crud_endpoints(app: FastAPI):
                     )
                 repo.update_estado(pedido_id, ESTADO_DESPACHAR_Y_FACTURAR)
                 pedido = repo.get_pedido_completo(pedido_id)
+                if pedido is None:
+                    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail={"error": "not_found", "message": "No se encontró el pedido."})
                 numero_pedido = pedido.get("cabecera", {}).get("numero_pedido", "")
                 _eid = pedido.get("cabecera", {}).get("estado_id")
                 try:
@@ -711,6 +717,8 @@ def register_crud_endpoints(app: FastAPI):
                     )
                 repo.update_estado(pedido_id, ESTADO_FINALIZADO)
                 pedido = repo.get_pedido_completo(pedido_id)
+                if pedido is None:
+                    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail={"error": "not_found", "message": "No se encontró el pedido."})
                 numero_pedido = pedido.get("cabecera", {}).get("numero_pedido", "")
                 _eid = pedido.get("cabecera", {}).get("estado_id")
                 try:
@@ -1228,6 +1236,8 @@ def register_crud_endpoints(app: FastAPI):
                 
                 # Obtener pedido actualizado
                 pedido_actualizado = repo.get_pedido_completo(pedido_id)
+                if pedido_actualizado is None:
+                    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail={"error": "not_found", "message": "No se encontró el pedido."})
                 numero_pedido = (pedido_actualizado.get("cabecera") or {}).get("numero_pedido")
                 
                 # Notificar a EL RAYO (email)
@@ -1586,7 +1596,9 @@ def register_crud_endpoints(app: FastAPI):
                 
                 # Crear libro de Excel
                 wb = Workbook()
-                wb.remove(wb.active)  # Eliminar la hoja por defecto
+                default_sheet = wb.active
+                if default_sheet is not None:
+                    wb.remove(default_sheet)  # Eliminar la hoja por defecto
                 
                 # Estilos
                 header_fill = PatternFill(start_color="4472C4", end_color="4472C4", fill_type="solid")

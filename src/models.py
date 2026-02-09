@@ -1146,8 +1146,8 @@ class BorradorResponse(BaseModel):
     
     status: str = Field(default="success")
     ajustes_detalle: List[AjusteDetalle] = Field(default_factory=list, description="Lista de ajustes guardados (vacía si no hay borrador)")
-    fecha_guardado: Optional[datetime] = Field(None, description="Fecha en que se guardó el borrador (null si no hay borrador)")
-    message: Optional[str] = Field(None, description="Mensaje informativo (ej: 'No hay borrador guardado')")
+    fecha_guardado: Optional[datetime] = Field(default=None, description="Fecha en que se guardó el borrador (null si no hay borrador)")
+    message: Optional[str] = Field(default=None, description="Mensaje informativo (ej: 'No hay borrador guardado')")
 
 
 class ProductoSAPProcesamientoItem(BaseModel):

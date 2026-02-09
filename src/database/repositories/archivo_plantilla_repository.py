@@ -82,7 +82,9 @@ class ArchivoPlantillaRepository:
             ))
             
             row = cursor.fetchone()
-            archivo_id = row[0] if row else None
+            if not row:
+                raise Exception("No se obtuvo el ID del archivo registrado")
+            archivo_id: int = row[0]
             
             self.conn.commit()
             

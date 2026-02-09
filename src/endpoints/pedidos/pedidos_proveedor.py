@@ -177,6 +177,9 @@ def register_proveedor_endpoints(app: FastAPI):
             
             logger.info(f"✅ Cambios guardados y respuesta creada para pedido {pedido_id}. Estado: CONFIRMADO")
             
+            # Determinar si hubo transición a CONFIRMADO en esta petición
+            transicion_a_confirmado = estado_id_antes is not None and estado_id_antes != ESTADO_REDISTRIBUCION
+            
             # 📢 Notificación en tiempo real a MABEL TRADING
             if resultado.get("status") == "success" and transicion_a_confirmado:
                 try:
@@ -198,7 +201,6 @@ def register_proveedor_endpoints(app: FastAPI):
                     logger.warning(f"⚠️ Error al enviar notificación en tiempo real: {notif_err}")
             
             # Enviar email solo cuando el pedido acaba de pasar a CONFIRMADO en esta petición (no si ya estaba CONFIRMADO)
-            transicion_a_confirmado = estado_id_antes is not None and estado_id_antes != ESTADO_REDISTRIBUCION
             if (
                 resultado.get("status") == "success"
                 and resultado.get("confirmacion_registrada", False)

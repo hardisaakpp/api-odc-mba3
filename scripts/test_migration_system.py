@@ -17,7 +17,7 @@ from typing import List, Tuple
 if sys.platform == 'win32':
     # Intentar establecer UTF-8 para la consola
     try:
-        sys.stdout.reconfigure(encoding='utf-8')
+        sys.stdout.reconfigure(encoding='utf-8')  # type: ignore[attr-defined]
     except:
         pass
 
@@ -152,7 +152,9 @@ def check_database_connection() -> Tuple[bool, str]:
         
         # Verificar versión de SQL Server
         cursor.execute("SELECT @@VERSION")
-        version = cursor.fetchone()[0]
+        row = cursor.fetchone()
+        assert row is not None, "No se obtuvo resultado de SELECT @@VERSION"
+        version = row[0]
         
         conn.close()
         
@@ -179,12 +181,16 @@ def check_migration_table() -> Tuple[bool, str]:
             WHERE TABLE_NAME = 'schema_migrations'
         """)
         
-        exists = cursor.fetchone()[0] > 0
+        row = cursor.fetchone()
+        assert row is not None, "No se obtuvo resultado de COUNT(*)"
+        exists = row[0] > 0
         
         if exists:
             # Contar migraciones aplicadas
             cursor.execute("SELECT COUNT(*) FROM schema_migrations")
-            count = cursor.fetchone()[0]
+            row = cursor.fetchone()
+            assert row is not None, "No se obtuvo resultado de COUNT(*)"
+            count = row[0]
             detail = f"Tabla existe, {count} migraciones aplicadas"
         else:
             detail = "Tabla no existe (se creará en primera ejecución)"

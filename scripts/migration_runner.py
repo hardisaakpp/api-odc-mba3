@@ -69,6 +69,7 @@ class MigrationRunner:
         
     def ensure_migration_table(self) -> None:
         """Asegurar que existe la tabla de control de migraciones."""
+        assert self.cursor is not None, "Debe llamar connect_db() antes de ensure_migration_table()"
         logger.info("🔍 Verificando tabla schema_migrations...")
         
         # Verificar si existe la tabla
@@ -77,7 +78,9 @@ class MigrationRunner:
             FROM INFORMATION_SCHEMA.TABLES 
             WHERE TABLE_NAME = 'schema_migrations'
         """)
-        exists = self.cursor.fetchone()[0] > 0
+        row = self.cursor.fetchone()
+        assert row is not None, "No se obtuvo resultado de COUNT(*)"
+        exists = row[0] > 0
         
         if not exists:
             logger.warning("⚠️  Tabla schema_migrations no existe. Creándola...")
@@ -96,6 +99,7 @@ class MigrationRunner:
     
     def load_applied_migrations(self) -> None:
         """Cargar las migraciones ya aplicadas desde la BD."""
+        assert self.cursor is not None, "Debe llamar connect_db() antes de load_applied_migrations()"
         logger.info("📋 Cargando migraciones aplicadas...")
         
         self.cursor.execute("""
@@ -197,6 +201,7 @@ class MigrationRunner:
         Returns:
             Tiempo de ejecución en ms, o None si es dry-run
         """
+        assert self.conn is not None and self.cursor is not None, "Debe llamar connect_db() antes de _execute_script()"
         logger.info(f"📄 Leyendo script: {script_path.name}")
         
         with open(script_path, 'r', encoding='utf-8') as f:
@@ -277,6 +282,7 @@ class MigrationRunner:
         Returns:
             True si se ejecutó correctamente, False si falló
         """
+        assert self.conn is not None and self.cursor is not None, "Debe llamar connect_db() antes de execute_migration()"
         version = migration['version']
         name = migration['name']
         filename = migration['file']
