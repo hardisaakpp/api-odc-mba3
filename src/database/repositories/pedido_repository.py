@@ -196,6 +196,47 @@ class PedidoRepository:
         """
         return self.cabecera_repo.tiene_pedidos()
 
+    def get_respuestas_proveedor(
+        self,
+        pedido_id: str,
+        *,
+        top_one: bool = False,
+    ) -> Dict[str, Dict[str, Any]]:
+        """
+        Obtiene respuestas del proveedor para un pedido.
+
+        Args:
+            pedido_id: UUID del pedido
+            top_one: Si True, limita a la última respuesta
+
+        Returns:
+            Dict indexado por pedido_detalle_id
+        """
+        cursor = self.conn.cursor()
+        top_clause = "TOP 1" if top_one else ""
+        cursor.execute(
+            f"""
+            SELECT {top_clause}
+                rpd.pedido_detalle_id,
+                rpd.cantidad_solicitada_total,
+                rpd.cantidad_confirmada_total
+            FROM pedido_respuesta_proveedor_detalle rpd
+            INNER JOIN pedido_respuesta_proveedor rp ON rpd.respuesta_id = rp.respuesta_id
+            WHERE rp.pedido_id = ?
+            ORDER BY rp.version DESC, rp.fecha_respuesta DESC
+            """,
+            (pedido_id,),
+        )
+
+        respuestas_proveedor: Dict[str, Dict[str, Any]] = {}
+        for row in cursor.fetchall():
+            respuestas_proveedor[str(row[0])] = {
+                "cantidad_solicitada_total": row[1],
+                "cantidad_confirmada_total": row[2],
+            }
+
+        return respuestas_proveedor
+
     def validar_puede_descartar(
         self, pedido_id: str, es_cancelar_pedido: bool = False
     ) -> Tuple[bool, str, str]:

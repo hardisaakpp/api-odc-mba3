@@ -239,6 +239,24 @@ class PedidoTiendaRepository:
         finally:
             cursor.close()
 
+    def get_tienda_id_by_codigo(self, codigo: str) -> Optional[str]:
+        """
+        Obtiene el tienda_id por código.
+
+        Args:
+            codigo: Código de tienda
+
+        Returns:
+            tienda_id o None si no existe
+        """
+        cursor = self.conn.cursor()
+        try:
+            cursor.execute("SELECT tienda_id FROM tienda WHERE codigo = ?", (codigo,))
+            row = cursor.fetchone()
+            return str(row[0]) if row else None
+        finally:
+            cursor.close()
+
     def validar_tiendas_existen(
         self,
         codigos_tiendas: List[str]
