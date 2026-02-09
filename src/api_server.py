@@ -59,7 +59,7 @@ from src.security.rate_limit import setup_rate_limiting
 app = FastAPI(
     title="MBA3 Query API",
     description="API para recibir, validar y procesar consultas SQL (SELECT)",
-    version="2.0.0",
+    version="2.1.0",
     # Ocultar Swagger en producción si está configurado
     docs_url="/docs" if not (ENVIRONMENT == "production" and HIDE_SWAGGER_IN_PROD) else None,
     redoc_url="/redoc" if not (ENVIRONMENT == "production" and HIDE_SWAGGER_IN_PROD) else None,
