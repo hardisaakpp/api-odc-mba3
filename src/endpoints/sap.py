@@ -345,7 +345,8 @@ def register_sap_endpoints(app: FastAPI):
                     error_code = resultado.get("error_code")  # Código de error de SAP
                     error_source = resultado.get("error_source")  # Origen del error (SAP, BACKEND, etc.)
                     sap_error_details = resultado.get("sap_error_details")  # Detalles completos del error de SAP
-                    resultado_st = resultado.get("solicitudes_transferencia")  # Resultado de Solicitudes de Transferencia
+                    resultado_st = resultado.get("solicitudes_transferencia")  # Resultado de Solicitudes de Transferencia (por tienda)
+                    resultado_itr = resultado.get("inventory_transfer_requests")  # Resultado de ITR (por bodega destino)
                     
                     # Guardar log de resultado
                     try:
@@ -395,8 +396,53 @@ def register_sap_endpoints(app: FastAPI):
                         "error_source": error_source,  # Origen: "SAP", "BACKEND", "SAP_CONNECTION", o None si éxito
                         "sap_response": sap_response,  # Respuesta completa de SAP (éxito)
                         "sap_error_details": sap_error_details,  # Detalles del error de SAP (si aplica)
-                        "solicitudes_transferencia": resultado_st  # Resultado de ST (para evaluación de cierre)
+                        "solicitudes_transferencia": resultado_st,  # Resultado de ST por tienda (para evaluación de cierre)
+                        "inventory_transfer_requests": resultado_itr  # Resultado de ITR por bodega destino
                     }
+                    
+                    # ⭐ Construir warnings cuando OC es exitosa pero ITR/ST fallaron
+                    # Esto permite que la UI muestre mensajes de advertencia junto al éxito de la OC
+                    detalle_warnings = []
+                    
+                    # Warnings de Solicitudes de Transferencia (por tienda)
+                    if resultado_st:
+                        if not resultado_st.get("success", True):
+                            st_error = resultado_st.get("error", "")
+                            st_errores_detalle = resultado_st.get("errores_detalle", [])
+                            st_resultados = resultado_st.get("resultados", [])
+                            
+                            if st_errores_detalle:
+                                # Usar errores detallados si están disponibles
+                                for e in st_errores_detalle:
+                                    detalle_warnings.append(e.get("mensaje", str(e)))
+                            elif st_resultados:
+                                # Extraer de resultados individuales
+                                for r in st_resultados:
+                                    if not r.get("success") and r.get("error"):
+                                        tienda = r.get("tienda_codigo", "N/A")
+                                        detalle_warnings.append(
+                                            f"ST no creada hacia {tienda}: {r['error']}"
+                                        )
+                            elif st_error:
+                                detalle_warnings.append(f"Solicitudes de Transferencia: {st_error}")
+                        elif resultado_st.get("warnings"):
+                            # Éxito parcial con warnings
+                            detalle_warnings.extend(resultado_st["warnings"])
+                    
+                    # Warnings de Inventory Transfer Requests (por bodega destino)
+                    if resultado_itr:
+                        itr_errors = resultado_itr.get("errors", 0)
+                        if itr_errors > 0:
+                            itr_resultados = resultado_itr.get("resultados", [])
+                            for r in itr_resultados:
+                                if not r.get("success") and r.get("error"):
+                                    to_wh = r.get("ToWarehouse", "N/A")
+                                    detalle_warnings.append(
+                                        f"ITR no creado hacia {to_wh}: {r['error']}"
+                                    )
+                    
+                    if detalle_warnings:
+                        detalle_resultado["warnings"] = detalle_warnings
                     
                     # Agregar referencia si está disponible
                     if referencia:
@@ -569,16 +615,28 @@ def register_sap_endpoints(app: FastAPI):
             if enviadas == 0:
                 status_general = "error"
             
+            # ⭐ Recopilar warnings de ITR/ST de todos los detalles para mostrar en la UI
+            all_warnings = []
+            for detalle in detalles:
+                detalle_warnings_list = detalle.get("warnings", [])
+                if detalle_warnings_list:
+                    all_warnings.extend(detalle_warnings_list)
+            
             # Preparar mensaje
             if len(oc_ids_a_procesar) == 1:
                 if enviadas > 0:
                     mensaje = f"ODC enviada exitosamente a SAP"
                     if detalles[0].get("doc_num"):
                         mensaje += f" (DocNum: {detalles[0].get('doc_num')})"
+                    # ⭐ Agregar info de warnings de ST/ITR al mensaje principal
+                    if all_warnings:
+                        mensaje += f". ADVERTENCIA: {len(all_warnings)} Solicitud(es) de Transferencia con problemas"
                 else:
                     mensaje = f"Error al enviar ODC a SAP: {detalles[0].get('error', 'Error desconocido')}"
             else:
                 mensaje = f"Proceso completado: {enviadas} ODC(s) enviada(s), {errores} error(es) de {len(oc_ids_a_procesar)} procesada(s)"
+                if all_warnings:
+                    mensaje += f". ADVERTENCIA: {len(all_warnings)} Solicitud(es) de Transferencia con problemas"
             
             logger.info(f"✅ INTEGRAR-SAP completado: {enviadas} enviadas, {errores} errores de {len(oc_ids_a_procesar)} procesadas")
             
@@ -633,13 +691,19 @@ def register_sap_endpoints(app: FastAPI):
             # Los errores de validación (como ODC sin detalles) se reportan con 200 y status: "error"
             status_code = 200
             
+            response_content = {
+                "status": status_general,
+                "message": mensaje,
+                "metadata": metadata
+            }
+            
+            # ⭐ Incluir warnings de ITR/ST a nivel raíz de la respuesta para fácil acceso en la UI
+            if all_warnings:
+                response_content["warnings"] = all_warnings
+            
             return JSONResponse(
                 status_code=status_code,
-                content={
-                    "status": status_general,
-                    "message": mensaje,
-                    "metadata": metadata
-                },
+                content=response_content,
                 headers=headers
             )
             

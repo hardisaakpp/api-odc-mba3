@@ -2,6 +2,7 @@
 Repositorio especializado para operaciones de pedido (cabecera).
 
 CHANGELOG:
+- 2026-02-06: Bitácora de transiciones de estado (pedido_estado_historial) en update_estado()
 - 2026-02-06: Agregado soporte para campos de auditoría (origen, ip_origen, modificado_por, modificado_fecha)
 - 2026-01-23: Extraído de pedido_repository.py
 """
@@ -380,6 +381,81 @@ class PedidoCabeceraRepository:
         finally:
             cursor.close()
 
+    # ------------------------------------------------------------------
+    # Cache: existencia de tabla pedido_estado_historial (una vez por conexión)
+    # ------------------------------------------------------------------
+    _tiene_historial: Optional[bool] = None
+
+    def _tiene_tabla_historial(self, cursor: pyodbc.Cursor) -> bool:
+        """Verifica si existe la tabla pedido_estado_historial (cacheado)."""
+        if PedidoCabeceraRepository._tiene_historial is None:
+            cursor.execute(
+                "SELECT OBJECT_ID(N'[dbo].[pedido_estado_historial]', N'U')"
+            )
+            row = cursor.fetchone()
+            PedidoCabeceraRepository._tiene_historial = row is not None and row[0] is not None
+        return PedidoCabeceraRepository._tiene_historial
+
+    def _registrar_transicion_estado(
+        self,
+        cursor: pyodbc.Cursor,
+        pedido_id: str,
+        estado_anterior_id: Optional[int],
+        estado_nuevo_id: int,
+        audit_context: Optional["AuditContext"] = None,
+    ) -> None:
+        """
+        Inserta un registro en pedido_estado_historial.
+
+        Solo se invoca cuando estado_anterior_id != estado_nuevo_id.
+        Si la tabla no existe todavía, se omite silenciosamente.
+
+        Args:
+            cursor: Cursor activo (dentro de la misma transacción)
+            pedido_id: UUID del pedido
+            estado_anterior_id: Estado previo (None para creación inicial)
+            estado_nuevo_id: Nuevo estado
+            audit_context: Contexto de auditoría opcional
+        """
+        if not self._tiene_tabla_historial(cursor):
+            return
+
+        usuario = audit_context.get_modificado_por() if audit_context else None
+        origen = audit_context.origen if audit_context else None
+        ip_origen = audit_context.ip_origen if audit_context else None
+
+        try:
+            cursor.execute("""
+                INSERT INTO pedido_estado_historial (
+                    pedido_id,
+                    estado_anterior_id,
+                    estado_nuevo_id,
+                    fecha_cambio,
+                    usuario_cambio,
+                    origen,
+                    ip_origen,
+                    accion
+                ) VALUES (?, ?, ?, SYSUTCDATETIME(), ?, ?, ?, ?)
+            """, (
+                pedido_id,
+                estado_anterior_id,
+                estado_nuevo_id,
+                usuario,
+                origen,
+                ip_origen,
+                "MANUAL",
+            ))
+            logger.debug(
+                f"📝 Historial: pedido {pedido_id} "
+                f"estado {estado_anterior_id} → {estado_nuevo_id} "
+                f"(usuario={usuario})"
+            )
+        except Exception as e:
+            # No fallar la operación principal por un error de historial
+            logger.warning(
+                f"⚠️ No se pudo registrar historial de estado para pedido {pedido_id}: {e}"
+            )
+
     def update_estado(
         self, 
         pedido_id: str, 
@@ -387,7 +463,13 @@ class PedidoCabeceraRepository:
         audit_context: Optional["AuditContext"] = None
     ) -> bool:
         """
-        Actualiza el estado de un pedido.
+        Actualiza el estado de un pedido y registra la transición en la bitácora.
+
+        Flujo:
+            1. Obtiene el estado actual del pedido
+            2. Si estado_actual != estado_nuevo → inserta en pedido_estado_historial
+            3. Actualiza pedido.estado_id, modificado_por, modificado_fecha
+            4. Commit (ambas operaciones en la misma transacción)
 
         Args:
             pedido_id: UUID del pedido
@@ -408,6 +490,23 @@ class PedidoCabeceraRepository:
             modificado_por = audit_context.get_modificado_por() if audit_context else None
             modificado_fecha = datetime.utcnow()
 
+            # ── Obtener estado anterior para la bitácora ──
+            estado_anterior_id: Optional[int] = None
+            if tiene_estado_id:
+                cursor.execute(
+                    "SELECT estado_id FROM pedido WHERE pedido_id = ?", (pedido_id,)
+                )
+                row_ant = cursor.fetchone()
+                if row_ant is not None:
+                    estado_anterior_id = row_ant[0]
+
+            # ── Registrar transición si el estado cambió ──
+            if estado_anterior_id is not None and estado_anterior_id != estado_id:
+                self._registrar_transicion_estado(
+                    cursor, pedido_id, estado_anterior_id, estado_id, audit_context
+                )
+
+            # ── Actualizar estado en tabla pedido ──
             if tiene_estado_id:
                 # COALESCE evita NULL en p.estado si no existe la fila en pedido_estado (ej. estado nuevo no migrado)
                 # Incluye campos de auditoría: modificado_por, modificado_fecha
@@ -859,7 +958,8 @@ class PedidoCabeceraRepository:
                     p.pedido_id, p.numero_pedido, p.fecha_pedido, p.fecha_entrega,
                     p.forma_pago, p.odc, p.proveedor_nombre, p.comprador_nombre,
                     p.comprador_codigo, p.origen_traslado, p.serie, p.archivo_nombre,
-                    p.creado_por, p.estado_id, pe.nombre AS estado_nombre, p.creado_en
+                    p.creado_por, p.estado_id, pe.nombre AS estado_nombre, p.creado_en,
+                    p.modificado_fecha
                 """
                 data_query = f"""
                     SELECT {select_fields}
@@ -873,7 +973,7 @@ class PedidoCabeceraRepository:
                     p.pedido_id, p.numero_pedido, p.fecha_pedido, p.fecha_entrega,
                     p.forma_pago, p.odc, p.proveedor_nombre, p.comprador_nombre,
                     p.comprador_codigo, p.origen_traslado, p.serie, p.archivo_nombre,
-                    p.creado_por, p.creado_en
+                    p.creado_por, p.creado_en, p.modificado_fecha
                 """
                 if tiene_estado:
                     select_fields += ", p.estado"
@@ -911,6 +1011,7 @@ class PedidoCabeceraRepository:
                         "estado_nombre": row[idx + 14],
                         "estado": row[idx + 14],
                         "creado_en": row[idx + 15].isoformat() if row[idx + 15] else None,
+                        "modificado_fecha": row[idx + 16].isoformat() if row[idx + 16] else None,
                     }
                 else:
                     pedido = {
@@ -928,8 +1029,9 @@ class PedidoCabeceraRepository:
                         "archivo_nombre": row[idx + 11],
                         "creado_por": row[idx + 12],
                         "creado_en": row[idx + 13].isoformat() if row[idx + 13] else None,
+                        "modificado_fecha": row[idx + 14].isoformat() if row[idx + 14] else None,
                     }
-                    pedido["estado"] = row[idx + 14] if tiene_estado else None
+                    pedido["estado"] = row[idx + 15] if tiene_estado else None
                 pedidos.append(pedido)
             
             has_more = (offset or 0) + len(pedidos) < total if limit else False

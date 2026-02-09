@@ -556,10 +556,27 @@ class OCSAPService:
                                 f"{resultado_transferencias['transferencias_creadas']}/{resultado_transferencias['total_tiendas']} "
                                 f"para pedido {pedido_id} (DocEntry confirmado para cada uno)"
                             )
+                            # Incluir warnings de éxito parcial (si algunos ITR fallaron)
+                            if resultado_transferencias.get("warnings"):
+                                logger.warning(
+                                    f"⚠️ Advertencias en ITR de pedido {pedido_id}: "
+                                    f"{'; '.join(resultado_transferencias['warnings'])}"
+                                )
                             result["solicitudes_transferencia"] = resultado_transferencias
                         else:
                             error_type = resultado_transferencias.get("error_type", "desconocido")
-                            error_msg = resultado_transferencias.get("error", "Error desconocido")
+                            error_msg = resultado_transferencias.get("error")
+                            
+                            # ⭐ FIX: Si no hay error de nivel superior, extraer de resultados individuales
+                            if not error_msg:
+                                resultados_st = resultado_transferencias.get("resultados", [])
+                                errores_individuales = [
+                                    f"{r.get('tienda_codigo', 'N/A')}: {r.get('error', 'Sin detalle')}"
+                                    for r in resultados_st
+                                    if not r.get("success") and r.get("error")
+                                ]
+                                error_msg = "; ".join(errores_individuales) if errores_individuales else "Error desconocido al crear Solicitudes de Transferencia"
+                            
                             if error_type == "datos_maestros":
                                 logger.warning(
                                     f"⚠️ Inventory Transfer Requests NO creados para pedido {pedido_id}: "

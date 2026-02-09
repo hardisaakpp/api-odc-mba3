@@ -825,6 +825,21 @@ class StockTransferService:
                 # 8. Determinar éxito general y loguear resultado REAL
                 result["success"] = result["transferencias_creadas"] > 0
                 
+                # ⭐ IMPORTANTE: Construir mensajes de error/warning detallados para la UI
+                # Extraer errores individuales de cada ITR fallido
+                errores_detalle = []
+                for r in result["resultados"]:
+                    if not r["success"] and r.get("error"):
+                        tienda_cod = r.get("tienda_codigo", "N/A")
+                        tienda_nom = r.get("tienda_nombre")
+                        destino = f"{tienda_cod} ({tienda_nom})" if tienda_nom else tienda_cod
+                        errores_detalle.append({
+                            "tienda_codigo": tienda_cod,
+                            "tienda_nombre": tienda_nom,
+                            "error": r["error"],
+                            "mensaje": f"{bodega_origen} → {destino}: {r['error']}"
+                        })
+                
                 if result["success"]:
                     logger.info(
                         f"✅ Inventory Transfer Requests creados en SAP: {result['transferencias_creadas']}/{result['total_tiendas']} "
@@ -834,11 +849,26 @@ class StockTransferService:
                         logger.warning(
                             f"⚠️ {result['transferencias_errores']} Inventory Transfer Request(s) NO se pudieron crear en SAP"
                         )
+                        # Éxito parcial: incluir warnings para la UI
+                        result["warnings"] = [e["mensaje"] for e in errores_detalle]
                 else:
                     logger.warning(
                         f"⚠️ No se creó ningún Inventory Transfer Request en SAP "
                         f"(0/{result['total_tiendas']} exitosos)"
                     )
+                    # ⭐ FIX: Establecer result["error"] con detalle real (antes quedaba sin definir → "Error desconocido")
+                    if errores_detalle:
+                        result["error"] = (
+                            f"Solicitudes de Transferencia fallidas "
+                            f"({result['transferencias_errores']}/{result['total_tiendas']}): "
+                            + "; ".join(e["mensaje"] for e in errores_detalle)
+                        )
+                        result["errores_detalle"] = errores_detalle
+                    else:
+                        result["error"] = (
+                            f"No se creó ninguna Solicitud de Transferencia en SAP "
+                            f"(0/{result['total_tiendas']} exitosos)"
+                        )
                 
                 return result
                 

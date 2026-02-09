@@ -191,8 +191,18 @@ class PedidoCierreService:
         else:
             # ST fallaron - determinar estado según tipo de error
             error_type = resultado_st.get("error_type")
-            error_st = resultado_st.get("error", "Error desconocido")
+            error_st = resultado_st.get("error")
             transferencias_errores = resultado_st.get("transferencias_errores", 0)
+            
+            # ⭐ FIX: Si no hay error de nivel superior, extraer de resultados individuales
+            if not error_st:
+                resultados_st = resultado_st.get("resultados", [])
+                errores_individuales = [
+                    f"{r.get('tienda_codigo', 'N/A')}: {r.get('error', 'Sin detalle')}"
+                    for r in resultados_st
+                    if not r.get("success") and r.get("error")
+                ]
+                error_st = "; ".join(errores_individuales) if errores_individuales else "Error desconocido al crear Solicitudes de Transferencia"
             
             if error_type == "datos_maestros":
                 # ❌ ERROR DE DATOS MAESTROS: No es problema de logística
