@@ -1,6 +1,6 @@
 """Tests unitarios para helpers de redistribución."""
 
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 import pytest
 from fastapi import HTTPException
@@ -25,7 +25,7 @@ from src.endpoints.pedidos.redistribucion._excel_generators import (
 
 
 class FakeRepoPedido:
-    def __init__(self, pedido_data: Dict[str, Any], respuestas: Dict[str, Dict[str, Any]] = None):
+    def __init__(self, pedido_data: Dict[str, Any], respuestas: Optional[Dict[str, Dict[str, Any]]] = None):
         self._pedido_data = pedido_data
         self._respuestas = respuestas or {}
 
@@ -40,7 +40,7 @@ class FakeRepoPedido:
 
 
 class FakeTiendaRepo:
-    def __init__(self, tienda_map: Dict[str, str] = None):
+    def __init__(self, tienda_map: Optional[Dict[str, str]] = None):
         self._tienda_map = tienda_map or {}
 
     def get_tienda_id_by_codigo(self, codigo: str):
@@ -100,8 +100,8 @@ def test_construir_distribucion_proporcional():
         {"codigo": "T2", "nombre": "Tienda 2", "cantidad": 40, "es_bodega": True},
     ]
     result = construir_distribucion_proporcional(tiendas, cantidad_confirmada=50, cantidad_total_original=100)
-    assert sum(t["cantidad"] for t in result) == 50
-    assert result[0]["tienda_codigo"] == "T1"
+    assert sum(t.cantidad for t in result) == 50
+    assert result[0].tienda_codigo == "T1"
 
 
 def test_convertir_ajustes_a_redistribucion():
@@ -128,6 +128,7 @@ def test_convertir_ajustes_a_redistribucion():
             costo_original=1,
             costo_ajustado=1,
             cambio_precio=False,
+            pedido_detalle_id=None,
         )
     ]
     tienda_repo = FakeTiendaRepo(tienda_map={"T1": "uuid-t1"})
@@ -154,6 +155,7 @@ def test_calcular_resumen_confirmacion():
             costo_original=2,
             costo_ajustado=2,
             cambio_precio=False,
+            pedido_detalle_id=None,
         )
     ]
     resumen = calcular_resumen_confirmacion(ajustes)
