@@ -20,6 +20,8 @@ from src.database.pedido_estados import (
     ESTADO_CONFIRMADO_PROVEEDOR,
     ESTADO_PEDIDO_CONFIRMADO,
     ESTADO_CONFIRMADO_ENVIADO,
+    ESTADO_DESPACHAR_Y_FACTURAR,
+    ESTADO_FINALIZADO,
     ESTADO_CANCELADO,
     estado_id_desde_legacy,
 )
@@ -915,16 +917,16 @@ class PedidoCabeceraRepository:
                     where_conditions.append("(p.estado IS NULL OR (p.estado <> N'BORRADOR' AND p.estado <> N'PENDIENTE_CONFIRMACION_PROVEEDOR'))")
 
             # Filtro para vista de redistribución: solo pedidos con estado >= 4 (CONFIRMADO POR EL RAYO)
-            # y excluir CANCELADO (19)
+            # y excluir CANCELADO (19), DESPACHAR_Y_FACTURAR (17) y FINALIZADO (18)
             if solo_redistribucion and (tiene_estado_id or tiene_estado):
                 if tiene_estado_id:
                     where_conditions.append("p.estado_id >= ?")
                     params.append(ESTADO_REDISTRIBUCION)
-                    where_conditions.append("p.estado_id <> ?")
-                    params.append(ESTADO_CANCELADO)
+                    where_conditions.append("p.estado_id NOT IN (?, ?, ?)")
+                    params.extend([ESTADO_DESPACHAR_Y_FACTURAR, ESTADO_FINALIZADO, ESTADO_CANCELADO])
                 else:
                     # Fallback para bases de datos sin columna estado_id
-                    where_conditions.append("p.estado NOT IN (N'BORRADOR', N'NUEVO_PEDIDO', N'GESTIONAR_PEDIDO', N'PENDIENTE_CONFIRMACION_PROVEEDOR', N'CANCELADO')")
+                    where_conditions.append("p.estado NOT IN (N'BORRADOR', N'NUEVO_PEDIDO', N'GESTIONAR_PEDIDO', N'PENDIENTE_CONFIRMACION_PROVEEDOR', N'DESPACHAR_Y_FACTURAR', N'DESPACHAR Y FACTURAR', N'FINALIZADO', N'CANCELADO')")
 
             if fecha_desde:
                 where_conditions.append("CAST(p.fecha_pedido AS DATE) >= CAST(? AS DATE)")
