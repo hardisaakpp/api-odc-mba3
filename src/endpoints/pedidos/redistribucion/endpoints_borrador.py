@@ -78,7 +78,7 @@ def register_borrador_endpoints(app: FastAPI):
     async def obtener_borrador_redistribucion(
         numero_pedido: str = Path(..., description="Número del pedido"),
         user: Dict = Depends(verify_jwt_token),
-        _: None = Depends(require_permission('mabel.view'))
+        _: None = Depends(require_any_permission(['mabel.view', 'odcsap.view']))
     ):
         """Obtiene el borrador de redistribución guardado."""
         try:
