@@ -20,6 +20,28 @@ async def notificar_redistribucion_confirmada(pedido_id: str, numero_pedido: str
     )
 
 
+async def notificar_odc_enviada_a_sap(pedido_id: str, numero_pedido: str, doc_num: str = None) -> None:
+    """Envía notificación en tiempo real a EL RAYO cuando la ODC se envía exitosamente a SAP."""
+    from src.utils.notification_manager import notification_manager, NotificationType
+
+    mensaje = f"La ODC del pedido {numero_pedido} se envió exitosamente a SAP"
+    if doc_num:
+        mensaje += f" (DocNum: {doc_num})"
+
+    await notification_manager.notify(
+        target_permission="odcsap.view",
+        title="ODC enviada a SAP exitosamente",
+        message=mensaje,
+        notification_type=NotificationType.SUCCESS,
+        metadata={
+            "pedido_id": pedido_id,
+            "numero_pedido": numero_pedido,
+            "doc_num": doc_num,
+            "accion": "odc_enviada_sap",
+        },
+    )
+
+
 def enviar_email_confirmacion_redistribucion(
     pedido_id: str,
     numero_pedido: str,

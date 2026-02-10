@@ -23,6 +23,7 @@ from ._helpers import obtener_pedido_o_404, obtener_respuestas_proveedor
 from ._converters import convertir_ajustes_a_redistribucion
 from ._resumen import calcular_resumen_confirmacion
 from ._sap_processing import procesar_pedido_sap_con_homologacion
+from ._notifications import notificar_odc_enviada_a_sap
 
 logger = logging.getLogger(__name__)
 
@@ -226,6 +227,11 @@ def register_proceso_completo_endpoints(app: FastAPI):
 
                     if success:
                         logger.info(f"✅ PASO 3/3 completado: ODC enviada a SAP (DocNum: {doc_num})")
+
+                        try:
+                            await notificar_odc_enviada_a_sap(pedido_id, numero_pedido, str(doc_num) if doc_num else None)
+                        except Exception as notif_err:
+                            logger.warning(f"⚠️ Error al enviar notificación SSE de ODC enviada a SAP: {notif_err}")
 
                         try:
                             from src.utils.email_notifier import send_mabel_redistribucion_confirmacion_notification
