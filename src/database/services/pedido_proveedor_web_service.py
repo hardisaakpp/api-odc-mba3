@@ -356,6 +356,15 @@ class PedidoProveedorWebService:
             
             logger.debug(f"Pedido {pedido_id} encontrado con {len(pedido.get('detalles', []))} detalles")
             
+            # Validar que pedidos INMEDIATO tengan una fecha de entrega real antes de confirmar
+            fecha_entrega = pedido.get("cabecera", {}).get("fecha_entrega", "")
+            if fecha_entrega and str(fecha_entrega).strip().upper() == "INMEDIATO":
+                logger.warning(f"Pedido {pedido_id} tiene fecha de entrega INMEDIATO, no se puede confirmar sin fecha real")
+                raise ValueError(
+                    "No se puede confirmar un pedido con fecha de entrega INMEDIATO. "
+                    "Por favor, seleccione una fecha de entrega antes de confirmar."
+                )
+            
             # Verificar si ya existe una respuesta activa
             respuesta_repo = PedidoRespuestaRepository(conn)
             respuesta_existente = respuesta_repo.obtener_respuesta_activa(pedido_id)
