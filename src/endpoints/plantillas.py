@@ -722,7 +722,7 @@ def register_plantillas_endpoints(app: FastAPI):
         limit: int = Query(50, ge=1, le=200, description="Límite de registros"),
         solo_activos: bool = Query(True, description="Solo mostrar archivos activos"),
         user: Dict = Depends(verify_jwt_token),
-        _: None = Depends(require_permission('mabel.view'))
+        _: None = Depends(require_any_permission(['mabel.view', 'odcsap.view']))
     ):
         """
         Lista los archivos Excel originales subidos por el usuario.
@@ -859,7 +859,7 @@ def register_plantillas_endpoints(app: FastAPI):
         archivo_id: int = Path(..., description="ID del archivo a eliminar"),
         eliminar_fisicamente: bool = Query(False, description="Si es true, elimina también del storage (MinIO)"),
         user: Dict = Depends(verify_jwt_token),
-        _: None = Depends(require_permission('mabel.view'))
+        _: None = Depends(require_any_permission(['mabel.view', 'odcsap.view']))
     ):
         """
         Elimina un archivo Excel original.

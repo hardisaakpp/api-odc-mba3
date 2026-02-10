@@ -64,7 +64,7 @@ def _map_permissions_to_capabilities(permissions: list, roles: list) -> Dict[str
         "can_review_pedido": is_admin or has_perm('mabel.view') or has_perm('odcsap.view'),
         "can_confirm_pedido": is_admin or has_perm('mabel.view') or has_perm('odcsap.view'),
         # Ver/gestionar archivos Excel originales (Listado Pedidos Originales)
-        "can_view_plantillas_originales": is_admin or has_perm('mabel.view'),
+        "can_view_plantillas_originales": is_admin or has_perm('mabel.view') or has_perm('odcsap.view'),
     }
     
     # Logging de debug solo en desarrollo
