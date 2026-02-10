@@ -297,7 +297,7 @@ def register_core_endpoints(app: FastAPI):
         pedido_id: str = Path(..., description="UUID del pedido"),
         version: Optional[int] = Query(None, ge=1, description="Versión específica (si no se especifica, analiza la última)"),
         user: Dict = Depends(verify_jwt_token),
-        _: None = Depends(require_permission('mabel.view'))
+        _: None = Depends(require_any_permission(['mabel.view', 'odcsap.view']))
     ):
         """Obtiene el reporte de diferencias de una redistribución."""
         try:
@@ -366,7 +366,7 @@ def register_core_endpoints(app: FastAPI):
         pedido_id: str = Path(..., description="UUID del pedido"),
         version: Optional[int] = Query(None, ge=1, description="Versión específica (si no se especifica, analiza la última)"),
         user: Dict = Depends(verify_jwt_token),
-        _: None = Depends(require_permission('mabel.view'))
+        _: None = Depends(require_any_permission(['mabel.view', 'odcsap.view']))
     ):
         """Exporta el reporte de diferencias a Excel."""
         try:
