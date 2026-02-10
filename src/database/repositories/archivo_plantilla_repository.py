@@ -342,6 +342,75 @@ class ArchivoPlantillaRepository:
         
         return archivos
     
+    def listar_todos(
+        self,
+        limit: int = 50,
+        solo_activos: bool = True
+    ) -> List[Dict[str, Any]]:
+        """
+        Lista todos los archivos subidos (sin filtrar por usuario).
+        
+        Usado por usuarios con permiso odcsap.view que necesitan ver
+        los archivos subidos por otros usuarios (ej: Mabel Trading).
+        
+        Args:
+            limit: Cantidad máxima de resultados
+            solo_activos: Si True, solo retorna archivos activos
+            
+        Returns:
+            Lista de diccionarios con información de archivos
+        """
+        cursor = self.conn.cursor()
+        
+        query = """
+            SELECT TOP (?)
+                a.archivo_id,
+                a.pedido_id,
+                a.nombre_original,
+                a.storage_path,
+                a.content_type,
+                a.tamaño_bytes,
+                a.subido_por,
+                a.fecha_subida,
+                a.activo,
+                a.descargas,
+                a.ultima_descarga,
+                a.ultimo_descargador,
+                p.numero_pedido
+            FROM archivo_plantilla a
+            LEFT JOIN pedido p ON a.pedido_id = p.pedido_id
+            WHERE 1=1
+        """
+        
+        params = [limit]
+        
+        if solo_activos:
+            query += " AND a.activo = 1"
+        
+        query += " ORDER BY a.fecha_subida DESC"
+        
+        cursor.execute(query, params)
+        
+        archivos = []
+        for row in cursor.fetchall():
+            archivos.append({
+                "archivo_id": row[0],
+                "pedido_id": row[1],
+                "nombre_original": row[2],
+                "storage_path": row[3],
+                "content_type": row[4],
+                "tamaño_bytes": row[5],
+                "subido_por": row[6],
+                "fecha_subida": row[7].isoformat() if row[7] else None,
+                "activo": row[8],
+                "descargas": row[9],
+                "ultima_descarga": row[10].isoformat() if row[10] else None,
+                "ultimo_descargador": row[11],
+                "numero_pedido": row[12]
+            })
+        
+        return archivos
+
     def existe_para_pedido(self, pedido_id: str) -> bool:
         """
         Verifica si existe un archivo activo para un pedido.

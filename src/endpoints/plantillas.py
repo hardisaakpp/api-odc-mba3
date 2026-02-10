@@ -797,16 +797,28 @@ def register_plantillas_endpoints(app: FastAPI):
                 )
             
             user_id = get_user_id(user)
+            permissions = user.get('permissions', [])
             
             with get_db_connection_context() as conn:
                 archivo_repo = ArchivoPlantillaRepository(conn)
                 
-                # Obtener archivos del usuario
-                archivos = archivo_repo.listar_por_usuario(
-                    usuario_id=user_id,
-                    limit=limit,
-                    solo_activos=solo_activos
-                )
+                # odcsap.view ve TODOS los archivos (necesita ver los subidos por Mabel)
+                # mabel.view ve solo sus propios archivos
+                has_odcsap = any('odcsap.view' in str(p).lower() for p in permissions)
+                roles = user.get('roles', [])
+                is_admin = any('admin' in str(r).lower() for r in roles)
+                
+                if has_odcsap or is_admin:
+                    archivos = archivo_repo.listar_todos(
+                        limit=limit,
+                        solo_activos=solo_activos
+                    )
+                else:
+                    archivos = archivo_repo.listar_por_usuario(
+                        usuario_id=user_id,
+                        limit=limit,
+                        solo_activos=solo_activos
+                    )
                 
                 # Enriquecer datos para el frontend
                 archivos_enriquecidos = []
