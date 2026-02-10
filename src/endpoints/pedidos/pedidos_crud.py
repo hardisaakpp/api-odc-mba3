@@ -510,6 +510,22 @@ def register_crud_endpoints(app: FastAPI):
                 pedido["puede_descargar_csv"] = _eid == ESTADO_REDISTRIBUCION  # Solo en estado CONFIRMADO (4)
                 pedido["puede_confirmar_redistribucion"] = _eid in ESTADOS_PUEDE_CONFIRMAR_REDISTRIBUCION
                 pedido["puede_finalizar"] = _eid == ESTADO_DESPACHAR_Y_FACTURAR  # Solo en estado Despachar y Facturar (17)
+                
+                # 📢 Notificación SSE a MABEL TRADING cuando EL RAYO abre el pedido (cambio de estado)
+                if estado_id == ESTADO_NUEVO_PEDIDO:
+                    try:
+                        from src.utils.notification_manager import notification_manager, NotificationType
+                        numero_pedido = pedido.get("cabecera", {}).get("numero_pedido", "")
+                        await notification_manager.notify(
+                            target_permission="mabel.view",
+                            title="EL RAYO está gestionando tu pedido",
+                            message=f"El pedido {numero_pedido} está siendo revisado por EL RAYO.",
+                            notification_type=NotificationType.INFO,
+                            metadata={"pedido_id": pedido_id, "numero_pedido": numero_pedido, "accion": "pedido_en_gestion"},
+                        )
+                    except Exception as notif_err:
+                        logger.warning(f"⚠️ Error al enviar notificación en tiempo real: {notif_err}")
+                
                 return JSONResponse(status_code=status.HTTP_200_OK, content=pedido)
         except HTTPException:
             raise
