@@ -74,72 +74,43 @@ def send_migration_notification(
             logger.warning("⚠️ No hay destinatarios de OPERACIONES configurados")
             return False
         
-        # Crear mensaje
-        msg = MIMEMultipart()
-        msg['From'] = EMAIL_FROM
-        msg['To'] = ", ".join(recipients)  # Múltiples destinatarios separados por coma
-        msg['Subject'] = f"📦 Nuevos Registros Migrados - {facturas_guardadas} factura(s) nueva(s)"
+        from src.utils.email_template import build_email, info_section, paragraph, create_email_message
         
-        # Crear cuerpo del mensaje
-        body_html = f"""
-        <html>
-        <head>
-            <style>
-                body {{ font-family: Arial, sans-serif; }}
-                .container {{ max-width: 600px; margin: 0 auto; padding: 20px; }}
-                .header {{ background-color: #4CAF50; color: white; padding: 15px; text-align: center; }}
-                .content {{ background-color: #f9f9f9; padding: 20px; }}
-                .stats {{ background-color: white; padding: 15px; margin: 10px 0; border-left: 4px solid #4CAF50; }}
-                .footer {{ text-align: center; color: #666; font-size: 12px; margin-top: 20px; }}
-            </style>
-        </head>
-        <body>
-            <div class="container">
-                <div class="header">
-                    <h2>🚀 Migración Automática Completada</h2>
-                </div>
-                <div class="content">
-                    <p>Se han migrado nuevos registros desde MBA3 a la base de datos.</p>
-                    
-                    <div class="stats">
-                        <h3>📊 Resumen de la Migración</h3>
-                        <ul>
-                            <li><strong>Facturas Nuevas:</strong> {facturas_guardadas}</li>
-                            <li><strong>Facturas Actualizadas:</strong> {facturas_actualizadas}</li>
-                            <li><strong>Total Detalles:</strong> {total_detalles}</li>
-                        </ul>
-                    </div>
-                    
-                    <p><strong>Fecha y Hora:</strong> {fecha_ejecucion.strftime('%Y-%m-%d %H:%M:%S')}</p>
-                    
-                    <p>Este es un mensaje automático del sistema de migración MBA3.</p>
-                </div>
-                <div class="footer">
-                    <p>Sistema MBA3 Consultas - Migración Automática</p>
-                </div>
-            </div>
-        </body>
-        </html>
-        """
+        body_html = build_email(
+            title="Migraci&oacute;n Autom&aacute;tica Completada",
+            subtitle="Nuevos registros migrados desde MBA3",
+            sections=[
+                paragraph("Se han migrado nuevos registros desde MBA3 a la base de datos."),
+                info_section("Resumen de la Migraci&oacute;n", [
+                    ("Facturas Nuevas", facturas_guardadas),
+                    ("Facturas Actualizadas", facturas_actualizadas),
+                    ("Total Detalles", total_detalles),
+                ], accent="green", highlight_first=True),
+            ],
+            accent="green",
+            timestamp=fecha_ejecucion,
+        )
         
-        body_text = f"""
-        Migración Automática Completada
+        body_text = f"""Migracion Automatica Completada
+{'=' * 40}
+
+Se han migrado nuevos registros desde MBA3 a la base de datos.
+
+Resumen de la Migracion:
+- Facturas Nuevas: {facturas_guardadas}
+- Facturas Actualizadas: {facturas_actualizadas}
+- Total Detalles: {total_detalles}
+
+Fecha y Hora: {fecha_ejecucion.strftime('%Y-%m-%d %H:%M:%S')}
+Mensaje automatico del sistema - Mabel Trading
+"""
         
-        Se han migrado nuevos registros desde MBA3 a la base de datos.
-        
-        Resumen de la Migración:
-        - Facturas Nuevas: {facturas_guardadas}
-        - Facturas Actualizadas: {facturas_actualizadas}
-        - Total Detalles: {total_detalles}
-        
-        Fecha y Hora: {fecha_ejecucion.strftime('%Y-%m-%d %H:%M:%S')}
-        
-        Este es un mensaje automático del sistema de migración MBA3.
-        """
-        
-        # Agregar cuerpo al mensaje
-        msg.attach(MIMEText(body_text, 'plain'))
-        msg.attach(MIMEText(body_html, 'html'))
+        msg = create_email_message(
+            subject=f"Nuevos Registros Migrados - {facturas_guardadas} factura(s) nueva(s)",
+            recipients=recipients,
+            body_html=body_html,
+            body_text=body_text,
+        )
         
         # Enviar email
         with smtplib.SMTP(EMAIL_SMTP_SERVER, EMAIL_SMTP_PORT) as server:
@@ -191,59 +162,41 @@ def send_error_notification(
             logger.warning("⚠️ No hay destinatarios TÉCNICOS configurados")
             return False
         
-        msg = MIMEMultipart()
-        msg['From'] = EMAIL_FROM
-        msg['To'] = ", ".join(recipients)  # Múltiples destinatarios separados por coma
-        msg['Subject'] = "❌ Error en Migración Automática MBA3"
+        from src.utils.email_template import build_email, info_section, warning_section, paragraph, create_email_message
         
-        body_html = f"""
-        <html>
-        <head>
-            <style>
-                body {{ font-family: Arial, sans-serif; }}
-                .container {{ max-width: 600px; margin: 0 auto; padding: 20px; }}
-                .header {{ background-color: #f44336; color: white; padding: 15px; text-align: center; }}
-                .content {{ background-color: #f9f9f9; padding: 20px; }}
-                .error {{ background-color: white; padding: 15px; margin: 10px 0; border-left: 4px solid #f44336; }}
-            </style>
-        </head>
-        <body>
-            <div class="container">
-                <div class="header">
-                    <h2>❌ Error en Migración Automática</h2>
-                </div>
-                <div class="content">
-                    <p>Se ha producido un error durante la migración automática desde MBA3.</p>
-                    
-                    <div class="error">
-                        <h3>Detalles del Error:</h3>
-                        <pre>{error_message}</pre>
-                    </div>
-                    
-                    <p><strong>Fecha y Hora:</strong> {fecha_ejecucion.strftime('%Y-%m-%d %H:%M:%S')}</p>
-                    
-                    <p>Por favor, revisa los logs del sistema para más información.</p>
-                </div>
-            </div>
-        </body>
-        </html>
-        """
+        body_html = build_email(
+            title="Error en Migraci&oacute;n Autom&aacute;tica",
+            subtitle="Se requiere atenci&oacute;n t&eacute;cnica",
+            sections=[
+                paragraph("Se ha producido un error durante la migraci&oacute;n autom&aacute;tica desde MBA3."),
+                info_section("Detalles del Error", [
+                    ("Error", f'<span style="font-family:Consolas,monospace;font-size:13px;color:#c62828;">{error_message}</span>'),
+                ], accent="red"),
+                warning_section("Acci&oacute;n Recomendada",
+                    '<p style="margin:0;color:#5d4037;font-size:14px;">Por favor, revisa los logs del sistema para m&aacute;s informaci&oacute;n.</p>'),
+            ],
+            accent="red",
+            timestamp=fecha_ejecucion,
+        )
         
-        body_text = f"""
-        Error en Migración Automática
+        body_text = f"""Error en Migracion Automatica
+{'=' * 40}
+
+Se ha producido un error durante la migracion automatica desde MBA3.
+
+Detalles del Error:
+{error_message}
+
+Fecha y Hora: {fecha_ejecucion.strftime('%Y-%m-%d %H:%M:%S')}
+Por favor, revisa los logs del sistema para mas informacion.
+"""
         
-        Se ha producido un error durante la migración automática desde MBA3.
-        
-        Detalles del Error:
-        {error_message}
-        
-        Fecha y Hora: {fecha_ejecucion.strftime('%Y-%m-%d %H:%M:%S')}
-        
-        Por favor, revisa los logs del sistema para más información.
-        """
-        
-        msg.attach(MIMEText(body_text, 'plain'))
-        msg.attach(MIMEText(body_html, 'html'))
+        msg = create_email_message(
+            subject="Error en Migracion Automatica MBA3",
+            recipients=recipients,
+            body_html=body_html,
+            body_text=body_text,
+        )
         
         with smtplib.SMTP(EMAIL_SMTP_SERVER, EMAIL_SMTP_PORT) as server:
             # Solo usar TLS si el puerto es 587 (no para puerto 25 - relay interno)
@@ -347,11 +300,10 @@ def send_homologacion_notification(
             logger.warning("⚠️ No hay destinatarios de HOMOLOGACIONES configurados")
             return False
         
-        # Crear mensaje
-        msg = MIMEMultipart()
-        msg['From'] = EMAIL_FROM
-        msg['To'] = ", ".join(recipients)
-        msg['Subject'] = f"⚠️ Productos NO Homologados Detectados - {len(productos_a_notificar)} producto(s) NUEVOS"
+        from src.utils.email_template import (
+            build_email, info_section, table_section, warning_section,
+            paragraph, badge_html, create_email_message,
+        )
         
         # Preparar estadísticas
         if estadisticas:
@@ -428,95 +380,75 @@ def send_homologacion_notification(
         if productos_sin_tipo:
             resumen_tipos += f"<li><strong>Sin clasificar:</strong> {len(productos_sin_tipo)} producto(s)</li>"
         
-        # Crear cuerpo del mensaje HTML
-        body_html = f"""
-        <html>
-        <head>
-            <style>
-                body {{ font-family: Arial, sans-serif; }}
-                .container {{ max-width: 800px; margin: 0 auto; padding: 20px; }}
-                .header {{ background-color: #ff9800; color: white; padding: 15px; text-align: center; }}
-                .content {{ background-color: #f9f9f9; padding: 20px; }}
-                .stats {{ background-color: white; padding: 15px; margin: 10px 0; border-left: 4px solid #ff9800; }}
-                .table-container {{ overflow-x: auto; margin: 20px 0; }}
-                table {{ width: 100%; border-collapse: collapse; background-color: white; }}
-                th {{ background-color: #ff9800; color: white; padding: 10px; text-align: left; }}
-                td {{ padding: 8px; border-bottom: 1px solid #ddd; }}
-                tr:hover {{ background-color: #f5f5f5; }}
-                .footer {{ text-align: center; color: #666; font-size: 12px; margin-top: 20px; }}
-                .warning {{ background-color: #fff3cd; border: 1px solid #ffc107; padding: 15px; margin: 15px 0; border-radius: 5px; }}
-                .mismatch-warning {{ background-color: #ffe0b2; border: 1px solid #ff9800; padding: 15px; margin: 15px 0; border-radius: 5px; }}
-            </style>
-        </head>
-        <body>
-            <div class="container">
-                <div class="header">
-                    <h2>⚠️ Productos NO Homologados Detectados</h2>
-                </div>
-                <div class="content">
-                    <p>Se han detectado productos de MBA3 que <strong>NO están homologados en SAP</strong> o tienen problemas de coincidencia.</p>
-                    
-                    <div class="stats">
-                        <h3>📊 Resumen por Tipo de Problema</h3>
-                        <ul>
-                            {resumen_tipos if resumen_tipos else "<li>Sin productos para mostrar</li>"}
-                        </ul>
-                    </div>
-                    
-                    <div class="warning">
-                        <strong>⚠️ ACCIÓN REQUERIDA:</strong><br>
-                        <ul>
-                            <li><strong>Productos que no existen:</strong> Deben ser creados en SAP con el mismo ItemCode (SKU) para que el sistema pueda procesar las órdenes de compra correctamente.</li>
-                            <li><strong>Productos con Mismatch:</strong> El SKU de MBA3 no coincide con el ItemCode de SAP. Se requiere corregir la homologación para que coincidan exactamente.</li>
-                        </ul>
-                    </div>
-                    
-                    {f'<div class="mismatch-warning"><strong>🔴 ATENCIÓN - Productos con Mismatch:</strong><br>Los productos marcados como "MISMATCH" tienen un SKU en MBA3 que no coincide con el ItemCode en SAP. Estos productos <strong>NO recibirán conversiones automáticas</strong> hasta que se corrija la homologación.</div>' if productos_mismatch else ''}
-                    
-                    <div class="stats">
-                        <h3>📊 Estadísticas de Homologación</h3>
-                        <ul>
-                            <li><strong>Total Productos en MBA3:</strong> {total_mba3}</li>
-                            <li><strong>Productos Homologados:</strong> {homologados}</li>
-                            <li><strong>Productos NO Homologados:</strong> {no_homologados}</li>
-                            <li><strong>Porcentaje de Homologación:</strong> {porcentaje}%</li>
-                        </ul>
-                    </div>
-                    
-                    <div class="table-container">
-                        <h3>📋 Productos que Requieren Homologación</h3>
-                        <table>
-                            <thead>
-                                <tr>
-                                    <th>#</th>
-                                    <th>SKU</th>
-                                    <th>Nombre Producto</th>
-                                    <th>Tipo de Problema</th>
-                                    <th>Veces Usado</th>
-                                    <th>Total Docenas</th>
-                                    <th>Total Valor</th>
-                                    <th>Última Aparición</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                {productos_tabla}
-                            </tbody>
-                        </table>
-                    </div>
-                    
-                    <p><strong>Fecha y Hora:</strong> {fecha_ejecucion.strftime('%Y-%m-%d %H:%M:%S')}</p>
-                    
-                    <p><strong>Nota:</strong> Este es un mensaje automático del sistema de migración MBA3. 
-                    Los productos se detectan automáticamente durante el proceso de migración cuando 
-                    no se encuentran en SAP.</p>
-                </div>
-                <div class="footer">
-                    <p>Sistema MBA3 Consultas - Notificación de Homologación</p>
-                </div>
-            </div>
-        </body>
-        </html>
-        """
+        # Construir filas de tabla para el template
+        table_rows = []
+        for idx, producto in enumerate(productos_mostrar, 1):
+            sku = producto.get("sku", "N/A")
+            nombre = producto.get("nombre_producto", "Sin nombre")
+            veces_usado = producto.get("veces_usado", 0)
+            total_docenas_val = producto.get("total_docenas", 0.0)
+            total_valor_val = producto.get("total_valor", 0.0)
+            ultima_aparicion = producto.get("ultima_aparicion", "N/A")
+            tipo_problema = producto.get("tipo_problema", "no_existe")
+            item_code_sap = producto.get("item_code_sap")
+            
+            if tipo_problema == "mismatch":
+                tipo_badge = badge_html("MISMATCH", "#fff3e0", "#e65100")
+            elif tipo_problema == "error":
+                tipo_badge = badge_html("Error", "#ffebee", "#c62828")
+            else:
+                tipo_badge = badge_html("No existe", "#e3f2fd", "#1565c0")
+            
+            table_rows.append((
+                str(idx),
+                f'<strong>{sku}</strong>',
+                nombre,
+                (tipo_badge, "center"),
+                str(veces_usado),
+                f"{total_docenas_val:.2f}",
+                f"${total_valor_val:.2f}",
+                str(ultima_aparicion),
+            ))
+        
+        footer_note = f"... y {len(productos_a_notificar) - 20} producto(s) m&aacute;s" if len(productos_a_notificar) > 20 else None
+        
+        # Construir resumen HTML por tipo
+        resumen_items = []
+        if productos_mismatch:
+            resumen_items.append(("Mismatch (SKU ≠ ItemCode)", f'{badge_html(str(len(productos_mismatch)), "#fff3e0", "#e65100")} producto(s)'))
+        if productos_no_existen:
+            resumen_items.append(("No existe en SAP", f'{badge_html(str(len(productos_no_existen)), "#e3f2fd", "#1565c0")} producto(s)'))
+        if productos_error:
+            resumen_items.append(("Error al consultar", f'{badge_html(str(len(productos_error)), "#ffebee", "#c62828")} producto(s)'))
+        if productos_sin_tipo:
+            resumen_items.append(("Sin clasificar", f'{badge_html(str(len(productos_sin_tipo)), "#f5f5f5", "#616161")} producto(s)'))
+        
+        # Secciones del email
+        sections = [
+            paragraph(f"Se han detectado <strong>{len(productos_a_notificar)}</strong> producto(s) de MBA3 que NO est&aacute;n homologados en SAP o tienen problemas de coincidencia."),
+            info_section("Resumen por Tipo de Problema", resumen_items, accent="orange"),
+            warning_section("Acci&oacute;n Requerida",
+                '<ul style="margin:8px 0;padding-left:20px;color:#5d4037;font-size:14px;line-height:1.6;">'
+                '<li><strong>No existen:</strong> Crear en SAP con el mismo ItemCode (SKU).</li>'
+                '<li><strong>Mismatch:</strong> Corregir la homologaci&oacute;n para que SKU y ItemCode coincidan.</li></ul>'),
+            info_section("Estad&iacute;sticas de Homologaci&oacute;n", [
+                ("Total Productos MBA3", total_mba3),
+                ("Homologados", homologados),
+                ("NO Homologados", no_homologados),
+                ("Porcentaje", f"{porcentaje}%"),
+            ], accent="orange"),
+            table_section("Productos que Requieren Homologaci&oacute;n",
+                ["#", "SKU", "Producto", "Problema", "Usos", "Docenas", "Valor", "&Uacute;lt. Aparici&oacute;n"],
+                table_rows, accent="orange", footer_note=footer_note),
+        ]
+        
+        body_html = build_email(
+            title="Productos NO Homologados Detectados",
+            subtitle=f"{len(productos_a_notificar)} producto(s) nuevos requieren atenci&oacute;n",
+            sections=sections,
+            accent="orange",
+            timestamp=fecha_ejecucion,
+        )
         
         # Crear cuerpo de texto plano
         body_text = f"""
@@ -574,10 +506,6 @@ def send_homologacion_notification(
         Nota: Este es un mensaje automático del sistema de migración MBA3.
         Se adjunta un archivo CSV con el detalle completo de todos los productos no homologados.
         """
-        
-        # Agregar cuerpo al mensaje
-        msg.attach(MIMEText(body_text, 'plain'))
-        msg.attach(MIMEText(body_html, 'html'))
         
         # Generar archivo CSV con todos los productos
         try:
@@ -638,13 +566,21 @@ def send_homologacion_notification(
                 f'attachment; filename= {filename}'
             )
             
-            # Adjuntar CSV al mensaje
-            msg.attach(csv_attachment)
+            csv_attachments = [csv_attachment]
             logger.debug(f"✅ Archivo CSV generado y adjuntado: {filename}")
             
         except Exception as csv_error:
             # No fallar el envío si hay error al generar CSV
+            csv_attachments = []
             logger.warning(f"⚠️ Error al generar CSV adjunto: {csv_error}")
+        
+        msg = create_email_message(
+            subject=f"Productos NO Homologados Detectados - {len(productos_a_notificar)} producto(s) NUEVOS",
+            recipients=recipients,
+            body_html=body_html,
+            body_text=body_text,
+            attachments=csv_attachments if csv_attachments else None,
+        )
         
         # Enviar email
         with smtplib.SMTP(EMAIL_SMTP_SERVER, EMAIL_SMTP_PORT) as server:
@@ -726,74 +662,47 @@ def send_capacity_warning_notification(
             mensaje_principal = "Se detectó una condición de advertencia."
             color = "#ff9800"
         
-        msg = MIMEMultipart()
-        msg['From'] = EMAIL_FROM
-        msg['To'] = ", ".join(recipients)
-        msg['Subject'] = titulo
+        from src.utils.email_template import build_email, info_section, warning_section, paragraph, create_email_message
         
-        # Crear tabla de detalles
-        detalles_html = ""
-        for key, value in details.items():
-            detalles_html += f"<li><strong>{key.replace('_', ' ').title()}:</strong> {value}</li>"
+        # Mapear tipo de warning a color de acento
+        accent_map = {'time_limit': 'orange', 'high_volume': 'blue', 'high_failures': 'red'}
+        accent = accent_map.get(warning_type, 'orange')
         
-        body_html = f"""
-        <html>
-        <head>
-            <style>
-                body {{ font-family: Arial, sans-serif; }}
-                .container {{ max-width: 600px; margin: 0 auto; padding: 20px; }}
-                .header {{ background-color: {color}; color: white; padding: 15px; text-align: center; }}
-                .content {{ background-color: #f9f9f9; padding: 20px; }}
-                .warning {{ background-color: white; padding: 15px; margin: 10px 0; border-left: 4px solid {color}; }}
-                .footer {{ text-align: center; color: #666; font-size: 12px; margin-top: 20px; }}
-            </style>
-        </head>
-        <body>
-            <div class="container">
-                <div class="header">
-                    <h2>{titulo}</h2>
-                </div>
-                <div class="content">
-                    <p>{mensaje_principal}</p>
-                    
-                    <div class="warning">
-                        <h3>📋 Detalles:</h3>
-                        <ul>
-                            {detalles_html}
-                        </ul>
-                    </div>
-                    
-                    <p><strong>Fecha y Hora:</strong> {fecha_ejecucion.strftime('%Y-%m-%d %H:%M:%S')}</p>
-                    
-                    <p><strong>Acción Recomendada:</strong> Revisar los logs del sistema y considerar ajustar la configuración si es necesario.</p>
-                </div>
-                <div class="footer">
-                    <p>Sistema MBA3 Consultas - Notificación Técnica</p>
-                </div>
-            </div>
-        </body>
-        </html>
-        """
+        detail_items = [(key.replace('_', ' ').title(), str(value)) for key, value in details.items()]
         
-        body_text = f"""
-        {titulo}
+        body_html = build_email(
+            title=titulo,
+            subtitle=mensaje_principal,
+            sections=[
+                paragraph(mensaje_principal),
+                info_section("Detalles", detail_items, accent=accent),
+                warning_section("Acci&oacute;n Recomendada",
+                    '<p style="margin:0;color:#5d4037;font-size:14px;">Revisar los logs del sistema y considerar ajustar la configuraci&oacute;n si es necesario.</p>'),
+            ],
+            accent=accent,
+            timestamp=fecha_ejecucion,
+        )
         
-        {mensaje_principal}
-        
-        Detalles:
-        """
+        body_text = f"""{titulo}
+{'=' * 40}
+
+{mensaje_principal}
+
+Detalles:
+"""
         for key, value in details.items():
             body_text += f"- {key.replace('_', ' ').title()}: {value}\n"
-        
         body_text += f"""
+Fecha y Hora: {fecha_ejecucion.strftime('%Y-%m-%d %H:%M:%S')}
+Accion Recomendada: Revisar los logs del sistema.
+"""
         
-        Fecha y Hora: {fecha_ejecucion.strftime('%Y-%m-%d %H:%M:%S')}
-        
-        Acción Recomendada: Revisar los logs del sistema y considerar ajustar la configuración si es necesario.
-        """
-        
-        msg.attach(MIMEText(body_text, 'plain'))
-        msg.attach(MIMEText(body_html, 'html'))
+        msg = create_email_message(
+            subject=titulo,
+            recipients=recipients,
+            body_html=body_html,
+            body_text=body_text,
+        )
         
         with smtplib.SMTP(EMAIL_SMTP_SERVER, EMAIL_SMTP_PORT) as server:
             if EMAIL_SMTP_PORT == 587:
@@ -860,20 +769,19 @@ def send_oc_to_supplier(
         numero_oc_sap = doc_num or oc_cabecera.get("numero_oc_sap", "N/A")
         referencia = oc_cabecera.get("referencia_despacho", "N/A")
         
-        # Crear mensaje
-        msg = MIMEMultipart()
-        msg['From'] = EMAIL_FROM
-        msg['To'] = ", ".join(recipients)
-        msg['Subject'] = f"📦 Orden de Compra Generada - ODC #{numero_oc_sap}"
+        from src.utils.email_template import (
+            build_email, info_section, table_section, summary_section,
+            paragraph, create_email_message,
+        )
         
         # Calcular totales
         total_lineas = len(oc_detalles)
         total_cantidad = sum(d.get("cantidad_sap", 0) for d in oc_detalles)
         total_valor = sum(d.get("total_linea", 0) or 0 for d in oc_detalles)
         
-        # Crear tabla HTML de detalles (máximo 50 líneas para no saturar)
+        # Crear filas de la tabla (máximo 50)
         detalles_mostrar = oc_detalles[:50]
-        detalles_tabla = ""
+        table_rows = []
         for idx, detalle in enumerate(detalles_mostrar, 1):
             sku = detalle.get("sku_sap", "N/A")
             nombre = detalle.get("nombre_producto", "Sin nombre")
@@ -881,118 +789,49 @@ def send_oc_to_supplier(
             unidad = detalle.get("unidad_sap", "N/A")
             precio_unit = detalle.get("precio_unitario", 0)
             total_linea = detalle.get("total_linea", 0)
-            
-            detalles_tabla += f"""
-            <tr>
-                <td>{idx}</td>
-                <td><strong>{sku}</strong></td>
-                <td>{nombre}</td>
-                <td>{cantidad:.2f}</td>
-                <td>{unidad}</td>
-                <td>${precio_unit:.2f}</td>
-                <td>${total_linea:.2f}</td>
-            </tr>
-            """
+            table_rows.append((
+                str(idx), f"<strong>{sku}</strong>", nombre,
+                f"{cantidad:.2f}", unidad, f"${precio_unit:.2f}", f"${total_linea:.2f}",
+            ))
         
-        if len(oc_detalles) > 50:
-            detalles_tabla += f"""
-            <tr>
-                <td colspan="7" style="text-align: center; font-style: italic;">
-                    ... y {len(oc_detalles) - 50} línea(s) más
-                </td>
-            </tr>
-            """
+        footer_note = f"... y {len(oc_detalles) - 50} l&iacute;nea(s) m&aacute;s" if len(oc_detalles) > 50 else None
         
-        # Crear cuerpo del mensaje HTML
-        body_html = f"""
-        <html>
-        <head>
-            <style>
-                body {{ font-family: Arial, sans-serif; }}
-                .container {{ max-width: 800px; margin: 0 auto; padding: 20px; }}
-                .header {{ background-color: #4CAF50; color: white; padding: 15px; text-align: center; }}
-                .content {{ background-color: #f9f9f9; padding: 20px; }}
-                .info-box {{ background-color: white; padding: 15px; margin: 10px 0; border-left: 4px solid #4CAF50; }}
-                .table-container {{ overflow-x: auto; margin: 20px 0; }}
-                table {{ width: 100%; border-collapse: collapse; background-color: white; }}
-                th {{ background-color: #4CAF50; color: white; padding: 10px; text-align: left; }}
-                td {{ padding: 8px; border-bottom: 1px solid #ddd; }}
-                tr:hover {{ background-color: #f5f5f5; }}
-                .footer {{ text-align: center; color: #666; font-size: 12px; margin-top: 20px; }}
-                .total {{ font-weight: bold; background-color: #e8f5e9; }}
-            </style>
-        </head>
-        <body>
-            <div class="container">
-                <div class="header">
-                    <h2>📦 Orden de Compra Generada</h2>
-                </div>
-                <div class="content">
-                    <p>Se ha generado una nueva Orden de Compra en SAP.</p>
-                    
-                    <div class="info-box">
-                        <h3>📋 Información de la Orden de Compra</h3>
-                        <ul>
-                            <li><strong>Número ODC SAP:</strong> {numero_oc_sap}</li>
-                            <li><strong>DocEntry:</strong> {doc_entry or 'N/A'}</li>
-                            <li><strong>Proveedor:</strong> {proveedor}</li>
-                            <li><strong>Referencia:</strong> {referencia}</li>
-                            <li><strong>Total Líneas:</strong> {total_lineas}</li>
-                            <li><strong>Total Cantidad:</strong> {total_cantidad:.2f}</li>
-                            <li><strong>Total Valor:</strong> ${total_valor:.2f}</li>
-                        </ul>
-                    </div>
-                    
-                    <div class="table-container">
-                        <h3>📋 Detalle de la Orden de Compra</h3>
-                        <table>
-                            <thead>
-                                <tr>
-                                    <th>#</th>
-                                    <th>SKU</th>
-                                    <th>Producto</th>
-                                    <th>Cantidad</th>
-                                    <th>Unidad</th>
-                                    <th>Precio Unit.</th>
-                                    <th>Total</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                {detalles_tabla}
-                            </tbody>
-                        </table>
-                    </div>
-                    
-                    <p><strong>Fecha y Hora:</strong> {fecha_ejecucion.strftime('%Y-%m-%d %H:%M:%S')}</p>
-                    
-                    <p>Este es un mensaje automático del sistema de integración SAP.</p>
-                </div>
-                <div class="footer">
-                    <p>Sistema MBA3 Consultas - Notificación de Orden de Compra</p>
-                </div>
-            </div>
-        </body>
-        </html>
-        """
+        body_html = build_email(
+            title="Orden de Compra Generada",
+            subtitle=f"ODC #{numero_oc_sap}",
+            sections=[
+                paragraph("Se ha generado una nueva Orden de Compra en SAP."),
+                info_section("Informaci&oacute;n de la ODC", [
+                    ("N&uacute;mero ODC SAP", numero_oc_sap),
+                    ("DocEntry", doc_entry or "N/A"),
+                    ("Proveedor", proveedor),
+                    ("Referencia", referencia),
+                    ("Total L&iacute;neas", total_lineas),
+                    ("Total Cantidad", f"{total_cantidad:.2f}"),
+                    ("Total Valor", f"${total_valor:.2f}"),
+                ], accent="green", highlight_first=True),
+                table_section("Detalle de la Orden de Compra",
+                    ["#", "SKU", "Producto", "Cantidad", "Unidad", "P. Unit.", "Total"],
+                    table_rows, accent="green", footer_note=footer_note),
+            ],
+            accent="green",
+            timestamp=fecha_ejecucion,
+        )
         
-        # Crear cuerpo de texto plano
-        body_text = f"""
-        Orden de Compra Generada
-        
-        Se ha generado una nueva Orden de Compra en SAP.
-        
-        Información de la Orden de Compra:
-        - Número ODC SAP: {numero_oc_sap}
-        - DocEntry: {doc_entry or 'N/A'}
-        - Proveedor: {proveedor}
-        - Referencia: {referencia}
-        - Total Líneas: {total_lineas}
-        - Total Cantidad: {total_cantidad:.2f}
-        - Total Valor: ${total_valor:.2f}
-        
-        Detalle de la Orden de Compra:
-        """
-        
+        body_text = f"""Orden de Compra Generada - ODC #{numero_oc_sap}
+{'=' * 40}
+
+Informacion de la ODC:
+- Numero ODC SAP: {numero_oc_sap}
+- DocEntry: {doc_entry or 'N/A'}
+- Proveedor: {proveedor}
+- Referencia: {referencia}
+- Total Lineas: {total_lineas}
+- Total Cantidad: {total_cantidad:.2f}
+- Total Valor: ${total_valor:.2f}
+
+Detalle:
+"""
         for idx, detalle in enumerate(detalles_mostrar, 1):
             sku = detalle.get("sku_sap", "N/A")
             nombre = detalle.get("nombre_producto", "Sin nombre")
@@ -1000,28 +839,18 @@ def send_oc_to_supplier(
             unidad = detalle.get("unidad_sap", "N/A")
             precio_unit = detalle.get("precio_unitario", 0)
             total_linea = detalle.get("total_linea", 0)
-            
-            body_text += f"""
-        {idx}. SKU: {sku}
-           Producto: {nombre}
-           Cantidad: {cantidad:.2f} {unidad}
-           Precio Unit.: ${precio_unit:.2f}
-           Total: ${total_linea:.2f}
-        """
+            body_text += f"  {idx}. {sku} - {nombre} | {cantidad:.2f} {unidad} | ${total_linea:.2f}\n"
         
         if len(oc_detalles) > 50:
-            body_text += f"\n        ... y {len(oc_detalles) - 50} línea(s) más\n"
+            body_text += f"  ... y {len(oc_detalles) - 50} linea(s) mas\n"
+        body_text += f"\nFecha y Hora: {fecha_ejecucion.strftime('%Y-%m-%d %H:%M:%S')}\n"
         
-        body_text += f"""
-        
-        Fecha y Hora: {fecha_ejecucion.strftime('%Y-%m-%d %H:%M:%S')}
-        
-        Este es un mensaje automático del sistema de integración SAP.
-        """
-        
-        # Agregar cuerpo al mensaje
-        msg.attach(MIMEText(body_text, 'plain'))
-        msg.attach(MIMEText(body_html, 'html'))
+        msg = create_email_message(
+            subject=f"Orden de Compra Generada - ODC #{numero_oc_sap}",
+            recipients=recipients,
+            body_html=body_html,
+            body_text=body_text,
+        )
         
         # Enviar email
         with smtplib.SMTP(EMAIL_SMTP_SERVER, EMAIL_SMTP_PORT) as server:
@@ -1094,6 +923,7 @@ def send_oc_ready_for_dispatch_notification(
         # Información de Solicitudes de Transferencia
         transferencias_info = ""
         transferencias_tabla = ""
+        transferencias_detalle_texto = ""
         total_transferencias = 0
         transferencias_exitosas = 0
         transferencias_fallidas = 0
@@ -1104,129 +934,267 @@ def send_oc_ready_for_dispatch_notification(
             transferencias_fallidas = solicitudes_transferencia.get("transferencias_errores", 0)
             resultados = solicitudes_transferencia.get("resultados", [])
             
-            # Construir tabla de transferencias
+            # Construir tabla de transferencias (HTML y texto plano)
             if resultados:
+                lineas_texto = []
                 for resultado in resultados:
                     tienda_codigo = resultado.get("tienda_codigo", "N/A")
                     success = resultado.get("success", False)
                     doc_num_transf = resultado.get("doc_num", "N/A")
                     error = resultado.get("error")
                     
-                    estado = "✅ Creada" if success else "❌ Error"
+                    estado = "Creada" if success else "Error"
                     doc_info = f"DocNum: {doc_num_transf}" if success else f"Error: {error or 'Desconocido'}"
                     
+                    # HTML
+                    estado_html = "✅ Creada" if success else "❌ Error"
                     transferencias_tabla += f"""
                     <tr>
                         <td>{tienda_codigo}</td>
-                        <td>{estado}</td>
+                        <td>{estado_html}</td>
                         <td>{doc_info}</td>
                     </tr>
                     """
+                    
+                    # Texto plano
+                    estado_txt = "Creada" if success else "Error"
+                    lineas_texto.append(f"  {tienda_codigo}\t{estado_txt}\t{doc_info}")
+                
+                transferencias_detalle_texto = "\n".join(lineas_texto)
         
-        # Crear mensaje
-        msg = MIMEMultipart()
+        # Crear mensaje con multipart/alternative para que el cliente prefiera HTML
+        msg = MIMEMultipart('alternative')
         msg['From'] = EMAIL_FROM
         msg['To'] = ", ".join(recipients)
-        msg['Subject'] = f"✅ OC y Solicitudes de Transferencia Generadas - Listo para Despacho #{numero_oc_sap}"
+        msg['Subject'] = f"OC y Solicitudes de Transferencia - Listo para Despacho #{numero_oc_sap}"
         
-        # Crear cuerpo del mensaje HTML
-        body_html = f"""
-        <html>
-        <head>
-            <style>
-                body {{ font-family: Arial, sans-serif; }}
-                .container {{ max-width: 800px; margin: 0 auto; padding: 20px; }}
-                .header {{ background-color: #2196F3; color: white; padding: 15px; text-align: center; }}
-                .content {{ background-color: #f9f9f9; padding: 20px; }}
-                .info-box {{ background-color: white; padding: 15px; margin: 10px 0; border-left: 4px solid #2196F3; }}
-                .success-box {{ background-color: #e8f5e9; padding: 15px; margin: 10px 0; border-left: 4px solid #4CAF50; }}
-                .table-container {{ overflow-x: auto; margin: 20px 0; }}
-                table {{ width: 100%; border-collapse: collapse; background-color: white; }}
-                th {{ background-color: #2196F3; color: white; padding: 10px; text-align: left; }}
-                td {{ padding: 8px; border-bottom: 1px solid #ddd; }}
-                tr:hover {{ background-color: #f5f5f5; }}
-                .footer {{ text-align: center; color: #666; font-size: 12px; margin-top: 20px; }}
-                .action-box {{ background-color: #fff3cd; padding: 15px; margin: 20px 0; border-left: 4px solid #ffc107; }}
-            </style>
-        </head>
-        <body>
-            <div class="container">
-                <div class="header">
-                    <h2>✅ OC y Solicitudes de Transferencia Generadas</h2>
-                </div>
-                <div class="content">
-                    <p>Se ha generado exitosamente la Orden de Compra y las Solicitudes de Transferencia en SAP.</p>
-                    <p><strong>Pueden proceder con el despacho y facturación.</strong></p>
-                    
-                    <div class="info-box">
-                        <h3>📋 Información de la Orden de Compra</h3>
-                        <ul>
-                            <li><strong>Número OC SAP:</strong> {numero_oc_sap}</li>
-                            <li><strong>DocEntry:</strong> {doc_entry or 'N/A'}</li>
-                            <li><strong>Proveedor:</strong> {proveedor}</li>
-                            <li><strong>Referencia:</strong> {referencia}</li>
-                            {("<li><strong>Número de Pedido:</strong> " + str(pedido_numero) + "</li>") if pedido_numero else ""}
-                        </ul>
-                    </div>
-                    
-                    {('<div class="success-box"><h3>📦 Solicitudes de Transferencia Generadas</h3><p><strong>Total:</strong> ' + str(transferencias_exitosas) + '/' + str(total_transferencias) + ' creadas exitosamente</p>' + ('<p style="color: #f44336;"><strong>⚠️ Errores:</strong> ' + str(transferencias_fallidas) + ' solicitud(es) fallaron</p>' if transferencias_fallidas > 0 else '') + '</div>') if solicitudes_transferencia else ""}
-                    
-                    {('<div class="table-container"><h3>📋 Detalle de Solicitudes de Transferencia</h3><table><thead><tr><th>Tienda</th><th>Estado</th><th>Información</th></tr></thead><tbody>' + transferencias_tabla + '</tbody></table></div>') if transferencias_tabla else ""}
-                    
-                    <div class="action-box">
-                        <h3>🎯 Acción Requerida</h3>
-                        <p>La Orden de Compra y las Solicitudes de Transferencia han sido registradas exitosamente en SAP.</p>
-                        <p><strong>El personal de El Rayo puede proceder con:</strong></p>
-                        <ul>
-                            <li>✅ Despacho de mercancía</li>
-                            <li>✅ Facturación correspondiente</li>
-                        </ul>
-                    </div>
-                    
-                    <div class="footer">
-                        <p>Fecha y Hora: {fecha_ejecucion.strftime('%Y-%m-%d %H:%M:%S')}</p>
-                        <p>Este es un mensaje automático del sistema de integración SAP.</p>
-                    </div>
-                </div>
-            </div>
-        </body>
-        </html>
-        """
+        # --- Construir filas HTML de la tabla de transferencias ---
+        filas_tabla_html = ""
+        if solicitudes_transferencia and solicitudes_transferencia.get("resultados"):
+            for idx, resultado in enumerate(solicitudes_transferencia.get("resultados", [])):
+                tienda_codigo = resultado.get("tienda_codigo", "N/A")
+                tienda_nombre = resultado.get("tienda_nombre") or tienda_codigo
+                success = resultado.get("success", False)
+                doc_num_transf = resultado.get("doc_num", "N/A")
+                error = resultado.get("error")
+                
+                bg_color = "#f8fffe" if idx % 2 == 0 else "#ffffff"
+                if success:
+                    badge = '<span style="display:inline-block;background-color:#d4edda;color:#155724;padding:3px 10px;border-radius:12px;font-size:12px;font-weight:600;">Creada</span>'
+                    info_html = f'<span style="font-family:Consolas,monospace;font-weight:600;color:#1a5276;">{doc_num_transf}</span>'
+                else:
+                    badge = '<span style="display:inline-block;background-color:#f8d7da;color:#721c24;padding:3px 10px;border-radius:12px;font-size:12px;font-weight:600;">Error</span>'
+                    info_html = f'<span style="color:#721c24;">{error or "Desconocido"}</span>'
+                
+                filas_tabla_html += f'''
+                <tr style="background-color:{bg_color};">
+                    <td style="padding:12px 16px;border-bottom:1px solid #e8e8e8;font-weight:600;color:#2c3e50;">{tienda_codigo}</td>
+                    <td style="padding:12px 16px;border-bottom:1px solid #e8e8e8;text-align:center;">{badge}</td>
+                    <td style="padding:12px 16px;border-bottom:1px solid #e8e8e8;text-align:center;">{info_html}</td>
+                </tr>'''
         
-        # Versión texto plano
-        body_text = f"""
-Orden de Compra y Solicitudes de Transferencia Generadas
+        # --- Sección de resumen de transferencias (HTML) ---
+        seccion_transferencias_html = ""
+        if solicitudes_transferencia:
+            errores_html = ""
+            if transferencias_fallidas > 0:
+                errores_html = f'<span style="color:#dc3545;font-weight:600;margin-left:16px;">{transferencias_fallidas} con error</span>'
+            
+            seccion_transferencias_html = f'''
+            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:24px 0;">
+                <tr>
+                    <td style="background:linear-gradient(135deg,#e8f5e9 0%,#c8e6c9 100%);border-radius:8px;padding:20px;">
+                        <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+                            <tr>
+                                <td style="font-size:16px;font-weight:700;color:#2e7d32;">
+                                    Solicitudes de Transferencia
+                                </td>
+                                <td style="text-align:right;">
+                                    <span style="display:inline-block;background-color:#2e7d32;color:#fff;padding:6px 16px;border-radius:20px;font-size:14px;font-weight:700;">{transferencias_exitosas}/{total_transferencias} creadas</span>
+                                    {errores_html}
+                                </td>
+                            </tr>
+                        </table>
+                    </td>
+                </tr>
+            </table>'''
+            
+            if filas_tabla_html:
+                seccion_transferencias_html += f'''
+            <table width="100%" cellpadding="0" cellspacing="0" style="border-radius:8px;overflow:hidden;border:1px solid #e0e0e0;margin-bottom:24px;">
+                <thead>
+                    <tr style="background:linear-gradient(135deg,#1a5276 0%,#2980b9 100%);">
+                        <th style="padding:14px 16px;text-align:left;color:#fff;font-size:13px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;">Tienda</th>
+                        <th style="padding:14px 16px;text-align:center;color:#fff;font-size:13px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;">Estado</th>
+                        <th style="padding:14px 16px;text-align:center;color:#fff;font-size:13px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;">DocNum</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {filas_tabla_html}
+                </tbody>
+            </table>'''
+        
+        # --- Sección de número de pedido (HTML) ---
+        pedido_html = ""
+        if pedido_numero:
+            pedido_html = f'''
+                            <tr>
+                                <td style="padding:8px 0;color:#7f8c8d;font-size:13px;width:160px;">Pedido</td>
+                                <td style="padding:8px 0;font-weight:600;color:#2c3e50;">{pedido_numero}</td>
+                            </tr>'''
+        
+        # Crear cuerpo del mensaje HTML (inline styles para compatibilidad con clientes de correo)
+        body_html = f"""<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OC y Solicitudes de Transferencia</title>
+</head>
+<body style="margin:0;padding:0;background-color:#f0f2f5;font-family:'Segoe UI',Tahoma,Geneva,Verdana,sans-serif;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color:#f0f2f5;padding:24px 0;">
+        <tr>
+            <td align="center">
+                <table role="presentation" width="640" cellpadding="0" cellspacing="0" style="max-width:640px;width:100%;background-color:#ffffff;border-radius:12px;overflow:hidden;box-shadow:0 2px 12px rgba(0,0,0,0.08);">
+                    
+                    <!-- Header -->
+                    <tr>
+                        <td style="background:linear-gradient(135deg,#1a5276 0%,#2980b9 100%);padding:32px 40px;text-align:center;">
+                            <h1 style="margin:0;color:#ffffff;font-size:22px;font-weight:700;letter-spacing:-0.3px;">
+                                OC y Solicitudes de Transferencia Generadas
+                            </h1>
+                            <p style="margin:8px 0 0;color:rgba(255,255,255,0.85);font-size:14px;">
+                                Listo para despacho y facturaci&oacute;n
+                            </p>
+                        </td>
+                    </tr>
+                    
+                    <!-- Body -->
+                    <tr>
+                        <td style="padding:32px 40px;">
+                            
+                            <!-- Mensaje principal -->
+                            <p style="margin:0 0 24px;color:#2c3e50;font-size:15px;line-height:1.6;">
+                                Se ha generado exitosamente la <strong>Orden de Compra</strong> y las 
+                                <strong>Solicitudes de Transferencia</strong> en SAP. 
+                                Pueden proceder con el despacho y facturaci&oacute;n.
+                            </p>
+                            
+                            <!-- Info OC -->
+                            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:24px;">
+                                <tr>
+                                    <td style="background-color:#f8f9fa;border-radius:8px;padding:20px 24px;border-left:4px solid #2980b9;">
+                                        <h3 style="margin:0 0 12px;color:#1a5276;font-size:15px;font-weight:700;">Informaci&oacute;n de la Orden de Compra</h3>
+                                        <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+                                            <tr>
+                                                <td style="padding:8px 0;color:#7f8c8d;font-size:13px;width:160px;">N&uacute;mero OC SAP</td>
+                                                <td style="padding:8px 0;font-weight:700;color:#1a5276;font-size:18px;">{numero_oc_sap}</td>
+                                            </tr>
+                                            <tr>
+                                                <td style="padding:8px 0;color:#7f8c8d;font-size:13px;">DocEntry</td>
+                                                <td style="padding:8px 0;font-weight:600;color:#2c3e50;">{doc_entry or 'N/A'}</td>
+                                            </tr>
+                                            <tr>
+                                                <td style="padding:8px 0;color:#7f8c8d;font-size:13px;">Proveedor</td>
+                                                <td style="padding:8px 0;font-weight:600;color:#2c3e50;">{proveedor}</td>
+                                            </tr>
+                                            <tr>
+                                                <td style="padding:8px 0;color:#7f8c8d;font-size:13px;">Referencia</td>
+                                                <td style="padding:8px 0;font-weight:600;color:#2c3e50;">{referencia}</td>
+                                            </tr>{pedido_html}
+                                        </table>
+                                    </td>
+                                </tr>
+                            </table>
+                            
+                            <!-- Solicitudes de Transferencia -->
+                            {seccion_transferencias_html}
+                            
+                            <!-- Accion Requerida -->
+                            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:24px 0;">
+                                <tr>
+                                    <td style="background-color:#fff8e1;border-radius:8px;padding:20px 24px;border-left:4px solid #f9a825;">
+                                        <h3 style="margin:0 0 8px;color:#e65100;font-size:15px;font-weight:700;">Acci&oacute;n Requerida</h3>
+                                        <p style="margin:0 0 8px;color:#5d4037;font-size:14px;line-height:1.5;">
+                                            El personal de El Rayo puede proceder con:
+                                        </p>
+                                        <table role="presentation" cellpadding="0" cellspacing="0">
+                                            <tr>
+                                                <td style="padding:4px 8px 4px 0;color:#2e7d32;font-size:14px;">&#10003;</td>
+                                                <td style="padding:4px 0;color:#5d4037;font-size:14px;">Despacho de mercader&iacute;a</td>
+                                            </tr>
+                                            <tr>
+                                                <td style="padding:4px 8px 4px 0;color:#2e7d32;font-size:14px;">&#10003;</td>
+                                                <td style="padding:4px 0;color:#5d4037;font-size:14px;">Facturaci&oacute;n correspondiente</td>
+                                            </tr>
+                                        </table>
+                                    </td>
+                                </tr>
+                            </table>
+                            
+                        </td>
+                    </tr>
+                    
+                    <!-- Footer -->
+                    <tr>
+                        <td style="background-color:#f8f9fa;padding:20px 40px;text-align:center;border-top:1px solid #e8e8e8;">
+                            <p style="margin:0;color:#95a5a6;font-size:12px;">
+                                Fecha y Hora: {fecha_ejecucion.strftime('%Y-%m-%d %H:%M:%S')}
+                            </p>
+                            <p style="margin:4px 0 0;color:#bdc3c7;font-size:11px;">
+                                Mensaje autom&aacute;tico del sistema de integraci&oacute;n SAP &mdash; Mabel Trading
+                            </p>
+                        </td>
+                    </tr>
+                    
+                </table>
+            </td>
+        </tr>
+    </table>
+</body>
+</html>"""
+        
+        # --- Versión texto plano (fallback) ---
+        seccion_transferencias_texto = ""
+        if solicitudes_transferencia:
+            seccion_transferencias_texto = f"""
+Solicitudes de Transferencia Generadas:
+- Total: {transferencias_exitosas}/{total_transferencias} creadas exitosamente
+{f'- Errores: {transferencias_fallidas} solicitud(es) fallaron' if transferencias_fallidas > 0 else ''}"""
+            if transferencias_detalle_texto:
+                seccion_transferencias_texto += f"""
+
+Detalle de Solicitudes de Transferencia:
+  Tienda\tEstado\tDocNum
+{transferencias_detalle_texto}"""
+        
+        body_text = f"""OC y Solicitudes de Transferencia Generadas
+{'=' * 50}
 
 Se ha generado exitosamente la Orden de Compra y las Solicitudes de Transferencia en SAP.
-Pueden proceder con el despacho y facturación.
+Pueden proceder con el despacho y facturacion.
 
-Información de la Orden de Compra:
-- Número OC SAP: {numero_oc_sap}
+Informacion de la Orden de Compra:
+- Numero OC SAP: {numero_oc_sap}
 - DocEntry: {doc_entry or 'N/A'}
 - Proveedor: {proveedor}
 - Referencia: {referencia}
-{f'- Número de Pedido: {pedido_numero}' if pedido_numero else ''}
+{f'- Numero de Pedido: {pedido_numero}' if pedido_numero else ''}
+{seccion_transferencias_texto}
 
-{f'''
-Solicitudes de Transferencia Generadas:
-- Total: {transferencias_exitosas}/{total_transferencias} creadas exitosamente
-{f'- Errores: {transferencias_fallidas} solicitud(es) fallaron' if transferencias_fallidas > 0 else ''}
-''' if solicitudes_transferencia else ''}
-
-Acción Requerida:
-La Orden de Compra y las Solicitudes de Transferencia han sido registradas exitosamente en SAP.
+Accion Requerida:
 El personal de El Rayo puede proceder con:
-- Despacho de mercancía
-- Facturación correspondiente
+- Despacho de mercaderia
+- Facturacion correspondiente
 
 Fecha y Hora: {fecha_ejecucion.strftime('%Y-%m-%d %H:%M:%S')}
-
-Este es un mensaje automático del sistema de integración SAP.
-        """
+Mensaje automatico del sistema de integracion SAP - Mabel Trading
+"""
         
-        # Agregar cuerpo al mensaje
-        msg.attach(MIMEText(body_text, 'plain'))
-        msg.attach(MIMEText(body_html, 'html'))
+        # ⭐ IMPORTANTE: Orden de attach - el último es el preferido por el cliente de correo
+        # En multipart/alternative, el cliente de correo elige el formato más rico (HTML)
+        msg.attach(MIMEText(body_text, 'plain', 'utf-8'))
+        msg.attach(MIMEText(body_html, 'html', 'utf-8'))
         
         # Enviar email
         with smtplib.SMTP(EMAIL_SMTP_SERVER, EMAIL_SMTP_PORT) as server:
@@ -1291,87 +1259,48 @@ def send_plantilla_upload_notification(
             logger.warning("⚠️ No hay destinatarios configurados para notificación de plantilla")
             return False
         
-        # Crear mensaje
-        msg = MIMEMultipart()
-        msg['From'] = f"{EMAIL_FROM_NAME} <{EMAIL_FROM}>"
-        msg['To'] = ", ".join(recipients)
-        msg['Subject'] = f"📋 Plantilla Excel Procesada Exitosamente - {numero_pedido or 'N/A'}"
+        from src.utils.email_template import build_email, info_section, paragraph, create_email_message
         
-        # Crear cuerpo del mensaje HTML
-        body_html = f"""
-        <html>
-        <head>
-            <style>
-                body {{ font-family: Arial, sans-serif; line-height: 1.6; color: #333; }}
-                .container {{ max-width: 800px; margin: 0 auto; padding: 20px; }}
-                .header {{ background-color: #4CAF50; color: white; padding: 20px; text-align: center; border-radius: 5px 5px 0 0; }}
-                .content {{ background-color: #f9f9f9; padding: 20px; border: 1px solid #ddd; }}
-                .info-box {{ background-color: white; padding: 15px; margin: 20px 0; border-left: 4px solid #4CAF50; border-radius: 3px; }}
-                .info-box h3 {{ margin-top: 0; color: #4CAF50; }}
-                .info-box ul {{ list-style: none; padding: 0; }}
-                .info-box li {{ padding: 8px 0; border-bottom: 1px solid #eee; }}
-                .info-box li:last-child {{ border-bottom: none; }}
-                .info-box strong {{ color: #555; }}
-                .footer {{ text-align: center; color: #999; font-size: 12px; margin-top: 30px; 
-                          padding-top: 20px; border-top: 1px solid #ddd; }}
-            </style>
-        </head>
-        <body>
-            <div class="container">
-                <div class="header">
-                    <h2>✅ Plantilla Excel Procesada Exitosamente</h2>
-                </div>
-                <div class="content">
-                    <p>Se ha procesado y guardado exitosamente una plantilla Excel de pedido.</p>
-                    
-                    <div class="info-box">
-                        <h3>📋 Información del Pedido</h3>
-                        <ul>
-                            <li><strong>Número de Pedido:</strong> {numero_pedido or 'N/A'}</li>
-                            <li><strong>Pedido ID:</strong> {pedido_id or 'N/A'}</li>
-                            <li><strong>Archivo:</strong> {filename or 'N/A'}</li>
-                            <li><strong>Usuario:</strong> {usuario_id or 'N/A'}</li>
-                            <li><strong>Formato:</strong> {formato_detectado or 'N/A'}</li>
-                            <li><strong>Artículos Cargados:</strong> {articulos_cargados}</li>
-                            <li><strong>Distribuciones Cargadas:</strong> {distribuciones_cargadas}</li>
-                        </ul>
-                    </div>
-                    
-                    <p><strong>Fecha y Hora de Procesamiento:</strong> {fecha_ejecucion.strftime('%Y-%m-%d %H:%M:%S')}</p>
-                </div>
-                <div class="footer">
-                    <p>Este es un correo automático del sistema MBA3 Consultas.</p>
-                    <p>Por favor, no responder a este correo.</p>
-                </div>
-            </div>
-        </body>
-        </html>
-        """
+        body_html = build_email(
+            title="Plantilla Excel Procesada Exitosamente",
+            subtitle=f"Pedido: {numero_pedido or 'N/A'}",
+            sections=[
+                paragraph("Se ha procesado y guardado exitosamente una plantilla Excel de pedido."),
+                info_section("Informaci&oacute;n del Pedido", [
+                    ("N&uacute;mero de Pedido", numero_pedido or "N/A"),
+                    ("Pedido ID", pedido_id or "N/A"),
+                    ("Archivo", filename or "N/A"),
+                    ("Usuario", usuario_id or "N/A"),
+                    ("Formato", formato_detectado or "N/A"),
+                    ("Art&iacute;culos Cargados", articulos_cargados),
+                    ("Distribuciones Cargadas", distribuciones_cargadas),
+                ], accent="green"),
+            ],
+            accent="green",
+            timestamp=fecha_ejecucion,
+        )
         
-        # Crear cuerpo de texto plano
-        body_text = f"""
-Plantilla Excel Procesada Exitosamente
+        body_text = f"""Plantilla Excel Procesada Exitosamente
+{'=' * 40}
 
-Se ha procesado y guardado exitosamente una plantilla Excel de pedido.
-
-Información del Pedido:
-- Número de Pedido: {numero_pedido or 'N/A'}
+Informacion del Pedido:
+- Numero de Pedido: {numero_pedido or 'N/A'}
 - Pedido ID: {pedido_id or 'N/A'}
 - Archivo: {filename or 'N/A'}
 - Usuario: {usuario_id or 'N/A'}
 - Formato: {formato_detectado or 'N/A'}
-- Artículos Cargados: {articulos_cargados}
+- Articulos Cargados: {articulos_cargados}
 - Distribuciones Cargadas: {distribuciones_cargadas}
 
-Fecha y Hora de Procesamiento: {fecha_ejecucion.strftime('%Y-%m-%d %H:%M:%S')}
-
-Este es un correo automático del sistema MBA3 Consultas.
-Por favor, no responder a este correo.
-        """
+Fecha y Hora: {fecha_ejecucion.strftime('%Y-%m-%d %H:%M:%S')}
+"""
         
-        # Agregar cuerpo al mensaje
-        msg.attach(MIMEText(body_text, 'plain'))
-        msg.attach(MIMEText(body_html, 'html'))
+        msg = create_email_message(
+            subject=f"Plantilla Excel Procesada - {numero_pedido or 'N/A'}",
+            recipients=recipients,
+            body_html=body_html,
+            body_text=body_text,
+        )
         
         # Enviar email
         with smtplib.SMTP(EMAIL_SMTP_SERVER, EMAIL_SMTP_PORT) as server:
@@ -1428,67 +1357,43 @@ def send_pedido_cancelado_notification(
             logger.warning("⚠️ No hay destinatarios configurados para notificación de pedido descartado")
             return False
 
-        msg = MIMEMultipart()
-        msg['From'] = f"{EMAIL_FROM_NAME} <{EMAIL_FROM}>"
-        msg['To'] = ", ".join(recipients)
-        msg['Subject'] = f"🚫 Pedido Cancelado - {numero_pedido or pedido_id}"
+        from src.utils.email_template import build_email, info_section, paragraph, badge_html, create_email_message
+        
+        body_html = build_email(
+            title="Pedido Cancelado",
+            subtitle=f"Pedido: {numero_pedido or pedido_id}",
+            sections=[
+                paragraph(f"Se ha cancelado un pedido. El estado ha cambiado a {badge_html('CANCELADO', '#ffebee', '#c62828')}."),
+                info_section("Informaci&oacute;n del Pedido", [
+                    ("N&uacute;mero de Pedido", numero_pedido or "N/A"),
+                    ("Pedido ID", pedido_id),
+                    ("Usuario que cancel&oacute;", usuario_id or "N/A"),
+                    ("Nuevo Estado", badge_html("CANCELADO", "#ffebee", "#c62828")),
+                ], accent="red"),
+                paragraph("El pedido permanece en el sistema con estado CANCELADO y no ser&aacute; procesado.", italic=True),
+            ],
+            accent="red",
+            timestamp=fecha_ejecucion,
+        )
+        
+        body_text = f"""Pedido Cancelado - {numero_pedido or pedido_id}
+{'=' * 40}
 
-        body_html = f"""
-        <html>
-        <head>
-            <style>
-                body {{ font-family: Arial, sans-serif; line-height: 1.6; color: #333; }}
-                .container {{ max-width: 800px; margin: 0 auto; padding: 20px; }}
-                .header {{ background-color: #d32f2f; color: white; padding: 20px; text-align: center; border-radius: 5px 5px 0 0; }}
-                .content {{ background-color: #f9f9f9; padding: 20px; border: 1px solid #ddd; }}
-                .info-box {{ background-color: white; padding: 15px; margin: 20px 0; border-left: 4px solid #d32f2f; border-radius: 3px; }}
-                .info-box h3 {{ margin-top: 0; color: #d32f2f; }}
-                .footer {{ text-align: center; color: #999; font-size: 12px; margin-top: 30px; padding-top: 20px; border-top: 1px solid #ddd; }}
-            </style>
-        </head>
-        <body>
-            <div class="container">
-                <div class="header">
-                    <h2>🚫 Pedido Cancelado</h2>
-                </div>
-                <div class="content">
-                    <p>Se ha cancelado un pedido. El estado del pedido ha cambiado a <strong>CANCELADO</strong>.</p>
-                    <div class="info-box">
-                        <h3>Información</h3>
-                        <ul style="list-style: none; padding: 0;">
-                            <li><strong>Número de Pedido:</strong> {numero_pedido or 'N/A'}</li>
-                            <li><strong>Pedido ID:</strong> {pedido_id}</li>
-                            <li><strong>Usuario que canceló:</strong> {usuario_id or 'N/A'}</li>
-                            <li><strong>Fecha y hora:</strong> {fecha_ejecucion.strftime('%Y-%m-%d %H:%M:%S')}</li>
-                            <li><strong>Nuevo Estado:</strong> CANCELADO</li>
-                        </ul>
-                    </div>
-                    <p>El pedido permanece en el sistema con estado CANCELADO y no será procesado.</p>
-                </div>
-                <div class="footer">
-                    <p>Sistema MBA3 Consultas - Notificación de pedido cancelado.</p>
-                </div>
-            </div>
-        </body>
-        </html>
-        """
-
-        body_text = f"""
-Pedido Cancelado
-
-Se ha cancelado un pedido. El estado del pedido ha cambiado a CANCELADO.
-
-- Número de Pedido: {numero_pedido or 'N/A'}
+- Numero de Pedido: {numero_pedido or 'N/A'}
 - Pedido ID: {pedido_id}
-- Usuario que canceló: {usuario_id or 'N/A'}
+- Usuario que cancelo: {usuario_id or 'N/A'}
 - Fecha y hora: {fecha_ejecucion.strftime('%Y-%m-%d %H:%M:%S')}
 - Nuevo Estado: CANCELADO
 
-El pedido permanece en el sistema con estado CANCELADO y no será procesado.
-        """
-
-        msg.attach(MIMEText(body_text.strip(), 'plain'))
-        msg.attach(MIMEText(body_html, 'html'))
+El pedido permanece en el sistema con estado CANCELADO y no sera procesado.
+"""
+        
+        msg = create_email_message(
+            subject=f"Pedido Cancelado - {numero_pedido or pedido_id}",
+            recipients=recipients,
+            body_html=body_html,
+            body_text=body_text,
+        )
 
         with smtplib.SMTP(EMAIL_SMTP_SERVER, EMAIL_SMTP_PORT) as server:
             if EMAIL_SMTP_PORT == 587:
@@ -1540,65 +1445,41 @@ def send_pedido_descartado_notification(
             logger.warning("⚠️ No hay destinatarios configurados para notificación de pedido descartado")
             return False
 
-        msg = MIMEMultipart()
-        msg['From'] = f"{EMAIL_FROM_NAME} <{EMAIL_FROM}>"
-        msg['To'] = ", ".join(recipients)
-        msg['Subject'] = f"🚫 Pedido Descartado - {numero_pedido or pedido_id}"
+        from src.utils.email_template import build_email, info_section, paragraph, create_email_message
+        
+        body_html = build_email(
+            title="Pedido Descartado",
+            subtitle=f"Pedido: {numero_pedido or pedido_id}",
+            sections=[
+                paragraph("Se ha descartado y eliminado un pedido completamente de la base de datos."),
+                info_section("Informaci&oacute;n del Pedido", [
+                    ("N&uacute;mero de Pedido", numero_pedido or "N/A"),
+                    ("Pedido ID", pedido_id),
+                    ("Usuario que descart&oacute;", usuario_id or "N/A"),
+                ], accent="red"),
+                paragraph("El pedido ya no est&aacute; disponible en el sistema. Podr&aacute;n volver a cargarlo desde cero si lo necesitan.", italic=True),
+            ],
+            accent="red",
+            timestamp=fecha_ejecucion,
+        )
+        
+        body_text = f"""Pedido Descartado - {numero_pedido or pedido_id}
+{'=' * 40}
 
-        body_html = f"""
-        <html>
-        <head>
-            <style>
-                body {{ font-family: Arial, sans-serif; line-height: 1.6; color: #333; }}
-                .container {{ max-width: 800px; margin: 0 auto; padding: 20px; }}
-                .header {{ background-color: #d32f2f; color: white; padding: 20px; text-align: center; border-radius: 5px 5px 0 0; }}
-                .content {{ background-color: #f9f9f9; padding: 20px; border: 1px solid #ddd; }}
-                .info-box {{ background-color: white; padding: 15px; margin: 20px 0; border-left: 4px solid #d32f2f; border-radius: 3px; }}
-                .info-box h3 {{ margin-top: 0; color: #d32f2f; }}
-                .footer {{ text-align: center; color: #999; font-size: 12px; margin-top: 30px; padding-top: 20px; border-top: 1px solid #ddd; }}
-            </style>
-        </head>
-        <body>
-            <div class="container">
-                <div class="header">
-                    <h2>🚫 Pedido Descartado</h2>
-                </div>
-                <div class="content">
-                    <p>Se ha descartado y eliminado un pedido completamente de la base de datos.</p>
-                    <div class="info-box">
-                        <h3>Información</h3>
-                        <ul style="list-style: none; padding: 0;">
-                            <li><strong>Número de Pedido:</strong> {numero_pedido or 'N/A'}</li>
-                            <li><strong>Pedido ID:</strong> {pedido_id}</li>
-                            <li><strong>Usuario que descartó:</strong> {usuario_id or 'N/A'}</li>
-                            <li><strong>Fecha y hora:</strong> {fecha_ejecucion.strftime('%Y-%m-%d %H:%M:%S')}</li>
-                        </ul>
-                    </div>
-                    <p>El pedido ya no está disponible en el sistema. Podrán volver a cargarlo desde cero si lo necesitan.</p>
-                </div>
-                <div class="footer">
-                    <p>Sistema MBA3 Consultas - Notificación de pedido descartado.</p>
-                </div>
-            </div>
-        </body>
-        </html>
-        """
-
-        body_text = f"""
-Pedido Descartado
-
-Se ha descartado y eliminado un pedido completamente de la base de datos.
-
-- Número de Pedido: {numero_pedido or 'N/A'}
+- Numero de Pedido: {numero_pedido or 'N/A'}
 - Pedido ID: {pedido_id}
-- Usuario que descartó: {usuario_id or 'N/A'}
+- Usuario que descarto: {usuario_id or 'N/A'}
 - Fecha y hora: {fecha_ejecucion.strftime('%Y-%m-%d %H:%M:%S')}
 
-El pedido ya no está disponible en el sistema. Podrán volver a cargarlo desde cero si lo necesitan.
-        """
-
-        msg.attach(MIMEText(body_text.strip(), 'plain'))
-        msg.attach(MIMEText(body_html, 'html'))
+El pedido ya no esta disponible en el sistema.
+"""
+        
+        msg = create_email_message(
+            subject=f"Pedido Descartado - {numero_pedido or pedido_id}",
+            recipients=recipients,
+            body_html=body_html,
+            body_text=body_text,
+        )
 
         with smtplib.SMTP(EMAIL_SMTP_SERVER, EMAIL_SMTP_PORT) as server:
             if EMAIL_SMTP_PORT == 587:
@@ -1662,119 +1543,62 @@ def send_mabel_redistribucion_confirmacion_notification(
         numero_pedido_encoded = numero_pedido.replace(" ", "%20")
         url_pedido = f"{base_url}/mba3-consultas/pedidos/{numero_pedido_encoded}"
         
-        # Crear mensaje
-        msg = MIMEMultipart()
-        msg['From'] = f"{EMAIL_FROM_NAME} <{EMAIL_FROM}>"
-        msg['To'] = ", ".join(recipients)
-        msg['Subject'] = f"✅ Redistribución Confirmada por MABEL TRADING - {numero_pedido}"
+        from src.utils.email_template import (
+            build_email, info_section, success_badge_section,
+            button_section, paragraph, badge_html, create_email_message,
+        )
         
-        # Crear cuerpo del mensaje HTML
-        body_html = f"""
-        <html>
-        <head>
-            <style>
-                body {{ font-family: Arial, sans-serif; line-height: 1.6; color: #333; }}
-                .container {{ max-width: 800px; margin: 0 auto; padding: 20px; }}
-                .header {{ background-color: #2196F3; color: white; padding: 20px; text-align: center; border-radius: 5px 5px 0 0; }}
-                .content {{ background-color: #f9f9f9; padding: 20px; border: 1px solid #ddd; }}
-                .info-box {{ background-color: white; padding: 15px; margin: 20px 0; border-left: 4px solid #2196F3; border-radius: 3px; }}
-                .info-box h3 {{ margin-top: 0; color: #2196F3; }}
-                .info-box ul {{ list-style: none; padding: 0; }}
-                .info-box li {{ padding: 8px 0; border-bottom: 1px solid #eee; }}
-                .info-box li:last-child {{ border-bottom: none; }}
-                .info-box strong {{ color: #555; }}
-                .button-container {{ text-align: center; margin: 30px 0; }}
-                .button {{ background-color: #2196F3; color: white; padding: 12px 30px; 
-                          text-decoration: none; border-radius: 5px; display: inline-block; 
-                          font-weight: bold; font-size: 16px; }}
-                .button:hover {{ background-color: #1976D2; }}
-                .url-text {{ background-color: #f5f5f5; padding: 10px; border-radius: 3px; 
-                            font-size: 12px; color: #666; word-break: break-all; 
-                            margin: 10px 0; }}
-                .footer {{ text-align: center; color: #999; font-size: 12px; margin-top: 30px; 
-                          padding-top: 20px; border-top: 1px solid #ddd; }}
-                .success-badge {{ background-color: #e3f2fd; color: #1565C0; padding: 10px; 
-                                border-radius: 5px; margin: 15px 0; text-align: center; 
-                                font-weight: bold; }}
-            </style>
-        </head>
-        <body>
-            <div class="container">
-                <div class="header">
-                    <h2>✅ Redistribución Confirmada por MABEL TRADING</h2>
-                </div>
-                <div class="content">
-                    <div class="success-badge">
-                        ✓ El usuario <strong>MABEL TRADING</strong> ha confirmado la redistribución exitosamente
-                    </div>
-                    
-                    <p>Se ha procesado la confirmación de la redistribución del pedido y está listo para continuar con el proceso.</p>
-                    
-                    <div class="info-box">
-                        <h3>📋 Información del Pedido</h3>
-                        <ul>
-                            <li><strong>Número de Pedido:</strong> {numero_pedido}</li>
-                            <li><strong>Pedido ID:</strong> {pedido_id}</li>
-                            {f'<li><strong>Usuario MABEL TRADING:</strong> {usuario_mabel}</li>' if usuario_mabel else ''}
-                            {f'<li><strong>Versión Confirmada:</strong> {version_confirmada}</li>' if version_confirmada else ''}
-                            <li><strong>Total Productos Redistribuidos:</strong> {total_productos}</li>
-                            <li><strong>Total Cantidad Ajustada:</strong> {total_cantidad_ajustada}</li>
-                            <li><strong>Estado:</strong> CONFIRMADO REDISTRIBUCION</li>
-                        </ul>
-                    </div>
-                    
-                    <div class="button-container">
-                        <p>Puedes revisar el pedido en el siguiente enlace:</p>
-                        <a href="{url_pedido}" class="button">🔗 Ver Pedido</a>
-                    </div>
-                    
-                    <p>O copia y pega este enlace en tu navegador:</p>
-                    <div class="url-text">{url_pedido}</div>
-                    
-                    <p><strong>Fecha y Hora de Confirmación:</strong> {fecha_ejecucion.strftime('%Y-%m-%d %H:%M:%S')}</p>
-                    
-                    <p><em>El pedido está ahora listo para continuar con el proceso de generación de orden de compra (ODC).</em></p>
-                </div>
-                <div class="footer">
-                    <p>Este es un correo automático del sistema MBA3 Consultas.</p>
-                    <p>Por favor, no responder a este correo.</p>
-                </div>
-            </div>
-        </body>
-        </html>
-        """
+        info_items = [
+            ("N&uacute;mero de Pedido", numero_pedido),
+            ("Pedido ID", pedido_id),
+        ]
+        if usuario_mabel:
+            info_items.append(("Usuario MABEL TRADING", usuario_mabel))
+        if version_confirmada:
+            info_items.append(("Versi&oacute;n Confirmada", version_confirmada))
+        info_items.extend([
+            ("Total Productos Redistribuidos", total_productos),
+            ("Total Cantidad Ajustada", total_cantidad_ajustada),
+            ("Estado", badge_html("CONFIRMADO REDISTRIBUCION", "#e8f5e9", "#2e7d32")),
+        ])
         
-        # Crear cuerpo de texto plano
-        body_text = f"""
-Redistribución Confirmada por MABEL TRADING
+        body_html = build_email(
+            title="Redistribuci&oacute;n Confirmada por MABEL TRADING",
+            subtitle=f"Pedido: {numero_pedido}",
+            sections=[
+                success_badge_section("MABEL TRADING ha confirmado la redistribuci&oacute;n exitosamente"),
+                paragraph("Se ha procesado la confirmaci&oacute;n de la redistribuci&oacute;n del pedido y est&aacute; listo para continuar."),
+                info_section("Informaci&oacute;n del Pedido", info_items, accent="blue"),
+                button_section("Ver Pedido", url_pedido, accent="blue"),
+                paragraph("El pedido est&aacute; ahora listo para la generaci&oacute;n de orden de compra (ODC).", italic=True),
+            ],
+            accent="blue",
+            timestamp=fecha_ejecucion,
+        )
+        
+        body_text = f"""Redistribucion Confirmada por MABEL TRADING
+{'=' * 40}
 
-El usuario MABEL TRADING ha confirmado la redistribución exitosamente.
-
-Se ha procesado la confirmación de la redistribución del pedido y está listo para continuar con el proceso.
-
-Información del Pedido:
-- Número de Pedido: {numero_pedido}
+Informacion del Pedido:
+- Numero de Pedido: {numero_pedido}
 - Pedido ID: {pedido_id}
 {f'- Usuario MABEL TRADING: {usuario_mabel}' if usuario_mabel else ''}
-{f'- Versión Confirmada: {version_confirmada}' if version_confirmada else ''}
-- Total Productos Redistribuidos: {total_productos}
+{f'- Version Confirmada: {version_confirmada}' if version_confirmada else ''}
+- Total Productos: {total_productos}
 - Total Cantidad Ajustada: {total_cantidad_ajustada}
 - Estado: CONFIRMADO REDISTRIBUCION
 
-Puedes revisar el pedido en el siguiente enlace:
-{url_pedido}
+Ver Pedido: {url_pedido}
 
-Fecha y Hora de Confirmación: {fecha_ejecucion.strftime('%Y-%m-%d %H:%M:%S')}
-
-El pedido está ahora listo para continuar con el proceso de generación de orden de compra (ODC).
-
-Este es un correo automático del sistema MBA3 Consultas.
-Por favor, no responder a este correo.
-        """
+Fecha y Hora: {fecha_ejecucion.strftime('%Y-%m-%d %H:%M:%S')}
+"""
         
-        # Agregar cuerpo al mensaje
-        msg.attach(MIMEText(body_text, 'plain'))
-        msg.attach(MIMEText(body_html, 'html'))
+        msg = create_email_message(
+            subject=f"Redistribucion Confirmada por MABEL TRADING - {numero_pedido}",
+            recipients=recipients,
+            body_html=body_html,
+            body_text=body_text,
+        )
         
         # Enviar email
         with smtplib.SMTP(EMAIL_SMTP_SERVER, EMAIL_SMTP_PORT) as server:
@@ -1832,71 +1656,44 @@ def send_pedido_eliminado_mabel_notification(
             logger.warning("⚠️ No hay destinatarios de MABEL TRADING configurados")
             return False
 
-        msg = MIMEMultipart()
-        msg['From'] = f"{EMAIL_FROM_NAME} <{EMAIL_FROM}>"
-        msg['To'] = ", ".join(recipients)
-        msg['Subject'] = f"✅ Pedido Eliminado - {numero_pedido or pedido_id}"
+        from src.utils.email_template import build_email, info_section, warning_section, paragraph, create_email_message
+        
+        body_html = build_email(
+            title="Pedido Eliminado Exitosamente",
+            subtitle=f"Pedido: {numero_pedido or pedido_id}",
+            sections=[
+                paragraph("Se ha eliminado un pedido desde la interfaz de Detalle del Pedido."),
+                info_section("Informaci&oacute;n del Pedido Eliminado", [
+                    ("N&uacute;mero de Pedido", numero_pedido or "N/A"),
+                    ("Pedido ID", pedido_id),
+                    ("Usuario que elimin&oacute;", usuario_id or "N/A"),
+                    ("Estado al eliminar", "Gestionar Pedido"),
+                ], accent="green"),
+                warning_section("Nota Importante",
+                    '<p style="margin:0;color:#5d4037;font-size:14px;">Esta es una operaci&oacute;n irreversible. Si necesita crear el pedido nuevamente, deber&aacute; cargarlo desde cero.</p>'),
+            ],
+            accent="green",
+            timestamp=fecha_ejecucion,
+        )
+        
+        body_text = f"""Pedido Eliminado Exitosamente - {numero_pedido or pedido_id}
+{'=' * 40}
 
-        body_html = f"""
-        <html>
-        <head>
-            <style>
-                body {{ font-family: Arial, sans-serif; line-height: 1.6; color: #333; }}
-                .container {{ max-width: 800px; margin: 0 auto; padding: 20px; }}
-                .header {{ background-color: #28a745; color: white; padding: 20px; text-align: center; border-radius: 5px 5px 0 0; }}
-                .content {{ background-color: #f9f9f9; padding: 20px; border: 1px solid #ddd; }}
-                .info-box {{ background-color: white; padding: 15px; margin: 20px 0; border-left: 4px solid #28a745; border-radius: 3px; }}
-                .info-box h3 {{ margin-top: 0; color: #28a745; }}
-                .footer {{ text-align: center; color: #999; font-size: 12px; margin-top: 30px; padding-top: 20px; border-top: 1px solid #ddd; }}
-            </style>
-        </head>
-        <body>
-            <div class="container">
-                <div class="header">
-                    <h2>✅ Pedido Eliminado Exitosamente</h2>
-                </div>
-                <div class="content">
-                    <p>Se ha eliminado un pedido desde la interfaz de Detalle del Pedido.</p>
-                    <div class="info-box">
-                        <h3>📋 Información del Pedido Eliminado</h3>
-                        <ul style="list-style: none; padding: 0;">
-                            <li><strong>Número de Pedido:</strong> {numero_pedido or 'N/A'}</li>
-                            <li><strong>Pedido ID:</strong> {pedido_id}</li>
-                            <li><strong>Usuario que eliminó:</strong> {usuario_id or 'N/A'}</li>
-                            <li><strong>Fecha y hora:</strong> {fecha_ejecucion.strftime('%Y-%m-%d %H:%M:%S')}</li>
-                            <li><strong>Estado al eliminar:</strong> Gestionar Pedido</li>
-                        </ul>
-                    </div>
-                    <p>El pedido ha sido eliminado completamente del sistema.</p>
-                    <p><strong>Nota:</strong> Esta es una operación irreversible. Si necesita crear el pedido nuevamente, deberá cargarlo desde cero.</p>
-                </div>
-                <div class="footer">
-                    <p>Sistema MBA3 Consultas - Notificación de pedido eliminado.</p>
-                </div>
-            </div>
-        </body>
-        </html>
-        """
-
-        body_text = f"""
-Pedido Eliminado Exitosamente
-
-Se ha eliminado un pedido desde la interfaz de Detalle del Pedido.
-
-Información del Pedido Eliminado:
-- Número de Pedido: {numero_pedido or 'N/A'}
+- Numero de Pedido: {numero_pedido or 'N/A'}
 - Pedido ID: {pedido_id}
-- Usuario que eliminó: {usuario_id or 'N/A'}
+- Usuario que elimino: {usuario_id or 'N/A'}
 - Fecha y hora: {fecha_ejecucion.strftime('%Y-%m-%d %H:%M:%S')}
 - Estado al eliminar: Gestionar Pedido
 
-El pedido ha sido eliminado completamente del sistema.
-
-Nota: Esta es una operación irreversible. Si necesita crear el pedido nuevamente, deberá cargarlo desde cero.
-        """
-
-        msg.attach(MIMEText(body_text.strip(), 'plain'))
-        msg.attach(MIMEText(body_html, 'html'))
+Nota: Operacion irreversible. Para crear el pedido nuevamente, cargarlo desde cero.
+"""
+        
+        msg = create_email_message(
+            subject=f"Pedido Eliminado - {numero_pedido or pedido_id}",
+            recipients=recipients,
+            body_html=body_html,
+            body_text=body_text,
+        )
 
         with smtplib.SMTP(EMAIL_SMTP_SERVER, EMAIL_SMTP_PORT) as server:
             if EMAIL_SMTP_PORT == 587:

@@ -101,90 +101,38 @@ def send_pedido_confirmacion_notification(
             numero_pedido_encoded = numero_pedido.replace(" ", "%20")
             url_confirmacion = f"{base_url}/mba3-consultas/pedidos/{numero_pedido_encoded}?modo=confirmacion&usuario=mabel-trading"
         
-        # Crear mensaje
-        msg = MIMEMultipart()
-        msg['From'] = f"{EMAIL_FROM_NAME} <{EMAIL_FROM}>"
-        msg['To'] = ", ".join(recipients)
-        msg['Subject'] = f"✅ Confirmación de Pedido Requerida - {numero_pedido}"
+        from src.utils.email_template import (
+            build_email, info_section, button_section,
+            paragraph, create_email_message,
+        )
         
-        # Crear cuerpo del mensaje HTML
-        body_html = f"""
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <meta charset="UTF-8">
-            <style>
-                body {{ font-family: Arial, sans-serif; line-height: 1.6; color: #333; }}
-                .container {{ max-width: 800px; margin: 0 auto; padding: 20px; }}
-                .header {{ background-color: #7c3aed; color: white; padding: 20px; text-align: center; border-radius: 5px 5px 0 0; }}
-                .content {{ background-color: #f9f9f9; padding: 20px; border: 1px solid #ddd; }}
-                .info-box {{ background-color: white; padding: 15px; margin: 20px 0; border-left: 4px solid #7c3aed; border-radius: 3px; }}
-                .info-box h3 {{ margin-top: 0; color: #7c3aed; }}
-                .info-box ul {{ list-style: none; padding: 0; }}
-                .info-box li {{ padding: 8px 0; border-bottom: 1px solid #eee; }}
-                .info-box li:last-child {{ border-bottom: none; }}
-                .info-box strong {{ color: #555; }}
-                .button-container {{ text-align: center; margin: 30px 0; }}
-                .button {{ background-color: #7c3aed; color: white; padding: 12px 30px; 
-                          text-decoration: none; border-radius: 5px; display: inline-block; 
-                          font-weight: bold; font-size: 16px; }}
-                .button:hover {{ background-color: #6d28d9; }}
-                .url-text {{ background-color: #f5f5f5; padding: 10px; border-radius: 3px; 
-                            font-size: 12px; color: #666; word-break: break-all; 
-                            margin: 10px 0; }}
-                .footer {{ text-align: center; color: #999; font-size: 12px; margin-top: 30px; 
-                          padding-top: 20px; border-top: 1px solid #ddd; }}
-            </style>
-        </head>
-        <body>
-            <div class="container">
-                <div class="header">
-                    <h2>✅ Confirmación de Pedido Requerida</h2>
-                </div>
-                <div class="content">
-                    <p>El usuario <strong>{usuario_origen}</strong> ha solicitado la confirmación del siguiente pedido:</p>
-                    
-                    <div class="info-box">
-                        <h3>📋 Información del Pedido</h3>
-                        <ul>
-                            <li><strong>Número de Pedido:</strong> {numero_pedido}</li>
-                            <li><strong>Fecha:</strong> {fecha_pedido}</li>
-                            <li><strong>Proveedor:</strong> {proveedor_nombre}</li>
-                            <li><strong>Comprador:</strong> {comprador_nombre}</li>
-                            <li><strong>Estado:</strong> {estado}</li>
-                            <li><strong>Total Productos:</strong> {total_productos}</li>
-                            <li><strong>Total Cantidad:</strong> {total_cantidad}</li>
-                            <li><strong>Total Valor:</strong> ${total_valor:,.2f}</li>
-                        </ul>
-                    </div>
-                    
-                    <div class="button-container">
-                        <p>Por favor, accede a la siguiente URL para confirmar el pedido:</p>
-                        <a href="{url_confirmacion}" class="button">🔗 Confirmar Pedido</a>
-                    </div>
-                    
-                    <p>O copia y pega este enlace en tu navegador:</p>
-                    <div class="url-text">{url_confirmacion}</div>
-                    
-                    <p><strong>Fecha y Hora de Solicitud:</strong> {fecha_ejecucion.strftime('%Y-%m-%d %H:%M:%S')}</p>
-                </div>
-                <div class="footer">
-                    <p>Este es un correo automático del sistema MBA3 Consultas.</p>
-                    <p>Por favor, no responder a este correo.</p>
-                </div>
-            </div>
-        </body>
-        </html>
-        """
+        body_html = build_email(
+            title="Confirmaci&oacute;n de Pedido Requerida",
+            subtitle=f"Pedido: {numero_pedido}",
+            sections=[
+                paragraph(f"El usuario <strong>{usuario_origen}</strong> ha solicitado la confirmaci&oacute;n del siguiente pedido:"),
+                info_section("Informaci&oacute;n del Pedido", [
+                    ("N&uacute;mero de Pedido", numero_pedido),
+                    ("Fecha", fecha_pedido),
+                    ("Proveedor", proveedor_nombre),
+                    ("Comprador", comprador_nombre),
+                    ("Estado", estado),
+                    ("Total Productos", total_productos),
+                    ("Total Cantidad", total_cantidad),
+                    ("Total Valor", f"${total_valor:,.2f}"),
+                ], accent="purple"),
+                button_section("Confirmar Pedido", url_confirmacion, accent="purple"),
+            ],
+            accent="purple",
+            timestamp=fecha_ejecucion,
+        )
         
-        # Crear cuerpo de texto plano
-        body_text = f"""
-Confirmación de Pedido Requerida
+        body_text = f"""Confirmacion de Pedido Requerida - {numero_pedido}
+{'=' * 40}
 
-El usuario {usuario_origen} ha solicitado la confirmación del siguiente pedido:
+El usuario {usuario_origen} solicita confirmacion:
 
-Información del Pedido:
-- Número de Pedido: {numero_pedido}
+- Numero de Pedido: {numero_pedido}
 - Fecha: {fecha_pedido}
 - Proveedor: {proveedor_nombre}
 - Comprador: {comprador_nombre}
@@ -193,18 +141,17 @@ Información del Pedido:
 - Total Cantidad: {total_cantidad}
 - Total Valor: ${total_valor:,.2f}
 
-Por favor, accede a la siguiente URL para confirmar el pedido:
-{url_confirmacion}
+Confirmar en: {url_confirmacion}
 
-Fecha y Hora de Solicitud: {fecha_ejecucion.strftime('%Y-%m-%d %H:%M:%S')}
-
-Este es un correo automático del sistema MBA3 Consultas.
-Por favor, no responder a este correo.
-        """
+Fecha y Hora: {fecha_ejecucion.strftime('%Y-%m-%d %H:%M:%S')}
+"""
         
-        # Agregar cuerpo al mensaje
-        msg.attach(MIMEText(body_text, 'plain'))
-        msg.attach(MIMEText(body_html, 'html'))
+        msg = create_email_message(
+            subject=f"Confirmacion de Pedido Requerida - {numero_pedido}",
+            recipients=recipients,
+            body_html=body_html,
+            body_text=body_text,
+        )
         
         # Enviar email
         with smtplib.SMTP(EMAIL_SMTP_SERVER, EMAIL_SMTP_PORT) as server:
@@ -276,117 +223,57 @@ def send_rayo_confirmacion_notification(
         numero_pedido_encoded = numero_pedido.replace(" ", "%20")
         url_pedido = f"{base_url}/mba3-consultas/pedidos/{numero_pedido_encoded}"
         
-        # Crear mensaje
-        msg = MIMEMultipart()
-        msg['From'] = f"{EMAIL_FROM_NAME} <{EMAIL_FROM}>"
-        msg['To'] = ", ".join(recipients)
-        msg['Subject'] = f"✅ Pedido Confirmado por El Rayo - {numero_pedido}"
+        from src.utils.email_template import (
+            build_email, info_section, success_badge_section,
+            button_section, paragraph, badge_html, create_email_message,
+        )
         
-        # Crear cuerpo del mensaje HTML
-        body_html = f"""
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <meta charset="UTF-8">
-            <style>
-                body {{ font-family: Arial, sans-serif; line-height: 1.6; color: #333; }}
-                .container {{ max-width: 800px; margin: 0 auto; padding: 20px; }}
-                .header {{ background-color: #4CAF50; color: white; padding: 20px; text-align: center; border-radius: 5px 5px 0 0; }}
-                .content {{ background-color: #f9f9f9; padding: 20px; border: 1px solid #ddd; }}
-                .info-box {{ background-color: white; padding: 15px; margin: 20px 0; border-left: 4px solid #4CAF50; border-radius: 3px; }}
-                .info-box h3 {{ margin-top: 0; color: #4CAF50; }}
-                .info-box ul {{ list-style: none; padding: 0; }}
-                .info-box li {{ padding: 8px 0; border-bottom: 1px solid #eee; }}
-                .info-box li:last-child {{ border-bottom: none; }}
-                .info-box strong {{ color: #555; }}
-                .button-container {{ text-align: center; margin: 30px 0; }}
-                .button {{ background-color: #4CAF50; color: white; padding: 12px 30px; 
-                          text-decoration: none; border-radius: 5px; display: inline-block; 
-                          font-weight: bold; font-size: 16px; }}
-                .button:hover {{ background-color: #45a049; }}
-                .url-text {{ background-color: #f5f5f5; padding: 10px; border-radius: 3px; 
-                            font-size: 12px; color: #666; word-break: break-all; 
-                            margin: 10px 0; }}
-                .footer {{ text-align: center; color: #999; font-size: 12px; margin-top: 30px; 
-                          padding-top: 20px; border-top: 1px solid #ddd; }}
-                .success-badge {{ background-color: #e8f5e9; color: #2e7d32; padding: 10px; 
-                                border-radius: 5px; margin: 15px 0; text-align: center; 
-                                font-weight: bold; }}
-            </style>
-        </head>
-        <body>
-            <div class="container">
-                <div class="header">
-                    <h2>✅ Pedido Confirmado por El Rayo</h2>
-                </div>
-                <div class="content">
-                    <div class="success-badge">
-                        ✓ El usuario <strong>EL RAYO</strong> ha confirmado el pedido exitosamente
-                    </div>
-                    
-                    <p>Se ha procesado la confirmación del pedido y se ha creado la respuesta del proveedor correspondiente.</p>
-                    
-                    <div class="info-box">
-                        <h3>📋 Información del Pedido</h3>
-                        <ul>
-                            <li><strong>Número de Pedido:</strong> {numero_pedido}</li>
-                            <li><strong>Pedido ID:</strong> {pedido_id}</li>
-                            {f'<li><strong>Usuario El Rayo:</strong> {usuario_rayo}</li>' if usuario_rayo else ''}
-                            <li><strong>Detalles Modificados:</strong> {detalles_modificados}</li>
-                            <li><strong>Estado:</strong> CONFIRMADO</li>
-                        </ul>
-                    </div>
-                    
-                    <div class="button-container">
-                        <p>Puedes revisar el pedido en el siguiente enlace:</p>
-                        <a href="{url_pedido}" class="button">🔗 Ver Pedido</a>
-                    </div>
-                    
-                    <p>O copia y pega este enlace en tu navegador:</p>
-                    <div class="url-text">{url_pedido}</div>
-                    
-                    <p><strong>Fecha y Hora de Confirmación:</strong> {fecha_ejecucion.strftime('%Y-%m-%d %H:%M:%S')}</p>
-                    
-                    <p><em>El pedido está ahora listo para que MABEL TRADING proceda con la redistribución y ajustes necesarios.</em></p>
-                </div>
-                <div class="footer">
-                    <p>Este es un correo automático del sistema MBA3 Consultas.</p>
-                    <p>Por favor, no responder a este correo.</p>
-                </div>
-            </div>
-        </body>
-        </html>
-        """
+        info_items = [
+            ("N&uacute;mero de Pedido", numero_pedido),
+            ("Pedido ID", pedido_id),
+        ]
+        if usuario_rayo:
+            info_items.append(("Usuario El Rayo", usuario_rayo))
+        info_items.extend([
+            ("Detalles Modificados", detalles_modificados),
+            ("Estado", badge_html("CONFIRMADO", "#e8f5e9", "#2e7d32")),
+        ])
         
-        # Crear cuerpo de texto plano
-        body_text = f"""
-Pedido Confirmado por El Rayo
+        body_html = build_email(
+            title="Pedido Confirmado por El Rayo",
+            subtitle=f"Pedido: {numero_pedido}",
+            sections=[
+                success_badge_section("EL RAYO ha confirmado el pedido exitosamente"),
+                paragraph("Se ha procesado la confirmaci&oacute;n del pedido y se ha creado la respuesta del proveedor correspondiente."),
+                info_section("Informaci&oacute;n del Pedido", info_items, accent="green"),
+                button_section("Ver Pedido", url_pedido, accent="green"),
+                paragraph("El pedido est&aacute; ahora listo para que MABEL TRADING proceda con la redistribuci&oacute;n y ajustes necesarios.", italic=True),
+            ],
+            accent="green",
+            timestamp=fecha_ejecucion,
+        )
+        
+        body_text = f"""Pedido Confirmado por El Rayo - {numero_pedido}
+{'=' * 40}
 
-El usuario EL RAYO ha confirmado el pedido exitosamente.
-
-Se ha procesado la confirmación del pedido y se ha creado la respuesta del proveedor correspondiente.
-
-Información del Pedido:
-- Número de Pedido: {numero_pedido}
+Informacion del Pedido:
+- Numero de Pedido: {numero_pedido}
 - Pedido ID: {pedido_id}
 {f'- Usuario El Rayo: {usuario_rayo}' if usuario_rayo else ''}
 - Detalles Modificados: {detalles_modificados}
 - Estado: CONFIRMADO
 
-Puedes revisar el pedido en el siguiente enlace:
-{url_pedido}
+Ver Pedido: {url_pedido}
 
-Fecha y Hora de Confirmación: {fecha_ejecucion.strftime('%Y-%m-%d %H:%M:%S')}
-
-El pedido está ahora listo para que MABEL TRADING proceda con la redistribución y ajustes necesarios.
-
-Este es un correo automático del sistema MBA3 Consultas.
-Por favor, no responder a este correo.
-        """
+Fecha y Hora: {fecha_ejecucion.strftime('%Y-%m-%d %H:%M:%S')}
+"""
         
-        # Agregar cuerpo al mensaje
-        msg.attach(MIMEText(body_text, 'plain'))
-        msg.attach(MIMEText(body_html, 'html'))
+        msg = create_email_message(
+            subject=f"Pedido Confirmado por El Rayo - {numero_pedido}",
+            recipients=recipients,
+            body_html=body_html,
+            body_text=body_text,
+        )
         
         # Enviar email
         with smtplib.SMTP(EMAIL_SMTP_SERVER, EMAIL_SMTP_PORT) as server:
