@@ -2,16 +2,18 @@
 Endpoints de exportación de pedidos.
 """
 
+import io
 import logging
 import uuid
 from typing import Dict
 from datetime import datetime
-from fastapi import FastAPI, Depends, HTTPException, Path, Query
+from fastapi import FastAPI, Depends, HTTPException, Path, Query, status
 from fastapi.responses import Response
 
 from src.database.connection import get_db_connection_context
 from src.database.repositories.pedido_repository import PedidoRepository
-from src.security.jwt_auth import verify_jwt_token, require_permission
+from src.database.pedido_estados import ESTADO_GESTIONAR_PEDIDO
+from src.security.jwt_auth import verify_jwt_token, require_permission, require_any_permission
 
 logger = logging.getLogger(__name__)
 
@@ -191,4 +193,273 @@ def register_exportacion_endpoints(app: FastAPI):
             raise HTTPException(
                 status_code=500,
                 detail=f"Error interno al exportar pedido: {str(e)}"
+            )
+
+    @app.get("/api/pedidos/{pedido_id}/descargar-pedido", tags=["Pedidos - Exportación"])
+    async def descargar_pedido(
+        pedido_id: str = Path(..., description="UUID del pedido"),
+        user: Dict = Depends(verify_jwt_token),
+        _: None = Depends(require_any_permission(['mabel.view', 'odcsap.view']))
+    ):
+        """
+        Descarga un pedido como archivo Excel con el formato de "Descargar Pedido".
+
+        Genera un archivo Excel (.xlsx) con una sola hoja llamada "datos" que combina
+        una cabecera tipo formulario con una tabla de detalle de productos.
+
+        **Uso:**
+        - Interfaz: Detalle del Pedido (`/pedidos/{pedido_id}`)
+        - Botón: "Descargar Pedido"
+        - Estado requerido: **GESTIONAR PEDIDO (3)** o superior
+
+        **Estructura del Excel:**
+        - Filas 1-4: Cabecera del pedido (columnas D y E)
+        - Filas 5-11: Información complementaria (columnas D y E)
+        - Fila 13: Encabezados de la tabla de productos (columnas B a J)
+        - Fila 14+: Datos de productos
+
+        **Respuestas:**
+        - **200**: Archivo Excel descargado correctamente
+        - **400**: Pedido no está en estado GESTIONAR PEDIDO o superior
+        - **404**: Pedido no encontrado
+        """
+        try:
+            import os
+            from openpyxl import Workbook
+            from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
+            from openpyxl.drawing.image import Image as XlImage
+
+            with get_db_connection_context() as conn:
+                repo = PedidoRepository(conn)
+
+                # Obtener pedido completo
+                pedido_data = repo.get_pedido_completo(pedido_id)
+
+                if not pedido_data:
+                    raise HTTPException(
+                        status_code=status.HTTP_404_NOT_FOUND,
+                        detail={"error": "not_found", "message": "Pedido no encontrado"}
+                    )
+
+                cabecera = pedido_data.get("cabecera", {})
+                estado_id = cabecera.get("estado_id")
+
+                # Validar que esté en estado GESTIONAR PEDIDO (3) o superior
+                if estado_id is None or int(estado_id) < ESTADO_GESTIONAR_PEDIDO:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail={
+                            "error": "estado_no_permitido",
+                            "message": f"El pedido debe estar en estado GESTIONAR PEDIDO o superior para descargar. "
+                                       f"Estado actual: {cabecera.get('estado_nombre', 'Desconocido')}"
+                        }
+                    )
+
+                detalles = pedido_data.get("detalles", [])
+
+                # Crear libro de Excel
+                wb = Workbook()
+                ws = wb.active
+                ws.title = "datos"
+
+                # --- Estilos ---
+                bold_font = Font(bold=True)
+                label_fill = PatternFill(start_color="588894", end_color="588894", fill_type="solid")
+                label_font = Font(bold=True, color="FFFFFF")
+                thin_border = Border(
+                    left=Side(style="thin"),
+                    right=Side(style="thin"),
+                    top=Side(style="thin"),
+                    bottom=Side(style="thin"),
+                )
+
+                # --- Logo ROLAND en B3 ---
+                logo_path = os.path.join(os.path.dirname(__file__), "..", "..", "assets", "roland_logo.png")
+                logo_path = os.path.normpath(logo_path)
+                if os.path.exists(logo_path):
+                    img = XlImage(logo_path)
+                    # Ajustar tamaño para que encaje bien en la celda (~2.5 cm alto)
+                    img.width = 180
+                    img.height = 45
+                    ws.add_image(img, "B3")
+                else:
+                    logger.warning(f"⚠️ Logo ROLAND no encontrado en {logo_path}")
+
+                # --- 1. Cabecera del pedido (filas 1-4, columnas D y E) ---
+                ws["D1"] = "PEDIDO ROLAND NO."
+                ws["D1"].font = bold_font
+                ws["E1"] = cabecera.get("numero_pedido", "")
+
+                ws["D2"] = "FECHA DE PEDIDO"
+                ws["D2"].font = bold_font
+                fecha_pedido = cabecera.get("fecha_pedido", "")
+                # Formatear fecha: si es solo fecha (YYYY-MM-DD), agregar 00:00:00
+                if fecha_pedido and len(str(fecha_pedido)) == 10:
+                    fecha_pedido = f"{fecha_pedido} 00:00:00"
+                ws["E2"] = str(fecha_pedido) if fecha_pedido else ""
+
+                ws["D3"] = "FECHA DE ENTREGA"
+                ws["D3"].font = bold_font
+                ws["E3"] = cabecera.get("fecha_entrega", "")
+
+                ws["D4"] = "FORMA DE PAGO"
+                ws["D4"].font = bold_font
+                ws["E4"] = cabecera.get("forma_pago", "")
+
+                # --- 2. Información complementaria (filas 5-11) ---
+                # Fila 5: vacía (separador visual)
+
+                ws["D6"] = "ODC"
+                ws["D6"].font = bold_font
+                ws["E6"] = cabecera.get("odc", "")
+
+                ws["D7"] = "NOMBRE PROVEEDOR"
+                ws["D7"].font = bold_font
+                ws["E7"] = cabecera.get("proveedor_nombre", "")
+
+                ws["D8"] = "COMPRADOR NOMBRE"
+                ws["D8"].font = bold_font
+                ws["E8"] = cabecera.get("comprador_nombre", "")
+
+                ws["D9"] = "COD COMPRADOR"
+                ws["D9"].font = bold_font
+                ws["E9"] = cabecera.get("comprador_codigo", "")
+
+                ws["D10"] = "ORIGEN TRASLADO"
+                ws["D10"].font = bold_font
+                ws["E10"] = cabecera.get("origen_traslado", "")
+
+                ws["D11"] = "SERIE"
+                ws["D11"].font = bold_font
+                ws["E11"] = cabecera.get("serie", "")
+
+                # Aplicar color de fondo #588894 con texto blanco a D2:D11 (excepto D5 que va vacía)
+                for row_num in range(2, 12):
+                    if row_num == 5:
+                        continue
+                    cell = ws[f"D{row_num}"]
+                    cell.fill = label_fill
+                    cell.font = label_font
+
+                # Bordes en la zona de cabecera e info complementaria (D:E, filas 1-4 y 6-11)
+                for row_num in [1, 2, 3, 4, 6, 7, 8, 9, 10, 11]:
+                    ws[f"D{row_num}"].border = thin_border
+                    ws[f"E{row_num}"].border = thin_border
+
+                # Fila 12: separador visual (vacía)
+
+                # --- 3. Tabla de productos (desde fila 13) ---
+                # Encabezados de la tabla (fila 13, columnas B a J)
+                headers = {
+                    "B13": "CODIGO INTERNO",
+                    "C13": "MARCA",
+                    "D13": "CODIGO DE BARRAS",
+                    "E13": "DESCRIPCION SAP",
+                    "F13": "PACK",
+                    "G13": "PRECIO DE LISTA",
+                    "H13": "DSCTO",
+                    "I13": "PVP",
+                    "J13": "TOTAL",
+                }
+                table_header_fill = PatternFill(start_color="F2F2F2", end_color="F2F2F2", fill_type="solid")
+                for cell_ref, header_text in headers.items():
+                    cell = ws[cell_ref]
+                    cell.value = header_text
+                    cell.font = bold_font
+                    cell.fill = table_header_fill
+                    cell.alignment = Alignment(horizontal="center")
+                    cell.border = thin_border
+
+                # Datos de productos (desde fila 14)
+                for idx, detalle in enumerate(detalles):
+                    row = 14 + idx
+
+                    ws[f"B{row}"] = detalle.get("codigo_interno", "")
+                    ws[f"C{row}"] = detalle.get("marca", "")
+                    ws[f"D{row}"] = detalle.get("codigo_barras", "")
+                    ws[f"E{row}"] = detalle.get("descripcion_sap", "")
+                    ws[f"F{row}"] = detalle.get("pack", "")
+
+                    # PRECIO DE LISTA: costo_doc_sin_iva
+                    costo = detalle.get("costo_doc_sin_iva")
+                    if costo is not None:
+                        try:
+                            ws[f"G{row}"] = float(costo)
+                        except (ValueError, TypeError):
+                            ws[f"G{row}"] = costo
+                    else:
+                        ws[f"G{row}"] = ""
+
+                    # DSCTO: descuento_1
+                    descuento = detalle.get("descuento_1")
+                    if descuento is not None:
+                        try:
+                            ws[f"H{row}"] = float(descuento)
+                        except (ValueError, TypeError):
+                            ws[f"H{row}"] = descuento
+                    else:
+                        ws[f"H{row}"] = ""
+
+                    # PVP
+                    pvp = detalle.get("pvp")
+                    if pvp is not None:
+                        try:
+                            ws[f"I{row}"] = float(pvp)
+                        except (ValueError, TypeError):
+                            ws[f"I{row}"] = pvp
+                    else:
+                        ws[f"I{row}"] = ""
+
+                    # TOTAL (cantidad solicitada)
+                    total = detalle.get("total")
+                    if total is not None:
+                        try:
+                            ws[f"J{row}"] = float(total)
+                        except (ValueError, TypeError):
+                            ws[f"J{row}"] = total
+                    else:
+                        ws[f"J{row}"] = ""
+
+                    # Bordes en cada celda de la fila de producto (B a J)
+                    for col_letter in ["B", "C", "D", "E", "F", "G", "H", "I", "J"]:
+                        ws[f"{col_letter}{row}"].border = thin_border
+
+                # Ajustar anchos de columna para mejor legibilidad
+                ws.column_dimensions["B"].width = 18
+                ws.column_dimensions["C"].width = 12
+                ws.column_dimensions["D"].width = 18
+                ws.column_dimensions["E"].width = 50
+                ws.column_dimensions["F"].width = 8
+                ws.column_dimensions["G"].width = 16
+                ws.column_dimensions["H"].width = 10
+                ws.column_dimensions["I"].width = 10
+                ws.column_dimensions["J"].width = 10
+
+                # Guardar en memoria
+                output = io.BytesIO()
+                wb.save(output)
+                output.seek(0)
+                excel_bytes = output.getvalue()
+                output.close()
+
+                logger.info(
+                    f"✅ Pedido {cabecera.get('numero_pedido', pedido_id)} descargado como Excel "
+                    f"({len(detalles)} productos)"
+                )
+
+                return Response(
+                    content=excel_bytes,
+                    media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    headers={
+                        "Content-Disposition": 'attachment; filename="Descargar Pedido.xlsx"'
+                    }
+                )
+
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"❌ Error al descargar pedido: {e}", exc_info=True)
+            raise HTTPException(
+                status_code=500,
+                detail={"error": "internal_error", "message": f"Error interno al generar Excel: {str(e)}"}
             )

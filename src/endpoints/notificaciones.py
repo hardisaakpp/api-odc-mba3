@@ -127,7 +127,6 @@ def register_notificaciones_endpoints(app: FastAPI):
                             heartbeat_data = json.dumps({"timestamp": now})
                             yield f"event: heartbeat\ndata: {heartbeat_data}\n\n"
                             last_heartbeat = now
-                            logger.debug(f"💓 Heartbeat SSE enviado a '{username}'")
 
             except asyncio.CancelledError:
                 logger.info(f"📢 Stream SSE cancelado para '{username}'")
