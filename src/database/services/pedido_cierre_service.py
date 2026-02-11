@@ -11,6 +11,7 @@ from ..pedido_estados import (
 )
 from ..repositories.orden_compra_repository import OrdenCompraRepository
 from ..repositories.pedido_repository import PedidoRepository
+from src.utils.audit_context import get_system_audit_context
 
 logger = logging.getLogger(__name__)
 
@@ -230,7 +231,8 @@ class PedidoCierreService:
                 )
         
         # Actualizar estado del pedido (por id)
-        actualizado = pedido_repo.update_estado(pedido_id, estado_nuevo_id)
+        audit = get_system_audit_context("pedido_cierre")
+        actualizado = pedido_repo.update_estado(pedido_id, estado_nuevo_id, audit_context=audit)
         
         if actualizado:
             if estado_nuevo == "CONFIRMADO_ENVIADO":

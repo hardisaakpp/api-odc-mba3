@@ -146,16 +146,19 @@ class PedidoUtils:
             "creado_por": row[12],
         }
         if tiene_estado_id:
-            # row: ..., creado_por, estado_id, estado_nombre, creado_en
+            # row: ..., creado_por, estado_id, estado_nombre, creado_en, modificado_por
             base["estado_id"] = row[13] if row[13] is not None else None
             base["estado_nombre"] = row[14] if row[14] is not None else None
             base["estado"] = base["estado_nombre"]  # compat
             base["creado_en"] = row[15].isoformat() if row[15] else None
+            base["modificado_por"] = row[16] if len(row) > 16 else None
         elif tiene_estado:
             base["estado"] = row[13]
             base["creado_en"] = row[14].isoformat() if row[14] else None
+            base["modificado_por"] = row[15] if len(row) > 15 else None
         else:
             base["creado_en"] = row[13].isoformat() if row[13] else None
+            base["modificado_por"] = row[14] if len(row) > 14 else None
         return base
     
     def obtener_distribuciones_tienda(

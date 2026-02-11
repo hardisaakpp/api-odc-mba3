@@ -408,6 +408,25 @@ class OCSAPService:
                     f"DocEntry={doc_entry}, DocNum={doc_num}{doc_date_str}"
                 )
 
+                # ⭐ Obtener serie del pedido para asignar Numbering Series a las ITR
+                serie_itr = None
+                pedido_id_temp = oc_cabecera.get("pedido_id")
+                if pedido_id_temp:
+                    try:
+                        from ..repositories.pedido_repository import PedidoRepository as _PedidoRepoSerie
+                        _repo_serie = _PedidoRepoSerie(oc_repo.conn)
+                        _pedido_serie = _repo_serie.get_pedido_completo(pedido_id_temp)
+                        if _pedido_serie:
+                            _serie_raw = (_pedido_serie.get("cabecera") or {}).get("serie")
+                            if _serie_raw is not None:
+                                try:
+                                    serie_itr = int(_serie_raw)
+                                    logger.info(f"📍 Serie del pedido para ITR: {serie_itr}")
+                                except (TypeError, ValueError):
+                                    logger.warning(f"⚠️ Valor de serie no válido: {_serie_raw}")
+                    except Exception as e:
+                        logger.warning(f"⚠️ No se pudo obtener serie del pedido (no crítico): {e}")
+                
                 # 6.1. Inventory Transfer Requests (1 por bodega destino) — POST /InventoryTransferRequests
                 doc_date_val = sap_response.get("doc_date")
                 doc_date_itr = None
@@ -442,6 +461,7 @@ class OCSAPService:
                             doc_date=doc_date_itr,
                             due_date=doc_date_itr,
                             oc_doc_num=doc_num,
+                            serie=serie_itr,
                         )
                         itr_created = 0
                         itr_errors = 0
@@ -547,7 +567,8 @@ class OCSAPService:
                             pedido_id=pedido_id,
                             oc_doc_num=doc_num,
                             bodega_origen=bodega_oc,  # Usa codigo_bodega de la OC (prioridad sobre origen_traslado)
-                            usuario_id=None
+                            usuario_id=None,
+                            serie=serie_itr  # ⭐ Numbering Series de SAP (ej: 10131)
                         )
                         
                         if resultado_transferencias.get("success"):

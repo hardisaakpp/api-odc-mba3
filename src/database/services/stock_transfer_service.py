@@ -437,7 +437,8 @@ class StockTransferService:
         pedido_id: str,
         oc_doc_num: Optional[int] = None,
         bodega_origen: Optional[str] = None,
-        usuario_id: Optional[str] = None
+        usuario_id: Optional[str] = None,
+        serie: Optional[int] = None
     ) -> Dict[str, Any]:
         """
         Crea Solicitudes de Transferencia (Inventory Transfer Requests) en SAP desde la distribución confirmada de un pedido.
@@ -515,6 +516,18 @@ class StockTransferService:
                     raise ValueError(f"No se encontró el pedido con ID: {pedido_id}")
                 
                 pedido_cabecera = pedido_data.get("cabecera", {})
+                
+                # ⭐ Obtener serie del pedido si no se proporcionó como parámetro
+                if serie is None:
+                    serie_raw = pedido_cabecera.get("serie")
+                    if serie_raw is not None:
+                        try:
+                            serie = int(serie_raw)
+                            logger.info(f"📍 Usando serie del pedido para ITR: {serie}")
+                        except (TypeError, ValueError):
+                            logger.warning(f"⚠️ Valor de serie no válido en pedido: {serie_raw}")
+                else:
+                    logger.info(f"📍 Usando serie proporcionada para ITR: {serie}")
                 
                 # 2. Obtener bodega origen (prioridad: parámetro > origen_traslado del pedido > default)
                 # ⭐ IMPORTANTE: Si bodega_origen viene de la OC (codigo_bodega), tiene prioridad
@@ -755,7 +768,8 @@ class StockTransferService:
                     bodega_origen=bodega_origen,
                     oc_doc_num=oc_doc_num,
                     usuario_id=usuario_id,
-                    pedido_id=pedido_id
+                    pedido_id=pedido_id,
+                    serie=serie
                 )
                 
                 # ⭐ VALIDACIÓN MÍNIMA PARA ITR: Solo validar formato básico

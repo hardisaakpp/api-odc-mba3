@@ -18,6 +18,7 @@ from decimal import Decimal, ROUND_HALF_UP
 from ..connection import get_db_connection_context
 from ..pedido_estados import ESTADO_CONFIRMADO_PROVEEDOR
 from ..repositories.pedido_repository import PedidoRepository
+from src.utils.audit_context import AuditContext, ORIGEN_WEB
 from ..repositories.pedido_respuesta_repository import PedidoRespuestaRepository
 
 logger = logging.getLogger(__name__)
@@ -477,7 +478,8 @@ class PedidoAjusteService:
             # ✅ CORRECCIÓN: Cambio de estado del pedido al final
             # Esto debe ser el último paso antes del commit
             if pedido_repo:
-                pedido_repo.update_estado(pedido_id, ESTADO_CONFIRMADO_PROVEEDOR)
+                audit = AuditContext(usuario=usuario_id, origen=ORIGEN_WEB)
+                pedido_repo.update_estado(pedido_id, ESTADO_CONFIRMADO_PROVEEDOR, audit_context=audit)
                 logger.debug(f"✅ Estado del pedido {pedido_id} actualizado a CONFIRMADO_PROVEEDOR")
             
         except Exception as e:

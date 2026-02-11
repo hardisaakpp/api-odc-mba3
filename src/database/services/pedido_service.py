@@ -28,6 +28,7 @@ from .pedido_format_handler import PedidoFormatHandler
 from .pedido_sap_handler import PedidoSAPHandler
 from .pedido_format_detector import PedidoFormatDetector
 from .pedido_sap_validator_helper import PedidoSAPValidatorHelper
+from src.utils.audit_context import AuditContext, ORIGEN_WEB
 from .pedido_formato_processor import PedidoFormatoProcessor
 from ..clients.sap_client import SAPClient
 from src.config import ENABLE_SAP_QUERIES
@@ -1724,9 +1725,10 @@ class PedidoService:
             )
 
         # Cambiar estado a NUEVO_PEDIDO
+        audit = AuditContext(usuario=usuario_id, origen=ORIGEN_WEB)
         with get_db_connection_context() as conn:
             repository = PedidoRepository(conn)
-            repository.update_estado(pedido_id, ESTADO_NUEVO_PEDIDO)
+            repository.update_estado(pedido_id, ESTADO_NUEVO_PEDIDO, audit_context=audit)
 
         logger.info(
             f"✅ Pedido {pedido_id} ({numero_pedido}) enviado a EL RAYO por usuario {usuario_id or 'N/A'}"

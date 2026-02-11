@@ -117,8 +117,10 @@ class PedidoCabeceraRepository:
                     estado_id,
                     origen,
                     ip_origen,
-                    creado_en
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, GETDATE())
+                    creado_en,
+                    modificado_por,
+                    modificado_fecha
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, GETDATE(), ?, GETDATE())
                 """
                 values = (
                     pedido_id,
@@ -137,6 +139,7 @@ class PedidoCabeceraRepository:
                     estado_id,
                     datos_cabecera_normalizado.get("origen"),  # Campo de auditoría
                     datos_cabecera_normalizado.get("ip_origen"),  # Campo de auditoría
+                    datos_cabecera_normalizado.get("creado_por"),  # modificado_por = creado_por al crear
                 )
             elif tiene_estado:
                 sql = """
@@ -155,8 +158,10 @@ class PedidoCabeceraRepository:
                     archivo_nombre,
                     creado_por,
                     estado,
-                    creado_en
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, GETDATE())
+                    creado_en,
+                    modificado_por,
+                    modificado_fecha
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, GETDATE(), ?, GETDATE())
                 """
                 estado = datos_cabecera_normalizado.get("estado", "PENDIENTE_CONFIRMACION_PROVEEDOR")
                 values = (
@@ -174,6 +179,7 @@ class PedidoCabeceraRepository:
                     datos_cabecera_normalizado.get("archivo_nombre"),
                     datos_cabecera_normalizado.get("creado_por"),
                     estado,
+                    datos_cabecera_normalizado.get("creado_por"),  # modificado_por = creado_por al crear
                 )
             else:
                 sql = """
@@ -191,8 +197,10 @@ class PedidoCabeceraRepository:
                     serie,
                     archivo_nombre,
                     creado_por,
-                    creado_en
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, GETDATE())
+                    creado_en,
+                    modificado_por,
+                    modificado_fecha
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, GETDATE(), ?, GETDATE())
                 """
                 values = (
                     pedido_id,
@@ -208,9 +216,23 @@ class PedidoCabeceraRepository:
                     datos_cabecera_normalizado.get("serie"),
                     datos_cabecera_normalizado.get("archivo_nombre"),
                     datos_cabecera_normalizado.get("creado_por"),
+                    datos_cabecera_normalizado.get("creado_por"),  # modificado_por = creado_por al crear
                 )
             
             cursor.execute(sql, values)
+            
+            # Registrar creación inicial en pedido_estado_historial
+            estado_inicial = (
+                estado_id if tiene_estado_id
+                else ESTADO_BORRADOR
+            )
+            self._registrar_transicion_estado(
+                cursor, pedido_id,
+                estado_anterior_id=None,
+                estado_nuevo_id=estado_inicial,
+                audit_context=audit_context,
+            )
+            
             self.conn.commit()
             
             logger.debug(f"✅ Pedido cabecera insertada: {pedido_id} - Pedido: {datos_cabecera_normalizado.get('numero_pedido')}")
@@ -257,7 +279,8 @@ class PedidoCabeceraRepository:
                         p.pedido_id, p.numero_pedido, p.fecha_pedido, p.fecha_entrega,
                         p.forma_pago, p.odc, p.proveedor_nombre, p.comprador_nombre,
                         p.comprador_codigo, p.origen_traslado, p.serie, p.archivo_nombre,
-                        p.creado_por, p.estado_id, pe.nombre AS estado_nombre, p.creado_en
+                        p.creado_por, p.estado_id, pe.nombre AS estado_nombre, p.creado_en,
+                        p.modificado_por
                     FROM pedido p
                     LEFT JOIN pedido_estado pe ON pe.id = p.estado_id
                     WHERE p.pedido_id = ?
@@ -268,7 +291,8 @@ class PedidoCabeceraRepository:
                         pedido_id, numero_pedido, fecha_pedido, fecha_entrega,
                         forma_pago, odc, proveedor_nombre, comprador_nombre,
                         comprador_codigo, origen_traslado, serie, archivo_nombre,
-                        creado_por, estado, creado_en
+                        creado_por, estado, creado_en,
+                        modificado_por
                     FROM pedido
                     WHERE pedido_id = ?
                 """, (pedido_id,))
@@ -278,7 +302,8 @@ class PedidoCabeceraRepository:
                         pedido_id, numero_pedido, fecha_pedido, fecha_entrega,
                         forma_pago, odc, proveedor_nombre, comprador_nombre,
                         comprador_codigo, origen_traslado, serie, archivo_nombre,
-                        creado_por, creado_en
+                        creado_por, creado_en,
+                        modificado_por
                     FROM pedido
                     WHERE pedido_id = ?
                 """, (pedido_id,))
@@ -331,7 +356,8 @@ class PedidoCabeceraRepository:
                         p.pedido_id, p.numero_pedido, p.fecha_pedido, p.fecha_entrega,
                         p.forma_pago, p.odc, p.proveedor_nombre, p.comprador_nombre,
                         p.comprador_codigo, p.origen_traslado, p.serie, p.archivo_nombre,
-                        p.creado_por, p.estado_id, pe.nombre AS estado_nombre, p.creado_en
+                        p.creado_por, p.estado_id, pe.nombre AS estado_nombre, p.creado_en,
+                        p.modificado_por
                     FROM pedido p
                     LEFT JOIN pedido_estado pe ON pe.id = p.estado_id
                     WHERE p.numero_pedido = ?
@@ -342,7 +368,8 @@ class PedidoCabeceraRepository:
                         pedido_id, numero_pedido, fecha_pedido, fecha_entrega,
                         forma_pago, odc, proveedor_nombre, comprador_nombre,
                         comprador_codigo, origen_traslado, serie, archivo_nombre,
-                        creado_por, estado, creado_en
+                        creado_por, estado, creado_en,
+                        modificado_por
                     FROM pedido
                     WHERE numero_pedido = ?
                 """, (numero_pedido,))
@@ -352,7 +379,8 @@ class PedidoCabeceraRepository:
                         pedido_id, numero_pedido, fecha_pedido, fecha_entrega,
                         forma_pago, odc, proveedor_nombre, comprador_nombre,
                         comprador_codigo, origen_traslado, serie, archivo_nombre,
-                        creado_por, creado_en
+                        creado_por, creado_en,
+                        modificado_por
                     FROM pedido
                     WHERE numero_pedido = ?
                 """, (numero_pedido,))
@@ -961,7 +989,7 @@ class PedidoCabeceraRepository:
                     p.forma_pago, p.odc, p.proveedor_nombre, p.comprador_nombre,
                     p.comprador_codigo, p.origen_traslado, p.serie, p.archivo_nombre,
                     p.creado_por, p.estado_id, pe.nombre AS estado_nombre, p.creado_en,
-                    p.modificado_fecha
+                    p.modificado_fecha, p.modificado_por
                 """
                 data_query = f"""
                     SELECT {select_fields}
@@ -975,7 +1003,7 @@ class PedidoCabeceraRepository:
                     p.pedido_id, p.numero_pedido, p.fecha_pedido, p.fecha_entrega,
                     p.forma_pago, p.odc, p.proveedor_nombre, p.comprador_nombre,
                     p.comprador_codigo, p.origen_traslado, p.serie, p.archivo_nombre,
-                    p.creado_por, p.creado_en, p.modificado_fecha
+                    p.creado_por, p.creado_en, p.modificado_fecha, p.modificado_por
                 """
                 if tiene_estado:
                     select_fields += ", p.estado"
@@ -1014,6 +1042,7 @@ class PedidoCabeceraRepository:
                         "estado": row[idx + 14],
                         "creado_en": row[idx + 15].isoformat() if row[idx + 15] else None,
                         "modificado_fecha": row[idx + 16].isoformat() if row[idx + 16] else None,
+                        "modificado_por": row[idx + 17],
                     }
                 else:
                     pedido = {
@@ -1032,8 +1061,9 @@ class PedidoCabeceraRepository:
                         "creado_por": row[idx + 12],
                         "creado_en": row[idx + 13].isoformat() if row[idx + 13] else None,
                         "modificado_fecha": row[idx + 14].isoformat() if row[idx + 14] else None,
+                        "modificado_por": row[idx + 15],
                     }
-                    pedido["estado"] = row[idx + 15] if tiene_estado else None
+                    pedido["estado"] = row[idx + 16] if tiene_estado else None
                 pedidos.append(pedido)
             
             has_more = (offset or 0) + len(pedidos) < total if limit else False

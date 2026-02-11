@@ -7,6 +7,7 @@ CHANGELOG:
 
 import logging
 import pyodbc
+from datetime import datetime
 from typing import Dict, Any, List, Optional
 
 logger = logging.getLogger(__name__)
@@ -498,6 +499,7 @@ class PedidoDetalleRepository:
                     errores.append(f"Detalle {pedido_detalle_id} no pertenece al pedido {numero_pedido}")
                     continue
                 
+                fecha_actual = datetime.now()
                 cursor.execute("""
                     MERGE pedido_detalle_modificacion_columna AS target
                     USING (SELECT ? AS pedido_detalle_id, ? AS columna_key, ? AS modificado_por) AS source
@@ -506,11 +508,11 @@ class PedidoDetalleRepository:
                     WHEN MATCHED THEN
                         UPDATE SET 
                             modificado_por = source.modificado_por,
-                            fecha_modificacion = GETDATE()
+                            fecha_modificacion = ?
                     WHEN NOT MATCHED THEN
                         INSERT (pedido_detalle_id, columna_key, modificado_por, fecha_modificacion)
-                        VALUES (source.pedido_detalle_id, source.columna_key, source.modificado_por, GETDATE());
-                """, (pedido_detalle_id, columna_key, modificado_por))
+                        VALUES (source.pedido_detalle_id, source.columna_key, source.modificado_por, ?);
+                """, (pedido_detalle_id, columna_key, modificado_por, fecha_actual, fecha_actual))
                 
                 modificaciones_count += 1
             

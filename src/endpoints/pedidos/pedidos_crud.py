@@ -471,6 +471,7 @@ def register_crud_endpoints(app: FastAPI):
 
     @app.post("/api/pedidos/{pedido_id}/gestionar", tags=["Pedidos"])
     async def marcar_pedido_gestionar(
+        request: Request,
         pedido_id: str = Path(..., description="UUID del pedido"),
         user: Dict = Depends(verify_jwt_token),
         _: None = Depends(require_any_permission(['odcsap.view', 'mabel.view']))
@@ -480,6 +481,7 @@ def register_crud_endpoints(app: FastAPI):
         Si el pedido está en estado NUEVO PEDIDO, actualiza a GESTIONAR PEDIDO y devuelve el pedido completo.
         Si ya está en otro estado, solo devuelve el pedido sin cambiar estado.
         """
+        audit = get_audit_context(request, user, origen=ORIGEN_WEB)
         try:
             with get_db_connection_context() as conn:
                 repo = PedidoRepository(conn)
@@ -495,7 +497,7 @@ def register_crud_endpoints(app: FastAPI):
                 except (TypeError, ValueError):
                     estado_id = None
                 if estado_id == ESTADO_NUEVO_PEDIDO:
-                    repo.update_estado(pedido_id, ESTADO_GESTIONAR_PEDIDO)
+                    repo.update_estado(pedido_id, ESTADO_GESTIONAR_PEDIDO, audit_context=audit)
                     pedido = repo.get_pedido_completo(pedido_id)
                 if pedido is None:
                     raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail={"error": "not_found", "message": "No se encontró el pedido."})
@@ -538,6 +540,7 @@ def register_crud_endpoints(app: FastAPI):
 
     @app.post("/api/pedidos/{pedido_id}/confirmar-para-redistribucion", tags=["Pedidos"])
     async def confirmar_para_redistribucion(
+        request: Request,
         pedido_id: str = Path(..., description="UUID del pedido"),
         user: Dict = Depends(verify_jwt_token),
         _: None = Depends(require_any_permission(['odcsap.view', 'mabel.view']))
@@ -552,6 +555,7 @@ def register_crud_endpoints(app: FastAPI):
         - **400**: Pedido no está en estado GESTIONAR PEDIDO.
         - **200**: Estado actualizado a CONFIRMADO; devuelve el pedido completo.
         """
+        audit = get_audit_context(request, user, origen=ORIGEN_WEB)
         try:
             with get_db_connection_context() as conn:
                 repo = PedidoRepository(conn)
@@ -574,7 +578,7 @@ def register_crud_endpoints(app: FastAPI):
                             "message": "Solo se puede confirmar para redistribución cuando el pedido está en estado GESTIONAR PEDIDO."
                         }
                     )
-                repo.update_estado(pedido_id, ESTADO_REDISTRIBUCION)
+                repo.update_estado(pedido_id, ESTADO_REDISTRIBUCION, audit_context=audit)
                 pedido = repo.get_pedido_completo(pedido_id)
                 if pedido is None:
                     raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail={"error": "not_found", "message": "No se encontró el pedido."})
@@ -616,6 +620,7 @@ def register_crud_endpoints(app: FastAPI):
 
     @app.post("/api/pedidos/{pedido_id}/marcar-despachar-y-facturar", tags=["Pedidos"])
     async def marcar_despachar_y_facturar(
+        request: Request,
         pedido_id: str = Path(..., description="UUID del pedido"),
         user: Dict = Depends(verify_jwt_token),
         _: None = Depends(require_any_permission(['odcsap.view', 'mabel.view']))
@@ -631,6 +636,7 @@ def register_crud_endpoints(app: FastAPI):
         - **400**: Pedido no está en estado Confirmado y Enviado.
         - **200**: Estado actualizado a Despachar y Facturar; devuelve el pedido completo.
         """
+        audit = get_audit_context(request, user, origen=ORIGEN_WEB)
         try:
             with get_db_connection_context() as conn:
                 repo = PedidoRepository(conn)
@@ -653,7 +659,7 @@ def register_crud_endpoints(app: FastAPI):
                             "message": "Solo se puede marcar como Despachar y Facturar cuando el pedido está en estado Confirmado y Enviado (ODC enviada a SAP)."
                         }
                     )
-                repo.update_estado(pedido_id, ESTADO_DESPACHAR_Y_FACTURAR)
+                repo.update_estado(pedido_id, ESTADO_DESPACHAR_Y_FACTURAR, audit_context=audit)
                 pedido = repo.get_pedido_completo(pedido_id)
                 if pedido is None:
                     raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail={"error": "not_found", "message": "No se encontró el pedido."})
@@ -695,6 +701,7 @@ def register_crud_endpoints(app: FastAPI):
 
     @app.post("/api/pedidos/{pedido_id}/marcar-finalizado", tags=["Pedidos"])
     async def marcar_finalizado(
+        request: Request,
         pedido_id: str = Path(..., description="UUID del pedido"),
         user: Dict = Depends(verify_jwt_token),
         _: None = Depends(require_any_permission(['odcsap.view', 'mabel.view']))
@@ -709,6 +716,7 @@ def register_crud_endpoints(app: FastAPI):
         - **400**: Pedido no está en estado Despachar y Facturar.
         - **200**: Estado actualizado a Finalizado; devuelve el pedido completo.
         """
+        audit = get_audit_context(request, user, origen=ORIGEN_WEB)
         try:
             with get_db_connection_context() as conn:
                 repo = PedidoRepository(conn)
@@ -731,7 +739,7 @@ def register_crud_endpoints(app: FastAPI):
                             "message": "Solo se puede marcar como Finalizado cuando el pedido está en estado Despachar y Facturar."
                         }
                     )
-                repo.update_estado(pedido_id, ESTADO_FINALIZADO)
+                repo.update_estado(pedido_id, ESTADO_FINALIZADO, audit_context=audit)
                 pedido = repo.get_pedido_completo(pedido_id)
                 if pedido is None:
                     raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail={"error": "not_found", "message": "No se encontró el pedido."})

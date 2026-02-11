@@ -13,6 +13,7 @@ from ..connection import get_db_connection_context
 from ..pedido_estados import ESTADO_RESPUESTA_PROVEEDOR_CARGADA
 from ..repositories.pedido_repository import PedidoRepository
 from ..repositories.pedido_respuesta_repository import PedidoRespuestaRepository
+from src.utils.audit_context import AuditContext, ORIGEN_WEB
 
 logger = logging.getLogger(__name__)
 
@@ -425,7 +426,8 @@ class PedidoProveedorService:
                 )
                 
                 # ✅ Estado correcto: RESPUESTA_PROVEEDOR_CARGADA (no CONFIRMADO)
-                repo.update_estado(pedido_id, ESTADO_RESPUESTA_PROVEEDOR_CARGADA)
+                audit = AuditContext(usuario=usuario_id, origen=ORIGEN_WEB)
+                repo.update_estado(pedido_id, ESTADO_RESPUESTA_PROVEEDOR_CARGADA, audit_context=audit)
                 
                 return {
                     "status": "success",

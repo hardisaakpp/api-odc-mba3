@@ -14,6 +14,7 @@ from ..repositories.pedido_repository import PedidoRepository
 from ..repositories.pedido_respuesta_repository import PedidoRespuestaRepository
 from ..repositories.pedido_confirmacion_rayo_repository import PedidoConfirmacionRayoRepository
 from .pedido_proveedor_service import PedidoProveedorService
+from src.utils.audit_context import AuditContext, ORIGEN_WEB
 
 logger = logging.getLogger(__name__)
 
@@ -312,7 +313,8 @@ class PedidoProveedorWebService:
             
             # Si es confirmado, actualizar estado del pedido a REDISTRIBUCION (flujo unificado con confirmar para redistribución)
             if estado == "confirmado":
-                repo.update_estado(pedido_id, ESTADO_REDISTRIBUCION)
+                audit = AuditContext(usuario=usuario_id, origen=ORIGEN_WEB)
+                repo.update_estado(pedido_id, ESTADO_REDISTRIBUCION, audit_context=audit)
             
             return {
                 "status": "success",
@@ -621,7 +623,8 @@ class PedidoProveedorWebService:
             except (TypeError, ValueError):
                 estado_id_actual = None
             if estado_id_actual != ESTADO_REDISTRIBUCION:
-                repo.update_estado(pedido_id, ESTADO_REDISTRIBUCION)
+                audit = AuditContext(usuario=usuario_id, origen=ORIGEN_WEB)
+                repo.update_estado(pedido_id, ESTADO_REDISTRIBUCION, audit_context=audit)
             
             # ✅ REGISTRAR CONFIRMACIÓN DE EL RAYO
             # Obtener valores actuales desde la BD para registrar el historial completo

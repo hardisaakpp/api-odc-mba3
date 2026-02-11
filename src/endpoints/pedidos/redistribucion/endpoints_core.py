@@ -258,7 +258,7 @@ def register_core_endpoints(app: FastAPI):
 
                     # Actualizar estado a CONFIRMADO REDISTRIBUCION si el procesamiento fue exitoso
                     if resultado_sap.get("status") in ["success", "partial"]:
-                        repo_pedido.update_estado(pedido_id, ESTADO_PEDIDO_CONFIRMADO)
+                        repo_pedido.update_estado(pedido_id, ESTADO_PEDIDO_CONFIRMADO, audit_context=audit)
                         estado_nuevo = "CONFIRMADO REDISTRIBUCION"
                         logger.info(f"✅ Estado del pedido {pedido_id} actualizado a CONFIRMADO REDISTRIBUCION")
 

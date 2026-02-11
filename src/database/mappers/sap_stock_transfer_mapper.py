@@ -28,7 +28,8 @@ class SAPStockTransferMapper:
         bodega_origen: str,
         oc_doc_num: Optional[int] = None,
         usuario_id: Optional[str] = None,
-        pedido_id: Optional[str] = None
+        pedido_id: Optional[str] = None,
+        serie: Optional[int] = None
     ) -> List[Dict[str, Any]]:
         """
         Convierte la distribución por tienda en múltiples Inventory Transfer Requests (una por tienda).
@@ -63,6 +64,7 @@ class SAPStockTransferMapper:
             oc_doc_num: Número de OC de SAP (DocNum) relacionada
             usuario_id: ID del usuario que genera la transferencia
             pedido_id: ID del pedido relacionado
+            serie: Numbering Series de SAP para InventoryTransferRequests (ej: 10131)
         
         Returns:
             Lista de diccionarios con estructura JSON para SAP Service Layer (uno por tienda)
@@ -175,6 +177,9 @@ class SAPStockTransferMapper:
                 "Comments": comentario_base,
                 "StockTransferLines": stock_transfer_lines
             }
+            # ⭐ Asignar Numbering Series de SAP si se proporcionó (ej: 10131)
+            if serie is not None:
+                stock_transfer["Series"] = serie
             
             stock_transfers.append(stock_transfer)
         
@@ -192,6 +197,7 @@ class SAPStockTransferMapper:
         doc_date: Optional[str] = None,
         due_date: Optional[str] = None,
         oc_doc_num: Optional[int] = None,
+        serie: Optional[int] = None,
     ) -> List[Dict[str, Any]]:
         """
         Agrupa detalles de OC por codigo_bodega y genera 1 Inventory Transfer Request por bodega destino.
@@ -241,6 +247,9 @@ class SAPStockTransferMapper:
             }
             if oc_doc_num is not None:
                 payload["Comments"] = f"Solicitud de traslado desde OC {oc_doc_num}"
+            # ⭐ Asignar Numbering Series de SAP si se proporcionó (ej: 10131)
+            if serie is not None:
+                payload["Series"] = serie
             payloads.append(payload)
             logger.debug(f"   ITR: {from_wh} → {to_wh}, {len(lines)} línea(s)")
 
