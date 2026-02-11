@@ -61,6 +61,10 @@ def _ejecutar_proceso_completo_sync(
     Raises:
         HTTPException: errores de validación o internos que se propagan al cliente.
     """
+    import threading
+    _worker_thread = threading.current_thread().name
+    logger.info(f"🧵 Ejecutando en thread: {_worker_thread} (NO es el event loop)")
+
     resultado_redistribucion = None
     resultado_odc = None
     resumen = None
@@ -350,12 +354,28 @@ def register_proceso_completo_endpoints(app: FastAPI):
             # ║ Esto permite que SSE heartbeats, polling y otras           ║
             # ║ peticiones HTTP sigan funcionando mientras se procesa.     ║
             # ╚══════════════════════════════════════════════════════════════╝
+            import threading
+            import time as _time
+
+            _t0 = _time.monotonic()
+            _main_thread = threading.current_thread().name
+            logger.info(
+                f"🧵 Delegando proceso pesado a thread separado "
+                f"(event loop libre para SSE/heartbeats). Main thread: {_main_thread}"
+            )
+
             resultado = await asyncio.to_thread(
                 _ejecutar_proceso_completo_sync,
                 numero_pedido,
                 request_body.ajustes_detalle,
                 user_id,
                 audit,
+            )
+
+            _elapsed = _time.monotonic() - _t0
+            logger.info(
+                f"🧵 Thread completado en {_elapsed:.1f}s. "
+                f"Event loop estuvo LIBRE durante ese tiempo."
             )
 
             # Enviar notificación SSE asíncrona si corresponde

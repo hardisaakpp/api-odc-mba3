@@ -283,6 +283,8 @@ if __name__ == "__main__":
         host="0.0.0.0",  # Escucha en todas las interfaces
         port=8000,
         reload=True,
+        reload_delay=1.0,  # Espera 1s antes de recargar (agrupa cambios rápidos y evita double-reload)
+        reload_dirs=["src"],  # Solo vigilar src/ (ignora output/, logs/, .venv/, etc.)
         log_level="info",
         timeout_keep_alive=120,  # Timeout para mantener conexión viva (120 segundos)
         timeout_graceful_shutdown=30,  # Timeout para cierre ordenado (30 segundos)
