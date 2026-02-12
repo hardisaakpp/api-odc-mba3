@@ -88,7 +88,10 @@ class PedidoOriginalRepository:
                     copiado_por,
                 ),
             )
-            pedido_original_id = str(cursor.fetchone()[0])
+            row = cursor.fetchone()
+            if row is None:
+                raise ValueError("No se pudo obtener el ID del pedido original insertado")
+            pedido_original_id = str(row[0])
 
             # --- Insertar detalles originales ---
             for detalle in detalles:
