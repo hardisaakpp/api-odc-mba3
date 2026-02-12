@@ -23,7 +23,7 @@ def register_pedidos_endpoints(app: FastAPI):
     de pedidos en la aplicación FastAPI.
     """
     # Registrar endpoints por categoría
-    register_crud_endpoints(app)              # 5 endpoints: listar, obtener, importar, crear, modificar
+    register_crud_endpoints(app)              # 6 endpoints: listar, estados, obtener, importar, crear, modificar
     register_exportacion_endpoints(app)       # 2 endpoints: exportar para proveedor, exportar plano MBA
     register_proveedor_endpoints(app)         # 4 endpoints: cargar respuesta, formulario, enviar respuesta, crear desde pedido
     register_edicion_endpoints(app)           # 5 endpoints: actualizar costo, total, comentario, guardar/obtener modificaciones

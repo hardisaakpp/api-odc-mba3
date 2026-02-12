@@ -312,3 +312,10 @@ migrations:
     description: "Agregar estado CANCELADO (id=19) a pedido_estado"
     category: "estado"
     dependencies: ["005"]
+
+  - version: "604"
+    name: "add_estado_cancelado_por_el_rayo"
+    file: "add_estado_cancelado_por_el_rayo.sql"
+    description: "Agregar estado CANCELADO POR EL RAYO (id=20) a pedido_estado"
+    category: "estado"
+    dependencies: ["603"]

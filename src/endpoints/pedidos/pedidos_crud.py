@@ -6,7 +6,7 @@ import logging
 import re
 import csv
 import io
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 from datetime import datetime
 from fastapi import FastAPI, UploadFile, File, Depends, HTTPException, Path, Query, Body, status, Request
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -311,6 +311,114 @@ def register_crud_endpoints(app: FastAPI):
             raise HTTPException(
                 status_code=500,
                 detail=f"Error interno al obtener último pedido para redistribución: {str(e)}"
+            )
+
+    @app.get("/api/pedidos/estados", tags=["Pedidos"], responses=READ_RESPONSES)
+    async def listar_estados_pedido(
+        contexto: Optional[str] = Query(
+            None,
+            description=(
+                "Contexto de la vista para filtrar estados relevantes. "
+                "Valores posibles: 'pedidos' (excluye BORRADOR), "
+                "'cargar-plantilla' (incluye BORRADOR, solo del flujo de carga), "
+                "'redistribucion' (solo estados aptos para redistribucion). "
+                "Si no se indica, devuelve todos los estados activos."
+            ),
+        ),
+        user: Dict = Depends(verify_jwt_token),
+        _: None = Depends(require_any_permission(['odcsap.view', 'mabel.view']))
+    ):
+        """
+        Devuelve la lista de estados de pedido disponibles para el dropdown
+        del contenedor "Filtros de Búsqueda".
+        
+        Este endpoint alimenta los selects/dropdowns de filtro por estado en todas
+        las interfaces de listas de pedidos. Devuelve únicamente los estados que
+        el usuario visualiza en la UI, consultados directamente de la tabla
+        maestra `pedido_estado`.
+        
+        **Query Parameters:**
+        - `contexto` (string, opcional) - Determina qué estados incluir:
+          - Sin valor / `null`: todos los estados activos
+          - `"pedidos"`: excluye BORRADOR (para /mba3-consultas/pedidos)
+          - `"cargar-plantilla"`: incluye BORRADOR (para /mba3-consultas/cargar-plantilla)
+          - `"redistribucion"`: solo estados del flujo de redistribución
+            (CONFIRMADO POR EL RAYO en adelante, sin CANCELADO ni finales)
+        
+        **Ejemplo:**
+        ```
+        GET /api/pedidos/estados
+        GET /api/pedidos/estados?contexto=pedidos
+        GET /api/pedidos/estados?contexto=redistribucion
+        ```
+        
+        **Respuesta:**
+        ```json
+        {
+            "status": "success",
+            "data": [
+                { "id": 1, "nombre": "BORRADOR", "orden": 1 },
+                { "id": 2, "nombre": "NUEVO PEDIDO", "orden": 2 },
+                ...
+            ]
+        }
+        ```
+        
+        Returns:
+            JSON con lista de estados disponibles para el filtro
+        """
+        try:
+            # Determinar filtros según contexto
+            excluir_ids: Optional[List[int]] = None
+            solo_ids: Optional[List[int]] = None
+
+            if contexto == "pedidos":
+                # Lista general: excluir BORRADOR (no se muestran pedidos en ese estado)
+                excluir_ids = [ESTADO_BORRADOR]
+            elif contexto == "redistribucion":
+                # Vista redistribución: solo estados relevantes para ese flujo
+                from src.database.pedido_estados import (
+                    ESTADO_RESPUESTA_PROVEEDOR_CARGADA,
+                    ESTADO_CONFIRMADO_PROVEEDOR,
+                    ESTADO_REDISTRIBUIDO,
+                    ESTADO_PEDIDO_CONFIRMADO,
+                    ESTADO_CONFIRMADO_ENVIADO,
+                    ESTADO_PENDIENTE_LOGISTICA,
+                    ESTADO_ERROR_DATOS_MAESTROS,
+                )
+                solo_ids = [
+                    ESTADO_REDISTRIBUCION,               # 4  - CONFIRMADO POR EL RAYO
+                    ESTADO_RESPUESTA_PROVEEDOR_CARGADA,  # 5
+                    ESTADO_CONFIRMADO_PROVEEDOR,         # 6
+                    ESTADO_REDISTRIBUIDO,                 # 9
+                    ESTADO_PEDIDO_CONFIRMADO,             # 10 - CONFIRMADO REDISTRIBUCION
+                    ESTADO_CONFIRMADO_ENVIADO,            # 12
+                    ESTADO_PENDIENTE_LOGISTICA,           # 13
+                    ESTADO_ERROR_DATOS_MAESTROS,          # 14
+                ]
+            # contexto == "cargar-plantilla" o None → todos los estados activos (incluye BORRADOR)
+
+            with get_db_connection_context() as conn:
+                repo = PedidoRepository(conn)
+                estados = repo.get_estados(
+                    solo_activos=True,
+                    excluir_ids=excluir_ids,
+                    solo_ids=solo_ids,
+                )
+
+            return JSONResponse(
+                status_code=200,
+                content={
+                    "status": "success",
+                    "data": estados,
+                }
+            )
+
+        except Exception as e:
+            logger.error(f"❌ Error al listar estados de pedido: {e}", exc_info=True)
+            raise HTTPException(
+                status_code=500,
+                detail=f"Error interno al listar estados de pedido: {str(e)}"
             )
 
     @app.get("/api/pedidos/existe", tags=["Pedidos"])

@@ -1753,6 +1753,114 @@ GET /api/pedidos?fecha_desde=2025-01-01&fecha_hasta=2025-01-31&proveedor_nombre=
 }
 ```
 
+### 1.2.1 Estados para Filtros de Búsqueda (Dropdown de Estado)
+
+**Descripción:** Endpoint para alimentar el dropdown/select del filtro **"Estado"** en el contenedor "Filtros de Búsqueda" de todas las interfaces de listas de pedidos. Devuelve los estados que el usuario realmente ve en la UI, consultados desde la tabla maestra `pedido_estado`.
+
+**Endpoint:** `GET /api/pedidos/estados`
+
+**Autenticación:** JWT token requerido  
+**Permiso:** `odcsap.view` o `mabel.view`
+
+**Query Parameters:**
+
+| Parámetro | Tipo | Requerido | Descripción |
+|-----------|------|-----------|-------------|
+| `contexto` | string | No | Contexto de la vista para filtrar estados relevantes |
+
+**Valores de `contexto`:**
+
+| Valor | Comportamiento | Vista asociada |
+|-------|---------------|----------------|
+| *(sin valor)* | Todos los estados activos (incluye BORRADOR) | Uso general |
+| `"pedidos"` | Excluye BORRADOR | `/mba3-consultas/pedidos` |
+| `"cargar-plantilla"` | Todos los estados activos (incluye BORRADOR) | `/mba3-consultas/cargar-plantilla` |
+| `"redistribucion"` | Solo estados del flujo de redistribución (4–14, sin CANCELADO ni finales) | `/mba3-consultas/redistribucion` |
+
+**Ejemplos:**
+```
+GET /api/pedidos/estados
+GET /api/pedidos/estados?contexto=pedidos
+GET /api/pedidos/estados?contexto=redistribucion
+```
+
+**Respuesta:**
+```json
+{
+  "status": "success",
+  "data": [
+    { "id": 1, "nombre": "BORRADOR", "orden": 1 },
+    { "id": 2, "nombre": "NUEVO PEDIDO", "orden": 2 },
+    { "id": 3, "nombre": "GESTIONAR PEDIDO", "orden": 3 },
+    { "id": 4, "nombre": "CONFIRMADO POR EL RAYO", "orden": 4 },
+    { "id": 5, "nombre": "RESPUESTA_PROVEEDOR_CARGADA", "orden": 5 },
+    { "id": 6, "nombre": "CONFIRMADO_PROVEEDOR", "orden": 6 },
+    { "id": 9, "nombre": "REDISTRIBUIDO", "orden": 9 },
+    { "id": 10, "nombre": "CONFIRMADO REDISTRIBUCION", "orden": 10 },
+    { "id": 12, "nombre": "CONFIRMADO_ENVIADO", "orden": 12 },
+    { "id": 17, "nombre": "DESPACHAR Y FACTURAR", "orden": 17 },
+    { "id": 18, "nombre": "FINALIZADO", "orden": 18 },
+    { "id": 19, "nombre": "CANCELADO", "orden": 19 },
+    { "id": 20, "nombre": "CANCELADO POR EL RAYO", "orden": 20 }
+  ]
+}
+```
+
+#### Implementación en Frontend
+
+**Al montar el componente de filtros:**
+```javascript
+// Cargar estados disponibles para el dropdown
+const loadEstados = async (contexto = 'pedidos') => {
+  try {
+    const params = contexto ? `?contexto=${contexto}` : '';
+    const response = await fetch(`/api/pedidos/estados${params}`, {
+      headers: { 'Authorization': `Bearer ${token}` }
+    });
+    const data = await response.json();
+    
+    if (data.status === 'success') {
+      setEstados(data.data); // Array de { id, nombre, orden }
+    }
+  } catch (error) {
+    console.error('Error loading estados:', error);
+  }
+};
+
+// Llamar al montar con el contexto de la vista actual
+useEffect(() => {
+  loadEstados('pedidos'); // o 'redistribucion', 'cargar-plantilla'
+}, []);
+```
+
+**En el select/dropdown de filtro:**
+```html
+<select v-model="filtroEstado" @change="aplicarFiltros">
+  <option value="">Todos los estados</option>
+  <option v-for="estado in estados" :key="estado.id" :value="estado.id">
+    {{ estado.nombre }}
+  </option>
+</select>
+```
+
+**Al aplicar el filtro de estado, enviar `estado_id` (numérico) al endpoint de listado:**
+```javascript
+// Usar estado_id al filtrar
+const params = new URLSearchParams();
+if (filtroEstado) {
+  params.set('estado', filtroEstado); // envía el id numérico
+}
+const response = await fetch(`/api/pedidos?${params}`, { ... });
+```
+
+#### Notas importantes
+
+- **Nombres dinámicos:** Los nombres vienen de la tabla `pedido_estado` y pueden ser editados sin afectar lógica. El frontend debe usar siempre `estado.nombre` para mostrar, nunca hardcodear nombres.
+- **Filtro por `id`:** Al filtrar pedidos, enviar el `id` numérico del estado (no el nombre) al endpoint `GET /api/pedidos`.
+- **Cache recomendado:** Los estados no cambian frecuentemente; se recomienda cachear la respuesta en el frontend (ej: sessionStorage o estado global).
+
+---
+
 ### 1.3 Pedidos para Redistribución y “último pedido” (misma lógica que cargar-plantilla)
 
 **Rutas de la interfaz Redistribución:**

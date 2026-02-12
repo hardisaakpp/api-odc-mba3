@@ -1517,3 +1517,70 @@ class PedidoCabeceraRepository:
             raise
         finally:
             cursor.close()
+
+    def get_estados(
+        self,
+        solo_activos: bool = True,
+        excluir_ids: Optional[List[int]] = None,
+        solo_ids: Optional[List[int]] = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        Obtiene la lista de estados de pedido desde la tabla pedido_estado.
+        
+        Diseñado para alimentar los dropdowns de "Filtros de Búsqueda" en las
+        interfaces de listas de pedidos, devolviendo los estados que el usuario
+        realmente visualiza en la UI.
+        
+        Args:
+            solo_activos: Si True, solo devuelve estados con activo=1 (default True)
+            excluir_ids: Lista opcional de estado_id a excluir del resultado
+                         (ej: [1] para excluir BORRADOR en la lista general)
+            solo_ids: Lista opcional de estado_id a incluir exclusivamente
+                      (ej: [4,5,6,9] para vista de redistribución)
+        
+        Returns:
+            Lista de dicts con id, nombre y orden, ordenados por orden ASC
+        """
+        cursor = self.conn.cursor()
+        try:
+            where_conditions: List[str] = []
+            params: List[Any] = []
+
+            if solo_activos:
+                where_conditions.append("pe.activo = 1")
+
+            if solo_ids:
+                placeholders = ",".join("?" for _ in solo_ids)
+                where_conditions.append(f"pe.id IN ({placeholders})")
+                params.extend(solo_ids)
+            elif excluir_ids:
+                placeholders = ",".join("?" for _ in excluir_ids)
+                where_conditions.append(f"pe.id NOT IN ({placeholders})")
+                params.extend(excluir_ids)
+
+            where_clause = " AND ".join(where_conditions) if where_conditions else "1=1"
+
+            query = f"""
+                SELECT pe.id, pe.nombre, pe.orden
+                FROM pedido_estado pe
+                WHERE {where_clause}
+                ORDER BY pe.orden ASC
+            """
+
+            cursor.execute(query, params)
+            estados = []
+            for row in cursor.fetchall():
+                estados.append({
+                    "id": row[0],
+                    "nombre": row[1],
+                    "orden": row[2],
+                })
+
+            logger.debug(f"✓ Estados obtenidos: {len(estados)} estado(s)")
+            return estados
+
+        except Exception as e:
+            logger.error(f"❌ Error al obtener estados de pedido: {e}", exc_info=True)
+            raise
+        finally:
+            cursor.close()
