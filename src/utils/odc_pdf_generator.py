@@ -332,7 +332,7 @@ def _build_header_info(
         [Paragraph(f"PEDIDO {referencia}", styles["value_normal"])],
         [Spacer(1, 3 * mm)],
         [Paragraph("Fecha y hora de generaci&oacute;n", styles["label"])],
-        [Paragraph(datetime.now().strftime("%d/%m/%Y %H:%M:%S"), styles["value_normal"])],
+        [Paragraph(_format_datetime(fecha_hora_generacion), styles["value_normal"])],
     ]
     left_table = Table(left_data, colWidths=[8 * cm])
     left_table.setStyle(TableStyle([
