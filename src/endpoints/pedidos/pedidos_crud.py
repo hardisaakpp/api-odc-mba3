@@ -22,8 +22,9 @@ from src.database.pedido_estados import (
     ESTADO_DESPACHAR_Y_FACTURAR,
     ESTADO_FINALIZADO,
     ESTADO_CANCELADO,
+    ESTADO_CANCELADO_POR_EL_RAYO,
     ESTADOS_PUEDE_DESCARTAR,
-    ESTADOS_PUEDE_ELIMINAR,
+    ESTADOS_PUEDE_CANCELAR_POR_EL_RAYO,
     ESTADO_LIMITE_CANCELAR_PEDIDO,
     ESTADOS_PUEDE_CONFIRMAR_REDISTRIBUCION,
 )
@@ -58,7 +59,7 @@ def register_crud_endpoints(app: FastAPI):
         offset: Optional[int] = Query(0, description="Offset para paginación"),
         solo_redistribucion: Optional[str] = Query(
             None,
-            description="Si 'true', solo pedidos aptos para redistribución (estado >= CONFIRMADO POR EL RAYO, excluye CANCELADO)"
+            description="Si 'true', solo pedidos aptos para redistribución (estado >= CONFIRMADO POR EL RAYO, excluye CANCELADO y CANCELADO POR EL RAYO)"
         ),
         user: Dict = Depends(verify_jwt_token),
         _: None = Depends(require_any_permission(['odcsap.view', 'mabel.view']))
@@ -452,7 +453,7 @@ def register_crud_endpoints(app: FastAPI):
                 except (TypeError, ValueError):
                     _eid = None
                 pedido["puede_descartar"] = _eid in ESTADOS_PUEDE_DESCARTAR
-                pedido["puede_eliminar"] = _eid in ESTADOS_PUEDE_ELIMINAR
+                pedido["puede_cancelar_por_el_rayo"] = _eid in ESTADOS_PUEDE_CANCELAR_POR_EL_RAYO
                 pedido["puede_cancelar_pedido"] = _eid is not None and _eid < ESTADO_LIMITE_CANCELAR_PEDIDO
                 pedido["puede_descargar_csv"] = _eid == ESTADO_REDISTRIBUCION  # Solo en estado CONFIRMADO (4)
                 pedido["puede_confirmar_redistribucion"] = _eid in ESTADOS_PUEDE_CONFIRMAR_REDISTRIBUCION
@@ -507,7 +508,7 @@ def register_crud_endpoints(app: FastAPI):
                 except (TypeError, ValueError):
                     _eid = None
                 pedido["puede_descartar"] = _eid in ESTADOS_PUEDE_DESCARTAR
-                pedido["puede_eliminar"] = _eid in ESTADOS_PUEDE_ELIMINAR
+                pedido["puede_cancelar_por_el_rayo"] = _eid in ESTADOS_PUEDE_CANCELAR_POR_EL_RAYO
                 pedido["puede_cancelar_pedido"] = _eid is not None and _eid < ESTADO_LIMITE_CANCELAR_PEDIDO
                 pedido["puede_descargar_csv"] = _eid == ESTADO_REDISTRIBUCION  # Solo en estado CONFIRMADO (4)
                 pedido["puede_confirmar_redistribucion"] = _eid in ESTADOS_PUEDE_CONFIRMAR_REDISTRIBUCION
@@ -589,7 +590,7 @@ def register_crud_endpoints(app: FastAPI):
                 except (TypeError, ValueError):
                     _eid = None
                 pedido["puede_descartar"] = _eid in ESTADOS_PUEDE_DESCARTAR
-                pedido["puede_eliminar"] = _eid in ESTADOS_PUEDE_ELIMINAR
+                pedido["puede_cancelar_por_el_rayo"] = _eid in ESTADOS_PUEDE_CANCELAR_POR_EL_RAYO
                 pedido["puede_cancelar_pedido"] = _eid is not None and _eid < ESTADO_LIMITE_CANCELAR_PEDIDO
                 pedido["puede_descargar_csv"] = _eid == ESTADO_REDISTRIBUCION  # Solo en estado CONFIRMADO (4)
                 pedido["puede_confirmar_redistribucion"] = _eid in ESTADOS_PUEDE_CONFIRMAR_REDISTRIBUCION
@@ -670,7 +671,7 @@ def register_crud_endpoints(app: FastAPI):
                 except (TypeError, ValueError):
                     _eid = None
                 pedido["puede_descartar"] = _eid in ESTADOS_PUEDE_DESCARTAR
-                pedido["puede_eliminar"] = _eid in ESTADOS_PUEDE_ELIMINAR
+                pedido["puede_cancelar_por_el_rayo"] = _eid in ESTADOS_PUEDE_CANCELAR_POR_EL_RAYO
                 pedido["puede_cancelar_pedido"] = _eid is not None and _eid < ESTADO_LIMITE_CANCELAR_PEDIDO
                 pedido["puede_descargar_csv"] = _eid == ESTADO_REDISTRIBUCION  # Solo en estado CONFIRMADO (4)
                 pedido["puede_confirmar_redistribucion"] = _eid in ESTADOS_PUEDE_CONFIRMAR_REDISTRIBUCION
@@ -750,7 +751,7 @@ def register_crud_endpoints(app: FastAPI):
                 except (TypeError, ValueError):
                     _eid = None
                 pedido["puede_descartar"] = _eid in ESTADOS_PUEDE_DESCARTAR
-                pedido["puede_eliminar"] = _eid in ESTADOS_PUEDE_ELIMINAR
+                pedido["puede_cancelar_por_el_rayo"] = _eid in ESTADOS_PUEDE_CANCELAR_POR_EL_RAYO
                 pedido["puede_cancelar_pedido"] = _eid is not None and _eid < ESTADO_LIMITE_CANCELAR_PEDIDO
                 pedido["puede_descargar_csv"] = _eid == ESTADO_REDISTRIBUCION  # Solo en estado CONFIRMADO (4)
                 pedido["puede_confirmar_redistribucion"] = _eid in ESTADOS_PUEDE_CONFIRMAR_REDISTRIBUCION
@@ -1454,42 +1455,41 @@ def register_crud_endpoints(app: FastAPI):
                 }
             )
 
-    @app.delete("/api/pedidos/{pedido_id}/eliminar", status_code=status.HTTP_204_NO_CONTENT, tags=["Pedidos"])
-    async def eliminar_pedido(
-        pedido_id: str = Path(..., description="UUID del pedido a eliminar"),
+    @app.post("/api/pedidos/{pedido_id}/cancelar-por-el-rayo", tags=["Pedidos"])
+    async def cancelar_pedido_por_el_rayo(
+        request: Request,
+        pedido_id: str = Path(..., description="UUID del pedido a cancelar"),
         user: Dict = Depends(verify_jwt_token),
         _: None = Depends(require_any_permission(['odcsap.view', 'mabel.view']))
     ):
         """
-        Eliminar un pedido desde la interfaz de Detalle del Pedido (botón "Eliminar Pedido").
+        Cancelar un pedido desde la interfaz de Detalle del Pedido (botón "Cancelar Pedido").
         
         **Uso exclusivo:**
         - Interfaz: **Detalle del Pedido** (`/pedidos/{pedido_id}`)
         - Estado permitido: **GESTIONAR PEDIDO (3)** únicamente
-        - Comportamiento: Elimina el pedido y **envía notificación a MABEL TRADING**
+        - Comportamiento: Cambia estado a CANCELADO POR EL RAYO (20) y notifica a MABEL TRADING
         
         **Notificaciones:**
-        - ✅ Se envía email a MABEL TRADING confirmando la eliminación
-        - ❌ NO se envía email a EL RAYO
+        - ✅ Se envía notificación en tiempo real a MABEL TRADING
         
-        **Diferencia con "Descartar":**
-        - "Descartar": Desde Cargar Plantilla, estados 1-2, notifica a EL RAYO solo en estado 2
-        - "Eliminar Pedido": Desde Detalle, estado 3 solamente, notifica a MABEL TRADING
-        
-        **Restricciones:**
-        - No se permite si el pedido tiene respuesta de proveedor, redistribución confirmada u orden de compra
+        **Diferencia con "Cancelar Pedido" de MABEL:**
+        - "Cancelar Pedido" (MABEL): Desde Redistribución, estados < 10, cambia a CANCELADO (19)
+        - "Cancelar Pedido" (EL RAYO): Desde Detalle, estado 3 solamente, cambia a CANCELADO POR EL RAYO (20)
         
         **Respuestas:**
-        - **204**: Pedido eliminado correctamente
+        - **200**: Pedido cancelado correctamente
         - **400**: Pedido no está en estado GESTIONAR PEDIDO (3)
         - **404**: Pedido no encontrado
-        - **409**: Pedido tiene información asociada
         """
+        # Crear contexto de auditoría (Buenas Prácticas - Sección 3)
+        audit = get_audit_context(request, user, origen=ORIGEN_WEB)
+        
         try:
             with get_db_connection_context() as conn:
                 repo = PedidoRepository(conn)
                 
-                # Validar que se puede eliminar (solo estado GESTIONAR PEDIDO)
+                # Validar que se puede cancelar (solo estado GESTIONAR PEDIDO)
                 ok, error_code, message = repo.validar_puede_eliminar(pedido_id)
                 
                 if not ok:
@@ -1508,52 +1508,55 @@ def register_crud_endpoints(app: FastAPI):
                         detail={"error": error_code, "message": message}
                     )
                 
-                # Obtener datos antes de eliminar (para logging y notificación)
+                # Obtener datos del pedido
                 pedido_data = repo.get_pedido_completo(pedido_id)
                 numero_pedido = (pedido_data.get("cabecera") or {}).get("numero_pedido") if pedido_data else None
-                estado_id = (pedido_data.get("cabecera") or {}).get("estado_id") if pedido_data else None
                 
-                # Eliminar el pedido
-                repo.delete_pedido(pedido_id)
-                
-                # Enviar notificación a MABEL TRADING (email)
-                try:
-                    from src.utils.email_notifier import send_pedido_eliminado_mabel_notification
-                    send_pedido_eliminado_mabel_notification(
-                        pedido_id=pedido_id,
-                        numero_pedido=numero_pedido,
-                        usuario_id=user.get("username") or user.get("sub"),
-                    )
-                    logger.info(f"📧 Notificación de pedido eliminado enviada a MABEL TRADING")
-                except Exception as notif_err:
-                    logger.warning(f"⚠️ No se pudo enviar notificación de pedido eliminado a MABEL TRADING: {notif_err}")
+                # Cambiar estado a CANCELADO POR EL RAYO (20) en vez de eliminar
+                from src.database.repositories.pedido.pedido_cabecera_repository import PedidoCabeceraRepository
+                cab_repo = PedidoCabeceraRepository(conn)
+                cab_repo.update_estado(
+                    pedido_id,
+                    ESTADO_CANCELADO_POR_EL_RAYO,
+                    audit_context=audit,
+                )
                 
                 # 📢 Notificación en tiempo real a MABEL TRADING
                 try:
                     from src.utils.notification_manager import notification_manager, NotificationType
                     await notification_manager.notify(
                         target_permission="mabel.view",
-                        title="Pedido eliminado por EL RAYO",
-                        message=f"El pedido {numero_pedido or pedido_id} ha sido eliminado desde gestión.",
+                        title="Pedido cancelado por EL RAYO",
+                        message=f"El pedido {numero_pedido or pedido_id} ha sido cancelado por EL RAYO.",
                         notification_type=NotificationType.WARNING,
-                        metadata={"pedido_id": pedido_id, "numero_pedido": numero_pedido, "accion": "pedido_eliminado"},
+                        metadata={"pedido_id": pedido_id, "numero_pedido": numero_pedido, "accion": "pedido_cancelado_por_el_rayo"},
                     )
                 except Exception as notif_err:
                     logger.warning(f"⚠️ Error al enviar notificación en tiempo real: {notif_err}")
                 
-                logger.info(f"✅ Pedido {pedido_id} eliminado desde Detalle del Pedido (botón Eliminar) por usuario {user.get('username', 'UNKNOWN')} (estado_id={estado_id}, numero_pedido={numero_pedido})")
+                logger.info(
+                    f"✅ Pedido {pedido_id} cancelado por EL RAYO (botón Cancelar Pedido) "
+                    f"por usuario {user.get('username', 'UNKNOWN')} (numero_pedido={numero_pedido})"
+                )
                 
-            return None
+                return {
+                    "success": True,
+                    "message": f"Pedido {numero_pedido or pedido_id} cancelado correctamente",
+                    "pedido_id": pedido_id,
+                    "numero_pedido": numero_pedido,
+                    "estado": "CANCELADO POR EL RAYO",
+                    "estado_id": ESTADO_CANCELADO_POR_EL_RAYO,
+                }
             
         except HTTPException:
             raise
         except Exception as e:
-            logger.error(f"❌ Error al eliminar pedido {pedido_id}: {e}", exc_info=True)
+            logger.error(f"❌ Error al cancelar pedido {pedido_id} por EL RAYO: {e}", exc_info=True)
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail={
                     "error": "internal_error",
-                    "message": f"Error al eliminar el pedido: {str(e)}"
+                    "message": f"Error al cancelar el pedido: {str(e)}"
                 }
             )
 

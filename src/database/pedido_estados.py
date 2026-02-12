@@ -21,6 +21,7 @@ ESTADO_ERROR_DATOS_MAESTROS = 14
 ESTADO_DESPACHAR_Y_FACTURAR = 17  # Manual: desde Confirmado y Enviado (ODC enviada a SAP)
 ESTADO_FINALIZADO = 18  # Estado final del flujo; solo desde Despachar y Facturar
 ESTADO_CANCELADO = 19  # Pedido cancelado por MABEL TRADING desde Redistribución
+ESTADO_CANCELADO_POR_EL_RAYO = 20  # Pedido cancelado por EL RAYO desde Gestionar Pedido
 
 # Estado inicial al subir Excel o crear pedido (siempre id = 1)
 ESTADO_INICIAL = ESTADO_BORRADOR
@@ -30,9 +31,9 @@ ESTADO_INICIAL = ESTADO_BORRADOR
 # - Nuevo Pedido (2): notifica a EL RAYO
 ESTADOS_PUEDE_DESCARTAR = (ESTADO_BORRADOR, ESTADO_NUEVO_PEDIDO)
 
-# Estados en los que se permite "Eliminar Pedido" (Detalle del Pedido): solo Gestionar Pedido.
-# - Gestionar Pedido (3): sin notificar
-ESTADOS_PUEDE_ELIMINAR = (ESTADO_GESTIONAR_PEDIDO,)
+# Estados en los que se permite "Cancelar Pedido" por EL RAYO (Detalle del Pedido): solo Gestionar Pedido.
+# Cambia estado a CANCELADO POR EL RAYO (20) en lugar de eliminar de la BD.
+ESTADOS_PUEDE_CANCELAR_POR_EL_RAYO = (ESTADO_GESTIONAR_PEDIDO,)
 
 # "Cancelar Pedido" (Redistribución): deshabilitar desde Confirmado redistribución (10) en adelante.
 # El botón debe estar habilitado solo cuando estado_id < ESTADO_PEDIDO_CONFIRMADO (10).
@@ -88,6 +89,7 @@ ESTADO_IDS_VALIDOS = frozenset({
     ESTADO_DESPACHAR_Y_FACTURAR,
     ESTADO_FINALIZADO,
     ESTADO_CANCELADO,
+    ESTADO_CANCELADO_POR_EL_RAYO,
 })
 
 # --- Mapping legacy string → id (solo para migración / compat temporal) -------
@@ -114,6 +116,8 @@ LEGACY_STRING_TO_ID = {
     "DESPACHAR_Y_FACTURAR": ESTADO_DESPACHAR_Y_FACTURAR,
     "FINALIZADO": ESTADO_FINALIZADO,
     "CANCELADO": ESTADO_CANCELADO,
+    "CANCELADO POR EL RAYO": ESTADO_CANCELADO_POR_EL_RAYO,
+    "CANCELADO_POR_EL_RAYO": ESTADO_CANCELADO_POR_EL_RAYO,
 }
 
 

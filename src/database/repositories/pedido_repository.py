@@ -25,7 +25,7 @@ if TYPE_CHECKING:
 from .pedido.pedido_cabecera_repository import PedidoCabeceraRepository
 from .pedido.pedido_detalle_repository import PedidoDetalleRepository
 from .pedido.pedido_tienda_repository import PedidoTiendaRepository
-from ..pedido_estados import ESTADO_LIMITE_CANCELAR_PEDIDO, ESTADOS_PUEDE_DESCARTAR, ESTADOS_PUEDE_ELIMINAR, estado_id_desde_legacy
+from ..pedido_estados import ESTADO_LIMITE_CANCELAR_PEDIDO, ESTADOS_PUEDE_DESCARTAR, ESTADOS_PUEDE_CANCELAR_POR_EL_RAYO, estado_id_desde_legacy
 
 logger = logging.getLogger(__name__)
 
@@ -139,7 +139,7 @@ class PedidoRepository:
         
         Args:
             solo_redistribucion: si True, solo incluye pedidos aptos para redistribución
-                (estado_id >= 4 "CONFIRMADO POR EL RAYO" y estado_id != 19 "CANCELADO")
+                (estado_id >= 4 "CONFIRMADO POR EL RAYO" y excluye CANCELADO (19) y CANCELADO POR EL RAYO (20))
         """
         return self.cabecera_repo.get_pedidos_con_filtros(
             estado, fecha_desde, fecha_hasta, proveedor_nombre,
@@ -328,7 +328,7 @@ class PedidoRepository:
         estado_id = cabecera.get("estado_id")
         
         # Validar estado: solo GESTIONAR PEDIDO (3)
-        if estado_id not in ESTADOS_PUEDE_ELIMINAR:
+        if estado_id not in ESTADOS_PUEDE_CANCELAR_POR_EL_RAYO:
             return (
                 False,
                 "estado_no_permitido",

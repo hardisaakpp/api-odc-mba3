@@ -23,6 +23,7 @@ from src.database.pedido_estados import (
     ESTADO_DESPACHAR_Y_FACTURAR,
     ESTADO_FINALIZADO,
     ESTADO_CANCELADO,
+    ESTADO_CANCELADO_POR_EL_RAYO,
     estado_id_desde_legacy,
 )
 
@@ -915,7 +916,7 @@ class PedidoCabeceraRepository:
             fecha_desde, fecha_hasta, proveedor_nombre, numero_pedido, creado_por, limit, offset
             excluir_borrador: si True, excluye pedidos en estado BORRADOR (estado_id=1)
             solo_redistribucion: si True, solo incluye pedidos aptos para redistribución
-                (estado_id >= 4 "CONFIRMADO POR EL RAYO" y estado_id != 19 "CANCELADO")
+                (estado_id >= 4 "CONFIRMADO POR EL RAYO" y excluye CANCELADO (19) y CANCELADO POR EL RAYO (20))
         """
         cursor = self.conn.cursor()
         try:
@@ -945,16 +946,16 @@ class PedidoCabeceraRepository:
                     where_conditions.append("(p.estado IS NULL OR (p.estado <> N'BORRADOR' AND p.estado <> N'PENDIENTE_CONFIRMACION_PROVEEDOR'))")
 
             # Filtro para vista de redistribución: solo pedidos con estado >= 4 (CONFIRMADO POR EL RAYO)
-            # y excluir CANCELADO (19), DESPACHAR_Y_FACTURAR (17) y FINALIZADO (18)
+            # y excluir DESPACHAR_Y_FACTURAR (17), FINALIZADO (18), CANCELADO (19) y CANCELADO POR EL RAYO (20)
             if solo_redistribucion and (tiene_estado_id or tiene_estado):
                 if tiene_estado_id:
                     where_conditions.append("p.estado_id >= ?")
                     params.append(ESTADO_REDISTRIBUCION)
-                    where_conditions.append("p.estado_id NOT IN (?, ?, ?)")
-                    params.extend([ESTADO_DESPACHAR_Y_FACTURAR, ESTADO_FINALIZADO, ESTADO_CANCELADO])
+                    where_conditions.append("p.estado_id NOT IN (?, ?, ?, ?)")
+                    params.extend([ESTADO_DESPACHAR_Y_FACTURAR, ESTADO_FINALIZADO, ESTADO_CANCELADO, ESTADO_CANCELADO_POR_EL_RAYO])
                 else:
                     # Fallback para bases de datos sin columna estado_id
-                    where_conditions.append("p.estado NOT IN (N'BORRADOR', N'NUEVO_PEDIDO', N'GESTIONAR_PEDIDO', N'PENDIENTE_CONFIRMACION_PROVEEDOR', N'DESPACHAR_Y_FACTURAR', N'DESPACHAR Y FACTURAR', N'FINALIZADO', N'CANCELADO')")
+                    where_conditions.append("p.estado NOT IN (N'BORRADOR', N'NUEVO_PEDIDO', N'GESTIONAR_PEDIDO', N'PENDIENTE_CONFIRMACION_PROVEEDOR', N'DESPACHAR_Y_FACTURAR', N'DESPACHAR Y FACTURAR', N'FINALIZADO', N'CANCELADO', N'CANCELADO POR EL RAYO')")
 
             if fecha_desde:
                 where_conditions.append("CAST(p.fecha_pedido AS DATE) >= CAST(? AS DATE)")
