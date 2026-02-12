@@ -987,6 +987,7 @@ def send_oc_ready_for_dispatch_notification(
                 lineas_texto = []
                 for resultado in resultados:
                     tienda_codigo = resultado.get("tienda_codigo", "N/A")
+                    tienda_nombre = resultado.get("tienda_nombre") or tienda_codigo
                     success = resultado.get("success", False)
                     doc_num_transf = resultado.get("doc_num", "N/A")
                     error = resultado.get("error")
@@ -999,6 +1000,7 @@ def send_oc_ready_for_dispatch_notification(
                     transferencias_tabla += f"""
                     <tr>
                         <td>{tienda_codigo}</td>
+                        <td>{tienda_nombre}</td>
                         <td>{estado_html}</td>
                         <td>{doc_info}</td>
                     </tr>
@@ -1006,7 +1008,7 @@ def send_oc_ready_for_dispatch_notification(
                     
                     # Texto plano
                     estado_txt = "Creada" if success else "Error"
-                    lineas_texto.append(f"  {tienda_codigo}\t{estado_txt}\t{doc_info}")
+                    lineas_texto.append(f"  {tienda_codigo}\t{tienda_nombre}\t{estado_txt}\t{doc_info}")
                 
                 transferencias_detalle_texto = "\n".join(lineas_texto)
         
@@ -1037,6 +1039,7 @@ def send_oc_ready_for_dispatch_notification(
                 filas_tabla_html += f'''
                 <tr style="background-color:{bg_color};">
                     <td style="padding:12px 16px;border-bottom:1px solid #e8e8e8;font-weight:600;color:#2c3e50;">{tienda_codigo}</td>
+                    <td style="padding:12px 16px;border-bottom:1px solid #e8e8e8;color:#555;">{tienda_nombre}</td>
                     <td style="padding:12px 16px;border-bottom:1px solid #e8e8e8;text-align:center;">{badge}</td>
                     <td style="padding:12px 16px;border-bottom:1px solid #e8e8e8;text-align:center;">{info_html}</td>
                 </tr>'''
@@ -1073,6 +1076,7 @@ def send_oc_ready_for_dispatch_notification(
                 <thead>
                     <tr style="background:linear-gradient(135deg,#1a5276 0%,#2980b9 100%);">
                         <th style="padding:14px 16px;text-align:left;color:#fff;font-size:13px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;">Tienda</th>
+                        <th style="padding:14px 16px;text-align:left;color:#fff;font-size:13px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;">Nombre</th>
                         <th style="padding:14px 16px;text-align:center;color:#fff;font-size:13px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;">Estado</th>
                         <th style="padding:14px 16px;text-align:center;color:#fff;font-size:13px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;">DocNum</th>
                     </tr>
@@ -1213,7 +1217,7 @@ Solicitudes de Transferencia Generadas:
                 seccion_transferencias_texto += f"""
 
 Detalle de Solicitudes de Transferencia:
-  Tienda\tEstado\tDocNum
+  Tienda\tNombre\tEstado\tDocNum
 {transferencias_detalle_texto}"""
         
         body_text = f"""OC y Solicitudes de Transferencia Generadas

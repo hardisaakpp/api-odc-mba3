@@ -1183,6 +1183,9 @@ def register_ordenes_compra_endpoints(app: FastAPI):
             if error:
                 raise HTTPException(status_code=404, detail=error)
             
+            if oc_cabecera is None or pdf_bytes is None:
+                raise HTTPException(status_code=404, detail="Orden de compra no encontrada")
+            
             # Nombre del archivo
             numero_oc_sap = oc_cabecera.get("numero_oc_sap", "SIN_NUMERO")
             nombre_archivo = f"ODC_{numero_oc_sap}.pdf"

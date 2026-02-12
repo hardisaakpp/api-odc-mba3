@@ -21,7 +21,7 @@ from src.database.repositories.distribucion_confirmada_repository import Distrib
 from src.database.repositories.pedido_repository import PedidoRepository
 from src.database.services.redistribucion_validator import RedistribucionValidator
 from src.security.jwt_auth import verify_jwt_token, require_permission
-from src.utils.audit_context import get_audit_context, ORIGEN_WEB
+from src.utils.audit_context import AuditContext, get_audit_context, ORIGEN_WEB
 from src.models import (
     RedistribucionConfirmarRequest,
     ProcesoCompletoSAPResponse,
@@ -41,7 +41,7 @@ def _ejecutar_proceso_completo_sync(
     numero_pedido: str,
     ajustes_detalle: List,
     user_id: str,
-    audit: dict,
+    audit: AuditContext,
 ) -> dict:
     """
     Ejecuta toda la lógica síncrona del proceso completo SAP.
