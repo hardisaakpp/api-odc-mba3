@@ -6,6 +6,8 @@ import logging
 from typing import Dict, Any, List, Optional
 from datetime import datetime
 
+from src.utils.timezone import ahora_naive
+
 logger = logging.getLogger(__name__)
 
 
@@ -50,7 +52,7 @@ class SAPOCMapper:
         elif fecha is not None and hasattr(fecha, 'strftime'):
             fecha = fecha.strftime("%Y-%m-%d")
         elif fecha is None:
-            fecha = datetime.now().strftime("%Y-%m-%d")
+            fecha = ahora_naive().strftime("%Y-%m-%d")
         
         # Construir DocumentLines. WarehouseCode SOLO desde detalle.codigo_bodega (contrato Postman).
         document_lines = []
@@ -101,7 +103,7 @@ class SAPOCMapper:
         pedido_final = pedido_id or oc_cabecera.get("pedido_id") or ""
         
         # Fecha actual para U_FECHA
-        fecha_actual = datetime.utcnow().strftime("%Y-%m-%d")
+        fecha_actual = ahora_naive().strftime("%Y-%m-%d")
         
         # Construir JSON completo con UDFs de trazabilidad
         # ⚠️ NOTA: Purchase Orders usa DocDueDate (no DueDate), que es correcto para este endpoint

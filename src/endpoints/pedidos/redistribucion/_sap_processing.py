@@ -6,7 +6,7 @@ from typing import Any, Dict
 def _enviar_notificacion_homologacion(conn, homologacion_service, logger) -> None:
     from src.database.repositories.homologacion_repository import HomologacionRepository
     from src.utils.email_notifier import send_homologacion_notification
-    from datetime import datetime
+    from src.utils.timezone import ahora_naive
 
     todos_productos = homologacion_service.get_todos_productos_no_homologados()
     productos_no_homologados = todos_productos.get("productos", [])
@@ -22,7 +22,7 @@ def _enviar_notificacion_homologacion(conn, homologacion_service, logger) -> Non
     email_enviado = send_homologacion_notification(
         productos_no_homologados=productos_no_homologados,
         estadisticas=estadisticas,
-        fecha_ejecucion=datetime.now(),
+        fecha_ejecucion=ahora_naive(),
         filtrar_ya_notificados=True,
         homologacion_repository=repository,
     )

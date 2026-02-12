@@ -7,6 +7,8 @@ import logging
 import uuid
 from typing import Dict
 from datetime import datetime
+
+from src.utils.timezone import ahora_naive
 from fastapi import FastAPI, Depends, HTTPException, Path, Query, status
 from fastapi.responses import Response
 
@@ -53,7 +55,7 @@ def register_exportacion_endpoints(app: FastAPI):
                 content=excel_bytes,
                 media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 headers={
-                    "Content-Disposition": f'attachment; filename="pedido_proveedor_{pedido_id}_{datetime.now().strftime("%Y%m%d")}.xlsx"'
+                    "Content-Disposition": f'attachment; filename="pedido_proveedor_{pedido_id}_{ahora_naive().strftime("%Y%m%d")}.xlsx"'
                 }
             )
             
@@ -174,7 +176,7 @@ def register_exportacion_endpoints(app: FastAPI):
             
             # Limpiar número de pedido para nombre de archivo
             numero_pedido_limpio = numero_pedido.replace(" ", "_").replace("-", "_").replace("/", "_")
-            filename = f"pedido_mba_{numero_pedido_limpio}_{datetime.now().strftime('%Y%m%d')}.txt"
+            filename = f"pedido_mba_{numero_pedido_limpio}_{ahora_naive().strftime('%Y%m%d')}.txt"
             
             logger.info(f"✅ Pedido {numero_pedido} exportado a formato MBA: {filename}")
             

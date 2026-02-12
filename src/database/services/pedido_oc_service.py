@@ -10,6 +10,8 @@ import pyodbc
 from typing import Dict, Any, List, Optional
 from datetime import datetime
 
+from src.utils.timezone import ahora_naive
+
 from src.config import PROJECT_ROOT
 from ..connection import get_db_connection_context
 from ..repositories.pedido_repository import PedidoRepository
@@ -60,9 +62,9 @@ class PedidoOCService:
                 fecha_pedido = datetime.fromisoformat(fecha_pedido.replace('Z', '+00:00'))
             except (ValueError, AttributeError):
                 # Si falla, usar fecha actual
-                fecha_pedido = datetime.now()
+                fecha_pedido = ahora_naive()
         elif fecha_pedido is None:
-            fecha_pedido = datetime.now()
+            fecha_pedido = ahora_naive()
         
         return {
             "despacho_id": None,  # No viene de despacho

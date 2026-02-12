@@ -304,7 +304,7 @@ EMAIL_FROM_NAME = os.getenv("EMAIL_FROM_NAME", "INTEGRACIÃ“N SAP")
 
 # EMAIL_TO - SEGMENTADO POR TIPO DE USUARIO
 # Usuario Principal: Operaciones/Despachos (recibe notificaciones de NUEVOS DESPACHOS)
-_email_operaciones = os.getenv("EMAIL_TO_OPERACIONES", "cortiz@mabeltrading.com.ec")
+_email_operaciones = os.getenv("EMAIL_TO_OPERACIONES", "cortiz@mabeltrading.com.ec,pchafuel@mabeltrading.com.ec")
 EMAIL_TO_OPERACIONES = [email.strip() for email in _email_operaciones.split(",") if email.strip()]
 
 # Usuario Homologaciones: Productos no homologados (recibe notificaciones de SKUs faltantes)
@@ -327,7 +327,8 @@ EMAIL_PROVEEDOR_PRUEBAS = os.getenv("EMAIL_PROVEEDOR_PRUEBAS", "cortiz@mabeltrad
 
 # Email de MABEL TRADING para notificaciones de confirmacion de pedidos
 # Usado cuando EL RAYO confirma un pedido y se debe notificar a MABEL TRADING
-EMAIL_MABEL_TRADING = os.getenv("EMAIL_MABEL_TRADING", "cortiz@mabeltrading.com.ec")
+_email_mabel_trading = os.getenv("EMAIL_MABEL_TRADING", "cortiz@mabeltrading.com.ec,pchafuel@mabeltrading.com.ec")
+EMAIL_MABEL_TRADING = [email.strip() for email in _email_mabel_trading.split(",") if email.strip()]
 
 
 # ConfiguraciÃ³n de advertencias tÃ©cnicas

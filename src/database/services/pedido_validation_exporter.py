@@ -7,6 +7,8 @@ import io
 from typing import Dict, Any
 from datetime import datetime
 
+from src.utils.timezone import ahora_naive
+
 from .pedido_validator import ValidationIssue, ValidationSeverity
 
 
@@ -84,7 +86,7 @@ class PedidoValidationExporter:
                 "Errores": validation_result.get("errors", 0),
                 "Advertencias": validation_result.get("warnings", 0),
                 "Válido": validation_result.get("valid", False),
-                "Fecha Validación": datetime.now().isoformat()
+                "Fecha Validación": ahora_naive().isoformat()
             }])
             resumen_df.to_excel(writer, sheet_name="Resumen", index=False)
             

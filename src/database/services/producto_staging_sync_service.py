@@ -8,6 +8,8 @@ import time
 from typing import List, Dict, Any, Optional
 from datetime import datetime, timedelta
 
+from src.utils.timezone import ahora_naive
+
 from src.database.connection import get_db_connection, get_sap_db_connection
 from src.database.repositories.producto_mba3_staging_repository import ProductoMBA3StagingRepository
 from src.database.repositories.producto_sap_staging_repository import ProductoSAPStagingRepository
@@ -88,7 +90,7 @@ class ProductoStagingSyncService:
         """
         conn = None
         sync_control_id = None
-        start_time = datetime.now()
+        start_time = ahora_naive()
         
         try:
             logger.info("🔄 Iniciando sincronización de productos MBA3 con paginación...")
@@ -126,7 +128,7 @@ class ProductoStagingSyncService:
             # Query base con filtros correctos (alineados con cruce de productos)
             # Calcular fecha límite (últimos 365 días) - formato YYYY-MM-DD para 4D
             # COMENTADO: Filtro de fechas deshabilitado
-            # fecha_limite = datetime.now() - timedelta(days=365)
+            # fecha_limite = ahora_naive() - timedelta(days=365)
             # fecha_limite_str = fecha_limite.strftime("%Y-%m-%d")
             
             query_base = (
@@ -456,7 +458,7 @@ class ProductoStagingSyncService:
                     total_eliminados = 0
             
             # Calcular duración
-            end_time = datetime.now()
+            end_time = ahora_naive()
             duracion_segundos = int((end_time - start_time).total_seconds())
             
             # Finalizar sync_control
@@ -501,7 +503,7 @@ class ProductoStagingSyncService:
             if conn and sync_control_id:
                 try:
                     sync_control_repo = SyncControlRepository(conn)
-                    end_time = datetime.now()
+                    end_time = ahora_naive()
                     duracion_segundos = int((end_time - start_time).total_seconds())
                     sync_control_repo.finalizar_sync(
                         sync_control_id,
@@ -542,7 +544,7 @@ class ProductoStagingSyncService:
         conn = None
         sap_conn = None
         sync_control_id = None
-        start_time = datetime.now()
+        start_time = ahora_naive()
         
         try:
             logger.info("🔄 Iniciando sincronización de productos SAP con paginación...")
@@ -795,7 +797,7 @@ class ProductoStagingSyncService:
                 )
             
             # Calcular duración
-            end_time = datetime.now()
+            end_time = ahora_naive()
             duracion_segundos = int((end_time - start_time).total_seconds())
             
             # Finalizar sync_control
@@ -835,7 +837,7 @@ class ProductoStagingSyncService:
             if conn and sync_control_id:
                 try:
                     sync_control_repo = SyncControlRepository(conn)
-                    end_time = datetime.now()
+                    end_time = ahora_naive()
                     duracion_segundos = int((end_time - start_time).total_seconds())
                     sync_control_repo.finalizar_sync(
                         sync_control_id,
@@ -883,5 +885,5 @@ class ProductoStagingSyncService:
             "status": "success",
             "mba3": mba3_result,
             "sap": sap_result,
-            "timestamp": datetime.now().isoformat()
+            "timestamp": ahora_naive().isoformat()
         }

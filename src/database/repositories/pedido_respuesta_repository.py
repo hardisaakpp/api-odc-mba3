@@ -7,6 +7,8 @@ import logging
 import pyodbc
 from typing import Dict, Any, List, Optional
 
+from src.utils.timezone import ahora_naive
+
 logger = logging.getLogger(__name__)
 
 
@@ -54,13 +56,14 @@ class PedidoRespuestaRepository:
                 raise ValueError("No se pudo generar el UUID para la respuesta")
             respuesta_id = str(row[0])
             
+            _ahora = ahora_naive()
             cursor.execute("""
                 INSERT INTO pedido_respuesta_proveedor (
                     respuesta_id, pedido_id, version, estado,
                     fecha_respuesta, creado_por, observaciones_generales,
                     created_at, updated_at
-                ) VALUES (?, ?, ?, 'PENDIENTE_REVISION', GETDATE(), ?, ?, GETDATE(), GETDATE())
-            """, (respuesta_id, pedido_id, nueva_version, usuario_id, observaciones_generales))
+                ) VALUES (?, ?, ?, 'PENDIENTE_REVISION', ?, ?, ?, ?, ?)
+            """, (respuesta_id, pedido_id, nueva_version, _ahora, usuario_id, observaciones_generales, _ahora, _ahora))
             
             self.conn.commit()
             logger.debug(f"✅ Respuesta del proveedor creada: {respuesta_id} (versión {nueva_version})")
@@ -133,6 +136,7 @@ class PedidoRespuestaRepository:
                 observaciones_precio = precio_resp.get("observaciones_precio")
                 
                 # Insertar detalle de respuesta
+                _ahora = ahora_naive()
                 cursor.execute("""
                     INSERT INTO pedido_respuesta_proveedor_detalle (
                         id, respuesta_id, pedido_detalle_id,
@@ -140,13 +144,15 @@ class PedidoRespuestaRepository:
                         costo_doc_sin_iva_original, costo_doc_sin_iva_ajustado,
                         descuento_1_original, descuento_1_ajustado,
                         observaciones, created_at, updated_at
-                    ) VALUES (NEWID(), ?, ?, ?, ?, ?, ?, ?, ?, ?, GETDATE(), GETDATE())
+                    ) VALUES (NEWID(), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
                     respuesta_id, pedido_detalle_id,
                     cantidad_solicitada_total, cantidad_confirmada_total,
                     costo_original, costo_ajustado,
                     descuento_original, descuento_ajustado,
-                    observaciones or observaciones_precio  # Combinar observaciones
+                    observaciones or observaciones_precio,
+                    _ahora,
+                    _ahora,
                 ))
                 
                 cantidades_guardadas += 1

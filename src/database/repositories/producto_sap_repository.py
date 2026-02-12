@@ -7,6 +7,8 @@ import pyodbc
 from typing import Optional, Dict, Any
 from datetime import datetime, timedelta
 
+from src.utils.timezone import ahora_naive
+
 logger = logging.getLogger(__name__)
 
 
@@ -102,7 +104,7 @@ class ProductoSAPRepository:
         else:
             return False
         
-        fecha_limite = datetime.now() - timedelta(days=cache_days)
+        fecha_limite = ahora_naive() - timedelta(days=cache_days)
         return ultima_consulta >= fecha_limite
     
     def insert_or_update(self, producto_data: Dict[str, Any]) -> bool:
@@ -142,8 +144,8 @@ class ProductoSAPRepository:
                     unidad_conversion = ?,
                     pack_id = ?,
                     grupo_articulos = ?,
-                    ultima_consulta = GETDATE(),
-                    updated_at = GETDATE()
+                    ultima_consulta = ?,
+                    updated_at = ?
                 WHERE sku = ? AND activo = 1
                 """
                 
@@ -154,6 +156,8 @@ class ProductoSAPRepository:
                     producto_data.get("unidad_conversion"),
                     producto_data.get("pack_id"),
                     producto_data.get("grupo_articulos"),
+                    ahora_naive(),
+                    ahora_naive(),
                     sku,
                 )
                 
@@ -176,9 +180,9 @@ class ProductoSAPRepository:
                     activo,
                     created_at,
                     updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, GETDATE(), 1, GETDATE(), GETDATE())
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
                 """
-                
+                _ahora = ahora_naive()
                 values = (
                     sku,
                     producto_data.get("item_code", sku),
@@ -187,6 +191,9 @@ class ProductoSAPRepository:
                     producto_data.get("unidad_conversion"),
                     producto_data.get("pack_id"),
                     producto_data.get("grupo_articulos"),
+                    _ahora,
+                    _ahora,
+                    _ahora,
                 )
                 
                 cursor.execute(sql, values)

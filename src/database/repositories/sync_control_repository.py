@@ -6,6 +6,8 @@ import logging
 import pyodbc
 from typing import Optional, Dict, Any
 from datetime import datetime
+
+from src.utils.timezone import ahora_naive
 import uuid
 
 logger = logging.getLogger(__name__)
@@ -45,7 +47,7 @@ class SyncControlRepository:
                     iniciado_por,
                     created_at
                 ) VALUES (?, ?, ?, ?, ?)
-            """, (sync_id, entidad, 'EN_PROGRESO', iniciado_por, datetime.now()))
+            """, (sync_id, entidad, 'EN_PROGRESO', iniciado_por, ahora_naive()))
             
             self.conn.commit()
             logger.debug(f"✅ Sync iniciado: {entidad} (sync_id: {sync_id})")
@@ -84,7 +86,7 @@ class SyncControlRepository:
         """
         cursor = self.conn.cursor()
         try:
-            ultima_sync_exitosa = datetime.now() if estado == 'EXITOSA' else None
+            ultima_sync_exitosa = ahora_naive() if estado == 'EXITOSA' else None
             
             cursor.execute("""
                 UPDATE sync_control
@@ -181,8 +183,8 @@ class SyncControlRepository:
         ⚠️ IMPORTANTE: Si hay una sync EN_PROGRESO con created_at > 2 horas,
            se considera inconsistente (proceso colgado).
         
-        ⚠️ NOTA TIMEZONE: Usa datetime.now() sin timezone para consistencia
-           con GETDATE() de SQL Server (hora local del servidor).
+        ⚠️ NOTA TIMEZONE: Usa ahora_naive() (hora Colombia, sin tzinfo) para
+           consistencia con GETDATE() de SQL Server.
         
         Args:
             entidad: 'MBA3' o 'SAP'
@@ -214,8 +216,8 @@ class SyncControlRepository:
                 
                 # ⚠️ Validación: Si la sync lleva > 2 horas, considerar inconsistente
                 if created_at:
-                    # datetime.now() sin timezone para consistencia con GETDATE() de SQL Server
-                    tiempo_transcurrido = (datetime.now() - created_at).total_seconds()
+                    # ahora_naive() en hora Colombia para consistencia con GETDATE() de SQL Server
+                    tiempo_transcurrido = (ahora_naive() - created_at).total_seconds()
                     horas_transcurridas = tiempo_transcurrido / 3600
                     
                     if horas_transcurridas > 2:

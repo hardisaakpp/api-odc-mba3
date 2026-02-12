@@ -403,10 +403,13 @@ class SkuRepository:
             
             set_clauses.extend([
                 "tiene_datos_sap = ?",
-                "updated_at = GETDATE()",
-                "ultima_modificacion = GETDATE()"
+                "updated_at = ?",
+                "ultima_modificacion = ?"
             ])
             params.append(1 if tiene_datos_sap else 0)
+            _ahora = ahora_naive()
+            params.append(_ahora)
+            params.append(_ahora)
             
             if modificado_por:
                 set_clauses.append("modificado_por = ?")
@@ -578,13 +581,14 @@ class SkuRepository:
                             tiene_datos_sap = ?,
                             tiene_diferencias = ?,
                             estado = ?,
-                            updated_at = GETDATE()
+                            updated_at = ?
                         WHERE homologacion_id = ?
                     """, (
                         row[7], row[8], row[9], row[10], row[11],
                         1 if tiene_datos_sap else 0,
                         1 if tiene_diferencias else 0,
                         estado,
+                        ahora_naive(),
                         existing[0]
                     ))
                     homologaciones_actualizadas += 1

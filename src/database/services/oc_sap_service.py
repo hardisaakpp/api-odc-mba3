@@ -7,6 +7,8 @@ Este servicio orquesta la construcción del JSON y el envío de ODC a SAP.
 import json
 import logging
 from datetime import datetime
+
+from src.utils.timezone import ahora_naive
 from typing import Optional, Dict, Any, List
 
 from src.config import PROJECT_ROOT
@@ -453,7 +455,7 @@ class OCSAPService:
                 if isinstance(doc_date_val, str) and len(doc_date_val) >= 10:
                     doc_date_itr = doc_date_val[:10]
                 if not doc_date_itr:
-                    doc_date_itr = datetime.utcnow().strftime("%Y-%m-%d")
+                    doc_date_itr = ahora_naive().strftime("%Y-%m-%d")
                 
                 # ⭐ REGLA CLARA: FromWarehouse prioridad
                 # 1. codigo_bodega de la OC (viene de Excel) → prioridad

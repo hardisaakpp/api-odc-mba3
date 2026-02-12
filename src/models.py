@@ -10,6 +10,8 @@ from typing import Optional, Dict, Any, List, Union
 from datetime import datetime
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from src.utils.timezone import ahora_naive
+
 
 class QueryRequest(BaseModel):
     """Modelo para recibir consultas SQL."""
@@ -890,7 +892,7 @@ class ReporteDiferenciasResponse(BaseModel):
     pedido_id: str = Field(..., description="UUID del pedido")
     numero_pedido: str = Field(..., description="Número del pedido")
     version: int = Field(..., ge=1)
-    fecha_generacion: datetime = Field(default_factory=datetime.now)
+    fecha_generacion: datetime = Field(default_factory=ahora_naive)
     
     # Resumen total
     total_productos: int = Field(..., ge=0)
@@ -932,7 +934,7 @@ class ConfirmarRedistribucionResponse(BaseModel):
     version_confirmada: int = Field(..., ge=1)
     estado_anterior: str
     estado_nuevo: str
-    fecha_confirmacion: datetime = Field(default_factory=datetime.now)
+    fecha_confirmacion: datetime = Field(default_factory=ahora_naive)
     mensaje: str = Field(..., description="Mensaje de confirmación")
 
 
@@ -1099,7 +1101,7 @@ class ConfirmarRedistribucionResponseFrontend(BaseModel):
     pedido_id: str = Field(..., description="UUID del pedido")
     numero_pedido: str = Field(..., description="Número del pedido")
     redistribucion_id: Optional[str] = Field(None, description="ID de la redistribución (si aplica)")
-    fecha_confirmacion: datetime = Field(default_factory=datetime.now)
+    fecha_confirmacion: datetime = Field(default_factory=ahora_naive)
     resumen: ResumenConfirmacion
     ajustes_aplicados: int = Field(..., ge=0, description="Cantidad de productos ajustados")
 
@@ -1138,7 +1140,7 @@ class GuardarBorradorResponse(BaseModel):
     message: str = Field(..., description="Mensaje de confirmación")
     pedido_id: str = Field(..., description="UUID del pedido")
     numero_pedido: str = Field(..., description="Número del pedido")
-    fecha_guardado: datetime = Field(default_factory=datetime.now)
+    fecha_guardado: datetime = Field(default_factory=ahora_naive)
 
 
 class BorradorResponse(BaseModel):
@@ -1414,7 +1416,7 @@ class ProcesoCompletoSAPResponse(BaseModel):
     resumen: Optional[ResumenConfirmacion] = Field(None, description="Resumen de cantidades y costos")
     
     # Timestamps
-    fecha_proceso: datetime = Field(default_factory=datetime.now, description="Fecha y hora del proceso")
+    fecha_proceso: datetime = Field(default_factory=ahora_naive, description="Fecha y hora del proceso")
     
     # Errores parciales (si el proceso falló en algún paso)
     paso_fallido: Optional[str] = Field(None, description="Nombre del paso donde falló (si aplica)")

@@ -10,6 +10,8 @@ import logging
 import pyodbc
 from typing import Dict, Any, List, Optional, TYPE_CHECKING
 from datetime import datetime
+
+from src.utils.timezone import ahora_naive
 from decimal import Decimal
 
 if TYPE_CHECKING:
@@ -349,7 +351,7 @@ class DistribucionConfirmadaRepository:
             
             # Insertar nuevas distribuciones confirmadas
             distribuciones_insertadas = 0
-            fecha_creacion = datetime.now()
+            fecha_creacion = ahora_naive()
             
             for producto in productos_redistribucion:
                 pedido_detalle_id = producto["pedido_detalle_id"]
@@ -482,7 +484,7 @@ class DistribucionConfirmadaRepository:
                 raise ValueError("No existe ninguna redistribución para confirmar")
             
             # Actualizar estado de todas las distribuciones de esta versión
-            fecha_modificacion = datetime.now()
+            fecha_modificacion = ahora_naive()
             cursor.execute("""
                 UPDATE distribucion_confirmada
                 SET estado = 'CONFIRMADO',

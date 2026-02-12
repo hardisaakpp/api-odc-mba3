@@ -9,6 +9,8 @@ import asyncio
 import time
 import json
 from datetime import datetime, timedelta
+
+from src.utils.timezone import ahora_naive
 from fastapi import FastAPI, HTTPException, Depends, Query, Request
 from fastapi.responses import StreamingResponse
 
@@ -173,7 +175,7 @@ def register_cruce_productos_endpoints(app: FastAPI):
             if completed_at_str:
                 completed_at = datetime.fromisoformat(completed_at_str)
                 age_minutes = round(
-                    (datetime.now() - completed_at).total_seconds() / 60, 1
+                    (ahora_naive() - completed_at).total_seconds() / 60, 1
                 )
             
             return {

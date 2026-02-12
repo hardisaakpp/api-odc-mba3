@@ -5,6 +5,8 @@ Endpoints relacionados con integración SAP.
 import logging
 import uuid
 from datetime import datetime
+
+from src.utils.timezone import ahora_naive
 from typing import Optional, List
 from fastapi import FastAPI, Request, Query as FastAPIQuery, Depends, Query
 from fastapi.responses import JSONResponse
@@ -499,7 +501,7 @@ def register_sap_endpoints(app: FastAPI):
             # Generar resumen consolidado del proceso
             resumen_cierre = {
                 "proceso_id": proceso_id,
-                "timestamp": datetime.now().isoformat(),
+                "timestamp": ahora_naive().isoformat(),
                 "usuario": username,
                 "fuente": source,
                 "total_procesadas": len(oc_ids_a_procesar),
@@ -759,7 +761,7 @@ def register_sap_endpoints(app: FastAPI):
         
         # Log
         logger.info("=" * 70)
-        logger.info(f"Prueba de consulta SAP recibida a las {datetime.now().isoformat()}")
+        logger.info(f"Prueba de consulta SAP recibida a las {ahora_naive().isoformat()}")
         logger.info(f"Fuente: {source}")
         logger.info(f"SKU: {sku}")
         logger.info("=" * 70)
@@ -799,7 +801,7 @@ def register_sap_endpoints(app: FastAPI):
                         "sap_enabled": ENABLE_SAP_QUERIES,
                     },
                     "message": "Producto encontrado en SAP",
-                    "timestamp": datetime.now().isoformat()
+                    "timestamp": ahora_naive().isoformat()
                 }
                 
                 # Agregar información de conversión si está disponible
@@ -836,7 +838,7 @@ def register_sap_endpoints(app: FastAPI):
                         "message": f"Producto no encontrado en SAP para SKU: {sku}",
                         "sku": sku,
                         "hint": "Verifica que el SKU exista en SAP y que el servidor vinculado esté configurado correctamente",
-                        "timestamp": datetime.now().isoformat()
+                        "timestamp": ahora_naive().isoformat()
                     }
                 )
                 
@@ -848,7 +850,7 @@ def register_sap_endpoints(app: FastAPI):
                     "status": "error",
                     "message": f"Error al consultar SAP: {str(e)}",
                     "sku": sku,
-                    "timestamp": datetime.now().isoformat()
+                    "timestamp": ahora_naive().isoformat()
                 }
             )
     
@@ -877,7 +879,7 @@ def register_sap_endpoints(app: FastAPI):
         source = get_source_from_headers(request)
         
         logger.info("=" * 70)
-        logger.info(f"Prueba de consulta SAP directa recibida a las {datetime.now().isoformat()}")
+        logger.info(f"Prueba de consulta SAP directa recibida a las {ahora_naive().isoformat()}")
         logger.info(f"SKU: {sku}")
         logger.info("=" * 70)
         
@@ -903,7 +905,7 @@ def register_sap_endpoints(app: FastAPI):
                         "sku": sku,
                         "sap_direct_result": resultado,
                         "message": "Consulta directa a SAP exitosa",
-                        "timestamp": datetime.now().isoformat()
+                        "timestamp": ahora_naive().isoformat()
                     },
                     headers={
                         "X-Source": source,

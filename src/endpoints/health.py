@@ -3,6 +3,8 @@ Endpoints relacionados con health check y estado del sistema.
 """
 
 from datetime import datetime
+
+from src.utils.timezone import ahora_naive
 from fastapi import FastAPI
 from src.models import HealthResponse
 
@@ -25,6 +27,6 @@ def register_health_endpoints(app: FastAPI):
         """
         return {
             "status": "ok",
-            "time": datetime.now().isoformat()
+            "time": ahora_naive().isoformat()
         }
 

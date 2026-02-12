@@ -240,9 +240,9 @@ def generar_excel_distribucion(
     row += 1
     ws_cabecera[f"A{row}"] = "Fecha de descarga:"
     ws_cabecera[f"A{row}"].font = Font(bold=True)
-    from datetime import datetime
+    from src.utils.timezone import ahora_naive
 
-    ws_cabecera[f"B{row}"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    ws_cabecera[f"B{row}"] = ahora_naive().strftime("%Y-%m-%d %H:%M:%S")
 
     excel_buffer = BytesIO()
     wb.save(excel_buffer)

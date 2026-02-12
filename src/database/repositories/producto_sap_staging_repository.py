@@ -7,6 +7,8 @@ import pyodbc
 from typing import List, Dict, Any, Optional
 from datetime import datetime
 
+from src.utils.timezone import ahora_naive
+
 logger = logging.getLogger(__name__)
 
 
@@ -142,7 +144,7 @@ class ProductoSAPStagingRepository:
             
             # Verificar si existe
             existing = self.find_by_item_code(item_code)
-            now = datetime.now()
+            now = ahora_naive()
             
             if existing:
                 # UPDATE

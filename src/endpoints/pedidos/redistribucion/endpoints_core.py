@@ -7,6 +7,8 @@ from fastapi import FastAPI, Depends, HTTPException, Path, Query, Body, status, 
 from fastapi.responses import JSONResponse, StreamingResponse
 from datetime import datetime
 
+from src.utils.timezone import ahora_naive
+
 from src.database.connection import get_db_connection_context
 from src.database.pedido_estados import ESTADO_REDISTRIBUIDO, ESTADO_PEDIDO_CONFIRMADO
 from src.database.repositories.distribucion_confirmada_repository import DistribucionConfirmadaRepository
@@ -274,7 +276,7 @@ def register_core_endpoints(app: FastAPI):
                     version_confirmada=resultado["version_confirmada"],
                     estado_anterior=estado_anterior,
                     estado_nuevo=estado_nuevo,
-                    fecha_confirmacion=datetime.now(),
+                    fecha_confirmacion=ahora_naive(),
                     mensaje=resultado["mensaje"]
                 )
 
@@ -336,7 +338,7 @@ def register_core_endpoints(app: FastAPI):
                     pedido_id=pedido_id_real,
                     numero_pedido=pedido_data["cabecera"]["numero_pedido"],
                     version=diferencias["version"],
-                    fecha_generacion=datetime.now(),
+                    fecha_generacion=ahora_naive(),
                     total_productos=diferencias["total_productos"],
                     total_cantidad_solicitada=diferencias["total_cantidad_solicitada"],
                     total_cantidad_confirmada=diferencias["total_cantidad_confirmada"],

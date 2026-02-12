@@ -6,6 +6,8 @@ import logging
 import asyncio
 import uuid
 from datetime import datetime
+
+from src.utils.timezone import ahora_naive
 from typing import Optional, List, Dict, Any
 from fastapi import FastAPI, Request, Query, Depends
 from fastapi.responses import JSONResponse
@@ -27,7 +29,7 @@ def generar_process_id() -> str:
     Returns:
         String con formato: odc-YYYY-MM-DD-UUID
     """
-    timestamp = datetime.now().strftime("%Y-%m-%d")
+    timestamp = ahora_naive().strftime("%Y-%m-%d")
     unique_id = str(uuid.uuid4())[:8]
     return f"odc-{timestamp}-{unique_id}"
 
@@ -202,7 +204,7 @@ def register_procesar_endpoint(app: FastAPI):
         
         # Log del proceso
         logger.info("=" * 70)
-        logger.info(f"🔄 PROCESAR-OC: Iniciado a las {datetime.now().isoformat()}")
+        logger.info(f"🔄 PROCESAR-OC: Iniciado a las {ahora_naive().isoformat()}")
         logger.info(f"Process ID: {process_id}")
         logger.info(f"Fuente: {source}")
         
@@ -265,7 +267,7 @@ def register_procesar_endpoint(app: FastAPI):
                                         "datos_sincronizados": False,
                                         "detalles": []
                                     },
-                                    "timestamp": datetime.now().isoformat()
+                                    "timestamp": ahora_naive().isoformat()
                                 }
                             }
                         
@@ -300,7 +302,7 @@ def register_procesar_endpoint(app: FastAPI):
                                         "datos_sincronizados": True,
                                         "detalles": []
                                     },
-                                    "timestamp": datetime.now().isoformat()
+                                    "timestamp": ahora_naive().isoformat()
                                 }
                             }
                     
@@ -446,7 +448,7 @@ def register_procesar_endpoint(app: FastAPI):
                         },
                         "metadata": {
                             "oc_status": oc_status,
-                            "timestamp": datetime.now().isoformat()
+                            "timestamp": ahora_naive().isoformat()
                         }
                     }
                 except Exception as e:
@@ -472,7 +474,7 @@ def register_procesar_endpoint(app: FastAPI):
                                 "datos_sincronizados": False,
                                 "detalles": []
                             },
-                            "timestamp": datetime.now().isoformat()
+                            "timestamp": ahora_naive().isoformat()
                         }
                     }
             
@@ -530,7 +532,7 @@ def register_procesar_endpoint(app: FastAPI):
                             "datos_sincronizados": False,
                             "detalles": []
                         },
-                        "timestamp": datetime.now().isoformat()
+                        "timestamp": ahora_naive().isoformat()
                     }
                 }
             )

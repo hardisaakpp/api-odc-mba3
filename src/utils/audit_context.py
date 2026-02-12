@@ -28,10 +28,15 @@ Uso:
     )
 """
 
+import logging
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Optional, Dict, Any
 from fastapi import Request
+
+from src.utils.timezone import ahora_naive
+
+logger = logging.getLogger(__name__)
 
 
 # Valores válidos para el campo 'origen'
@@ -63,7 +68,7 @@ class AuditContext:
     usuario: Optional[str] = None
     origen: str = ORIGEN_API
     ip_origen: Optional[str] = None
-    fecha: datetime = field(default_factory=datetime.utcnow)
+    fecha: datetime = field(default_factory=ahora_naive)
     
     def __post_init__(self):
         """Valida y normaliza los valores."""
@@ -208,7 +213,7 @@ def get_audit_context(
         usuario=get_username_from_user(user),
         origen=origen,
         ip_origen=get_client_ip(request) if request else None,
-        fecha=datetime.utcnow()
+        fecha=ahora_naive()
     )
 
 
@@ -226,8 +231,28 @@ def get_celery_audit_context(task_name: str = "celery_task") -> AuditContext:
         usuario=f"celery:{task_name}",
         origen=ORIGEN_CELERY,
         ip_origen=None,
-        fecha=datetime.utcnow()
+        fecha=ahora_naive()
     )
+
+
+def ensure_audit_context(audit_context: Optional["AuditContext"] = None) -> "AuditContext":
+    """
+    Garantiza que siempre exista un AuditContext.
+
+    Si se proporciona uno, lo retorna tal cual.  Si es None, crea un
+    fallback con usuario='SYSTEM' y origen='LEGACY' y emite un warning
+    para que se detecten llamadas sin auditoría durante desarrollo.
+
+    Args:
+        audit_context: Contexto de auditoría (puede ser None)
+
+    Returns:
+        AuditContext proporcionado o fallback SYSTEM/LEGACY
+    """
+    if audit_context is not None:
+        return audit_context
+    logger.warning("⚠️ Operación sin audit_context - usando fallback SYSTEM/LEGACY")
+    return AuditContext(usuario="SYSTEM", origen=ORIGEN_LEGACY)
 
 
 def get_system_audit_context(process_name: str = "system") -> AuditContext:
@@ -244,5 +269,5 @@ def get_system_audit_context(process_name: str = "system") -> AuditContext:
         usuario=f"system:{process_name}",
         origen=ORIGEN_SYSTEM,
         ip_origen=None,
-        fecha=datetime.utcnow()
+        fecha=ahora_naive()
     )

@@ -8,6 +8,8 @@ import logging
 from typing import Optional
 from datetime import datetime
 
+from src.utils.timezone import ahora_naive
+
 from src.utils import (
     validate_query,
     parse_query,
@@ -44,7 +46,7 @@ class QueryService:
             ValueError: Si la consulta no es válida
         """
         if not received_at:
-            received_at = datetime.now().isoformat()
+            received_at = ahora_naive().isoformat()
         
         # Validar consulta
         is_valid, validation_message = validate_query(query_text)

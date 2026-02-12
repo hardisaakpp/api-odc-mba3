@@ -4,6 +4,8 @@ Endpoint para migrar despachos desde MBA3 a SQL Server.
 
 import logging
 from datetime import datetime, timedelta
+
+from src.utils.timezone import ahora_naive
 from typing import List, Dict, Any, Union
 from fastapi import FastAPI, Request, Depends, Body
 from fastapi.responses import JSONResponse
@@ -32,7 +34,7 @@ def build_query_with_date_filter(base_query: str, days: int = 30) -> str:
     """
     # Calcular fecha límite (hace N días) - solo fecha, sin hora
     # MBA3/4D espera formato de fecha simple (YYYY-MM-DD) sin hora
-    fecha_limite = datetime.now() - timedelta(days=days)
+    fecha_limite = ahora_naive() - timedelta(days=days)
     fecha_limite_str = fecha_limite.strftime("%Y-%m-%d")
     
     # Verificar si la query ya tiene WHERE
@@ -162,7 +164,7 @@ def register_migrar_endpoint(app: FastAPI):
         
         # Log de la consulta predefinida
         logger.info("=" * 70)
-        logger.info(f"🔄 MIGRAR COMPLETO: Proceso iniciado a las {datetime.now().isoformat()}")
+        logger.info(f"🔄 MIGRAR COMPLETO: Proceso iniciado a las {ahora_naive().isoformat()}")
         logger.info(f"Fuente: {source}")
         logger.info(f"📅 Proceso manual: filtrando últimos {MIGRATE_DATE_FILTER_DAYS} días (1 año)")
         logger.info(f"Query predefinida: {query_predefinida}")
@@ -299,7 +301,7 @@ def register_migrar_endpoint(app: FastAPI):
                             email_enviado = send_homologacion_notification(
                                 productos_no_homologados=productos_no_homologados,
                                 estadisticas=estadisticas,
-                                fecha_ejecucion=datetime.now(),
+                                fecha_ejecucion=ahora_naive(),
                                 filtrar_ya_notificados=True,  # ← CLAVE: Filtrar ya notificados
                                 homologacion_repository=repository
                             )
@@ -456,7 +458,7 @@ def register_migrar_endpoint(app: FastAPI):
         
         # Log de la consulta
         logger.info("=" * 70)
-        logger.info(f"📡 CONSULTAR MBA3: Iniciado a las {datetime.now().isoformat()}")
+        logger.info(f"📡 CONSULTAR MBA3: Iniciado a las {ahora_naive().isoformat()}")
         logger.info(f"Fuente: {source}")
         if use_date_filter:
             logger.info(f"Filtro de fecha: últimos {days} días")
@@ -641,7 +643,7 @@ def register_migrar_endpoint(app: FastAPI):
         
         # Log del proceso
         logger.info("=" * 70)
-        logger.info(f"💾 GUARDAR DATOS: Iniciado a las {datetime.now().isoformat()}")
+        logger.info(f"💾 GUARDAR DATOS: Iniciado a las {ahora_naive().isoformat()}")
         logger.info(f"Fuente: {source}")
         logger.info(f"Upsert: {upsert}")
         data_count = len(data) if isinstance(data, list) else 1

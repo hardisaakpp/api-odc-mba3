@@ -12,6 +12,8 @@ import base64
 import json
 from typing import Dict, Optional
 from datetime import datetime
+
+from src.utils.timezone import ahora_naive
 from fastapi import FastAPI, UploadFile, File, Depends, HTTPException, Query, Form, Path
 from fastapi.responses import JSONResponse, StreamingResponse
 import io
@@ -182,7 +184,7 @@ def register_plantillas_endpoints(app: FastAPI):
                 },
                 "metadata": {
                     "uploaded_by": user_id,
-                    "uploaded_at": datetime.now().isoformat()
+                    "uploaded_at": ahora_naive().isoformat()
                 }
             }
             
@@ -192,7 +194,7 @@ def register_plantillas_endpoints(app: FastAPI):
                 
                 excel_bytes = PedidoValidationExporter.export_to_excel_bytes(resultado["validation"])
                 response_data["validation_log_excel_base64"] = base64.b64encode(excel_bytes).decode('utf-8')
-                response_data["validation_log_filename"] = f"validation_log_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+                response_data["validation_log_filename"] = f"validation_log_{ahora_naive().strftime('%Y%m%d_%H%M%S')}.xlsx"
             
             # Si hay errores de validación, retornar 400 pero con detalles
             if resultado["status"] == "validation_error":
@@ -367,7 +369,7 @@ def register_plantillas_endpoints(app: FastAPI):
         a diferencia de /api/pedidos que los excluye.
         
         **Uso:** Este endpoint está diseñado para el contenedor "Pedidos" de la página
-        cargar-plantilla. Muestra todos los pedidos del usuario actual, incluyendo
+        cargar-plantilla. Muestra todos los pedidos de todos los usuarios, incluyendo
         los que están en estado BORRADOR.
         
         **Query Parameters:**
@@ -416,11 +418,11 @@ def register_plantillas_endpoints(app: FastAPI):
             with get_db_connection_context() as conn:
                 repo = PedidoRepository(conn)
                 
-                # Listar pedidos del usuario INCLUYENDO BORRADOR
+                # Listar TODOS los pedidos INCLUYENDO BORRADOR (visibles para cualquier usuario con mabel.view)
                 resultado = repo.get_pedidos_con_filtros(
                     estado=estado,
                     numero_pedido=numero_pedido.strip() if numero_pedido else None,
-                    creado_por=user_id,  # Solo pedidos del usuario actual
+                    creado_por=None,  # Todos los pedidos, sin filtrar por usuario
                     limit=limit,
                     offset=offset,
                     excluir_borrador=False,  # INCLUIR BORRADOR para cargar-plantilla
@@ -647,7 +649,7 @@ def register_plantillas_endpoints(app: FastAPI):
         de forma independiente sin requerir otros filtros.
         
         **Comportamiento:**
-        - Si `numero_pedido` está vacío o no se proporciona, devuelve los últimos pedidos del usuario.
+        - Si `numero_pedido` está vacío o no se proporciona, devuelve los últimos pedidos.
         - Si `numero_pedido` tiene valor, busca pedidos cuyo número contenga el texto ingresado.
         - Incluye pedidos en estado BORRADOR (útil para cargar-plantilla).
         - Ordena por fecha de creación descendente.
@@ -688,10 +690,10 @@ def register_plantillas_endpoints(app: FastAPI):
             with get_db_connection_context() as conn:
                 repo = PedidoRepository(conn)
                 
-                # Usar el método existente con filtros, incluyendo BORRADOR
+                # Buscar en TODOS los pedidos, incluyendo BORRADOR (visibles para cualquier usuario con mabel.view)
                 resultado = repo.get_pedidos_con_filtros(
                     numero_pedido=numero_pedido.strip() if numero_pedido else None,
-                    creado_por=user_id,  # Solo pedidos del usuario actual
+                    creado_por=None,  # Todos los pedidos, sin filtrar por usuario
                     limit=limit,
                     offset=0,
                     excluir_borrador=False,  # Incluir BORRADOR para cargar-plantilla

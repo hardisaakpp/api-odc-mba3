@@ -8,6 +8,8 @@ import csv
 import io
 from typing import Dict, List, Optional
 from datetime import datetime
+
+from src.utils.timezone import ahora_naive
 from fastapi import FastAPI, UploadFile, File, Depends, HTTPException, Path, Query, Body, status, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
@@ -1094,6 +1096,7 @@ def register_crud_endpoints(app: FastAPI):
              response_model=CrearPedidoResponse,
              tags=["Pedidos"])
     async def crear_pedido_manual(
+        request: Request,
         request_body: CrearPedidoRequest = Body(..., description="Datos del pedido a crear"),
         user: Dict = Depends(verify_jwt_token),
         _: None = Depends(require_permission('mabel.view'))
@@ -1110,6 +1113,9 @@ def register_crud_endpoints(app: FastAPI):
         try:
             from src.database.services.pedido_service import PedidoService
             
+            # Crear contexto de auditoría (Buenas Prácticas - Sección 3)
+            audit = get_audit_context(request, user, origen=ORIGEN_WEB)
+            
             service = PedidoService()
             usuario_id = user.get("sub") or user.get("user_id")
             
@@ -1123,7 +1129,8 @@ def register_crud_endpoints(app: FastAPI):
                 datos_pedido=datos_pedido,
                 usuario_id=usuario_id,
                 validar_productos=datos_pedido.get("validar_productos", True),
-                validar_tiendas=datos_pedido.get("validar_tiendas", True)
+                validar_tiendas=datos_pedido.get("validar_tiendas", True),
+                audit_context=audit
             )
             
             # Determinar código de estado HTTP
@@ -1173,6 +1180,7 @@ def register_crud_endpoints(app: FastAPI):
              response_model=ModificarPedidoCabeceraResponse,
              tags=["Pedidos - Edición"])
     async def modificar_pedido_cabecera(
+        request: Request,
         pedido_id: str = Path(..., description="UUID del pedido"),
         request_body: ModificarPedidoCabeceraRequest = Body(..., description="Datos de la cabecera a modificar"),
         user: Dict = Depends(verify_jwt_token),
@@ -1187,6 +1195,9 @@ def register_crud_endpoints(app: FastAPI):
             JSON con resultado de la modificación
         """
         try:
+            # Crear contexto de auditoría (Buenas Prácticas - Sección 3)
+            audit = get_audit_context(request, user, origen=ORIGEN_WEB)
+            
             datos_cabecera = request_body.model_dump(exclude_unset=True)
             campos_modificados = list(datos_cabecera.keys())
             user_id = get_user_id(user)
@@ -1204,7 +1215,7 @@ def register_crud_endpoints(app: FastAPI):
                         }
                     )
                 
-                resultado = repo.update_cabecera(pedido_id, datos_cabecera)
+                resultado = repo.update_cabecera(pedido_id, datos_cabecera, audit_context=audit)
                 
                 if not resultado:
                     raise HTTPException(
@@ -1446,6 +1457,7 @@ def register_crud_endpoints(app: FastAPI):
 
     @app.delete("/api/pedidos/{pedido_id}", status_code=status.HTTP_204_NO_CONTENT, tags=["Pedidos"])
     async def descartar_o_cancelar_pedido(
+        request: Request,
         pedido_id: str = Path(..., description="UUID del pedido a eliminar"),
         notificar_el_rayo: bool = Query(
             False,
@@ -1483,6 +1495,9 @@ def register_crud_endpoints(app: FastAPI):
         - **409**: Pedido tiene información asociada
         """
         try:
+            # Crear contexto de auditoría (Buenas Prácticas - Sección 3)
+            audit = get_audit_context(request, user, origen=ORIGEN_WEB)
+            
             with get_db_connection_context() as conn:
                 repo = PedidoRepository(conn)
                 ok, error_code, message = repo.validar_puede_descartar(
@@ -1509,8 +1524,8 @@ def register_crud_endpoints(app: FastAPI):
                 numero_pedido = (pedido_data.get("cabecera") or {}).get("numero_pedido") if pedido_data else None
                 estado_id = (pedido_data.get("cabecera") or {}).get("estado_id") if pedido_data else None
                 
-                # Eliminar el pedido
-                repo.delete_pedido(pedido_id)
+                # Eliminar el pedido con audit_context
+                repo.delete_pedido(pedido_id, audit_context=audit)
                 
                 # Determinar si se debe enviar notificación a EL RAYO
                 enviar_notificacion = False
@@ -2152,7 +2167,7 @@ def register_crud_endpoints(app: FastAPI):
                 row += 1
                 ws_cabecera[f'A{row}'] = "Fecha de descarga:"
                 ws_cabecera[f'A{row}'].font = Font(bold=True)
-                ws_cabecera[f'B{row}'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                ws_cabecera[f'B{row}'] = ahora_naive().strftime("%Y-%m-%d %H:%M:%S")
                 
                 # Guardar el libro de Excel en memoria
                 excel_buffer = io.BytesIO()
@@ -2163,7 +2178,7 @@ def register_crud_endpoints(app: FastAPI):
                 numero_pedido = cabecera.get("numero_pedido", pedido_id)
                 # Limpiar nombre para evitar caracteres inválidos en nombre de archivo
                 numero_pedido_safe = re.sub(r'[^\w\-_\. ]', '_', numero_pedido)
-                filename = f"pedido_{numero_pedido_safe}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+                filename = f"pedido_{numero_pedido_safe}_{ahora_naive().strftime('%Y%m%d_%H%M%S')}.xlsx"
                 
                 logger.info(f"✅ Excel generado para pedido {pedido_id} ({numero_pedido}) por usuario {user.get('username', 'UNKNOWN')}")
                 

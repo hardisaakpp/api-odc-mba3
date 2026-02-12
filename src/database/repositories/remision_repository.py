@@ -6,6 +6,8 @@ import logging
 import pyodbc
 from typing import Optional, Dict, Any
 
+from src.utils.timezone import ahora_naive
+
 from .common.serialization import serialize_date
 
 logger = logging.getLogger(__name__)
@@ -144,7 +146,7 @@ class RemisionRepository:
                 factura_impresa = ?,
                 confirmado = ?,
                 fecha_factura = ?,
-                updated_at = GETDATE()
+                updated_at = ?
             WHERE remision_id = ?
             """
             
@@ -164,6 +166,7 @@ class RemisionRepository:
                 merged["factura_impresa"],
                 merged.get("confirmado", 0),  # BIT: 0 o 1, por defecto 0
                 merged["fecha_factura"],
+                ahora_naive(),
                 remision_id,
             )
             
@@ -265,9 +268,9 @@ class RemisionRepository:
                 fecha_factura,
                 created_at,
                 updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, GETDATE(), GETDATE())
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """
-            
+            _ahora = ahora_naive()
             values = (
                 remision_id,
                 datos_cabecera["empresa"],
@@ -285,6 +288,8 @@ class RemisionRepository:
                 datos_cabecera["factura_impresa"],
                 datos_cabecera.get("confirmado", 0),  # BIT: 0 o 1, por defecto 0
                 datos_cabecera["fecha_factura"],
+                _ahora,
+                _ahora,
             )
             
             cursor.execute(sql, values)

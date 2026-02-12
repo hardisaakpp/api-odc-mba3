@@ -16,13 +16,15 @@ Uso:
             warning_section("Accion", "Texto de accion"),
         ],
         accent="blue",
-        timestamp=datetime.now(),
+        timestamp=ahora_naive(),
     )
 """
 
 import logging
 import smtplib
 from datetime import datetime
+
+from src.utils.timezone import ahora_naive
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from typing import List, Tuple, Optional, Any, Dict
@@ -228,7 +230,7 @@ def build_email(
     """
     c = ACCENTS.get(accent, ACCENTS["blue"])
     if timestamp is None:
-        timestamp = datetime.now()
+        timestamp = ahora_naive()
     ts_str = timestamp.strftime('%Y-%m-%d %H:%M:%S')
 
     subtitle_html = ""

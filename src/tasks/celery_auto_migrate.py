@@ -18,6 +18,8 @@ import logging
 import time
 import os
 from datetime import datetime
+
+from src.utils.timezone import ahora_naive
 from celery import Task
 from celery.exceptions import SoftTimeLimitExceeded
 
@@ -57,7 +59,7 @@ class AutoMigrationTask(Task):
             from src.utils.email_notifier import send_error_notification
             send_error_notification(
                 error_message=str(exc),
-                fecha_ejecucion=datetime.now()
+                fecha_ejecucion=ahora_naive()
             )
             logger.info("📧 Notificación de error enviada por email")
         except Exception as email_error:
@@ -105,7 +107,7 @@ def execute_auto_migration(self):
     from src.utils.email_notifier import send_migration_notification, send_homologacion_notification
     from src.exceptions import MBA3QueryError
     
-    fecha_ejecucion = datetime.now()
+    fecha_ejecucion = ahora_naive()
     is_retry = False  # Flag para saber si estamos en el segundo intento
     
     try:
@@ -276,7 +278,7 @@ def execute_auto_migration(self):
                 "total_detalles": total_detalles,
                 "task_id": self.request.id,
                 "worker_pid": os.getpid(),
-                "timestamp": datetime.now().isoformat()
+                "timestamp": ahora_naive().isoformat()
             }
         else:
             raise Exception("save_status es None")

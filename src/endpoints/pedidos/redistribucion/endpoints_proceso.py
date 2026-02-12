@@ -15,6 +15,8 @@ from typing import Dict, List
 from fastapi import FastAPI, Depends, HTTPException, Path, Body, status, Request
 from datetime import datetime
 
+from src.utils.timezone import ahora_naive
+
 from src.database.connection import get_db_connection_context
 from src.database.pedido_estados import ESTADO_PEDIDO_CONFIRMADO
 from src.database.repositories.distribucion_confirmada_repository import DistribucionConfirmadaRepository
@@ -200,7 +202,7 @@ def _ejecutar_proceso_completo_sync(
                     odc_generada=None,
                     envio_sap=None,
                     resumen=resumen,
-                    fecha_proceso=datetime.now(),
+                    fecha_proceso=ahora_naive(),
                     paso_fallido="generar_odc",
                     error_detalle=str(e)
                 )
@@ -271,7 +273,7 @@ def _ejecutar_proceso_completo_sync(
                         odc_generada=resultado_odc,
                         envio_sap=resultado_envio_sap,
                         resumen=resumen,
-                        fecha_proceso=datetime.now(),
+                        fecha_proceso=ahora_naive(),
                         paso_fallido=None,
                         error_detalle=None
                     )
@@ -291,7 +293,7 @@ def _ejecutar_proceso_completo_sync(
                         odc_generada=resultado_odc,
                         envio_sap=resultado_envio_sap,
                         resumen=resumen,
-                        fecha_proceso=datetime.now(),
+                        fecha_proceso=ahora_naive(),
                         paso_fallido="envio_sap",
                         error_detalle=error
                     )
@@ -312,7 +314,7 @@ def _ejecutar_proceso_completo_sync(
                     odc_generada=resultado_odc,
                     envio_sap=None,
                     resumen=resumen,
-                    fecha_proceso=datetime.now(),
+                    fecha_proceso=ahora_naive(),
                     paso_fallido="envio_sap",
                     error_detalle=str(e)
                 )

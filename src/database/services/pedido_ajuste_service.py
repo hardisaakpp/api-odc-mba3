@@ -18,8 +18,10 @@ from decimal import Decimal, ROUND_HALF_UP
 from ..connection import get_db_connection_context
 from ..pedido_estados import ESTADO_CONFIRMADO_PROVEEDOR
 from ..repositories.pedido_repository import PedidoRepository
-from src.utils.audit_context import AuditContext, ORIGEN_WEB
+from src.utils.audit_context import AuditContext, ORIGEN_WEB, ensure_audit_context
+from src.utils.timezone import ahora_naive
 from ..repositories.pedido_respuesta_repository import PedidoRespuestaRepository
+from .audit_log_service import AuditLogService
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +33,8 @@ class PedidoAjusteService:
         self,
         pedido_id: str,
         usuario_id: Optional[str] = None,
-        forzar_redistribucion: bool = False
+        forzar_redistribucion: bool = False,
+        audit_context: Optional[AuditContext] = None,
     ) -> Dict[str, Any]:
         """
         Procesa la confirmación del proveedor y ajusta el pedido.
@@ -48,10 +51,16 @@ class PedidoAjusteService:
             pedido_id: UUID del pedido
             usuario_id: User ID del usuario que procesa la confirmación
             forzar_redistribucion: Si True, redistribuye aunque haya distribución específica
+            audit_context: Contexto de auditoría (Buenas Prácticas - Sección 3)
             
         Returns:
             Dict con resultado del procesamiento y reporte de diferencias
         """
+        # Si no se proporciona audit_context, crear uno con usuario_id
+        if audit_context is None and usuario_id:
+            audit_context = AuditContext(usuario=usuario_id, origen=ORIGEN_WEB)
+        audit = ensure_audit_context(audit_context)
+        
         with get_db_connection_context() as conn:
             respuesta_repo = PedidoRespuestaRepository(conn)
             pedido_repo = PedidoRepository(conn)
@@ -69,7 +78,9 @@ class PedidoAjusteService:
                 conn=conn,
                 respuesta=respuesta,
                 pedido=pedido,
-                forzar_redistribucion=forzar_redistribucion
+                forzar_redistribucion=forzar_redistribucion,
+                audit_context=audit,
+                pedido_id=pedido_id,
             )
             
             # PASO 3: Cerrar respuesta y pedido (sin commit aún)
@@ -78,7 +89,8 @@ class PedidoAjusteService:
                 respuesta_id=respuesta["cabecera"]["respuesta_id"],
                 pedido_id=pedido_id,
                 usuario_id=usuario_id,
-                pedido_repo=pedido_repo
+                pedido_repo=pedido_repo,
+                audit_context=audit,
             )
             
             # ✅ COMMIT ÚNICO: Todo o nada
@@ -281,6 +293,23 @@ class PedidoAjusteService:
                         "metodo": "distribucion_especifica"
                     })
                 
+                # Registrar ajustes en audit log
+                if audit_context and pedido_id:
+                    audit_svc = AuditLogService(conn)
+                    for aj in ajustes:
+                        audit_svc.registrar(
+                            pedido_id=pedido_id,
+                            entidad="pedido_detalle_tienda",
+                            entidad_id=aj["pedido_detalle_tienda_id"],
+                            accion="UPDATE",
+                            audit_context=audit_context,
+                            campo="cantidad",
+                            valor_anterior=str(aj.get("cantidad_anterior")),
+                            valor_nuevo=str(aj["cantidad_nueva"]),
+                            comentario="Ajuste por confirmación proveedor (distribución específica)",
+                            cursor=cursor,
+                        )
+                
                 return {
                     "metodo": "distribucion_especifica",
                     "tiendas_ajustadas": len(ajustes),
@@ -338,6 +367,23 @@ class PedidoAjusteService:
                         "metodo": "redistribucion_proporcional"
                     })
                 
+                # Registrar ajustes en audit log
+                if audit_context and pedido_id:
+                    audit_svc = AuditLogService(conn)
+                    for aj in ajustes:
+                        audit_svc.registrar(
+                            pedido_id=pedido_id,
+                            entidad="pedido_detalle_tienda",
+                            entidad_id=aj.get("tienda_id", ""),
+                            accion="UPDATE",
+                            audit_context=audit_context,
+                            campo="cantidad",
+                            valor_anterior=str(aj["cantidad_anterior"]),
+                            valor_nuevo=str(aj["cantidad_nueva"]),
+                            comentario="Ajuste por confirmación proveedor (redistribución proporcional)",
+                            cursor=cursor,
+                        )
+                
                 return {
                     "metodo": "redistribucion_proporcional",
                     "tiendas_ajustadas": len(ajustes),
@@ -356,7 +402,9 @@ class PedidoAjusteService:
         pedido_detalle_id: str,
         costo_ajustado: float,
         descuento_ajustado: Optional[float],
-        cantidad_confirmada: int
+        cantidad_confirmada: int,
+        audit_context: Optional[AuditContext] = None,
+        pedido_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Actualiza los costos del producto en pedido_detalle y recalcula totales.
@@ -413,6 +461,24 @@ class PedidoAjusteService:
                 WHERE pedido_detalle_id = ?
             """, values)
             
+            # Registrar cambios en audit log
+            if audit_context and pedido_id:
+                audit_svc = AuditLogService(conn)
+                cambios = {}
+                if costo_original != costo_ajustado:
+                    cambios["costo_doc_sin_iva"] = {"anterior": costo_original, "nuevo": costo_ajustado}
+                if descuento_original != descuento_ajustado and descuento_ajustado is not None:
+                    cambios["descuento_1"] = {"anterior": descuento_original, "nuevo": descuento_ajustado}
+                if cambios:
+                    audit_svc.registrar_cambios(
+                        pedido_id=pedido_id,
+                        entidad="pedido_detalle",
+                        entidad_id=pedido_detalle_id,
+                        audit_context=audit_context,
+                        cambios=cambios,
+                        cursor=cursor,
+                    )
+            
             return {
                 "costo_original": costo_original,
                 "costo_ajustado": costo_ajustado,
@@ -435,7 +501,8 @@ class PedidoAjusteService:
         respuesta_id: str,
         pedido_id: str,
         usuario_id: Optional[str] = None,
-        pedido_repo: Optional[PedidoRepository] = None
+        pedido_repo: Optional[PedidoRepository] = None,
+        audit_context: Optional[AuditContext] = None,
     ) -> None:
         """
         Cierra la respuesta (aprobación) y actualiza estado del pedido.
@@ -451,15 +518,16 @@ class PedidoAjusteService:
         try:
             # ✅ CORRECCIÓN: Validación de idempotencia
             # Solo actualiza si está en estado correcto (evita race conditions)
+            _ahora = ahora_naive()
             cursor.execute("""
                 UPDATE pedido_respuesta_proveedor
                 SET estado = 'APROBADA',
-                    fecha_aprobacion = GETDATE(),
+                    fecha_aprobacion = ?,
                     aprobado_por = ?,
-                    updated_at = GETDATE()
+                    updated_at = ?
                 WHERE respuesta_id = ?
                     AND estado = 'PENDIENTE_REVISION'
-            """, (usuario_id, respuesta_id))
+            """, (_ahora, usuario_id, _ahora, respuesta_id))
             
             rows_affected = cursor.rowcount
             
@@ -478,7 +546,8 @@ class PedidoAjusteService:
             # ✅ CORRECCIÓN: Cambio de estado del pedido al final
             # Esto debe ser el último paso antes del commit
             if pedido_repo:
-                audit = AuditContext(usuario=usuario_id, origen=ORIGEN_WEB)
+                # Usar audit_context proporcionado o crear uno con usuario_id
+                audit = audit_context or AuditContext(usuario=usuario_id, origen=ORIGEN_WEB)
                 pedido_repo.update_estado(pedido_id, ESTADO_CONFIRMADO_PROVEEDOR, audit_context=audit)
                 logger.debug(f"✅ Estado del pedido {pedido_id} actualizado a CONFIRMADO_PROVEEDOR")
             

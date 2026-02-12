@@ -12,6 +12,8 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.base import MIMEBase
 from email import encoders
 from datetime import datetime
+
+from src.utils.timezone import ahora_naive
 from typing import List, Optional, Dict, Any
 from src.config import (
     EMAIL_SMTP_SERVER,
@@ -64,7 +66,7 @@ def send_migration_notification(
         return False
     
     if not fecha_ejecucion:
-        fecha_ejecucion = datetime.now()
+        fecha_ejecucion = ahora_naive()
     
     try:
         # USAR EMAIL_TO_OPERACIONES en lugar de EMAIL_TO
@@ -152,7 +154,7 @@ def send_error_notification(
         return False
     
     if not fecha_ejecucion:
-        fecha_ejecucion = datetime.now()
+        fecha_ejecucion = ahora_naive()
     
     try:
         # USAR EMAIL_TO_TECNICOS en lugar de EMAIL_TO
@@ -267,7 +269,7 @@ def send_homologacion_notification(
         return False
     
     if not fecha_ejecucion:
-        fecha_ejecucion = datetime.now()
+        fecha_ejecucion = ahora_naive()
     
     # FILTRAR productos ya notificados si se solicita
     productos_a_notificar = productos_no_homologados
@@ -635,7 +637,7 @@ def send_capacity_warning_notification(
         return False
     
     if not fecha_ejecucion:
-        fecha_ejecucion = datetime.now()
+        fecha_ejecucion = ahora_naive()
     
     try:
         recipients = EMAIL_TO_TECNICOS if isinstance(EMAIL_TO_TECNICOS, list) else [EMAIL_TO_TECNICOS] if EMAIL_TO_TECNICOS else []
@@ -756,7 +758,7 @@ def send_oc_to_supplier(
         return False
     
     if not fecha_ejecucion:
-        fecha_ejecucion = datetime.now()
+        fecha_ejecucion = ahora_naive()
     
     try:
         # Determinar destinatario
@@ -952,7 +954,7 @@ def send_oc_ready_for_dispatch_notification(
         return False
     
     if not fecha_ejecucion:
-        fecha_ejecucion = datetime.now()
+        fecha_ejecucion = ahora_naive()
     
     try:
         # Usar EMAIL_TO_OPERACIONES (Operaciones/Despachos) para notificar a El Rayo
@@ -1301,7 +1303,7 @@ def send_plantilla_upload_notification(
         return False
     
     if not fecha_ejecucion:
-        fecha_ejecucion = datetime.now()
+        fecha_ejecucion = ahora_naive()
     
     try:
         # Usar EMAIL_TO_OPERACIONES (Operaciones/Despachos) para notificar a El Rayo
@@ -1400,7 +1402,7 @@ def send_pedido_cancelado_notification(
         return False
 
     if not fecha_ejecucion:
-        fecha_ejecucion = datetime.now()
+        fecha_ejecucion = ahora_naive()
 
     try:
         recipients = EMAIL_TO_OPERACIONES if isinstance(EMAIL_TO_OPERACIONES, list) else [EMAIL_TO_OPERACIONES] if EMAIL_TO_OPERACIONES else []
@@ -1488,7 +1490,7 @@ def send_pedido_descartado_notification(
         return False
 
     if not fecha_ejecucion:
-        fecha_ejecucion = datetime.now()
+        fecha_ejecucion = ahora_naive()
 
     try:
         recipients = EMAIL_TO_OPERACIONES if isinstance(EMAIL_TO_OPERACIONES, list) else [EMAIL_TO_OPERACIONES] if EMAIL_TO_OPERACIONES else []
@@ -1579,7 +1581,7 @@ def send_mabel_redistribucion_confirmacion_notification(
         return False
     
     if not fecha_ejecucion:
-        fecha_ejecucion = datetime.now()
+        fecha_ejecucion = ahora_naive()
     
     try:
         # Usar EMAIL_TO_OPERACIONES (Operaciones/Despachos) para notificar a El Rayo
@@ -1698,11 +1700,11 @@ def send_pedido_eliminado_mabel_notification(
         return False
 
     if not fecha_ejecucion:
-        fecha_ejecucion = datetime.now()
+        fecha_ejecucion = ahora_naive()
 
     try:
         # Usar EMAIL_MABEL_TRADING
-        recipients = [EMAIL_MABEL_TRADING] if isinstance(EMAIL_MABEL_TRADING, str) else EMAIL_MABEL_TRADING
+        recipients = EMAIL_MABEL_TRADING if isinstance(EMAIL_MABEL_TRADING, list) else [EMAIL_MABEL_TRADING] if EMAIL_MABEL_TRADING else []
 
         if not recipients:
             logger.warning("⚠️ No hay destinatarios de MABEL TRADING configurados")

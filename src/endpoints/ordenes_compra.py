@@ -7,6 +7,8 @@ import logging
 import threading
 import asyncio
 from datetime import datetime, timedelta
+
+from src.utils.timezone import ahora_naive
 from typing import Optional, List, Dict, Any, cast
 from fastapi import FastAPI, Request, Query, Depends, Path, Body, HTTPException
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -42,7 +44,7 @@ def get_cached_ordenes_compra(estado: Optional[str] = None) -> Optional[Dict[str
     """
     with _oc_cache_lock:
         cache_key = f"ordenes_compra_{estado or 'all'}"
-        now = datetime.now()
+        now = ahora_naive()
         
         if cache_key in _ordenes_compra_cache:
             cached_data = _ordenes_compra_cache[cache_key]
@@ -72,7 +74,7 @@ def set_cached_ordenes_compra(data: Dict[str, Any], estado: Optional[str] = None
         cache_key = f"ordenes_compra_{estado or 'all'}"
         _ordenes_compra_cache[cache_key] = {
             'data': data,
-            'timestamp': datetime.now()
+            'timestamp': ahora_naive()
         }
         logger.debug(f"💾 Cache SAVED para /ordenes-compra (estado={estado})")
 
@@ -338,7 +340,7 @@ def register_ordenes_compra_endpoints(app: FastAPI):
             )
         
         logger.info("=" * 70)
-        logger.info(f"📋 GET /ordenes-compra: Consulta ejecutada a las {datetime.now().isoformat()}")
+        logger.info(f"📋 GET /ordenes-compra: Consulta ejecutada a las {ahora_naive().isoformat()}")
         logger.info(f"Fuente: {source}")
         logger.info(f"Filtro estado: {estado or 'Todos'}")
         logger.info("=" * 70)
@@ -687,7 +689,7 @@ def register_ordenes_compra_endpoints(app: FastAPI):
         source = get_source_from_headers(request)
         
         logger.info("=" * 70)
-        logger.info(f"🗑️ DELETE /ordenes-compra/{oc_id}: Eliminación iniciada a las {datetime.now().isoformat()}")
+        logger.info(f"🗑️ DELETE /ordenes-compra/{oc_id}: Eliminación iniciada a las {ahora_naive().isoformat()}")
         logger.info(f"Fuente: {source}")
         logger.info("=" * 70)
         
@@ -830,7 +832,7 @@ def register_ordenes_compra_endpoints(app: FastAPI):
         source = get_source_from_headers(request)
         
         logger.info("=" * 70)
-        logger.info(f"🗑️ DELETE /ordenes-compra: Eliminación múltiple iniciada a las {datetime.now().isoformat()}")
+        logger.info(f"🗑️ DELETE /ordenes-compra: Eliminación múltiple iniciada a las {ahora_naive().isoformat()}")
         logger.info(f"Fuente: {source}")
         
         try:

@@ -6,6 +6,8 @@ import logging
 import json
 from typing import Optional, Dict, Any
 from datetime import datetime
+
+from src.utils.timezone import ahora_naive
 import uuid
 
 logger = logging.getLogger(__name__)
@@ -106,7 +108,7 @@ class SAPIntegrationLogRepository:
             
             cursor.execute(query, (
                 proceso_id_str,
-                datetime.now(),
+                ahora_naive(),
                 nivel_log,
                 mensaje,
                 usuario,

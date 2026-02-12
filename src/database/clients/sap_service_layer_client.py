@@ -15,6 +15,8 @@ import json
 import requests
 from typing import List, Optional, Dict, Any, Tuple, Union
 from datetime import datetime, timedelta
+
+from src.utils.timezone import ahora_naive
 from requests.adapters import HTTPAdapter
 
 from src.config import (
@@ -127,7 +129,7 @@ class SAPServiceLayerClient:
         if not self.session_expires:
             return False
         # Renovar sesión si expira en menos de 5 minutos
-        return datetime.now() < (self.session_expires - timedelta(minutes=5))
+        return ahora_naive() < (self.session_expires - timedelta(minutes=5))
     
     def _create_session_with_tls(self, tls_version: Optional[ssl._SSLMethod] = None, tls_name: str = "default") -> requests.Session:
         """
@@ -364,7 +366,7 @@ class SAPServiceLayerClient:
                 if session_cookie:
                     self.session_id = session_cookie
                     # Las sesiones de SAP suelen durar 30 minutos
-                    self.session_expires = datetime.now() + timedelta(minutes=25)
+                    self.session_expires = ahora_naive() + timedelta(minutes=25)
                     logger.info(f"✅ Autenticación exitosa con SAP Service Layer (TLS: {tls_version})")
                     return True
                 else:

@@ -28,6 +28,8 @@ import os
 import logging
 import json
 from datetime import datetime
+
+from src.utils.timezone import ahora, ahora_naive
 from logging.handlers import RotatingFileHandler, TimedRotatingFileHandler
 from pathlib import Path
 from typing import Optional, Any, Dict
@@ -70,7 +72,7 @@ class JsonFormatter(logging.Formatter):
     
     def format(self, record: logging.LogRecord) -> str:
         log_data = {
-            "timestamp": datetime.utcnow().isoformat() + "Z",
+            "timestamp": ahora().isoformat(),
             "level": record.levelname,
             "logger": record.name,
             "message": record.getMessage(),
@@ -113,7 +115,7 @@ class ConsoleFormatter(logging.Formatter):
     
     def format(self, record: logging.LogRecord) -> str:
         # Formato base
-        timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        timestamp = ahora_naive().strftime('%Y-%m-%d %H:%M:%S')
         level = record.levelname
         
         # Color según nivel (solo si es terminal)
@@ -264,7 +266,7 @@ def log_business_operation(
     """
     # Construir datos del log
     log_data = {
-        "timestamp": datetime.utcnow().isoformat() + "Z",
+        "timestamp": ahora().isoformat(),
         "operation": operation,
         "success": success,
         "id_usuario": id_usuario,

@@ -5,6 +5,8 @@ Mapper para transformar datos de facturas MBA3 a formato SQL Server.
 from typing import Optional, Dict, Any
 from datetime import datetime
 
+from src.utils.timezone import ahora_naive
+
 
 class FacturaMapper:
     """Mapper para transformar facturas de MBA3 a SQL Server."""
@@ -78,7 +80,7 @@ class FacturaMapper:
         fecha_despacho = fecha_factura
         if not fecha_despacho:
             # Si no hay fecha de factura, usar la fecha actual como valor por defecto
-            fecha_despacho = datetime.now().strftime("%Y-%m-%d")
+            fecha_despacho = ahora_naive().strftime("%Y-%m-%d")
         
         # Obtener empresa: primero del campo EMPRESA, luego del código de factura
         empresa = factura.get("EMPRESA")
@@ -278,7 +280,7 @@ class FacturaMapper:
         fecha_remision = fecha_factura
         if not fecha_remision:
             # Si no hay fecha de factura, usar la fecha actual como valor por defecto
-            fecha_remision = datetime.now().strftime("%Y-%m-%d")
+            fecha_remision = ahora_naive().strftime("%Y-%m-%d")
         
         # Obtener empresa: primero del campo EMPRESA, luego del código de factura
         empresa = factura.get("EMPRESA")

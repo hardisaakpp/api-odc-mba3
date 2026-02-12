@@ -8,6 +8,8 @@ from fastapi import FastAPI, Depends, HTTPException, Path, Query, Body, status, 
 from fastapi.responses import StreamingResponse
 from datetime import datetime
 
+from src.utils.timezone import ahora_naive
+
 from src.database.connection import get_db_connection_context
 from src.database.pedido_estados import ESTADO_PEDIDO_CONFIRMADO
 from src.database.repositories.distribucion_confirmada_repository import DistribucionConfirmadaRepository
@@ -146,7 +148,7 @@ def register_frontend_endpoints(app: FastAPI):
                     pedido_id=pedido_id,
                     numero_pedido=numero_pedido,
                     redistribucion_id=str(resultado["version"]),
-                    fecha_confirmacion=datetime.now(),
+                    fecha_confirmacion=ahora_naive(),
                     resumen=resumen,
                     ajustes_aplicados=total_productos,
                     message="Redistribución confirmada exitosamente"
@@ -204,7 +206,7 @@ def register_frontend_endpoints(app: FastAPI):
 
                 return BorradorResponse(
                     ajustes_detalle=ajustes_ajustados,
-                    fecha_guardado=datetime.now()
+                    fecha_guardado=ahora_naive()
                 )
 
         except HTTPException:
@@ -286,7 +288,7 @@ def register_frontend_endpoints(app: FastAPI):
                 numero_pedido = cabecera.get("numero_pedido", pedido_id)
                 numero_pedido_safe = re.sub(r'[^\w\-_\. ]', '_', numero_pedido)
                 version_str = f"_v{distribucion_data.get('version_actual', 1)}"
-                filename = f"distribucion_{numero_pedido_safe}{version_str}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+                filename = f"distribucion_{numero_pedido_safe}{version_str}_{ahora_naive().strftime('%Y%m%d_%H%M%S')}.xlsx"
 
                 logger.info(f"✅ Excel de distribución generado para pedido {pedido_id} ({numero_pedido}) por usuario {user.get('username', 'UNKNOWN')}")
 

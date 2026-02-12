@@ -9,6 +9,8 @@ from typing import Dict, Any, List, Optional
 from datetime import datetime
 from decimal import Decimal
 
+from src.utils.timezone import ahora_naive
+
 logger = logging.getLogger(__name__)
 
 
@@ -156,7 +158,7 @@ class PedidoSAPProcesamientoRepository:
                     tipo_problema = ?,
                     item_code_sap_encontrado = ?,
                     mensaje_error = ?,
-                    fecha_procesamiento = GETDATE(),
+                    fecha_procesamiento = ?,
                     procesado_por = ?
                 WHERE procesamiento_detalle_id = ?
             """, (
@@ -175,6 +177,7 @@ class PedidoSAPProcesamientoRepository:
                 datos.get("tipo_problema"),
                 datos.get("item_code_sap_encontrado"),
                 datos.get("mensaje_error"),
+                ahora_naive(),
                 datos.get("procesado_por"),
                 procesamiento_detalle_id
             ))

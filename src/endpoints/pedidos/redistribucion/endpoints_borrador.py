@@ -4,8 +4,11 @@ import json
 import logging
 from typing import Dict, Optional
 
-from fastapi import FastAPI, Depends, HTTPException, Path, Query, Body, status
+from fastapi import FastAPI, Depends, HTTPException, Path, Query, Body, status, Request
 from datetime import datetime
+
+from src.utils.timezone import ahora_naive
+from src.utils.audit_context import get_audit_context, ORIGEN_WEB
 
 from src.database.connection import get_db_connection_context
 from src.database.repositories.distribucion_confirmada_repository import DistribucionConfirmadaRepository
@@ -33,6 +36,7 @@ def register_borrador_endpoints(app: FastAPI):
              response_model=GuardarBorradorResponse,
              tags=["Pedidos - Redistribución"])
     async def guardar_borrador_redistribucion(
+        request: Request,
         numero_pedido: str = Path(..., description="Número del pedido"),
         request_body: GuardarBorradorRequest = Body(..., description="Datos del borrador de redistribución"),
         user: Dict = Depends(verify_jwt_token),
@@ -41,6 +45,8 @@ def register_borrador_endpoints(app: FastAPI):
         """Guarda un borrador de redistribución."""
         try:
             user_id = get_user_id(user)
+            # Crear contexto de auditoría (Buenas Prácticas - Sección 3)
+            audit = get_audit_context(request, user, origen=ORIGEN_WEB)
 
             with get_db_connection_context() as conn:
                 repo_pedido = PedidoRepository(conn)
@@ -51,12 +57,12 @@ def register_borrador_endpoints(app: FastAPI):
                 pedido_id = pedido_data["cabecera"]["pedido_id"]
 
                 ajustes_json = json.dumps([ajuste.dict() for ajuste in request_body.ajustes_detalle])
-                repo_borrador.upsert_borrador(pedido_id, numero_pedido, ajustes_json, user_id)
+                repo_borrador.upsert_borrador(pedido_id, numero_pedido, ajustes_json, user_id, audit_context=audit)
 
                 return GuardarBorradorResponse(
                     pedido_id=pedido_id,
                     numero_pedido=numero_pedido,
-                    fecha_guardado=datetime.now(),
+                    fecha_guardado=ahora_naive(),
                     message="Borrador guardado exitosamente"
                 )
 
@@ -225,7 +231,7 @@ def register_borrador_endpoints(app: FastAPI):
                             )
                         return BorradorResponse(
                             ajustes_detalle=ajustes_detalle_confirmada,
-                            fecha_guardado=datetime.now(),
+                            fecha_guardado=ahora_naive(),
                         )
 
                 respuestas_map = obtener_respuestas_proveedor(repo_pedido, pedido_id, top_one=True)
@@ -287,7 +293,7 @@ def register_borrador_endpoints(app: FastAPI):
 
                 return BorradorResponse(
                     ajustes_detalle=ajustes_detalle,
-                    fecha_guardado=datetime.now()
+                    fecha_guardado=ahora_naive()
                 )
 
         except HTTPException:

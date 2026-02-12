@@ -8,6 +8,8 @@ import os
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from datetime import datetime
+
+from src.utils.timezone import ahora_naive
 from typing import Optional, Dict, Any
 from src.config import (
     EMAIL_SMTP_SERVER,
@@ -54,14 +56,14 @@ def send_pedido_confirmacion_notification(
         return False
     
     if not fecha_ejecucion:
-        fecha_ejecucion = datetime.now()
+        fecha_ejecucion = ahora_naive()
     
     try:
         # Determinar destinatario
         if email_destino:
             recipients = [email_destino.strip()]
         else:
-            recipients = [EMAIL_MABEL_TRADING] if EMAIL_MABEL_TRADING else []
+            recipients = EMAIL_MABEL_TRADING if isinstance(EMAIL_MABEL_TRADING, list) else [EMAIL_MABEL_TRADING] if EMAIL_MABEL_TRADING else []
             if not recipients:
                 logger.warning("⚠️ No hay email configurado para MABEL TRADING")
                 return False
@@ -202,14 +204,14 @@ def send_rayo_confirmacion_notification(
         return False
     
     if not fecha_ejecucion:
-        fecha_ejecucion = datetime.now()
+        fecha_ejecucion = ahora_naive()
     
     try:
         # Determinar destinatario
         if email_destino:
             recipients = [email_destino.strip()]
         else:
-            recipients = [EMAIL_MABEL_TRADING] if EMAIL_MABEL_TRADING else []
+            recipients = EMAIL_MABEL_TRADING if isinstance(EMAIL_MABEL_TRADING, list) else [EMAIL_MABEL_TRADING] if EMAIL_MABEL_TRADING else []
             if not recipients:
                 logger.warning("⚠️ No hay email configurado para MABEL TRADING")
                 return False

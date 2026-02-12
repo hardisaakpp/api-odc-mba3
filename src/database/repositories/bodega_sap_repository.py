@@ -7,6 +7,8 @@ import pyodbc
 from typing import Optional, Dict, Any, List
 from datetime import datetime, timedelta
 
+from src.utils.timezone import ahora_naive
+
 logger = logging.getLogger(__name__)
 
 
@@ -79,7 +81,7 @@ class BodegaSAPRepository:
         """
         cursor = self.conn.cursor()
         try:
-            fecha_limite = datetime.now() - timedelta(days=cache_days)
+            fecha_limite = ahora_naive() - timedelta(days=cache_days)
             
             cursor.execute(
                 """
@@ -143,7 +145,7 @@ class BodegaSAPRepository:
         else:
             return False
         
-        fecha_limite = datetime.now() - timedelta(days=cache_days)
+        fecha_limite = ahora_naive() - timedelta(days=cache_days)
         return ultima_consulta >= fecha_limite
     
     def insert_or_update(self, bodega_data: Dict[str, Any]) -> bool:
@@ -178,14 +180,16 @@ class BodegaSAPRepository:
                 UPDATE bodega_sap_cache SET
                     whs_name = ?,
                     es_bodega = ?,
-                    ultima_consulta = GETDATE(),
-                    updated_at = GETDATE()
+                    ultima_consulta = ?,
+                    updated_at = ?
                 WHERE whs_code = ? AND activo = 1
                 """
                 
                 values = (
                     bodega_data.get("whs_name"),
                     bodega_data.get("es_bodega"),
+                    ahora_naive(),
+                    ahora_naive(),
                     whs_code_normalized,
                 )
                 
@@ -204,9 +208,9 @@ class BodegaSAPRepository:
                     activo,
                     created_at,
                     updated_at
-                ) VALUES (?, ?, ?, GETDATE(), ?, GETDATE(), GETDATE())
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
                 """
-                
+                _ahora = ahora_naive()
                 activo = bodega_data.get("activo", True)
                 if not isinstance(activo, bool):
                     activo = True
@@ -215,7 +219,10 @@ class BodegaSAPRepository:
                     whs_code_normalized,
                     bodega_data.get("whs_name"),
                     bodega_data.get("es_bodega"),
+                    _ahora,
                     1 if activo else 0,
+                    _ahora,
+                    _ahora,
                 )
                 
                 cursor.execute(sql, values)

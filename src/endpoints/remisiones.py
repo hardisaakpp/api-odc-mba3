@@ -9,6 +9,8 @@ Estos documentos de remisión son diferentes a los despachos normales:
 
 import logging
 from datetime import datetime, timedelta
+
+from src.utils.timezone import ahora_naive
 from typing import List, Dict, Any, Union, Optional
 from fastapi import FastAPI, Request, Depends, Query
 from fastapi.responses import JSONResponse
@@ -36,7 +38,7 @@ def build_query_with_date_filter(base_query: str, days: int = 30) -> str:
     """
     # Calcular fecha límite (hace N días) - solo fecha, sin hora
     # MBA3/4D espera formato de fecha simple (YYYY-MM-DD) sin hora
-    fecha_limite = datetime.now() - timedelta(days=days)
+    fecha_limite = ahora_naive() - timedelta(days=days)
     fecha_limite_str = fecha_limite.strftime("%Y-%m-%d")
     
     # Verificar si la query ya tiene WHERE
@@ -229,7 +231,7 @@ def register_remisiones_endpoints(app: FastAPI):
         
         # Log de la consulta
         logger.info("=" * 70)
-        logger.info(f"📡 CONSULTAR REMISIONES: Iniciado a las {datetime.now().isoformat()}")
+        logger.info(f"📡 CONSULTAR REMISIONES: Iniciado a las {ahora_naive().isoformat()}")
         logger.info(f"Fuente: {source}")
         logger.info(f"📅 Proceso: filtrando últimos {MIGRATE_DATE_FILTER_DAYS} días")
         logger.info(f"Query: {query_predefinida[:200]}...")

@@ -1118,7 +1118,8 @@ class PedidoService:
         datos_pedido: Dict[str, Any],
         usuario_id: Optional[str] = None,
         validar_productos: bool = True,
-        validar_tiendas: bool = True
+        validar_tiendas: bool = True,
+        audit_context: Optional["AuditContext"] = None,
     ) -> Dict[str, Any]:
         """
         Crea un pedido manualmente desde datos JSON (HU-01 - Carga por Pantalla).
@@ -1454,8 +1455,12 @@ class PedidoService:
                 consolidacion = self.consolidator.consolidar_pedido_por_producto(detalles_con_tiendas)
                 resultado["consolidacion"] = consolidacion["resumen"]
                 
+                # Construir audit_context con fallback si no se proporcionó
+                from src.utils.audit_context import ensure_audit_context
+                audit = ensure_audit_context(audit_context)
+                
                 repository = PedidoRepository(conn)
-                pedido_id = repository.insert_cabecera(cabecera)
+                pedido_id = repository.insert_cabecera(cabecera, audit_context=audit)
                 resultado["pedido_id"] = pedido_id
                 resultado["numero_pedido"] = cabecera.get("numero_pedido")  # ⭐ Agregado para redirección del frontend
                 resultado["estado_id"] = 1
@@ -1464,7 +1469,7 @@ class PedidoService:
                 
                 for detalle_data in detalles_con_tiendas:
                     try:
-                        pedido_detalle_id = repository.insert_detalle(pedido_id, detalle_data["detalle"])
+                        pedido_detalle_id = repository.insert_detalle(pedido_id, detalle_data["detalle"], audit_context=audit)
                         resultado["articulos_cargados"] += 1
                         if detalle_data.get("distribuciones"):
                             distribuciones = []
@@ -1482,7 +1487,7 @@ class PedidoService:
                                         "es_bodega": dist.get("es_bodega", False)  # ⭐ NUEVO: Preservar flag de bodega
                                     })
                             if distribuciones:
-                                resultado["distribuciones_cargadas"] += repository.insert_detalle_tiendas(pedido_detalle_id, distribuciones)
+                                resultado["distribuciones_cargadas"] += repository.insert_detalle_tiendas(pedido_detalle_id, distribuciones, audit_context=audit)
                     except Exception as e:
                         logger.warning(f"⚠️ Error procesando artículo: {e}")
                         resultado["errores"].append(str(e))

@@ -15,6 +15,7 @@ from ..repositories.pedido_respuesta_repository import PedidoRespuestaRepository
 from ..repositories.pedido_confirmacion_rayo_repository import PedidoConfirmacionRayoRepository
 from .pedido_proveedor_service import PedidoProveedorService
 from src.utils.audit_context import AuditContext, ORIGEN_WEB
+from src.utils.timezone import ahora_naive
 
 logger = logging.getLogger(__name__)
 
@@ -293,9 +294,9 @@ class PedidoProveedorWebService:
                         UPDATE pedido_respuesta_proveedor
                         SET estado = ?,
                             observaciones_generales = ?,
-                            updated_at = GETDATE()
+                            updated_at = ?
                         WHERE respuesta_id = ?
-                    """, (estado_respuesta, observaciones_generales, respuesta_id))
+                    """, (estado_respuesta, observaciones_generales, ahora_naive(), respuesta_id))
                     conn.commit()
                 except Exception as e:
                     conn.rollback()
@@ -570,9 +571,9 @@ class PedidoProveedorWebService:
                     cursor.execute("""
                         UPDATE pedido_respuesta_proveedor
                         SET observaciones_generales = ?,
-                            updated_at = GETDATE()
+                            updated_at = ?
                         WHERE respuesta_id = ?
-                    """, (observaciones_generales, respuesta_id))
+                    """, (observaciones_generales, ahora_naive(), respuesta_id))
                     conn.commit()
                 except Exception as e:
                     conn.rollback()
@@ -589,9 +590,9 @@ class PedidoProveedorWebService:
                         UPDATE pedido_respuesta_proveedor
                         SET estado = 'PENDIENTE_REVISION',
                             observaciones_generales = ?,
-                            updated_at = GETDATE()
+                            updated_at = ?
                         WHERE respuesta_id = ?
-                    """, (observaciones_generales, respuesta_id))
+                    """, (observaciones_generales, ahora_naive(), respuesta_id))
                     conn.commit()
                 except Exception as e:
                     conn.rollback()

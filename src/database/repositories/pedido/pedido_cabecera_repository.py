@@ -12,6 +12,8 @@ import pyodbc
 from typing import Dict, Any, List, Optional, TYPE_CHECKING
 from datetime import date, datetime
 
+from src.utils.timezone import ahora_naive
+
 from .pedido_utils import PedidoUtils
 
 from src.database.pedido_estados import (
@@ -30,6 +32,8 @@ from src.database.pedido_estados import (
 # Import para type hints sin dependencia circular
 if TYPE_CHECKING:
     from src.utils.audit_context import AuditContext
+
+from src.database.services.audit_log_service import AuditLogService
 
 logger = logging.getLogger(__name__)
 
@@ -121,8 +125,9 @@ class PedidoCabeceraRepository:
                     creado_en,
                     modificado_por,
                     modificado_fecha
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, GETDATE(), ?, GETDATE())
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """
+                _ahora = ahora_naive()
                 values = (
                     pedido_id,
                     datos_cabecera_normalizado.get("numero_pedido"),
@@ -140,7 +145,9 @@ class PedidoCabeceraRepository:
                     estado_id,
                     datos_cabecera_normalizado.get("origen"),  # Campo de auditoría
                     datos_cabecera_normalizado.get("ip_origen"),  # Campo de auditoría
+                    _ahora,  # creado_en
                     datos_cabecera_normalizado.get("creado_por"),  # modificado_por = creado_por al crear
+                    _ahora,  # modificado_fecha
                 )
             elif tiene_estado:
                 sql = """
@@ -162,9 +169,10 @@ class PedidoCabeceraRepository:
                     creado_en,
                     modificado_por,
                     modificado_fecha
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, GETDATE(), ?, GETDATE())
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """
                 estado = datos_cabecera_normalizado.get("estado", "PENDIENTE_CONFIRMACION_PROVEEDOR")
+                _ahora = ahora_naive()
                 values = (
                     pedido_id,
                     datos_cabecera_normalizado.get("numero_pedido"),
@@ -180,7 +188,9 @@ class PedidoCabeceraRepository:
                     datos_cabecera_normalizado.get("archivo_nombre"),
                     datos_cabecera_normalizado.get("creado_por"),
                     estado,
+                    _ahora,  # creado_en
                     datos_cabecera_normalizado.get("creado_por"),  # modificado_por = creado_por al crear
+                    _ahora,  # modificado_fecha
                 )
             else:
                 sql = """
@@ -201,8 +211,9 @@ class PedidoCabeceraRepository:
                     creado_en,
                     modificado_por,
                     modificado_fecha
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, GETDATE(), ?, GETDATE())
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """
+                _ahora = ahora_naive()
                 values = (
                     pedido_id,
                     datos_cabecera_normalizado.get("numero_pedido"),
@@ -217,7 +228,9 @@ class PedidoCabeceraRepository:
                     datos_cabecera_normalizado.get("serie"),
                     datos_cabecera_normalizado.get("archivo_nombre"),
                     datos_cabecera_normalizado.get("creado_por"),
+                    _ahora,  # creado_en
                     datos_cabecera_normalizado.get("creado_por"),  # modificado_por = creado_por al crear
+                    _ahora,  # modificado_fecha
                 )
             
             cursor.execute(sql, values)
@@ -519,7 +532,7 @@ class PedidoCabeceraRepository:
             
             # Campos de auditoría (Buenas Prácticas - Sección 3)
             modificado_por = audit_context.get_modificado_por() if audit_context else None
-            modificado_fecha = datetime.utcnow()
+            modificado_fecha = ahora_naive()
 
             # ── Obtener estado anterior para la bitácora ──
             estado_anterior_id: Optional[int] = None
@@ -623,17 +636,58 @@ class PedidoCabeceraRepository:
             
         return cabecera
 
-    def delete(self, pedido_id: str, cursor: Optional[pyodbc.Cursor] = None) -> bool:
+    def delete(
+        self,
+        pedido_id: str,
+        cursor: Optional[pyodbc.Cursor] = None,
+        audit_context: Optional["AuditContext"] = None,
+    ) -> bool:
         """
         Elimina la cabecera del pedido (una sola fila).
         Si se pasa cursor, no hace commit (para uso en transacción).
+        Registra snapshot en pedido_audit_log antes de eliminar.
 
         Returns:
             True si se eliminó una fila, False si no existía.
         """
+        from src.utils.audit_context import ensure_audit_context
+        audit = ensure_audit_context(audit_context)
+        
         own_cursor = cursor is None
         cur = cursor or self.conn.cursor()
         try:
+            # Snapshot del registro antes de eliminar
+            cur.execute("""
+                SELECT pedido_id, numero_pedido, fecha_pedido, proveedor_nombre,
+                       comprador_nombre, estado_id, creado_por, creado_en
+                FROM pedido WHERE pedido_id = ?
+            """, (pedido_id,))
+            row = cur.fetchone()
+            snapshot = None
+            if row:
+                snapshot = {
+                    "pedido_id": str(row[0]),
+                    "numero_pedido": row[1],
+                    "fecha_pedido": str(row[2]) if row[2] else None,
+                    "proveedor_nombre": row[3],
+                    "comprador_nombre": row[4],
+                    "estado_id": row[5],
+                    "creado_por": row[6],
+                    "creado_en": str(row[7]) if row[7] else None,
+                }
+            
+            # Registrar en audit log antes del DELETE
+            audit_svc = AuditLogService(self.conn)
+            audit_svc.registrar_delete(
+                pedido_id=pedido_id,
+                entidad="pedido",
+                entidad_id=pedido_id,
+                audit_context=audit,
+                datos_eliminados=snapshot,
+                comentario="Eliminación de pedido cabecera",
+                cursor=cur,
+            )
+            
             cur.execute("DELETE FROM pedido WHERE pedido_id = ?", (pedido_id,))
             rows = cur.rowcount
             if own_cursor:
@@ -650,7 +704,12 @@ class PedidoCabeceraRepository:
             if own_cursor:
                 cur.close()
 
-    def update(self, pedido_id: str, datos_cabecera: Dict[str, Any]) -> bool:
+    def update(
+        self,
+        pedido_id: str,
+        datos_cabecera: Dict[str, Any],
+        audit_context: Optional["AuditContext"] = None,
+    ) -> bool:
         """
         Actualiza la cabecera de un pedido.
         
@@ -660,10 +719,14 @@ class PedidoCabeceraRepository:
         Args:
             pedido_id: UUID del pedido
             datos_cabecera: Diccionario con datos actualizados (sin pedido_id)
+            audit_context: Contexto de auditoría (Buenas Prácticas - Sección 3)
             
         Returns:
             True si se actualizó correctamente, False si no existe el pedido
         """
+        from src.utils.audit_context import ensure_audit_context
+        audit = ensure_audit_context(audit_context)
+        
         cursor = self.conn.cursor()
         
         try:
@@ -723,6 +786,10 @@ class PedidoCabeceraRepository:
                 if isinstance(fp, date):
                     merged["fecha_pedido"] = fp.isoformat()
             
+            # Campos de auditoría
+            modificado_por = audit.get_modificado_por()
+            modificado_fecha = ahora_naive()
+            
             if tiene_estado:
                 sql = """
                 UPDATE pedido SET
@@ -735,7 +802,11 @@ class PedidoCabeceraRepository:
                     comprador_codigo = ?,
                     origen_traslado = ?,
                     serie = ?,
-                    estado = ?
+                    estado = ?,
+                    modificado_por = ?,
+                    modificado_fecha = ?,
+                    origen = COALESCE(?, origen),
+                    ip_origen = COALESCE(?, ip_origen)
                 WHERE pedido_id = ?
                 """
                 values = (
@@ -749,6 +820,10 @@ class PedidoCabeceraRepository:
                     merged.get("origen_traslado"),
                     merged.get("serie"),
                     merged.get("estado"),
+                    modificado_por,
+                    modificado_fecha,
+                    audit.origen,
+                    audit.ip_origen,
                     pedido_id,
                 )
             else:
@@ -762,7 +837,9 @@ class PedidoCabeceraRepository:
                     comprador_nombre = ?,
                     comprador_codigo = ?,
                     origen_traslado = ?,
-                    serie = ?
+                    serie = ?,
+                    modificado_por = ?,
+                    modificado_fecha = ?
                 WHERE pedido_id = ?
                 """
                 values = (
@@ -775,11 +852,33 @@ class PedidoCabeceraRepository:
                     merged.get("comprador_codigo"),
                     merged.get("origen_traslado"),
                     merged.get("serie"),
+                    modificado_por,
+                    modificado_fecha,
                     pedido_id,
                 )
             
             cursor.execute(sql, values)
             rows_affected = cursor.rowcount
+            
+            # Registrar cambios en audit log
+            cambios = {}
+            for campo in existing:
+                val_anterior = existing[campo]
+                val_nuevo = merged.get(campo)
+                if str(val_anterior) != str(val_nuevo):
+                    cambios[campo] = {"anterior": val_anterior, "nuevo": val_nuevo}
+            
+            if cambios:
+                audit_svc = AuditLogService(self.conn)
+                audit_svc.registrar_cambios(
+                    pedido_id=pedido_id,
+                    entidad="pedido",
+                    entidad_id=pedido_id,
+                    audit_context=audit,
+                    cambios=cambios,
+                    cursor=cursor,
+                )
+            
             self.conn.commit()
             
             if rows_affected > 0:

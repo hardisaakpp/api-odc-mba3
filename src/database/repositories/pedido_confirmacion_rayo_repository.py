@@ -9,6 +9,8 @@ import pyodbc
 from typing import Dict, Any, List, Optional
 from datetime import datetime
 
+from src.utils.timezone import ahora_naive
+
 logger = logging.getLogger(__name__)
 
 
@@ -53,8 +55,8 @@ class PedidoConfirmacionRayoRepository:
                     confirmacion_id, pedido_id, respuesta_id,
                     confirmado_por, fecha_confirmacion,
                     total_detalles_modificados, observaciones_generales
-                ) VALUES (?, ?, ?, ?, GETDATE(), 0, ?)
-            """, (confirmacion_id, pedido_id, respuesta_id, usuario_id, observaciones_generales))
+                ) VALUES (?, ?, ?, ?, ?, 0, ?)
+            """, (confirmacion_id, pedido_id, respuesta_id, usuario_id, ahora_naive(), observaciones_generales))
             
             self.conn.commit()
             logger.debug(f"✅ Confirmación de EL RAYO creada: {confirmacion_id}")

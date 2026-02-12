@@ -9,6 +9,8 @@ CHANGELOG:
 import logging
 import pyodbc
 from datetime import datetime
+
+from src.utils.timezone import ahora_naive
 from typing import Optional, Dict, Any, TYPE_CHECKING
 
 from ..common.serialization import serialize_date
@@ -151,7 +153,7 @@ class DespachoCabeceraRepository:
                 codigo_despacho, codigo_bodega, confirmado,
                 creado_por, origen, ip_origen,
                 created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, GETDATE(), GETDATE())
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """
 
             values = (
@@ -176,6 +178,8 @@ class DespachoCabeceraRepository:
                 creado_por,
                 origen,
                 ip_origen,
+                ahora_naive(),
+                ahora_naive(),
             )
 
             cursor.execute(sql, values)
@@ -234,7 +238,7 @@ class DespachoCabeceraRepository:
             modificado_fecha = None
             if audit_context:
                 modificado_por = audit_context.get_modificado_por()
-                modificado_fecha = datetime.utcnow()
+                modificado_fecha = ahora_naive()
 
             sql = """
             UPDATE despacho_cabecera SET
@@ -245,7 +249,7 @@ class DespachoCabeceraRepository:
                 num_id_factura_relacionada = ?, fecha_factura = ?,
                 codigo_despacho = ?, codigo_bodega = ?, confirmado = ?,
                 modificado_por = ?, modificado_fecha = ?,
-                updated_at = GETDATE()
+                updated_at = ?
             WHERE despacho_id = ?
             """
 
@@ -257,6 +261,7 @@ class DespachoCabeceraRepository:
                 merged["num_id_factura_relacionada"], merged["fecha_factura"],
                 merged["codigo_despacho"], merged.get("codigo_bodega"), merged.get("confirmado", 0),
                 modificado_por, modificado_fecha,
+                ahora_naive(),
                 despacho_id,
             )
 

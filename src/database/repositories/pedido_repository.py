@@ -69,13 +69,18 @@ class PedidoRepository:
         """
         return self.cabecera_repo.insert(datos_cabecera, audit_context=audit_context)
 
-    def update_cabecera(self, pedido_id: str, datos_cabecera: Dict[str, Any]) -> bool:
+    def update_cabecera(
+        self,
+        pedido_id: str,
+        datos_cabecera: Dict[str, Any],
+        audit_context: Optional["AuditContext"] = None,
+    ) -> bool:
         """
         Actualiza la cabecera de un pedido.
         
         DELEGADO a PedidoCabeceraRepository.
         """
-        return self.cabecera_repo.update(pedido_id, datos_cabecera)
+        return self.cabecera_repo.update(pedido_id, datos_cabecera, audit_context=audit_context)
 
     def update_estado(
         self, 
@@ -378,7 +383,11 @@ class PedidoRepository:
         finally:
             cursor.close()
 
-    def delete_pedido(self, pedido_id: str) -> bool:
+    def delete_pedido(
+        self,
+        pedido_id: str,
+        audit_context: Optional["AuditContext"] = None,
+    ) -> bool:
         """
         Elimina un pedido y sus detalles/distribuciones en una transacción.
         Solo debe llamarse después de validar con validar_puede_descartar.
@@ -388,9 +397,9 @@ class PedidoRepository:
         cursor = self.conn.cursor()
         try:
             self.conn.autocommit = False
-            self.tienda_repo.delete_distribuciones_by_pedido_id(pedido_id, cursor=cursor)
-            self.detalle_repo.delete_by_pedido_id(pedido_id, cursor=cursor)
-            ok = self.cabecera_repo.delete(pedido_id, cursor=cursor)
+            self.tienda_repo.delete_distribuciones_by_pedido_id(pedido_id, cursor=cursor, audit_context=audit_context)
+            self.detalle_repo.delete_by_pedido_id(pedido_id, cursor=cursor, audit_context=audit_context)
+            ok = self.cabecera_repo.delete(pedido_id, cursor=cursor, audit_context=audit_context)
             self.conn.commit()
             if ok:
                 logger.info(f"✅ Pedido {pedido_id} descartado (eliminado)")
@@ -405,13 +414,18 @@ class PedidoRepository:
 
     # ========== Métodos de Detalle (delegados) ==========
 
-    def insert_detalle(self, pedido_id: str, datos_detalle: Dict[str, Any]) -> str:
+    def insert_detalle(
+        self,
+        pedido_id: str,
+        datos_detalle: Dict[str, Any],
+        audit_context: Optional["AuditContext"] = None,
+    ) -> str:
         """
         Inserta un registro en pedido_detalle (artículo).
         
         DELEGADO a PedidoDetalleRepository.
         """
-        return self.detalle_repo.insert(pedido_id, datos_detalle)
+        return self.detalle_repo.insert(pedido_id, datos_detalle, audit_context=audit_context)
 
     def update_costo_detalle(
         self,
@@ -481,14 +495,15 @@ class PedidoRepository:
     def insert_detalle_tiendas(
         self,
         pedido_detalle_id: str,
-        distribuciones: List[Dict[str, Any]]
+        distribuciones: List[Dict[str, Any]],
+        audit_context: Optional["AuditContext"] = None,
     ) -> int:
         """
         Inserta distribuciones de un detalle por tiendas.
         
         DELEGADO a PedidoTiendaRepository.
         """
-        return self.tienda_repo.insert_distribuciones(pedido_detalle_id, distribuciones)
+        return self.tienda_repo.insert_distribuciones(pedido_detalle_id, distribuciones, audit_context=audit_context)
 
     def get_or_create_tienda(
         self, 

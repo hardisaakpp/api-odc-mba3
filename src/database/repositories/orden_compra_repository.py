@@ -10,6 +10,8 @@ import pyodbc
 from typing import Optional, Dict, Any, List, TYPE_CHECKING
 from datetime import datetime
 
+from src.utils.timezone import ahora_naive
+
 from .common.serialization import serialize_date
 
 if TYPE_CHECKING:
@@ -166,7 +168,7 @@ class OrdenCompraRepository:
                 origen,
                 ip_origen,
                 created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, GETDATE())
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """
             
             values = (
@@ -181,6 +183,7 @@ class OrdenCompraRepository:
                 creado_por,
                 origen,
                 ip_origen,
+                ahora_naive(),
             )
             
             cursor.execute(sql, values)
@@ -626,7 +629,7 @@ class OrdenCompraRepository:
                 error_message = ?,
                 error_code = ?,
                 error_source = ?,
-                updated_at = GETDATE()
+                updated_at = ?
             WHERE oc_id = ?
             """
             
@@ -642,6 +645,7 @@ class OrdenCompraRepository:
                 merged.get("error_message"),  # Puede ser None
                 merged.get("error_code"),  # Puede ser None
                 merged.get("error_source"),  # Puede ser None
+                ahora_naive(),
                 oc_id,
             )
             
@@ -700,18 +704,19 @@ class OrdenCompraRepository:
         
         try:
             # Construir SQL dinámicamente según campos proporcionados
-            set_clauses = ["estado = ?", "updated_at = GETDATE()"]
-            values: List[Any] = [estado]
+            set_clauses = ["estado = ?", "updated_at = ?"]
+            values: List[Any] = [estado, ahora_naive()]
             
             # Siempre actualizar fecha_procesado cuando se cambia el estado
-            set_clauses.append("fecha_procesado = GETDATE()")
+            set_clauses.append("fecha_procesado = ?")
+            values.append(ahora_naive())
             
             # Campos de auditoría (Buenas Prácticas - Sección 3)
             if audit_context:
                 set_clauses.append("modificado_por = ?")
                 values.append(audit_context.get_modificado_por())
                 set_clauses.append("modificado_fecha = ?")
-                values.append(datetime.utcnow())
+                values.append(ahora_naive())
             
             if numero_oc_sap is not None:
                 set_clauses.append("numero_oc_sap = ?")
@@ -793,8 +798,8 @@ class OrdenCompraRepository:
         cursor = self.conn.cursor()
         
         try:
-            set_clauses = ["updated_at = GETDATE()"]
-            values = []
+            set_clauses = ["updated_at = ?"]
+            values: List[Any] = [ahora_naive()]
             
             if doc_entry is not None:
                 set_clauses.append("doc_entry = ?")
@@ -804,7 +809,7 @@ class OrdenCompraRepository:
                 set_clauses.append("numero_oc_sap = ?")
                 values.append(doc_num)
             
-            if not values:
+            if len(values) == 1:
                 # No hay nada que actualizar
                 return False
             
@@ -953,10 +958,10 @@ class OrdenCompraRepository:
                 """
                 UPDATE orden_compra_detalle
                 SET sku_sap = ?,
-                    updated_at = GETDATE()
+                    updated_at = ?
                 WHERE oc_detalle_id = ?
                 """,
-                (nuevo_sku_sap, oc_detalle_id)
+                (nuevo_sku_sap, ahora_naive(), oc_detalle_id)
             )
             
             rows_affected = cursor.rowcount

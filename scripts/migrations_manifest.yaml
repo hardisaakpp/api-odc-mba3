@@ -326,3 +326,10 @@ migrations:
     description: "Crear tablas pedido_original y pedido_detalle_original para snapshot inmutable del pedido al momento del envío"
     category: "base"
     dependencies: ["004"]
+
+  - version: "606"
+    name: "audit_completa_pedidos"
+    file: "audit_completa_pedidos.sql"
+    description: "Auditoría completa: valor_anterior/valor_nuevo en modificaciones, campos audit en redistribucion_borrador, tabla pedido_audit_log"
+    category: "alter"
+    dependencies: ["004", "015"]

@@ -9,6 +9,8 @@ import logging
 from typing import Optional, Dict, Any, List
 from datetime import datetime
 
+from src.utils.timezone import ahora_naive
+
 logger = logging.getLogger(__name__)
 
 
@@ -71,14 +73,15 @@ class ArchivoPlantillaRepository:
                     activo
                 )
                 OUTPUT INSERTED.archivo_id
-                VALUES (?, ?, ?, ?, ?, ?, GETDATE(), 1)
+                VALUES (?, ?, ?, ?, ?, ?, ?, 1)
             """, (
                 pedido_id,
                 nombre_original,
                 storage_path,
                 content_type,
                 tamaño_bytes,
-                subido_por
+                subido_por,
+                ahora_naive(),
             ))
             
             row = cursor.fetchone()
@@ -228,10 +231,10 @@ class ArchivoPlantillaRepository:
                 UPDATE archivo_plantilla
                 SET 
                     descargas = descargas + 1,
-                    ultima_descarga = GETDATE(),
+                    ultima_descarga = ?,
                     ultimo_descargador = ?
                 WHERE archivo_id = ?
-            """, (descargado_por, archivo_id))
+            """, (ahora_naive(), descargado_por, archivo_id))
             
             self.conn.commit()
             

@@ -8,6 +8,8 @@ import logging
 import os
 from typing import Dict, Any, Optional, cast
 from datetime import datetime
+
+from src.utils.timezone import ahora_naive
 import redis
 
 logger = logging.getLogger(__name__)
@@ -94,8 +96,8 @@ class ProcesoEstadoService:
             "progress": 0,
             "message": "Iniciando cruce de productos...",
             "user_id": user_id,  # Auditoría: quién inició el proceso
-            "created_at": datetime.now().isoformat(),
-            "updated_at": datetime.now().isoformat(),
+            "created_at": ahora_naive().isoformat(),
+            "updated_at": ahora_naive().isoformat(),
             "version": 1  # Versión para comparación segura
         }
         self._guardar_estado(process_id, estado_inicial)
@@ -134,7 +136,7 @@ class ProcesoEstadoService:
             "step": step,
             "progress": nuevo_progress,
             "message": message,
-            "updated_at": datetime.now().isoformat(),
+            "updated_at": ahora_naive().isoformat(),
             "version": estado.get("version", 0) + 1  # Incrementar versión
         })
         
@@ -169,8 +171,8 @@ class ProcesoEstadoService:
             "progress": 100,
             "message": "Cruce completado exitosamente",
             "resultado": resultado,
-            "completed_at": datetime.now().isoformat(),
-            "updated_at": datetime.now().isoformat(),
+            "completed_at": ahora_naive().isoformat(),
+            "updated_at": ahora_naive().isoformat(),
             "version": estado.get("version", 0) + 1
         })
         self._guardar_estado(process_id, estado)
@@ -210,8 +212,8 @@ class ProcesoEstadoService:
             "progress": estado.get("progress", 0),  # NO resetear progress
             "message": f"Error: {error}",
             "error": error,
-            "error_at": datetime.now().isoformat(),
-            "updated_at": datetime.now().isoformat(),
+            "error_at": ahora_naive().isoformat(),
+            "updated_at": ahora_naive().isoformat(),
             "version": estado.get("version", 0) + 1
         })
         self._guardar_estado(process_id, estado)
@@ -280,7 +282,7 @@ class ProcesoEstadoService:
             completed_at_str = estado.get("completed_at")
             if completed_at_str:
                 completed_at = datetime.fromisoformat(completed_at_str)
-                edad_minutos = (datetime.now() - completed_at).total_seconds() / 60
+                edad_minutos = (ahora_naive() - completed_at).total_seconds() / 60
                 
                 if edad_minutos > max_age_minutes:
                     logger.debug(f"Proceso {process_id} es muy antiguo ({edad_minutos:.1f} min)")

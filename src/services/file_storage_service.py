@@ -27,6 +27,8 @@ Uso:
 import logging
 import io
 from datetime import datetime
+
+from src.utils.timezone import ahora_naive
 from typing import Optional, Tuple, Dict, Any
 from pathlib import PurePosixPath
 
@@ -154,7 +156,7 @@ class FileStorageService:
             Ruta de almacenamiento en el bucket
         """
         if timestamp is None:
-            timestamp = datetime.now()
+            timestamp = ahora_naive()
         
         # Sanitizar nombre del archivo
         nombre_seguro = "".join(
@@ -196,7 +198,7 @@ class FileStorageService:
         """
         client = self._get_client()
         
-        timestamp = datetime.now()
+        timestamp = ahora_naive()
         storage_path = self._generar_storage_path(pedido_id, nombre_original, timestamp)
         
         # Metadatos del archivo (solo caracteres ASCII permitidos en S3)

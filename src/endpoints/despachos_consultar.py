@@ -4,6 +4,8 @@ Endpoint para consultar despachos desde MBA3 (solo lectura).
 
 import logging
 from datetime import datetime
+
+from src.utils.timezone import ahora_naive
 from fastapi import FastAPI, Request, Depends
 from fastapi.responses import JSONResponse
 
@@ -70,7 +72,7 @@ def register_consultar_endpoint(app: FastAPI):
         
         # Log de la consulta
         logger.info("=" * 70)
-        logger.info(f"🔍 CONSULTAR: Consulta ejecutada a las {datetime.now().isoformat()}")
+        logger.info(f"🔍 CONSULTAR: Consulta ejecutada a las {ahora_naive().isoformat()}")
         logger.info(f"Fuente: {source}")
         logger.info(f"Query predefinida: {query_predefinida}")
         logger.info("Ejecutando consulta contra MBA3 (SOLO CONSULTA, NO GUARDA)...")

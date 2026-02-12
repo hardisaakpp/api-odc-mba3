@@ -6,6 +6,8 @@ import logging
 import threading
 import asyncio
 from datetime import datetime, timedelta
+
+from src.utils.timezone import ahora_naive
 from typing import Optional, Dict, Any
 from fastapi import FastAPI, Request, Query, Depends
 from fastapi.responses import JSONResponse
@@ -40,7 +42,7 @@ def get_cached_despachos(limit: Optional[int] = None) -> Optional[Dict[str, Any]
     """
     with _cache_lock:
         cache_key = f"despachos_{limit or 'all'}"
-        now = datetime.now()
+        now = ahora_naive()
         
         if cache_key in _despachos_cache:
             cached_data = _despachos_cache[cache_key]
@@ -70,7 +72,7 @@ def set_cached_despachos(data: Dict[str, Any], limit: Optional[int] = None):
         cache_key = f"despachos_{limit or 'all'}"
         _despachos_cache[cache_key] = {
             'data': data,
-            'timestamp': datetime.now()
+            'timestamp': ahora_naive()
         }
         logger.debug(f"💾 Cache SAVED para /despachos/count (limit={limit})")
 
@@ -269,7 +271,7 @@ def register_info_endpoints(app: FastAPI):
         source = get_source_from_headers(request)
         
         logger.info("=" * 70)
-        logger.info(f"📋 GET /despachos/{despacho_id}/detalles: Consulta ejecutada a las {datetime.now().isoformat()}")
+        logger.info(f"📋 GET /despachos/{despacho_id}/detalles: Consulta ejecutada a las {ahora_naive().isoformat()}")
         logger.info(f"Fuente: {source}")
         logger.info("=" * 70)
         

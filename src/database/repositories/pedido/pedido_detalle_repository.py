@@ -2,13 +2,21 @@
 Repositorio especializado para operaciones de pedido_detalle.
 
 CHANGELOG:
+- 2026-02-12: Agregado soporte completo para audit_context en todos los métodos de escritura
 - 2026-01-23: Extraído de pedido_repository.py
 """
 
 import logging
 import pyodbc
 from datetime import datetime
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, TYPE_CHECKING
+
+from src.utils.timezone import ahora_naive
+
+if TYPE_CHECKING:
+    from src.utils.audit_context import AuditContext
+
+from src.database.services.audit_log_service import AuditLogService
 
 logger = logging.getLogger(__name__)
 
@@ -25,7 +33,12 @@ class PedidoDetalleRepository:
         """
         self.conn = conn
 
-    def insert(self, pedido_id: str, datos_detalle: Dict[str, Any]) -> str:
+    def insert(
+        self,
+        pedido_id: str,
+        datos_detalle: Dict[str, Any],
+        audit_context: Optional["AuditContext"] = None,
+    ) -> str:
         """
         Inserta un registro en pedido_detalle (artículo).
         
@@ -34,10 +47,14 @@ class PedidoDetalleRepository:
         Args:
             pedido_id: UUID del pedido
             datos_detalle: Diccionario con datos del detalle (sin pedido_detalle_id)
+            audit_context: Contexto de auditoría (Buenas Prácticas - Sección 3)
             
         Returns:
             pedido_detalle_id (UUID) generado
         """
+        from src.utils.audit_context import ensure_audit_context
+        audit = ensure_audit_context(audit_context)
+        
         cursor = self.conn.cursor()
         
         try:
@@ -74,8 +91,11 @@ class PedidoDetalleRepository:
                     subtotal,
                     total,
                     comentario,
+                    creado_por,
+                    origen,
+                    ip_origen,
                     created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, GETDATE())
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """
                 
                 values = (
@@ -92,6 +112,10 @@ class PedidoDetalleRepository:
                     datos_detalle.get("subtotal"),
                     datos_detalle.get("total"),
                     datos_detalle.get("comentario"),
+                    audit.get_creado_por(),
+                    audit.origen,
+                    audit.ip_origen,
+                    ahora_naive(),
                 )
             else:
                 sql = """
@@ -108,8 +132,11 @@ class PedidoDetalleRepository:
                     pvp,
                     subtotal,
                     total,
+                    creado_por,
+                    origen,
+                    ip_origen,
                     created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, GETDATE())
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """
                 
                 values = (
@@ -125,9 +152,25 @@ class PedidoDetalleRepository:
                     datos_detalle.get("pvp"),
                     datos_detalle.get("subtotal"),
                     datos_detalle.get("total"),
+                    audit.get_creado_por(),
+                    audit.origen,
+                    audit.ip_origen,
+                    ahora_naive(),
                 )
             
             cursor.execute(sql, values)
+            
+            # Registrar en audit log
+            audit_svc = AuditLogService(self.conn)
+            audit_svc.registrar_insert(
+                pedido_id=pedido_id,
+                entidad="pedido_detalle",
+                entidad_id=pedido_detalle_id,
+                audit_context=audit,
+                datos={"codigo_interno": datos_detalle.get("codigo_interno"), "pedido_id": pedido_id},
+                cursor=cursor,
+            )
+            
             self.conn.commit()
             
             logger.debug(f"✅ Pedido detalle insertado: {pedido_detalle_id}")
@@ -141,22 +184,55 @@ class PedidoDetalleRepository:
             cursor.close()
 
     def delete_by_pedido_id(
-        self, pedido_id: str, cursor: Optional[pyodbc.Cursor] = None
+        self,
+        pedido_id: str,
+        cursor: Optional[pyodbc.Cursor] = None,
+        audit_context: Optional["AuditContext"] = None,
     ) -> int:
         """
         Elimina todos los registros de pedido_detalle de un pedido.
         Si se pasa cursor, no hace commit (para uso en transacción).
+        Registra snapshot en pedido_audit_log antes de eliminar.
 
         Returns:
             Número de filas eliminadas.
         """
+        from src.utils.audit_context import ensure_audit_context
+        audit = ensure_audit_context(audit_context)
+        
         own_cursor = cursor is None
         cur = cursor or self.conn.cursor()
         try:
+            # Snapshot antes de eliminar
+            cur.execute("""
+                SELECT pedido_detalle_id, codigo_interno, descripcion_sap, total
+                FROM pedido_detalle WHERE pedido_id = ?
+            """, (pedido_id,))
+            rows_snapshot = cur.fetchall()
+            
             cur.execute("""
                 DELETE FROM pedido_detalle WHERE pedido_id = ?
             """, (pedido_id,))
             count = cur.rowcount
+            
+            # Registrar en audit log
+            if rows_snapshot:
+                audit_svc = AuditLogService(self.conn)
+                for row in rows_snapshot:
+                    audit_svc.registrar_delete(
+                        pedido_id=pedido_id,
+                        entidad="pedido_detalle",
+                        entidad_id=str(row[0]),
+                        audit_context=audit,
+                        datos_eliminados={
+                            "pedido_detalle_id": str(row[0]),
+                            "codigo_interno": row[1],
+                            "descripcion_sap": row[2],
+                            "total": str(row[3]) if row[3] else None,
+                        },
+                        cursor=cur,
+                    )
+            
             if own_cursor:
                 self.conn.commit()
             if count > 0:
@@ -175,7 +251,8 @@ class PedidoDetalleRepository:
         self,
         pedido_detalle_id: str,
         nuevo_costo: float,
-        modificado_por: Optional[str] = None
+        modificado_por: Optional[str] = None,
+        audit_context: Optional["AuditContext"] = None,
     ) -> Dict[str, Any]:
         """
         Actualiza el costo unitario de un detalle de pedido.
@@ -183,11 +260,19 @@ class PedidoDetalleRepository:
         Args:
             pedido_detalle_id: UUID del detalle del pedido
             nuevo_costo: Nuevo valor del costo unitario (DECIMAL)
-            modificado_por: ID del usuario que realiza la modificación (opcional)
+            modificado_por: ID del usuario (deprecated, usar audit_context)
+            audit_context: Contexto de auditoría (Buenas Prácticas - Sección 3)
             
         Returns:
             Dict con información de la actualización
         """
+        from src.utils.audit_context import ensure_audit_context
+        audit = ensure_audit_context(audit_context)
+        # Retrocompatibilidad: si se pasó modificado_por sin audit_context
+        usuario_mod = audit.get_modificado_por()
+        if modificado_por and not audit_context:
+            usuario_mod = modificado_por
+        
         cursor = self.conn.cursor()
         
         try:
@@ -208,18 +293,24 @@ class PedidoDetalleRepository:
                 }
             
             costo_anterior = row[0]
+            pedido_id = str(row[1])
             costo_anterior_float = float(costo_anterior) if costo_anterior is not None else None
             
             set_clauses = [
                 "costo_doc_sin_iva = ?",
-                "updated_at = GETDATE()",
-                "costo_modificado_manual = 1"
+                "updated_at = ?",
+                "costo_modificado_manual = 1",
+                "modificado_por = ?",
+                "modificado_fecha = ?",
+                "origen = COALESCE(?, origen)",
+                "ip_origen = COALESCE(?, ip_origen)"
             ]
-            values: List[Any] = [nuevo_costo]
-            
-            if modificado_por:
-                set_clauses.append("modificado_por = ?")
-                values.append(modificado_por)
+            _ahora = ahora_naive()
+            values: List[Any] = [
+                nuevo_costo, _ahora,
+                usuario_mod, _ahora,
+                audit.origen, audit.ip_origen,
+            ]
             
             values.append(pedido_detalle_id)
             
@@ -230,6 +321,21 @@ class PedidoDetalleRepository:
             """, values)
             
             rows_affected = cursor.rowcount
+            
+            # Registrar cambio en audit log
+            audit_svc = AuditLogService(self.conn)
+            audit_svc.registrar(
+                pedido_id=pedido_id,
+                entidad="pedido_detalle",
+                entidad_id=pedido_detalle_id,
+                accion="UPDATE",
+                audit_context=audit,
+                campo="costo_doc_sin_iva",
+                valor_anterior=str(costo_anterior_float) if costo_anterior_float is not None else None,
+                valor_nuevo=str(float(nuevo_costo)),
+                cursor=cursor,
+            )
+            
             self.conn.commit()
             
             if rows_affected > 0:
@@ -261,7 +367,8 @@ class PedidoDetalleRepository:
         self,
         pedido_detalle_id: str,
         nuevo_total: float,
-        modificado_por: Optional[str] = None
+        modificado_por: Optional[str] = None,
+        audit_context: Optional["AuditContext"] = None,
     ) -> Dict[str, Any]:
         """
         Actualiza el total de un detalle de pedido.
@@ -269,11 +376,18 @@ class PedidoDetalleRepository:
         Args:
             pedido_detalle_id: UUID del detalle del pedido
             nuevo_total: Nuevo valor del total (DECIMAL)
-            modificado_por: ID del usuario que realiza la modificación (opcional)
+            modificado_por: ID del usuario (deprecated, usar audit_context)
+            audit_context: Contexto de auditoría (Buenas Prácticas - Sección 3)
             
         Returns:
             Dict con información de la actualización
         """
+        from src.utils.audit_context import ensure_audit_context
+        audit = ensure_audit_context(audit_context)
+        usuario_mod = audit.get_modificado_por()
+        if modificado_por and not audit_context:
+            usuario_mod = modificado_por
+        
         cursor = self.conn.cursor()
         
         try:
@@ -296,19 +410,25 @@ class PedidoDetalleRepository:
             
             total_anterior = row[0]
             costo_anterior = row[1]
+            pedido_id = str(row[2])
             total_anterior_float = float(total_anterior) if total_anterior is not None else None
             costo_anterior_float = float(costo_anterior) if costo_anterior is not None else None
             
             set_clauses = [
                 "total = ?",
-                "updated_at = GETDATE()",
-                "total_modificado_manual = 1"
+                "updated_at = ?",
+                "total_modificado_manual = 1",
+                "modificado_por = ?",
+                "modificado_fecha = ?",
+                "origen = COALESCE(?, origen)",
+                "ip_origen = COALESCE(?, ip_origen)"
             ]
-            values: List[Any] = [nuevo_total]
-            
-            if modificado_por:
-                set_clauses.append("modificado_por = ?")
-                values.append(modificado_por)
+            _ahora = ahora_naive()
+            values: List[Any] = [
+                nuevo_total, _ahora,
+                usuario_mod, _ahora,
+                audit.origen, audit.ip_origen,
+            ]
             
             values.append(pedido_detalle_id)
             
@@ -319,6 +439,21 @@ class PedidoDetalleRepository:
             """, values)
             
             rows_affected = cursor.rowcount
+            
+            # Registrar cambio en audit log
+            audit_svc = AuditLogService(self.conn)
+            audit_svc.registrar(
+                pedido_id=pedido_id,
+                entidad="pedido_detalle",
+                entidad_id=pedido_detalle_id,
+                accion="UPDATE",
+                audit_context=audit,
+                campo="total",
+                valor_anterior=str(total_anterior_float) if total_anterior_float is not None else None,
+                valor_nuevo=str(float(nuevo_total)),
+                cursor=cursor,
+            )
+            
             self.conn.commit()
             
             if rows_affected > 0:
@@ -352,7 +487,8 @@ class PedidoDetalleRepository:
         self,
         pedido_detalle_id: str,
         nuevo_comentario: Optional[str],
-        modificado_por: Optional[str] = None
+        modificado_por: Optional[str] = None,
+        audit_context: Optional["AuditContext"] = None,
     ) -> Dict[str, Any]:
         """
         Actualiza el comentario de un detalle de pedido.
@@ -360,16 +496,23 @@ class PedidoDetalleRepository:
         Args:
             pedido_detalle_id: UUID del detalle del pedido
             nuevo_comentario: Nuevo comentario (puede ser None para limpiar)
-            modificado_por: ID del usuario que realiza la modificación (opcional)
+            modificado_por: ID del usuario (deprecated, usar audit_context)
+            audit_context: Contexto de auditoría (Buenas Prácticas - Sección 3)
             
         Returns:
             Dict con información de la actualización
         """
+        from src.utils.audit_context import ensure_audit_context
+        audit = ensure_audit_context(audit_context)
+        usuario_mod = audit.get_modificado_por()
+        if modificado_por and not audit_context:
+            usuario_mod = modificado_por
+        
         cursor = self.conn.cursor()
         
         try:
             cursor.execute("""
-                SELECT comentario
+                SELECT comentario, pedido_id
                 FROM pedido_detalle
                 WHERE pedido_detalle_id = ?
             """, (pedido_detalle_id,))
@@ -385,18 +528,27 @@ class PedidoDetalleRepository:
                 }
             
             comentario_anterior = row[0]
+            pedido_id = str(row[1])
             comentario_anterior_str = comentario_anterior if comentario_anterior else None
             nuevo_comentario_str = nuevo_comentario.strip() if nuevo_comentario and nuevo_comentario.strip() else None
             
-            set_clauses = ["comentario = ?", "updated_at = GETDATE()"]
+            _ahora = ahora_naive()
+            set_clauses = [
+                "comentario = ?",
+                "updated_at = ?",
+                "modificado_por = ?",
+                "modificado_fecha = ?",
+                "origen = COALESCE(?, origen)",
+                "ip_origen = COALESCE(?, ip_origen)"
+            ]
             if nuevo_comentario_str:
                 set_clauses.append("comentario_modificado_manual = 1")
             
-            values = [nuevo_comentario_str]
-            
-            if modificado_por:
-                set_clauses.append("modificado_por = ?")
-                values.append(modificado_por)
+            values: List[Any] = [
+                nuevo_comentario_str, _ahora,
+                usuario_mod, _ahora,
+                audit.origen, audit.ip_origen,
+            ]
             
             values.append(pedido_detalle_id)
             
@@ -407,6 +559,21 @@ class PedidoDetalleRepository:
             """, values)
             
             rows_affected = cursor.rowcount
+            
+            # Registrar cambio en audit log
+            audit_svc = AuditLogService(self.conn)
+            audit_svc.registrar(
+                pedido_id=pedido_id,
+                entidad="pedido_detalle",
+                entidad_id=pedido_detalle_id,
+                accion="UPDATE",
+                audit_context=audit,
+                campo="comentario",
+                valor_anterior=comentario_anterior_str,
+                valor_nuevo=nuevo_comentario_str,
+                cursor=cursor,
+            )
+            
             self.conn.commit()
             
             if rows_affected > 0:
@@ -438,20 +605,30 @@ class PedidoDetalleRepository:
         self,
         numero_pedido: str,
         modificaciones: List[Dict[str, str]],
-        modificado_por: Optional[str] = None
+        modificado_por: Optional[str] = None,
+        audit_context: Optional["AuditContext"] = None,
     ) -> Dict[str, Any]:
         """
         Guarda o actualiza modificaciones de columnas para un pedido.
+        Ahora incluye valor_anterior y valor_nuevo en pedido_detalle_modificacion_columna.
         
         Args:
             numero_pedido: Número del pedido
             modificaciones: Lista de diccionarios con formato:
-                [{"pedido_detalle_id": "uuid", "columna_key": "costo_doc_sin_iva"}, ...]
-            modificado_por: ID del usuario que realiza la modificación (opcional)
+                [{"pedido_detalle_id": "uuid", "columna_key": "costo_doc_sin_iva",
+                  "valor_anterior": "100.00", "valor_nuevo": "120.00"}, ...]
+            modificado_por: ID del usuario (deprecated, usar audit_context)
+            audit_context: Contexto de auditoría (Buenas Prácticas - Sección 3)
         
         Returns:
             Dict con información de las modificaciones guardadas
         """
+        from src.utils.audit_context import ensure_audit_context
+        audit = ensure_audit_context(audit_context)
+        usuario_mod = audit.get_modificado_por()
+        if modificado_por and not audit_context:
+            usuario_mod = modificado_por
+        
         cursor = self.conn.cursor()
         
         try:
@@ -474,6 +651,14 @@ class PedidoDetalleRepository:
             columnas_validas = {'costo_doc_sin_iva', 'total', 'comentario'}
             modificaciones_count = 0
             errores = []
+            
+            # Verificar si la tabla tiene columnas valor_anterior/valor_nuevo
+            cursor.execute("""
+                SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS
+                WHERE TABLE_NAME = 'pedido_detalle_modificacion_columna'
+                AND COLUMN_NAME = 'valor_anterior'
+            """)
+            tiene_valores = (cursor.fetchone()[0] or 0) > 0
             
             for mod in modificaciones:
                 pedido_detalle_id = mod.get('pedido_detalle_id')
@@ -499,22 +684,56 @@ class PedidoDetalleRepository:
                     errores.append(f"Detalle {pedido_detalle_id} no pertenece al pedido {numero_pedido}")
                     continue
                 
-                fecha_actual = datetime.now()
-                cursor.execute("""
-                    MERGE pedido_detalle_modificacion_columna AS target
-                    USING (SELECT ? AS pedido_detalle_id, ? AS columna_key, ? AS modificado_por) AS source
-                    ON target.pedido_detalle_id = source.pedido_detalle_id 
-                    AND target.columna_key = source.columna_key
-                    WHEN MATCHED THEN
-                        UPDATE SET 
-                            modificado_por = source.modificado_por,
-                            fecha_modificacion = ?
-                    WHEN NOT MATCHED THEN
-                        INSERT (pedido_detalle_id, columna_key, modificado_por, fecha_modificacion)
-                        VALUES (source.pedido_detalle_id, source.columna_key, source.modificado_por, ?);
-                """, (pedido_detalle_id, columna_key, modificado_por, fecha_actual, fecha_actual))
+                fecha_actual = ahora_naive()
+                valor_anterior = mod.get('valor_anterior')
+                valor_nuevo = mod.get('valor_nuevo')
+                
+                if tiene_valores:
+                    cursor.execute("""
+                        MERGE pedido_detalle_modificacion_columna AS target
+                        USING (SELECT ? AS pedido_detalle_id, ? AS columna_key, ? AS modificado_por,
+                                      ? AS valor_anterior, ? AS valor_nuevo) AS source
+                        ON target.pedido_detalle_id = source.pedido_detalle_id 
+                        AND target.columna_key = source.columna_key
+                        WHEN MATCHED THEN
+                            UPDATE SET 
+                                modificado_por = source.modificado_por,
+                                fecha_modificacion = ?,
+                                valor_anterior = source.valor_anterior,
+                                valor_nuevo = source.valor_nuevo
+                        WHEN NOT MATCHED THEN
+                            INSERT (pedido_detalle_id, columna_key, modificado_por, fecha_modificacion, valor_anterior, valor_nuevo)
+                            VALUES (source.pedido_detalle_id, source.columna_key, source.modificado_por, ?, source.valor_anterior, source.valor_nuevo);
+                    """, (pedido_detalle_id, columna_key, usuario_mod, valor_anterior, valor_nuevo, fecha_actual, fecha_actual))
+                else:
+                    cursor.execute("""
+                        MERGE pedido_detalle_modificacion_columna AS target
+                        USING (SELECT ? AS pedido_detalle_id, ? AS columna_key, ? AS modificado_por) AS source
+                        ON target.pedido_detalle_id = source.pedido_detalle_id 
+                        AND target.columna_key = source.columna_key
+                        WHEN MATCHED THEN
+                            UPDATE SET 
+                                modificado_por = source.modificado_por,
+                                fecha_modificacion = ?
+                        WHEN NOT MATCHED THEN
+                            INSERT (pedido_detalle_id, columna_key, modificado_por, fecha_modificacion)
+                            VALUES (source.pedido_detalle_id, source.columna_key, source.modificado_por, ?);
+                    """, (pedido_detalle_id, columna_key, usuario_mod, fecha_actual, fecha_actual))
                 
                 modificaciones_count += 1
+            
+            # Registrar en audit log
+            if modificaciones_count > 0:
+                audit_svc = AuditLogService(self.conn)
+                audit_svc.registrar(
+                    pedido_id=pedido_id,
+                    entidad="pedido_detalle_modificacion_columna",
+                    entidad_id=pedido_id,
+                    accion="UPDATE",
+                    audit_context=audit,
+                    comentario=f"{modificaciones_count} columnas modificadas para pedido {numero_pedido}",
+                    cursor=cursor,
+                )
             
             self.conn.commit()
             

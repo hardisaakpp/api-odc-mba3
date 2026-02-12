@@ -6,6 +6,8 @@ import logging
 import pyodbc
 from typing import List
 
+from src.utils.timezone import ahora_naive
+
 logger = logging.getLogger(__name__)
 
 
@@ -100,19 +102,21 @@ class NotificacionRepository:
             
             if existing:
                 # ACTUALIZAR: incrementar contador y actualizar fecha
+                _ahora = ahora_naive()
                 cursor.execute(
                     """
                     UPDATE productos_no_homologados_notificados
                     SET veces_notificado = veces_notificado + 1,
-                        ultima_notificacion = GETDATE(),
-                        updated_at = GETDATE()
+                        ultima_notificacion = ?,
+                        updated_at = ?
                     WHERE sku = ? AND activo = 1
                     """,
-                    (sku,)
+                    (_ahora, _ahora, sku)
                 )
                 logger.debug(f"✅ Producto {sku} actualizado en notificados (veces: {existing[1] + 1})")
             else:
                 # INSERTAR: primera notificación
+                _ahora = ahora_naive()
                 cursor.execute(
                     """
                     INSERT INTO productos_no_homologados_notificados (
@@ -123,9 +127,9 @@ class NotificacionRepository:
                         activo,
                         created_at,
                         updated_at
-                    ) VALUES (?, GETDATE(), 1, GETDATE(), 1, GETDATE(), GETDATE())
+                    ) VALUES (?, ?, 1, ?, 1, ?, ?)
                     """,
-                    (sku,)
+                    (sku, _ahora, _ahora, _ahora, _ahora)
                 )
                 logger.debug(f"✅ Producto {sku} registrado como notificado")
             

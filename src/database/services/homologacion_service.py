@@ -6,6 +6,8 @@ import logging
 from typing import List, Dict, Any, Set, Optional
 from datetime import datetime
 
+from src.utils.timezone import ahora_naive
+
 from ..connection import get_db_connection
 from ..repositories.homologacion_repository import HomologacionRepository
 
@@ -120,8 +122,8 @@ class HomologacionService:
                         "veces_usado": 1,
                         "total_docenas": 0.0,
                         "total_valor": 0.0,
-                        "primera_aparicion": datetime.now().strftime("%Y-%m-%d"),
-                        "ultima_aparicion": datetime.now().strftime("%Y-%m-%d"),
+                        "primera_aparicion": ahora_naive().strftime("%Y-%m-%d"),
+                        "ultima_aparicion": ahora_naive().strftime("%Y-%m-%d"),
                         "tipo_problema": tipo_problema
                     }
                     if info_adicional:

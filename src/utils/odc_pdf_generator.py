@@ -25,6 +25,8 @@ Uso:
 import io
 import logging
 from datetime import datetime
+
+from src.utils.timezone import ahora_naive
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -659,7 +661,7 @@ def generar_odc_pdf(
         elements.append(Spacer(1, 8 * mm))
 
         # ── 6. Pie de página ─────────────────────────────────────────────
-        fecha_gen = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        fecha_gen = ahora_naive().strftime("%Y-%m-%d %H:%M:%S")
         elements.append(
             Paragraph(
                 f"Documento generado autom&aacute;ticamente &mdash; {COMPRADOR_RAZON_SOCIAL} &mdash; {fecha_gen}",

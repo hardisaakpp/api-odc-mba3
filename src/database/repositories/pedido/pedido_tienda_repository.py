@@ -2,12 +2,20 @@
 Repositorio especializado para operaciones de tiendas y distribuciones.
 
 CHANGELOG:
+- 2026-02-12: Agregado soporte para audit_context en insert/delete de distribuciones
 - 2026-01-23: Extraído de pedido_repository.py
 """
 
 import logging
 import pyodbc
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, TYPE_CHECKING
+
+from src.utils.timezone import ahora_naive
+
+if TYPE_CHECKING:
+    from src.utils.audit_context import AuditContext
+
+from src.database.services.audit_log_service import AuditLogService
 
 logger = logging.getLogger(__name__)
 
@@ -27,7 +35,8 @@ class PedidoTiendaRepository:
     def insert_distribuciones(
         self,
         pedido_detalle_id: str,
-        distribuciones: List[Dict[str, Any]]
+        distribuciones: List[Dict[str, Any]],
+        audit_context: Optional["AuditContext"] = None,
     ) -> int:
         """
         Inserta distribuciones de un detalle por tiendas.
@@ -39,6 +48,9 @@ class PedidoTiendaRepository:
         Returns:
             Número de distribuciones insertadas
         """
+        from src.utils.audit_context import ensure_audit_context
+        audit = ensure_audit_context(audit_context)
+        
         if not distribuciones:
             return 0
         
@@ -64,6 +76,16 @@ class PedidoTiendaRepository:
             row = cursor.fetchone()
             tiene_es_bodega = (row[0] if row else 0) > 0
             
+            # Verificar columnas de auditoría
+            cursor.execute("""
+                SELECT COUNT(*) 
+                FROM INFORMATION_SCHEMA.COLUMNS 
+                WHERE TABLE_NAME = 'pedido_detalle_tienda' 
+                AND COLUMN_NAME = 'creado_por'
+            """)
+            row = cursor.fetchone()
+            tiene_audit_cols = (row[0] if row else 0) > 0
+            
             columnas = ["id", "pedido_detalle_id", "tienda_id", "cantidad"]
             valores_placeholders = ["NEWID()", "?", "?", "?"]
             
@@ -75,8 +97,12 @@ class PedidoTiendaRepository:
                 columnas.append("es_bodega")
                 valores_placeholders.append("?")
             
+            if tiene_audit_cols:
+                columnas.extend(["creado_por", "origen", "ip_origen"])
+                valores_placeholders.extend(["?", "?", "?"])
+            
             columnas.append("created_at")
-            valores_placeholders.append("GETDATE()")
+            valores_placeholders.append("?")
             
             sql = f"""
                 INSERT INTO pedido_detalle_tienda (
@@ -105,6 +131,10 @@ class PedidoTiendaRepository:
                     if tiene_es_bodega:
                         valores.append(1 if es_bodega else 0)
                     
+                    if tiene_audit_cols:
+                        valores.extend([audit.get_creado_por(), audit.origen, audit.ip_origen])
+                    
+                    valores.append(ahora_naive())
                     cursor.execute(sql, tuple(valores))
                     inserted_count += 1
                     
@@ -183,7 +213,7 @@ class PedidoTiendaRepository:
                 
                 if debe_actualizar and nombre_final:
                     nombre_final_stripped = nombre_final.strip()
-                    cursor.execute("UPDATE tienda SET nombre = ?, updated_at = GETDATE() WHERE codigo = ?", (nombre_final_stripped, codigo))
+                    cursor.execute("UPDATE tienda SET nombre = ?, updated_at = ? WHERE codigo = ?", (nombre_final_stripped, ahora_naive(), codigo))
                     self.conn.commit()
                     origen = "SAP" if nombre_sap else "Excel"
                     logger.info(f"✅ Nombre de tienda actualizado desde {origen}: {codigo} → '{nombre_final_stripped}' (anterior: '{nombre_existente}')")
@@ -216,10 +246,10 @@ class PedidoTiendaRepository:
                 nombre,
                 activa,
                 created_at
-            ) VALUES (?, ?, ?, 1, GETDATE())
+            ) VALUES (?, ?, ?, 1, ?)
             """
             
-            cursor.execute(sql, (tienda_id, codigo, nombre_guardar))
+            cursor.execute(sql, (tienda_id, codigo, nombre_guardar, ahora_naive()))
             self.conn.commit()
             
             logger.debug(f"✅ Nueva tienda creada: {codigo} ({tienda_id})")
@@ -319,18 +349,34 @@ class PedidoTiendaRepository:
             cursor.close()
 
     def delete_distribuciones_by_pedido_id(
-        self, pedido_id: str, cursor: Optional[pyodbc.Cursor] = None
+        self,
+        pedido_id: str,
+        cursor: Optional[pyodbc.Cursor] = None,
+        audit_context: Optional["AuditContext"] = None,
     ) -> int:
         """
         Elimina todas las filas de pedido_detalle_tienda asociadas a un pedido.
         Si se pasa cursor, no hace commit (para uso en transacción).
+        Registra snapshot en pedido_audit_log antes de eliminar.
 
         Returns:
             Número de filas eliminadas.
         """
+        from src.utils.audit_context import ensure_audit_context
+        audit = ensure_audit_context(audit_context)
+        
         own_cursor = cursor is None
         cur = cursor or self.conn.cursor()
         try:
+            # Snapshot antes de eliminar
+            cur.execute("""
+                SELECT pdt.id, pdt.pedido_detalle_id, pdt.tienda_id, pdt.cantidad
+                FROM pedido_detalle_tienda pdt
+                INNER JOIN pedido_detalle pd ON pdt.pedido_detalle_id = pd.pedido_detalle_id
+                WHERE pd.pedido_id = ?
+            """, (pedido_id,))
+            rows_snapshot = cur.fetchall()
+            
             cur.execute("""
                 DELETE FROM pedido_detalle_tienda
                 WHERE pedido_detalle_id IN (
@@ -338,6 +384,20 @@ class PedidoTiendaRepository:
                 )
             """, (pedido_id,))
             count = cur.rowcount
+            
+            # Registrar en audit log (resumen, no por cada fila para performance)
+            if count > 0:
+                audit_svc = AuditLogService(self.conn)
+                audit_svc.registrar_delete(
+                    pedido_id=pedido_id,
+                    entidad="pedido_detalle_tienda",
+                    entidad_id=pedido_id,
+                    audit_context=audit,
+                    datos_eliminados={"total_distribuciones_eliminadas": count},
+                    comentario=f"Eliminadas {count} distribuciones del pedido",
+                    cursor=cur,
+                )
+            
             if own_cursor:
                 self.conn.commit()
             if count > 0:
