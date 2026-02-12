@@ -2,7 +2,7 @@
 
 import re
 from io import BytesIO
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 import pandas as pd
 from openpyxl import Workbook
@@ -58,6 +58,7 @@ def generar_excel_distribucion(
     distribucion_data: Dict[str, Any],
     productos_enriquecidos: List[Dict[str, Any]],
     user: Dict[str, Any],
+    itr_por_tienda: Optional[Dict[str, int]] = None,
 ) -> BytesIO:
     """Genera el libro Excel de distribución confirmada."""
     cabecera = pedido_data.get("cabecera", {})
@@ -167,11 +168,14 @@ def generar_excel_distribucion(
     ws_resumen.column_dimensions["D"].width = 18
     ws_resumen.column_dimensions["E"].width = 15
 
+    if itr_por_tienda is None:
+        itr_por_tienda = {}
+
     ws_detalle = wb.create_sheet("Distribución por Tienda")
     ws_detalle["A1"] = "DISTRIBUCIÓN DETALLADA POR TIENDA"
     ws_detalle["A1"].font = title_font
     ws_detalle["A1"].fill = title_fill
-    ws_detalle.merge_cells("A1:G1")
+    ws_detalle.merge_cells("A1:H1")
 
     headers_detalle = [
         "Código Producto",
@@ -181,6 +185,7 @@ def generar_excel_distribucion(
         "Cantidad Asignada",
         "Costo Unitario",
         "Observaciones",
+        "Número Solicitud Transferencia",
     ]
 
     for col_num, header in enumerate(headers_detalle, 1):
@@ -201,11 +206,15 @@ def generar_excel_distribucion(
             for dist in distribuciones:
                 ws_detalle.cell(row=row, column=1, value=codigo_interno)
                 ws_detalle.cell(row=row, column=2, value=descripcion)
-                ws_detalle.cell(row=row, column=3, value=dist.get("tienda_codigo", ""))
+                tienda_codigo = dist.get("tienda_codigo", "")
+                ws_detalle.cell(row=row, column=3, value=tienda_codigo)
                 ws_detalle.cell(row=row, column=4, value=dist.get("tienda_nombre", ""))
                 ws_detalle.cell(row=row, column=5, value=dist.get("cantidad_asignada", 0))
                 ws_detalle.cell(row=row, column=6, value=float(dist.get("costo_unitario_ajustado", 0.0)))
                 ws_detalle.cell(row=row, column=7, value=dist.get("observaciones", ""))
+                # Número Solicitud Transferencia (DocNum del ITR en SAP)
+                doc_num_itr = itr_por_tienda.get(tienda_codigo)
+                ws_detalle.cell(row=row, column=8, value=doc_num_itr if doc_num_itr else "")
                 ws_detalle.cell(row=row, column=6).number_format = "#,##0.00"
                 row += 1
         else:
@@ -221,6 +230,7 @@ def generar_excel_distribucion(
     ws_detalle.column_dimensions["E"].width = 18
     ws_detalle.column_dimensions["F"].width = 15
     ws_detalle.column_dimensions["G"].width = 30
+    ws_detalle.column_dimensions["H"].width = 30
 
     row = ws_cabecera.max_row + 2
     ws_cabecera[f"A{row}"] = "Descargado por:"

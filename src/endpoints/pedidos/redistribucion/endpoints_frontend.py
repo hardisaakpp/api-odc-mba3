@@ -251,12 +251,36 @@ def register_frontend_endpoints(app: FastAPI):
                     pedido_data.get("detalles", []),
                 )
 
+                # Obtener mapping tienda_codigo → DocNum de ITR desde SAP
+                itr_por_tienda: Dict[str, int] = {}
+                numero_pedido_buscar = cabecera.get("numero_pedido", "")
+                if numero_pedido_buscar:
+                    try:
+                        from src.database.clients.sap_service_layer_client import SAPServiceLayerClient
+                        sap_client = SAPServiceLayerClient()
+                        itrs = sap_client.get_inventory_transfer_requests_by_comment(
+                            f"Pedido {numero_pedido_buscar}"
+                        )
+                        for itr in itrs:
+                            to_wh = itr.get("to_warehouse")
+                            doc_num = itr.get("doc_num")
+                            if to_wh and doc_num:
+                                itr_por_tienda[to_wh] = doc_num
+                        if itr_por_tienda:
+                            logger.info(
+                                f"📋 ITR DocNums obtenidos para {len(itr_por_tienda)} tienda(s) "
+                                f"del pedido {numero_pedido_buscar}"
+                            )
+                    except Exception as e_itr:
+                        logger.warning(f"⚠️ No se pudieron obtener ITR DocNums (no crítico): {e_itr}")
+
                 excel_buffer = generar_excel_distribucion(
                     pedido_id=pedido_id,
                     pedido_data=pedido_data,
                     distribucion_data=distribucion_data,
                     productos_enriquecidos=productos_enriquecidos,
                     user=user,
+                    itr_por_tienda=itr_por_tienda,
                 )
 
                 numero_pedido = cabecera.get("numero_pedido", pedido_id)

@@ -13,7 +13,7 @@ import ssl
 import subprocess
 import json
 import requests
-from typing import Optional, Dict, Any, Tuple, Union
+from typing import List, Optional, Dict, Any, Tuple, Union
 from datetime import datetime, timedelta
 from requests.adapters import HTTPAdapter
 
@@ -653,6 +653,77 @@ class SAPServiceLayerClient:
                 "error": f"Error inesperado: {str(e)}"
             }
     
+    def get_inventory_transfer_requests_by_comment(
+        self,
+        comment_filter: str,
+    ) -> List[Dict[str, Any]]:
+        """
+        Consulta Inventory Transfer Requests en SAP filtrando por texto en Comments.
+
+        Retorna una lista de dicts con DocNum, DocEntry, ToWarehouse, FromWarehouse y Comments.
+        Si SAP no está disponible o la consulta falla, retorna lista vacía.
+        """
+        if not self.enabled:
+            logger.debug("⏭️ Consulta de ITR deshabilitada")
+            return []
+
+        if not self._ensure_session():
+            logger.error("❌ No se pudo establecer sesión con SAP Service Layer para consultar ITR")
+            return []
+
+        try:
+            # Escapar comillas simples para OData
+            safe_filter = comment_filter.replace("'", "''")
+
+            # SAP B1 Service Layer soporta contains() en $filter
+            url = (
+                f"{self.base_url}/InventoryTransferRequests"
+                f"?$select=DocNum,DocEntry,ToWarehouse,FromWarehouse,Comments"
+                f"&$filter=contains(Comments, '{safe_filter}')"
+                f"&$orderby=DocNum asc"
+            )
+
+            headers = {
+                "Content-Type": "application/json",
+                "Cookie": f"B1SESSION={self.session_id}",
+                "Prefer": "odata.maxpagesize=500",
+            }
+
+            logger.info(f"🔍 GET InventoryTransferRequests (filter: '{comment_filter}')")
+
+            if self.working_session:
+                response = self.working_session.get(url, headers=headers, timeout=self.timeout)
+            else:
+                response, _ = self._try_request_with_fallback("GET", url, headers=headers)
+                if response is None:
+                    logger.warning("⚠️ No se pudo consultar ITR en SAP")
+                    return []
+
+            if response.status_code == 200:
+                data = response.json()
+                items = data.get("value", [])
+                logger.info(f"✅ ITR encontrados: {len(items)}")
+                return [
+                    {
+                        "doc_num": item.get("DocNum"),
+                        "doc_entry": item.get("DocEntry"),
+                        "to_warehouse": item.get("ToWarehouse"),
+                        "from_warehouse": item.get("FromWarehouse"),
+                        "comments": item.get("Comments"),
+                    }
+                    for item in items
+                ]
+            else:
+                logger.warning(
+                    f"⚠️ Error al consultar ITR: {response.status_code} - "
+                    f"{response.text[:500] if response.text else 'Sin detalle'}"
+                )
+                return []
+
+        except Exception as e:
+            logger.warning(f"⚠️ Error al consultar Inventory Transfer Requests: {e}")
+            return []
+
     def get_stock_by_warehouse(
         self, 
         item_code: str, 
