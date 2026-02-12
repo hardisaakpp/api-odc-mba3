@@ -20,7 +20,7 @@ async def notificar_redistribucion_confirmada(pedido_id: str, numero_pedido: str
     )
 
 
-async def notificar_odc_enviada_a_sap(pedido_id: str, numero_pedido: str, doc_num: str = None) -> None:
+async def notificar_odc_enviada_a_sap(pedido_id: str, numero_pedido: str, doc_num: str | None = None) -> None:
     """Envía notificación en tiempo real a EL RAYO cuando la ODC se envía exitosamente a SAP."""
     from src.utils.notification_manager import notification_manager, NotificationType
 

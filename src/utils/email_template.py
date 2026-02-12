@@ -212,7 +212,7 @@ def build_email(
     sections: Optional[List[str]] = None,
     accent: str = "blue",
     timestamp: Optional[datetime] = None,
-) -> Tuple[str, str]:
+) -> str:
     """Construye el HTML y texto plano del email.
 
     Args:

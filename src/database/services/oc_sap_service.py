@@ -4,10 +4,12 @@ Servicio para enviar órdenes de compra a SAP Service Layer.
 Este servicio orquesta la construcción del JSON y el envío de ODC a SAP.
 """
 
+import json
 import logging
 from datetime import datetime
 from typing import Optional, Dict, Any, List
 
+from src.config import PROJECT_ROOT
 from ..repositories.orden_compra_repository import OrdenCompraRepository
 from ..clients.sap_service_layer_client import SAPServiceLayerClient
 from ..mappers.sap_oc_mapper import SAPOCMapper
@@ -210,6 +212,24 @@ class OCSAPService:
                             logger.warning(f"⚠️ No se pudo persistir bodega en la cabecera: {e}")
                     else:
                         logger.warning(f"⚠️ No se pudo determinar bodega para ODC {oc_id}. La ODC se enviará sin WarehouseCode.")
+            
+            # 2.9. Generar JSON de SAP y guardar en output/ (diagnóstico, antes de validaciones)
+            try:
+                purchase_order_json_preview = SAPOCMapper.to_sap_purchase_order(
+                    oc_cabecera,
+                    oc_detalles,
+                    warehouse_code,
+                    usuario_id=oc_cabecera.get("creado_por"),
+                    pedido_id=oc_cabecera.get("pedido_id")
+                )
+                output_dir = PROJECT_ROOT / "output"
+                output_dir.mkdir(parents=True, exist_ok=True)
+                out_file = output_dir / f"odc_{oc_id}.json"
+                with open(out_file, "w", encoding="utf-8") as f:
+                    json.dump(purchase_order_json_preview, f, ensure_ascii=False, indent=2, default=str)
+                logger.info(f"📥 ODC (preview) guardada en {out_file}")
+            except Exception as e:
+                logger.warning(f"⚠️ No se pudo generar/guardar preview de ODC en output/: {e}")
             
             # 3. Validar antes de crear OC
             validacion = self._validar_antes_de_crear_oc(oc_cabecera, oc_detalles)

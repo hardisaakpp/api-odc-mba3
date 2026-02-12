@@ -235,7 +235,7 @@ def send_rayo_confirmacion_notification(
         if usuario_rayo:
             info_items.append(("Usuario El Rayo", usuario_rayo))
         info_items.extend([
-            ("Detalles Modificados", detalles_modificados),
+            ("Detalles Modificados", str(detalles_modificados)),
             ("Estado", badge_html("CONFIRMADO", "#e8f5e9", "#2e7d32")),
         ])
         

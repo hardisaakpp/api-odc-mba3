@@ -78,7 +78,8 @@ class PedidoOCService:
         procesamiento_detalle: Dict[str, Any],
         oc_id: str,
         conn: Optional[pyodbc.Connection] = None,
-        pedido_id: Optional[str] = None
+        pedido_id: Optional[str] = None,
+        codigo_bodega_cabecera: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Transforma un detalle de pedido_sap_procesamiento_detalle a formato de orden_compra_detalle.
@@ -93,13 +94,15 @@ class PedidoOCService:
         - total_linea_sap → total_linea (ya calculado)
         - cantidad_original → cantidad_origen (para auditoría)
         - pedido_detalle_id → referencia_detalle
-        - codigo_bodega → obtenido desde distribuciones confirmadas (es_bodega=True, cantidad_asignada > 0)
+        - codigo_bodega → obtenido desde distribuciones confirmadas (es_bodega=True), 
+                           con fallback a codigo_bodega_cabecera (origen_traslado)
         
         Args:
             procesamiento_detalle: Diccionario con datos de pedido_sap_procesamiento_detalle
             oc_id: UUID de la cabecera de orden de compra
             conn: Conexión a la base de datos (opcional, para obtener bodega desde distribuciones)
             pedido_id: UUID del pedido (opcional, para obtener bodega desde distribuciones)
+            codigo_bodega_cabecera: Bodega de la cabecera como fallback (ej: RL-CD de origen_traslado)
             
         Returns:
             Diccionario con datos para insertar en orden_compra_detalle
@@ -142,6 +145,12 @@ class PedidoOCService:
                 except Exception as e:
                     logger.warning(f"⚠️ No se pudo obtener bodega desde distribuciones para detalle {pedido_detalle_id}: {e}")
         
+        # Fallback: usar bodega de cabecera (determinada desde origen_traslado)
+        if not codigo_bodega and codigo_bodega_cabecera:
+            codigo_bodega = codigo_bodega_cabecera
+            sku = procesamiento_detalle.get("item_code_sap", "?")
+            logger.debug(f"📍 Bodega de cabecera usada como fallback para {sku}: {codigo_bodega}")
+        
         return {
             "sku_sap": procesamiento_detalle.get("item_code_sap"),
             "cantidad_sap": procesamiento_detalle.get("cantidad_sap"),
@@ -150,7 +159,7 @@ class PedidoOCService:
             "precio_unitario": procesamiento_detalle.get("precio_unitario_sap"),
             "total_linea": procesamiento_detalle.get("total_linea_sap"),
             "cantidad_origen": procesamiento_detalle.get("cantidad_original"),
-            "codigo_bodega": codigo_bodega,  # ⭐ NUEVO: Bodega por línea desde distribuciones
+            "codigo_bodega": codigo_bodega,
         }
     
     def crear_oc_desde_pedido_confirmado(
@@ -375,7 +384,8 @@ class PedidoOCService:
                     proc, 
                     oc_id,
                     conn=conn,  # ⭐ Pasar conexión para obtener bodega
-                    pedido_id=pedido_id  # ⭐ Pasar pedido_id para obtener bodega
+                    pedido_id=pedido_id,  # ⭐ Pasar pedido_id para obtener bodega
+                    codigo_bodega_cabecera=codigo_bodega  # ⭐ Fallback: bodega de cabecera
                 )
                 
                 # Validar campos mínimos requeridos
@@ -410,16 +420,16 @@ class PedidoOCService:
                         pedido_id=oc_cabecera_db.get("pedido_id") or pedido_id,
                     )
                     result["sap_request_json"] = sap_request_json
-                    # DESACTIVADO: Descarga de ODC en JSON a output/ ya no es necesaria
-                    # try:
-                    #     output_dir = PROJECT_ROOT / "output"
-                    #     output_dir.mkdir(parents=True, exist_ok=True)
-                    #     out_file = output_dir / f"odc_{oc_id}.json"
-                    #     with open(out_file, "w", encoding="utf-8") as f:
-                    #         json.dump(sap_request_json, f, ensure_ascii=False, indent=2, default=str)
-                    #     logger.info(f"📥 ODC guardada en {out_file}")
-                    # except Exception as e:
-                    #     logger.warning(f"⚠️ No se pudo guardar ODC en output/: {e}")
+                    # Descarga de ODC en JSON a output/
+                    try:
+                        output_dir = PROJECT_ROOT / "output"
+                        output_dir.mkdir(parents=True, exist_ok=True)
+                        out_file = output_dir / f"odc_{oc_id}.json"
+                        with open(out_file, "w", encoding="utf-8") as f:
+                            json.dump(sap_request_json, f, ensure_ascii=False, indent=2, default=str)
+                        logger.info(f"📥 ODC guardada en {out_file}")
+                    except Exception as e:
+                        logger.warning(f"⚠️ No se pudo guardar ODC en output/: {e}")
                     # Log resumido en INFO para ver CardCode, ítems y bodegas sin DEBUG
                     card = sap_request_json.get("CardCode", "")
                     lineas = sap_request_json.get("DocumentLines", [])
