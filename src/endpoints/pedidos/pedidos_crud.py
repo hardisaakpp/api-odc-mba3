@@ -15,6 +15,7 @@ from src.database.connection import get_db_connection_context
 from src.database.repositories.pedido_repository import PedidoRepository
 from src.database.repositories.pedido_respuesta_repository import PedidoRespuestaRepository
 from src.database.pedido_estados import (
+    ESTADO_BORRADOR,
     ESTADO_GESTIONAR_PEDIDO,
     ESTADO_NUEVO_PEDIDO,
     ESTADO_REDISTRIBUCION,

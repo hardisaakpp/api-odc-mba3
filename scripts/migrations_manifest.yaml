@@ -319,3 +319,10 @@ migrations:
     description: "Agregar estado CANCELADO POR EL RAYO (id=20) a pedido_estado"
     category: "estado"
     dependencies: ["603"]
+
+  - version: "605"
+    name: "create_pedido_original_tables"
+    file: "create_pedido_original_tables.sql"
+    description: "Crear tablas pedido_original y pedido_detalle_original para snapshot inmutable del pedido al momento del envío"
+    category: "base"
+    dependencies: ["004"]

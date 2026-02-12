@@ -1724,6 +1724,24 @@ class PedidoService:
                 error_code="email_failed"
             )
 
+        # Copiar snapshot original ANTES de cambiar estado (los datos aún están intactos)
+        try:
+            from ..repositories.pedido_original_repository import PedidoOriginalRepository
+            with get_db_connection_context() as conn:
+                original_repo = PedidoOriginalRepository(conn)
+                original_repo.copiar_pedido_original(
+                    pedido_id=pedido_id,
+                    cabecera=cabecera,
+                    detalles=detalles,
+                    copiado_por=usuario_id,
+                )
+        except Exception as e:
+            # No bloquear el envío si falla la copia del snapshot
+            logger.warning(
+                f"⚠️ No se pudo crear snapshot original para pedido {pedido_id}: {e}",
+                exc_info=True,
+            )
+
         # Cambiar estado a NUEVO_PEDIDO
         audit = AuditContext(usuario=usuario_id, origen=ORIGEN_WEB)
         with get_db_connection_context() as conn:

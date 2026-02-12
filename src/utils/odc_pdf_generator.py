@@ -120,6 +120,28 @@ def _format_date(date_value: Any) -> str:
     return str(date_value)
 
 
+def _format_datetime(date_value: Any) -> str:
+    """Formatea una fecha con hora a dd/mm/yyyy HH:MM:SS."""
+    if date_value is None:
+        return "N/A"
+    if isinstance(date_value, str):
+        try:
+            if "T" in date_value:
+                dt = datetime.fromisoformat(date_value.replace("Z", "+00:00"))
+            elif "-" in date_value and " " in date_value:
+                dt = datetime.strptime(date_value, "%Y-%m-%d %H:%M:%S")
+            elif "-" in date_value:
+                dt = datetime.strptime(date_value.split(" ")[0], "%Y-%m-%d")
+            else:
+                return date_value
+            return dt.strftime("%d/%m/%Y %H:%M:%S")
+        except Exception:
+            return str(date_value)
+    elif hasattr(date_value, "strftime"):
+        return date_value.strftime("%d/%m/%Y %H:%M:%S")
+    return str(date_value)
+
+
 def _get_styles() -> Dict[str, ParagraphStyle]:
     """Crea los estilos de párrafo para el PDF."""
     styles = getSampleStyleSheet()
@@ -280,6 +302,8 @@ def _build_header_info(
     proveedor_code = oc_cabecera.get("proveedor", "N/A")
     referencia = oc_cabecera.get("referencia_despacho", "N/A")
     fecha_creacion = oc_cabecera.get("fecha_generacion") or oc_cabecera.get("created_at")
+    # Fecha/hora del momento en que se generó (envió) la ODC a SAP
+    fecha_hora_generacion = oc_cabecera.get("fecha_procesado") or oc_cabecera.get("created_at")
 
     # Datos del pedido (si existen)
     proveedor_nombre = "N/A"
@@ -306,6 +330,9 @@ def _build_header_info(
         [Spacer(1, 3 * mm)],
         [Paragraph("Comentario", styles["label"])],
         [Paragraph(f"PEDIDO {referencia}", styles["value_normal"])],
+        [Spacer(1, 3 * mm)],
+        [Paragraph("Fecha y hora de generaci&oacute;n", styles["label"])],
+        [Paragraph(datetime.now().strftime("%d/%m/%Y %H:%M:%S"), styles["value_normal"])],
     ]
     left_table = Table(left_data, colWidths=[8 * cm])
     left_table.setStyle(TableStyle([

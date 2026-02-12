@@ -517,6 +517,49 @@ function ListadoPedidosOriginales({ isOpen, onClose }) {
 - El usuario puede descargar cualquier archivo de su lista.
 - El usuario puede eliminar cualquier archivo de su lista (soft delete por defecto).
 
+#### 0.5.7.5 Botón "Descargar Pedido Original" — datos originales sin ediciones
+
+El botón **"Descargar Pedido Original"** en la pantalla de detalle del pedido permite descargar un archivo Excel (.xlsx) con los **valores originales** del pedido, tal como fueron enviados desde la pantalla de cargar-plantilla (botón "Enviar"), **antes de cualquier edición** de COSTO UNIT., TOTAL, COMENTARIO o FECHA DE ENTREGA.
+
+**Diferencia con "Descargar Pedido":**
+- **"Descargar Pedido"**: genera el Excel con los valores **actuales** (posiblemente editados).
+- **"Descargar Pedido Original"**: genera el Excel con los valores **originales** (inmutables desde el envío).
+
+**Endpoint:** `GET /api/pedidos/{pedido_id}/descargar-pedido-original`
+
+- **Método:** GET
+- **URL:** `/api/pedidos/{pedido_id}/descargar-pedido-original` (usar `cabecera.pedido_id`).
+- **Autenticación:** JWT en header `Authorization: Bearer {token}`.
+- **Permisos:** `mabel.view` o `odcsap.view`.
+
+**Respuestas:**
+- **200**: Archivo Excel (.xlsx) descargado (nombre: `Descargar Pedido Original.xlsx`).
+- **404** con `error: "not_found"`: Pedido no encontrado.
+- **404** con `error: "sin_snapshot_original"`: El pedido existe pero no tiene snapshot original (fue creado antes de esta funcionalidad).
+
+**Estructura del Excel descargado:**
+- Logo ROLAND en celda B3
+- Filas 1-4, columnas D-E: PEDIDO ROLAND NO., FECHA DE PEDIDO, FECHA DE ENTREGA (original), FORMA DE PAGO
+- Filas 6-11, columnas D-E: MENSAJE, NOMBRE PROVEEDOR, COMPRADOR NOMBRE, COD COMPRADOR, ORIGEN TRASLADO, SERIE
+- Fila 13: Encabezados de tabla (CODIGO INTERNO, MARCA, CODIGO DE BARRAS, DESCRIPCION SAP, PACK, PRECIO DE LISTA, DSCTO, PVP, TOTAL)
+- Fila 14+: Datos de productos con valores originales
+- Colores corporativos: labels con fondo #588894 y texto blanco
+
+**Implementación en frontend:**
+
+```tsx
+const handleDescargarPedidoOriginal = (pedidoId: string) => {
+  window.open(`/api/pedidos/${pedidoId}/descargar-pedido-original`, '_blank');
+};
+
+// Botón en la interfaz de detalle del pedido
+<Button onClick={() => handleDescargarPedidoOriginal(cabecera.pedido_id)}>
+  Descargar Pedido Original
+</Button>
+```
+
+**Nota:** Solo los pedidos enviados después de la activación de esta funcionalidad tendrán snapshot original. Para pedidos anteriores, el endpoint devuelve 404 con `error: "sin_snapshot_original"`.
+
 ### 0.5.8 Pantalla "Detalle del Pedido - EL RAYO" (`/mba3-consultas/pedidos/{id}`)
 
 **Ruta:** `http://localhost:3000/mba3-consultas/pedidos/{numero_pedido}` (ej. `P-12.21 - 12 - 2025`).

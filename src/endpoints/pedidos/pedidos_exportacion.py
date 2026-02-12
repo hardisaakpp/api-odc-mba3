@@ -370,12 +370,21 @@ def register_exportacion_endpoints(app: FastAPI):
                     cell.alignment = Alignment(horizontal="center")
                     cell.border = thin_border
 
+                # Determinar marca a partir de ORIGEN TRASLADO de la cabecera
+                MARCA_POR_ORIGEN = {
+                    "RL-CD": "ROLAND",
+                    "OUT-CD": "DESCUENTON",
+                    "RG-CD": "REGIONS",
+                }
+                origen_traslado = (cabecera.get("origen_traslado") or "").strip().upper()
+                marca_excel = MARCA_POR_ORIGEN.get(origen_traslado, "")
+
                 # Datos de productos (desde fila 14)
                 for idx, detalle in enumerate(detalles):
                     row = 14 + idx
 
                     ws[f"B{row}"] = detalle.get("codigo_interno", "")
-                    ws[f"C{row}"] = detalle.get("marca", "")
+                    ws[f"C{row}"] = marca_excel
                     ws[f"D{row}"] = detalle.get("codigo_barras", "")
                     ws[f"E{row}"] = detalle.get("descripcion_sap", "")
                     ws[f"F{row}"] = detalle.get("pack", "")
@@ -390,7 +399,7 @@ def register_exportacion_endpoints(app: FastAPI):
                     else:
                         ws[f"G{row}"] = ""
 
-                    # DSCTO: descuento_1
+                    # DSCTO: descuento_1 (formato porcentaje)
                     descuento = detalle.get("descuento_1")
                     if descuento is not None:
                         try:
@@ -399,6 +408,7 @@ def register_exportacion_endpoints(app: FastAPI):
                             ws[f"H{row}"] = descuento
                     else:
                         ws[f"H{row}"] = ""
+                    ws[f"H{row}"].number_format = '0.00%'
 
                     # PVP
                     pvp = detalle.get("pvp")
@@ -423,6 +433,20 @@ def register_exportacion_endpoints(app: FastAPI):
                     # Bordes en cada celda de la fila de producto (B a J)
                     for col_letter in ["B", "C", "D", "E", "F", "G", "H", "I", "J"]:
                         ws[f"{col_letter}{row}"].border = thin_border
+
+                # --- Fila de TOTAL al final de la columna J ---
+                if detalles:
+                    ultima_fila_datos = 14 + len(detalles) - 1
+                    fila_total = ultima_fila_datos + 1
+
+                    ws[f"I{fila_total}"] = "TOTAL"
+                    ws[f"I{fila_total}"].font = bold_font
+                    ws[f"I{fila_total}"].alignment = Alignment(horizontal="right")
+                    ws[f"I{fila_total}"].border = thin_border
+
+                    ws[f"J{fila_total}"] = f"=SUM(J14:J{ultima_fila_datos})"
+                    ws[f"J{fila_total}"].font = bold_font
+                    ws[f"J{fila_total}"].border = thin_border
 
                 # Ajustar anchos de columna para mejor legibilidad
                 ws.column_dimensions["B"].width = 18
@@ -462,4 +486,290 @@ def register_exportacion_endpoints(app: FastAPI):
             raise HTTPException(
                 status_code=500,
                 detail={"error": "internal_error", "message": f"Error interno al generar Excel: {str(e)}"}
+            )
+
+    # ========================================================================
+    # Descargar Pedido Original (desde tablas pedido_original)
+    # ========================================================================
+    @app.get("/api/pedidos/{pedido_id}/descargar-pedido-original", tags=["Pedidos - Exportación"])
+    async def descargar_pedido_original(
+        pedido_id: str = Path(..., description="UUID del pedido"),
+        user: Dict = Depends(verify_jwt_token),
+        _: None = Depends(require_any_permission(['mabel.view', 'odcsap.view']))
+    ):
+        """
+        Descarga el pedido **con los valores originales** (antes de ediciones).
+
+        Genera un archivo Excel (.xlsx) idéntico en formato al de "Descargar Pedido"
+        (logo ROLAND, colores corporativos, misma estructura), pero lee los datos
+        de las tablas `pedido_original` y `pedido_detalle_original`, que almacenan
+        una copia inmutable de los valores al momento del envío.
+
+        **Uso:**
+        - Interfaz: Detalle del Pedido (`/pedidos/{pedido_id}`)
+        - Botón: "Descargar Pedido Original"
+        - Estado requerido: **GESTIONAR PEDIDO (3)** o superior
+
+        **Estructura del Excel:**
+        - Filas 1-4: Cabecera del pedido (columnas D y E)
+        - Filas 5-11: Información complementaria (columnas D y E)
+        - Fila 13: Encabezados de la tabla de productos (columnas B a J)
+        - Fila 14+: Datos de productos con valores originales
+
+        **Respuestas:**
+        - **200**: Archivo Excel descargado correctamente
+        - **404**: Pedido no encontrado o sin snapshot original
+        """
+        try:
+            import os
+            from openpyxl import Workbook
+            from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
+            from openpyxl.drawing.image import Image as XlImage
+            from src.database.repositories.pedido_original_repository import PedidoOriginalRepository
+
+            with get_db_connection_context() as conn:
+                original_repo = PedidoOriginalRepository(conn)
+                pedido_original = original_repo.get_pedido_original(pedido_id)
+
+                if not pedido_original:
+                    # Verificar si el pedido existe para dar un mensaje más claro
+                    repo = PedidoRepository(conn)
+                    pedido_vivo = repo.get_pedido_completo(pedido_id)
+                    if not pedido_vivo:
+                        raise HTTPException(
+                            status_code=status.HTTP_404_NOT_FOUND,
+                            detail={"error": "not_found", "message": "Pedido no encontrado"}
+                        )
+                    raise HTTPException(
+                        status_code=status.HTTP_404_NOT_FOUND,
+                        detail={
+                            "error": "sin_snapshot_original",
+                            "message": (
+                                "No se encontraron datos originales para este pedido. "
+                                "Solo los pedidos enviados después de la activación de esta "
+                                "funcionalidad tienen snapshot original disponible."
+                            )
+                        }
+                    )
+
+                cabecera = pedido_original["cabecera"]
+                detalles = pedido_original["detalles"]
+
+                # Crear libro de Excel (mismo formato que descargar-pedido)
+                wb = Workbook()
+                ws = wb.active
+                ws.title = "datos"
+
+                # --- Estilos ---
+                bold_font = Font(bold=True)
+                label_fill = PatternFill(start_color="588894", end_color="588894", fill_type="solid")
+                label_font = Font(bold=True, color="FFFFFF")
+                thin_border = Border(
+                    left=Side(style="thin"),
+                    right=Side(style="thin"),
+                    top=Side(style="thin"),
+                    bottom=Side(style="thin"),
+                )
+
+                # --- Logo ROLAND en B3 ---
+                logo_path = os.path.join(os.path.dirname(__file__), "..", "..", "assets", "roland_logo.png")
+                logo_path = os.path.normpath(logo_path)
+                if os.path.exists(logo_path):
+                    img = XlImage(logo_path)
+                    img.width = 180
+                    img.height = 45
+                    ws.add_image(img, "B3")
+                else:
+                    logger.warning(f"⚠️ Logo ROLAND no encontrado en {logo_path}")
+
+                # --- 1. Cabecera del pedido (filas 1-4, columnas D y E) ---
+                ws["D1"] = "PEDIDO ROLAND NO."
+                ws["D1"].font = bold_font
+                ws["E1"] = cabecera.get("numero_pedido", "")
+
+                ws["D2"] = "FECHA DE PEDIDO"
+                ws["D2"].font = bold_font
+                fecha_pedido = cabecera.get("fecha_pedido", "")
+                if fecha_pedido and len(str(fecha_pedido)) == 10:
+                    fecha_pedido = f"{fecha_pedido} 00:00:00"
+                ws["E2"] = str(fecha_pedido) if fecha_pedido else ""
+
+                ws["D3"] = "FECHA DE ENTREGA"
+                ws["D3"].font = bold_font
+                ws["E3"] = cabecera.get("fecha_entrega", "")
+
+                ws["D4"] = "FORMA DE PAGO"
+                ws["D4"].font = bold_font
+                ws["E4"] = cabecera.get("forma_pago", "")
+
+                # --- 2. Información complementaria (filas 5-11) ---
+                ws["D6"] = "MENSAJE"
+                ws["D6"].font = bold_font
+                ws["E6"] = cabecera.get("mensaje", "")
+
+                ws["D7"] = "NOMBRE PROVEEDOR"
+                ws["D7"].font = bold_font
+                ws["E7"] = cabecera.get("proveedor_nombre", "")
+
+                ws["D8"] = "COMPRADOR NOMBRE"
+                ws["D8"].font = bold_font
+                ws["E8"] = cabecera.get("comprador_nombre", "")
+
+                ws["D9"] = "COD COMPRADOR"
+                ws["D9"].font = bold_font
+                ws["E9"] = cabecera.get("comprador_codigo", "")
+
+                ws["D10"] = "ORIGEN TRASLADO"
+                ws["D10"].font = bold_font
+                ws["E10"] = cabecera.get("origen_traslado", "")
+
+                ws["D11"] = "SERIE"
+                ws["D11"].font = bold_font
+                ws["E11"] = cabecera.get("serie", "")
+
+                # Aplicar color de fondo #588894 con texto blanco a D2:D11
+                for row_num in range(2, 12):
+                    if row_num == 5:
+                        continue
+                    cell = ws[f"D{row_num}"]
+                    cell.fill = label_fill
+                    cell.font = label_font
+
+                # Bordes en la zona de cabecera e info complementaria
+                for row_num in [1, 2, 3, 4, 6, 7, 8, 9, 10, 11]:
+                    ws[f"D{row_num}"].border = thin_border
+                    ws[f"E{row_num}"].border = thin_border
+
+                # --- 3. Tabla de productos (desde fila 13) ---
+                headers = {
+                    "B13": "CODIGO INTERNO",
+                    "C13": "MARCA",
+                    "D13": "CODIGO DE BARRAS",
+                    "E13": "DESCRIPCION SAP",
+                    "F13": "PACK",
+                    "G13": "PRECIO DE LISTA",
+                    "H13": "DSCTO",
+                    "I13": "PVP",
+                    "J13": "TOTAL",
+                }
+                table_header_fill = PatternFill(start_color="F2F2F2", end_color="F2F2F2", fill_type="solid")
+                for cell_ref, header_text in headers.items():
+                    cell = ws[cell_ref]
+                    cell.value = header_text
+                    cell.font = bold_font
+                    cell.fill = table_header_fill
+                    cell.alignment = Alignment(horizontal="center")
+                    cell.border = thin_border
+
+                # Determinar marca a partir de ORIGEN TRASLADO de la cabecera
+                MARCA_POR_ORIGEN = {
+                    "RL-CD": "ROLAND",
+                    "OUT-CD": "DESCUENTON",
+                    "RG-CD": "REGIONS",
+                }
+                origen_traslado = (cabecera.get("origen_traslado") or "").strip().upper()
+                marca_excel = MARCA_POR_ORIGEN.get(origen_traslado, "")
+
+                # Datos de productos (desde fila 14) — valores ORIGINALES
+                for idx, detalle in enumerate(detalles):
+                    row = 14 + idx
+
+                    ws[f"B{row}"] = detalle.get("codigo_interno", "")
+                    ws[f"C{row}"] = marca_excel
+                    ws[f"D{row}"] = detalle.get("codigo_barras", "")
+                    ws[f"E{row}"] = detalle.get("descripcion_sap", "")
+                    ws[f"F{row}"] = detalle.get("pack", "")
+
+                    costo = detalle.get("costo_doc_sin_iva")
+                    if costo is not None:
+                        try:
+                            ws[f"G{row}"] = float(costo)
+                        except (ValueError, TypeError):
+                            ws[f"G{row}"] = costo
+                    else:
+                        ws[f"G{row}"] = ""
+
+                    descuento = detalle.get("descuento_1")
+                    if descuento is not None:
+                        try:
+                            ws[f"H{row}"] = float(descuento)
+                        except (ValueError, TypeError):
+                            ws[f"H{row}"] = descuento
+                    else:
+                        ws[f"H{row}"] = ""
+                    ws[f"H{row}"].number_format = '0.00%'
+
+                    pvp = detalle.get("pvp")
+                    if pvp is not None:
+                        try:
+                            ws[f"I{row}"] = float(pvp)
+                        except (ValueError, TypeError):
+                            ws[f"I{row}"] = pvp
+                    else:
+                        ws[f"I{row}"] = ""
+
+                    total = detalle.get("total")
+                    if total is not None:
+                        try:
+                            ws[f"J{row}"] = float(total)
+                        except (ValueError, TypeError):
+                            ws[f"J{row}"] = total
+                    else:
+                        ws[f"J{row}"] = ""
+
+                    for col_letter in ["B", "C", "D", "E", "F", "G", "H", "I", "J"]:
+                        ws[f"{col_letter}{row}"].border = thin_border
+
+                # --- Fila de TOTAL al final de la columna J ---
+                if detalles:
+                    ultima_fila_datos = 14 + len(detalles) - 1
+                    fila_total = ultima_fila_datos + 1
+
+                    ws[f"I{fila_total}"] = "TOTAL"
+                    ws[f"I{fila_total}"].font = bold_font
+                    ws[f"I{fila_total}"].alignment = Alignment(horizontal="right")
+                    ws[f"I{fila_total}"].border = thin_border
+
+                    ws[f"J{fila_total}"] = f"=SUM(J14:J{ultima_fila_datos})"
+                    ws[f"J{fila_total}"].font = bold_font
+                    ws[f"J{fila_total}"].border = thin_border
+
+                # Ajustar anchos de columna
+                ws.column_dimensions["B"].width = 18
+                ws.column_dimensions["C"].width = 12
+                ws.column_dimensions["D"].width = 18
+                ws.column_dimensions["E"].width = 50
+                ws.column_dimensions["F"].width = 8
+                ws.column_dimensions["G"].width = 16
+                ws.column_dimensions["H"].width = 10
+                ws.column_dimensions["I"].width = 10
+                ws.column_dimensions["J"].width = 10
+
+                # Guardar en memoria
+                output = io.BytesIO()
+                wb.save(output)
+                output.seek(0)
+                excel_bytes = output.getvalue()
+                output.close()
+
+                logger.info(
+                    f"✅ Pedido ORIGINAL {cabecera.get('numero_pedido', pedido_id)} descargado como Excel "
+                    f"({len(detalles)} productos)"
+                )
+
+                return Response(
+                    content=excel_bytes,
+                    media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    headers={
+                        "Content-Disposition": 'attachment; filename="Descargar Pedido Original.xlsx"'
+                    }
+                )
+
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"❌ Error al descargar pedido original: {e}", exc_info=True)
+            raise HTTPException(
+                status_code=500,
+                detail={"error": "internal_error", "message": f"Error interno al generar Excel original: {str(e)}"}
             )
