@@ -2,13 +2,14 @@
 Endpoints relacionados con gestión de órdenes de compra.
 """
 
+import io
 import logging
 import threading
 import asyncio
 from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Any, cast
 from fastapi import FastAPI, Request, Query, Depends, Path, Body, HTTPException
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 
 from src.utils import get_source_from_headers
 from src.database.repositories.orden_compra_repository import OrdenCompraRepository
@@ -1104,6 +1105,108 @@ def register_ordenes_compra_endpoints(app: FastAPI):
             raise HTTPException(
                 status_code=500,
                 detail=f"Error al obtener detalles de la orden de compra: {str(e)}"
+            )
+    
+    @app.get("/ordenes-compra/{oc_id}/pdf", tags=["Órdenes de Compra"])
+    async def get_orden_compra_pdf(
+        request: Request,
+        oc_id: str = Path(..., description="UUID de la orden de compra"),
+        user: dict = Depends(verify_jwt_token),
+        _: None = Depends(require_any_permission(['odcsap.view', 'mabel.view']))
+    ):
+        """
+        Endpoint para descargar el PDF de una orden de compra.
+        
+        Genera y retorna el documento PDF de la ODC con toda la información
+        de cabecera, detalles de productos, resumen financiero y firmas.
+        
+        **Path Parameters:**
+        - `oc_id` (string, requerido) - UUID de la orden de compra
+        
+        **Ejemplo de uso:**
+        ```
+        GET /ordenes-compra/DD7D7A51-9E57-44D4-9A8F-4A05427A8325/pdf
+        ```
+        """
+        source = get_source_from_headers(request)
+        
+        logger.info(f"📄 GET /ordenes-compra/{oc_id}/pdf: Generación de PDF iniciada")
+        
+        try:
+            def generar_pdf_oc():
+                conn = get_db_connection()
+                try:
+                    oc_repo = OrdenCompraRepository(conn)
+                    
+                    # 1. Obtener cabecera de la OC
+                    oc_cabecera = oc_repo.get_existing_cabecera(oc_id)
+                    if not oc_cabecera:
+                        return None, None, "Orden de compra no encontrada"
+                    
+                    # 2. Obtener detalles
+                    oc_detalles = oc_repo.get_detalles(oc_id)
+                    if not oc_detalles:
+                        oc_detalles = []
+                    
+                    # 3. Intentar enriquecer con datos del pedido (para PDF)
+                    pedido_info = None
+                    pedido_id = oc_cabecera.get("pedido_id")
+                    if pedido_id:
+                        try:
+                            from src.database.services.oc_sap_service import OCSAPService
+                            pedido_info = OCSAPService._obtener_pedido_info_para_pdf(
+                                conn, pedido_id, oc_detalles
+                            )
+                        except Exception as e_enrich:
+                            logger.warning(f"⚠️ No se pudo enriquecer datos para PDF (no crítico): {e_enrich}")
+                    
+                    # 4. Generar PDF
+                    from src.utils.odc_pdf_generator import generar_odc_pdf
+                    
+                    doc_num = oc_cabecera.get("numero_oc_sap")
+                    doc_entry = oc_cabecera.get("doc_entry")
+                    
+                    pdf_bytes = generar_odc_pdf(
+                        oc_cabecera=oc_cabecera,
+                        oc_detalles=oc_detalles,
+                        doc_num=doc_num,
+                        doc_entry=doc_entry,
+                        pedido_info=pedido_info,
+                    )
+                    
+                    return pdf_bytes, oc_cabecera, None
+                finally:
+                    conn.close()
+            
+            pdf_bytes, oc_cabecera, error = await asyncio.to_thread(generar_pdf_oc)
+            
+            if error:
+                raise HTTPException(status_code=404, detail=error)
+            
+            # Nombre del archivo
+            numero_oc_sap = oc_cabecera.get("numero_oc_sap", "SIN_NUMERO")
+            nombre_archivo = f"ODC_{numero_oc_sap}.pdf"
+            
+            logger.info(f"✅ GET /ordenes-compra/{oc_id}/pdf: PDF generado exitosamente ({len(pdf_bytes)} bytes)")
+            
+            return StreamingResponse(
+                io.BytesIO(pdf_bytes),
+                media_type="application/pdf",
+                headers={
+                    "Content-Disposition": f'attachment; filename="{nombre_archivo}"',
+                    "Content-Length": str(len(pdf_bytes)),
+                    "X-Source": source,
+                    "X-Endpoint": "GET-ORDEN-COMPRA-PDF",
+                }
+            )
+            
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"❌ Error al generar PDF de OC {oc_id}: {e}", exc_info=True)
+            raise HTTPException(
+                status_code=500,
+                detail=f"Error al generar PDF de la orden de compra: {str(e)}"
             )
     
     @app.put("/ordenes-compra/{oc_id}/detalle/{oc_detalle_id}/sku", tags=["Órdenes de Compra"])

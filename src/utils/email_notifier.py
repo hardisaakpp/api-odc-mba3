@@ -725,20 +725,28 @@ def send_oc_to_supplier(
     doc_num: Optional[int] = None,
     doc_entry: Optional[int] = None,
     proveedor_email: Optional[str] = None,
-    fecha_ejecucion: Optional[datetime] = None
+    fecha_ejecucion: Optional[datetime] = None,
+    pedido_info: Optional[Dict[str, Any]] = None,
 ) -> bool:
     """
-    Envía correo al proveedor con la ODC generada.
+    Envía correo al proveedor con la ODC generada, incluyendo PDF adjunto.
     
     DESTINATARIO: proveedor_email (si se proporciona) o EMAIL_TO_OPERACIONES como fallback
     
     Args:
         oc_cabecera: Datos de cabecera de la orden de compra
-        oc_detalles: Lista de detalles de la orden de compra
+        oc_detalles: Lista de detalles de la orden de compra.
+            Cada detalle puede incluir opcionalmente campos enriquecidos:
+            - codigo_barras: Código de barras del producto
+            - descripcion / nombre_producto / descripcion_sap: Descripción del producto
         doc_num: Número de documento SAP (DocNum)
         doc_entry: Entry de documento SAP (DocEntry)
         proveedor_email: Email del proveedor (opcional)
         fecha_ejecucion: Fecha y hora de la ejecución (por defecto ahora)
+        pedido_info: Información adicional del pedido (opcional).
+            - proveedor_nombre: Razón social del proveedor
+            - forma_pago: Plazo/forma de pago
+            - fecha_entrega: Fecha de entrega
     
     Returns:
         True si el email se envió correctamente, False en caso contrario
@@ -801,6 +809,11 @@ def send_oc_to_supplier(
             subtitle=f"ODC #{numero_oc_sap}",
             sections=[
                 paragraph("Se ha generado una nueva Orden de Compra en SAP."),
+                paragraph(
+                    "Adjunto encontrar&aacute; el documento PDF de la Orden de Compra.",
+                    italic=True,
+                    color="#7f8c8d",
+                ),
                 info_section("Informaci&oacute;n de la ODC", [
                     ("N&uacute;mero ODC SAP", numero_oc_sap),
                     ("DocEntry", doc_entry or "N/A"),
@@ -820,6 +833,8 @@ def send_oc_to_supplier(
         
         body_text = f"""Orden de Compra Generada - ODC #{numero_oc_sap}
 {'=' * 40}
+
+Adjunto: ODC {numero_oc_sap}.pdf
 
 Informacion de la ODC:
 - Numero ODC SAP: {numero_oc_sap}
@@ -845,11 +860,43 @@ Detalle:
             body_text += f"  ... y {len(oc_detalles) - 50} linea(s) mas\n"
         body_text += f"\nFecha y Hora: {fecha_ejecucion.strftime('%Y-%m-%d %H:%M:%S')}\n"
         
+        # ── Generar PDF adjunto ──────────────────────────────────────────
+        pdf_attachment = None
+        try:
+            from src.utils.odc_pdf_generator import generar_odc_pdf
+            
+            pdf_bytes = generar_odc_pdf(
+                oc_cabecera=oc_cabecera,
+                oc_detalles=oc_detalles,
+                doc_num=doc_num,
+                doc_entry=doc_entry,
+                pedido_info=pedido_info,
+            )
+            
+            # Crear adjunto MIME
+            pdf_attachment = MIMEBase("application", "pdf")
+            pdf_attachment.set_payload(pdf_bytes)
+            encoders.encode_base64(pdf_attachment)
+            pdf_filename = f"ODC {numero_oc_sap}.pdf"
+            pdf_attachment.add_header(
+                "Content-Disposition",
+                "attachment",
+                filename=pdf_filename,
+            )
+            logger.info(f"📎 PDF adjunto generado: {pdf_filename} ({len(pdf_bytes):,} bytes)")
+        except Exception as e:
+            # Si falla la generación del PDF, enviar el email sin adjunto
+            logger.warning(f"⚠️ No se pudo generar PDF adjunto (se enviará email sin PDF): {e}")
+            pdf_attachment = None
+        
+        attachments = [pdf_attachment] if pdf_attachment else None
+        
         msg = create_email_message(
             subject=f"Orden de Compra Generada - ODC #{numero_oc_sap}",
             recipients=recipients,
             body_html=body_html,
             body_text=body_text,
+            attachments=attachments,
         )
         
         # Enviar email
@@ -864,7 +911,8 @@ Detalle:
             
             server.send_message(msg, to_addrs=recipients)
         
-        logger.info(f"✅ Email de ODC enviado a {', '.join(recipients)} (ODC #{numero_oc_sap})")
+        pdf_status = "con PDF adjunto" if pdf_attachment else "sin PDF adjunto"
+        logger.info(f"✅ Email de ODC enviado a {', '.join(recipients)} (ODC #{numero_oc_sap}) [{pdf_status}]")
         return True
         
     except Exception as e:

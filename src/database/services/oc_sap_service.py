@@ -524,7 +524,7 @@ class OCSAPService:
                 # FASE 6: Notificación y cierre
                 # ============================================================
                 
-                # 7. Enviar correo al proveedor (no bloquea si falla)
+                # 7. Enviar correo al proveedor con PDF adjunto (no bloquea si falla)
                 try:
                     from src.utils.email_notifier import send_oc_to_supplier
                     from src.config import EMAIL_PROVEEDOR_PRUEBAS
@@ -533,15 +533,27 @@ class OCSAPService:
                     # TODO: En producción, obtener desde tabla cliente usando CardCode
                     proveedor_email = EMAIL_PROVEEDOR_PRUEBAS
                     
+                    # Enriquecer datos para el PDF adjunto
+                    pedido_info = None
+                    pedido_id_email = oc_cabecera.get("pedido_id")
+                    if pedido_id_email:
+                        try:
+                            pedido_info = self._obtener_pedido_info_para_pdf(
+                                oc_repo.conn, pedido_id_email, oc_detalles
+                            )
+                        except Exception as e_enrich:
+                            logger.warning(f"⚠️ No se pudo enriquecer datos para PDF (no crítico): {e_enrich}")
+                    
                     email_enviado = send_oc_to_supplier(
                         oc_cabecera=oc_cabecera,
                         oc_detalles=oc_detalles,
                         doc_num=doc_num,
                         doc_entry=doc_entry,
-                        proveedor_email=proveedor_email
+                        proveedor_email=proveedor_email,
+                        pedido_info=pedido_info,
                     )
                     if email_enviado:
-                        logger.info(f"📧 Email de ODC enviado al proveedor {oc_cabecera.get('proveedor')}")
+                        logger.info(f"📧 Email de ODC con PDF enviado al proveedor {oc_cabecera.get('proveedor')}")
                     else:
                         logger.warning(f"⚠️ No se pudo enviar email de ODC al proveedor (no crítico)")
                 except Exception as e:
@@ -1044,4 +1056,114 @@ class OCSAPService:
                 "detalles": []
             }
 
+    # ──────────────────────────────────────────────────────────────────────
+    # Métodos auxiliares para generación de PDF
+    # ──────────────────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _obtener_pedido_info_para_pdf(
+        conn,
+        pedido_id: str,
+        oc_detalles: List[Dict[str, Any]],
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Obtiene información adicional del pedido para enriquecer el PDF de la ODC.
+
+        Enriquece cada elemento de ``oc_detalles`` *in-place* con los campos
+        ``codigo_barras`` y ``descripcion`` obtenidos de ``pedido_detalle``
+        (usando ``referencia_detalle`` como enlace a ``pedido_detalle_id``).
+
+        Además retorna un dict con la información de cabecera del pedido
+        (proveedor_nombre, forma_pago, fecha_entrega).
+
+        Args:
+            conn: Conexión activa a la base de datos.
+            pedido_id: UUID del pedido relacionado.
+            oc_detalles: Lista de detalles de la ODC (se modifica in-place).
+
+        Returns:
+            Dict con: proveedor_nombre, forma_pago, fecha_entrega.
+            None si no se puede obtener la información.
+        """
+        cursor = conn.cursor()
+        try:
+            # 1. Obtener datos de cabecera del pedido
+            pedido_info: Dict[str, Any] = {}
+            try:
+                cursor.execute(
+                    """
+                    SELECT proveedor_nombre, forma_pago, fecha_entrega
+                    FROM pedido
+                    WHERE pedido_id = ?
+                    """,
+                    (pedido_id,),
+                )
+                row = cursor.fetchone()
+                if row:
+                    pedido_info = {
+                        "proveedor_nombre": row[0] or None,
+                        "forma_pago": row[1] or None,
+                        "fecha_entrega": row[2].isoformat() if row[2] and hasattr(row[2], "isoformat") else (row[2] or None),
+                    }
+                    logger.debug(
+                        f"📋 Pedido info para PDF: proveedor={pedido_info.get('proveedor_nombre')}, "
+                        f"forma_pago={pedido_info.get('forma_pago')}, "
+                        f"fecha_entrega={pedido_info.get('fecha_entrega')}"
+                    )
+            except Exception as e:
+                logger.warning(f"⚠️ No se pudo obtener cabecera del pedido {pedido_id}: {e}")
+
+            # 2. Obtener detalles del pedido (codigo_barras, descripcion_sap)
+            # Mapear por pedido_detalle_id para enriquecer oc_detalles
+            referencia_ids = [
+                d.get("referencia_detalle")
+                for d in oc_detalles
+                if d.get("referencia_detalle")
+            ]
+
+            if referencia_ids:
+                try:
+                    placeholders = ",".join("?" for _ in referencia_ids)
+                    cursor.execute(
+                        f"""
+                        SELECT pedido_detalle_id, codigo_barras, descripcion_sap
+                        FROM pedido_detalle
+                        WHERE pedido_detalle_id IN ({placeholders})
+                        """,
+                        referencia_ids,
+                    )
+                    # Crear mapa de pedido_detalle_id -> (codigo_barras, descripcion_sap)
+                    detalle_map: Dict[str, Dict[str, Any]] = {}
+                    for r in cursor.fetchall():
+                        detalle_map[str(r[0])] = {
+                            "codigo_barras": r[1] or "",
+                            "descripcion": r[2] or "",
+                        }
+
+                    # Enriquecer oc_detalles in-place
+                    enriched = 0
+                    for detalle in oc_detalles:
+                        ref_id = detalle.get("referencia_detalle")
+                        if ref_id and ref_id in detalle_map:
+                            extra = detalle_map[ref_id]
+                            detalle["codigo_barras"] = extra.get("codigo_barras", "")
+                            detalle["descripcion"] = extra.get("descripcion", "")
+                            enriched += 1
+
+                    logger.debug(
+                        f"📋 Detalles enriquecidos para PDF: {enriched}/{len(oc_detalles)} "
+                        f"(de {len(detalle_map)} registros encontrados en pedido_detalle)"
+                    )
+                except Exception as e:
+                    logger.warning(
+                        f"⚠️ No se pudieron obtener detalles del pedido para PDF: {e}"
+                    )
+
+            return pedido_info if pedido_info else None
+
+        except Exception as e:
+            logger.warning(f"⚠️ Error general al obtener pedido info para PDF: {e}")
+            return None
+        finally:
+            cursor.close()
 
