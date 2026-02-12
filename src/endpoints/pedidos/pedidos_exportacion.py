@@ -309,9 +309,9 @@ def register_exportacion_endpoints(app: FastAPI):
                 # --- 2. Información complementaria (filas 5-11) ---
                 # Fila 5: vacía (separador visual)
 
-                ws["D6"] = "ODC"
+                ws["D6"] = "MENSAJE"
                 ws["D6"].font = bold_font
-                ws["E6"] = cabecera.get("odc", "")
+                ws["E6"] = cabecera.get("mensaje", "")
 
                 ws["D7"] = "NOMBRE PROVEEDOR"
                 ws["D7"].font = bold_font

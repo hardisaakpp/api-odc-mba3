@@ -47,7 +47,7 @@ BEGIN
         fecha_entrega NVARCHAR(50) NULL,  -- Puede ser "INMEDIATO" o fecha
         forma_pago NVARCHAR(50) NULL,
         
-        odc NVARCHAR(50) NULL,
+        mensaje NVARCHAR(50) NULL,
         proveedor_nombre NVARCHAR(150) NULL,
         comprador_nombre NVARCHAR(150) NULL,
         comprador_codigo NVARCHAR(50) NULL,

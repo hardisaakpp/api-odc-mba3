@@ -326,9 +326,9 @@ class PedidoService:
                         cabecera_parseada.get("FORMA PAGO") or 
                         cabecera_parseada.get("FORMA DE PAGO")
                     ),
-                    "odc": (
-                        cabecera_parseada.get("odc") or 
-                        cabecera_parseada.get("ODC")
+                    "mensaje": (
+                        cabecera_parseada.get("mensaje") or 
+                        cabecera_parseada.get("MENSAJE")
                     ),
                     "proveedor_nombre": (
                         cabecera_parseada.get("proveedor_nombre") or 
@@ -1160,7 +1160,7 @@ class PedidoService:
                 "fecha_pedido": datos_pedido.get("fecha_pedido"),
                 "fecha_entrega": datos_pedido.get("fecha_entrega"),
                 "forma_pago": datos_pedido.get("forma_pago"),
-                "odc": datos_pedido.get("odc"),
+                "mensaje": datos_pedido.get("mensaje"),
                 "proveedor_nombre": datos_pedido.get("proveedor_nombre"),
                 "comprador_nombre": datos_pedido.get("comprador_nombre"),
                 "comprador_codigo": datos_pedido.get("comprador_codigo"),

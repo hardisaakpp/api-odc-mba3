@@ -107,7 +107,7 @@ class PedidoCabeceraRepository:
                     fecha_pedido,
                     fecha_entrega,
                     forma_pago,
-                    odc,
+                    mensaje,
                     proveedor_nombre,
                     comprador_nombre,
                     comprador_codigo,
@@ -129,7 +129,7 @@ class PedidoCabeceraRepository:
                     datos_cabecera_normalizado.get("fecha_pedido"),
                     datos_cabecera_normalizado.get("fecha_entrega"),
                     datos_cabecera_normalizado.get("forma_pago"),
-                    datos_cabecera_normalizado.get("odc"),
+                    datos_cabecera_normalizado.get("mensaje"),
                     datos_cabecera_normalizado.get("proveedor_nombre"),
                     datos_cabecera_normalizado.get("comprador_nombre"),
                     datos_cabecera_normalizado.get("comprador_codigo"),
@@ -150,7 +150,7 @@ class PedidoCabeceraRepository:
                     fecha_pedido,
                     fecha_entrega,
                     forma_pago,
-                    odc,
+                    mensaje,
                     proveedor_nombre,
                     comprador_nombre,
                     comprador_codigo,
@@ -171,7 +171,7 @@ class PedidoCabeceraRepository:
                     datos_cabecera_normalizado.get("fecha_pedido"),
                     datos_cabecera_normalizado.get("fecha_entrega"),
                     datos_cabecera_normalizado.get("forma_pago"),
-                    datos_cabecera_normalizado.get("odc"),
+                    datos_cabecera_normalizado.get("mensaje"),
                     datos_cabecera_normalizado.get("proveedor_nombre"),
                     datos_cabecera_normalizado.get("comprador_nombre"),
                     datos_cabecera_normalizado.get("comprador_codigo"),
@@ -190,7 +190,7 @@ class PedidoCabeceraRepository:
                     fecha_pedido,
                     fecha_entrega,
                     forma_pago,
-                    odc,
+                    mensaje,
                     proveedor_nombre,
                     comprador_nombre,
                     comprador_codigo,
@@ -209,7 +209,7 @@ class PedidoCabeceraRepository:
                     datos_cabecera_normalizado.get("fecha_pedido"),
                     datos_cabecera_normalizado.get("fecha_entrega"),
                     datos_cabecera_normalizado.get("forma_pago"),
-                    datos_cabecera_normalizado.get("odc"),
+                    datos_cabecera_normalizado.get("mensaje"),
                     datos_cabecera_normalizado.get("proveedor_nombre"),
                     datos_cabecera_normalizado.get("comprador_nombre"),
                     datos_cabecera_normalizado.get("comprador_codigo"),
@@ -278,7 +278,7 @@ class PedidoCabeceraRepository:
                 cursor.execute("""
                     SELECT 
                         p.pedido_id, p.numero_pedido, p.fecha_pedido, p.fecha_entrega,
-                        p.forma_pago, p.odc, p.proveedor_nombre, p.comprador_nombre,
+                        p.forma_pago, p.mensaje, p.proveedor_nombre, p.comprador_nombre,
                         p.comprador_codigo, p.origen_traslado, p.serie, p.archivo_nombre,
                         p.creado_por, p.estado_id, pe.nombre AS estado_nombre, p.creado_en,
                         p.modificado_por
@@ -290,7 +290,7 @@ class PedidoCabeceraRepository:
                 cursor.execute("""
                     SELECT 
                         pedido_id, numero_pedido, fecha_pedido, fecha_entrega,
-                        forma_pago, odc, proveedor_nombre, comprador_nombre,
+                        forma_pago, mensaje, proveedor_nombre, comprador_nombre,
                         comprador_codigo, origen_traslado, serie, archivo_nombre,
                         creado_por, estado, creado_en,
                         modificado_por
@@ -301,7 +301,7 @@ class PedidoCabeceraRepository:
                 cursor.execute("""
                     SELECT 
                         pedido_id, numero_pedido, fecha_pedido, fecha_entrega,
-                        forma_pago, odc, proveedor_nombre, comprador_nombre,
+                        forma_pago, mensaje, proveedor_nombre, comprador_nombre,
                         comprador_codigo, origen_traslado, serie, archivo_nombre,
                         creado_por, creado_en,
                         modificado_por
@@ -355,7 +355,7 @@ class PedidoCabeceraRepository:
                 cursor.execute("""
                     SELECT 
                         p.pedido_id, p.numero_pedido, p.fecha_pedido, p.fecha_entrega,
-                        p.forma_pago, p.odc, p.proveedor_nombre, p.comprador_nombre,
+                        p.forma_pago, p.mensaje, p.proveedor_nombre, p.comprador_nombre,
                         p.comprador_codigo, p.origen_traslado, p.serie, p.archivo_nombre,
                         p.creado_por, p.estado_id, pe.nombre AS estado_nombre, p.creado_en,
                         p.modificado_por
@@ -367,7 +367,7 @@ class PedidoCabeceraRepository:
                 cursor.execute("""
                     SELECT 
                         pedido_id, numero_pedido, fecha_pedido, fecha_entrega,
-                        forma_pago, odc, proveedor_nombre, comprador_nombre,
+                        forma_pago, mensaje, proveedor_nombre, comprador_nombre,
                         comprador_codigo, origen_traslado, serie, archivo_nombre,
                         creado_por, estado, creado_en,
                         modificado_por
@@ -378,7 +378,7 @@ class PedidoCabeceraRepository:
                 cursor.execute("""
                     SELECT 
                         pedido_id, numero_pedido, fecha_pedido, fecha_entrega,
-                        forma_pago, odc, proveedor_nombre, comprador_nombre,
+                        forma_pago, mensaje, proveedor_nombre, comprador_nombre,
                         comprador_codigo, origen_traslado, serie, archivo_nombre,
                         creado_por, creado_en,
                         modificado_por
@@ -673,7 +673,7 @@ class PedidoCabeceraRepository:
                 cursor.execute("""
                     SELECT 
                         pedido_id, numero_pedido, fecha_pedido, fecha_entrega,
-                        forma_pago, odc, proveedor_nombre, comprador_nombre,
+                        forma_pago, mensaje, proveedor_nombre, comprador_nombre,
                         comprador_codigo, origen_traslado, serie, archivo_nombre,
                         creado_por, estado
                     FROM pedido
@@ -683,7 +683,7 @@ class PedidoCabeceraRepository:
                 cursor.execute("""
                     SELECT 
                         pedido_id, numero_pedido, fecha_pedido, fecha_entrega,
-                        forma_pago, odc, proveedor_nombre, comprador_nombre,
+                        forma_pago, mensaje, proveedor_nombre, comprador_nombre,
                         comprador_codigo, origen_traslado, serie, archivo_nombre,
                         creado_por
                     FROM pedido
@@ -699,7 +699,7 @@ class PedidoCabeceraRepository:
                 "fecha_pedido": row[2].isoformat() if row[2] else None,
                 "fecha_entrega": row[3],
                 "forma_pago": row[4],
-                "odc": row[5],
+                "mensaje": row[5],
                 "proveedor_nombre": row[6],
                 "comprador_nombre": row[7],
                 "comprador_codigo": row[8],
@@ -729,7 +729,7 @@ class PedidoCabeceraRepository:
                     fecha_pedido = ?,
                     fecha_entrega = ?,
                     forma_pago = ?,
-                    odc = ?,
+                    mensaje = ?,
                     proveedor_nombre = ?,
                     comprador_nombre = ?,
                     comprador_codigo = ?,
@@ -742,7 +742,7 @@ class PedidoCabeceraRepository:
                     merged.get("fecha_pedido"),
                     merged.get("fecha_entrega"),
                     merged.get("forma_pago"),
-                    merged.get("odc"),
+                    merged.get("mensaje"),
                     merged.get("proveedor_nombre"),
                     merged.get("comprador_nombre"),
                     merged.get("comprador_codigo"),
@@ -757,7 +757,7 @@ class PedidoCabeceraRepository:
                     fecha_pedido = ?,
                     fecha_entrega = ?,
                     forma_pago = ?,
-                    odc = ?,
+                    mensaje = ?,
                     proveedor_nombre = ?,
                     comprador_nombre = ?,
                     comprador_codigo = ?,
@@ -769,7 +769,7 @@ class PedidoCabeceraRepository:
                     merged.get("fecha_pedido"),
                     merged.get("fecha_entrega"),
                     merged.get("forma_pago"),
-                    merged.get("odc"),
+                    merged.get("mensaje"),
                     merged.get("proveedor_nombre"),
                     merged.get("comprador_nombre"),
                     merged.get("comprador_codigo"),
@@ -820,7 +820,7 @@ class PedidoCabeceraRepository:
                 cursor.execute("""
                     SELECT 
                         p.pedido_id, p.numero_pedido, p.fecha_pedido, p.fecha_entrega,
-                        p.forma_pago, p.odc, p.proveedor_nombre, p.comprador_nombre,
+                        p.forma_pago, p.mensaje, p.proveedor_nombre, p.comprador_nombre,
                         p.comprador_codigo, p.origen_traslado, p.serie, p.archivo_nombre,
                         p.creado_por, p.estado_id, pe.nombre AS estado_nombre, p.creado_en
                     FROM pedido p
@@ -836,7 +836,7 @@ class PedidoCabeceraRepository:
                         "fecha_pedido": row[2].isoformat() if row[2] else None,
                         "fecha_entrega": row[3],
                         "forma_pago": row[4],
-                        "odc": row[5],
+                        "mensaje": row[5],
                         "proveedor_nombre": row[6],
                         "comprador_nombre": row[7],
                         "comprador_codigo": row[8],
@@ -862,7 +862,7 @@ class PedidoCabeceraRepository:
             cursor.execute("""
                 SELECT 
                     pedido_id, numero_pedido, fecha_pedido, fecha_entrega,
-                    forma_pago, odc, proveedor_nombre, comprador_nombre,
+                    forma_pago, mensaje, proveedor_nombre, comprador_nombre,
                     comprador_codigo, origen_traslado, serie, archivo_nombre,
                     creado_por, estado, creado_en
                 FROM pedido
@@ -877,7 +877,7 @@ class PedidoCabeceraRepository:
                     "fecha_pedido": row[2].isoformat() if row[2] else None,
                     "fecha_entrega": row[3],
                     "forma_pago": row[4],
-                    "odc": row[5],
+                    "mensaje": row[5],
                     "proveedor_nombre": row[6],
                     "comprador_nombre": row[7],
                     "comprador_codigo": row[8],
@@ -987,7 +987,7 @@ class PedidoCabeceraRepository:
             if tiene_estado_id:
                 select_fields = """
                     p.pedido_id, p.numero_pedido, p.fecha_pedido, p.fecha_entrega,
-                    p.forma_pago, p.odc, p.proveedor_nombre, p.comprador_nombre,
+                    p.forma_pago, p.mensaje, p.proveedor_nombre, p.comprador_nombre,
                     p.comprador_codigo, p.origen_traslado, p.serie, p.archivo_nombre,
                     p.creado_por, p.estado_id, pe.nombre AS estado_nombre, p.creado_en,
                     p.modificado_fecha, p.modificado_por
@@ -1002,7 +1002,7 @@ class PedidoCabeceraRepository:
             else:
                 select_fields = """
                     p.pedido_id, p.numero_pedido, p.fecha_pedido, p.fecha_entrega,
-                    p.forma_pago, p.odc, p.proveedor_nombre, p.comprador_nombre,
+                    p.forma_pago, p.mensaje, p.proveedor_nombre, p.comprador_nombre,
                     p.comprador_codigo, p.origen_traslado, p.serie, p.archivo_nombre,
                     p.creado_por, p.creado_en, p.modificado_fecha, p.modificado_por
                 """
@@ -1030,7 +1030,7 @@ class PedidoCabeceraRepository:
                         "fecha_pedido": row[idx + 2].isoformat() if row[idx + 2] else None,
                         "fecha_entrega": row[idx + 3],
                         "forma_pago": row[idx + 4],
-                        "odc": row[idx + 5],
+                        "mensaje": row[idx + 5],
                         "proveedor_nombre": row[idx + 6],
                         "comprador_nombre": row[idx + 7],
                         "comprador_codigo": row[idx + 8],
@@ -1052,7 +1052,7 @@ class PedidoCabeceraRepository:
                         "fecha_pedido": row[idx + 2].isoformat() if row[idx + 2] else None,
                         "fecha_entrega": row[idx + 3],
                         "forma_pago": row[idx + 4],
-                        "odc": row[idx + 5],
+                        "mensaje": row[idx + 5],
                         "proveedor_nombre": row[idx + 6],
                         "comprador_nombre": row[idx + 7],
                         "comprador_codigo": row[idx + 8],
@@ -1124,7 +1124,7 @@ class PedidoCabeceraRepository:
                 total = result[0] if result else 0
                 select_fields = """
                     p.pedido_id, p.numero_pedido, p.fecha_pedido, p.fecha_entrega,
-                    p.forma_pago, p.odc, p.proveedor_nombre, p.comprador_nombre,
+                    p.forma_pago, p.mensaje, p.proveedor_nombre, p.comprador_nombre,
                     p.comprador_codigo, p.origen_traslado, p.serie, p.archivo_nombre,
                     p.creado_por, p.estado_id, pe.nombre AS estado_nombre, p.creado_en
                 """
@@ -1152,7 +1152,7 @@ class PedidoCabeceraRepository:
                 total = result[0] if result else 0
                 select_fields = """
                     p.pedido_id, p.numero_pedido, p.fecha_pedido, p.fecha_entrega,
-                    p.forma_pago, p.odc, p.proveedor_nombre, p.comprador_nombre,
+                    p.forma_pago, p.mensaje, p.proveedor_nombre, p.comprador_nombre,
                     p.comprador_codigo, p.origen_traslado, p.serie, p.archivo_nombre,
                     p.creado_por, p.creado_en, p.estado
                 """
@@ -1177,7 +1177,7 @@ class PedidoCabeceraRepository:
                         "fecha_pedido": row[idx + 2].isoformat() if row[idx + 2] else None,
                         "fecha_entrega": row[idx + 3],
                         "forma_pago": row[idx + 4],
-                        "odc": row[idx + 5],
+                        "mensaje": row[idx + 5],
                         "proveedor_nombre": row[idx + 6],
                         "comprador_nombre": row[idx + 7],
                         "comprador_codigo": row[idx + 8],
@@ -1197,7 +1197,7 @@ class PedidoCabeceraRepository:
                         "fecha_pedido": row[idx + 2].isoformat() if row[idx + 2] else None,
                         "fecha_entrega": row[idx + 3],
                         "forma_pago": row[idx + 4],
-                        "odc": row[idx + 5],
+                        "mensaje": row[idx + 5],
                         "proveedor_nombre": row[idx + 6],
                         "comprador_nombre": row[idx + 7],
                         "comprador_codigo": row[idx + 8],
@@ -1274,7 +1274,7 @@ class PedidoCabeceraRepository:
                 cursor.execute("""
                     SELECT TOP 1
                         p.pedido_id, p.numero_pedido, p.fecha_pedido, p.fecha_entrega,
-                        p.forma_pago, p.odc, p.proveedor_nombre, p.comprador_nombre,
+                        p.forma_pago, p.mensaje, p.proveedor_nombre, p.comprador_nombre,
                         p.comprador_codigo, p.origen_traslado, p.serie, p.archivo_nombre,
                         p.creado_por, p.estado_id, pe.nombre AS estado_nombre, p.creado_en
                     FROM pedido p
@@ -1286,7 +1286,7 @@ class PedidoCabeceraRepository:
                 cursor.execute("""
                     SELECT TOP 1
                         pedido_id, numero_pedido, fecha_pedido, fecha_entrega,
-                        forma_pago, odc, proveedor_nombre, comprador_nombre,
+                        forma_pago, mensaje, proveedor_nombre, comprador_nombre,
                         comprador_codigo, origen_traslado, serie, archivo_nombre,
                         creado_por, estado, creado_en
                     FROM pedido
@@ -1297,7 +1297,7 @@ class PedidoCabeceraRepository:
                 cursor.execute("""
                     SELECT TOP 1
                         pedido_id, numero_pedido, fecha_pedido, fecha_entrega,
-                        forma_pago, odc, proveedor_nombre, comprador_nombre,
+                        forma_pago, mensaje, proveedor_nombre, comprador_nombre,
                         comprador_codigo, origen_traslado, serie, archivo_nombre,
                         creado_por, creado_en
                     FROM pedido
@@ -1316,7 +1316,7 @@ class PedidoCabeceraRepository:
                     "fecha_pedido": row[2].isoformat() if row[2] else None,
                     "fecha_entrega": row[3],
                     "forma_pago": row[4],
-                    "odc": row[5],
+                    "mensaje": row[5],
                     "proveedor_nombre": row[6],
                     "comprador_nombre": row[7],
                     "comprador_codigo": row[8],
@@ -1336,7 +1336,7 @@ class PedidoCabeceraRepository:
                     "fecha_pedido": row[2].isoformat() if row[2] else None,
                     "fecha_entrega": row[3],
                     "forma_pago": row[4],
-                    "odc": row[5],
+                    "mensaje": row[5],
                     "proveedor_nombre": row[6],
                     "comprador_nombre": row[7],
                     "comprador_codigo": row[8],
@@ -1353,7 +1353,7 @@ class PedidoCabeceraRepository:
                 "fecha_pedido": row[2].isoformat() if row[2] else None,
                 "fecha_entrega": row[3],
                 "forma_pago": row[4],
-                "odc": row[5],
+                "mensaje": row[5],
                 "proveedor_nombre": row[6],
                 "comprador_nombre": row[7],
                 "comprador_codigo": row[8],
@@ -1394,7 +1394,7 @@ class PedidoCabeceraRepository:
                     cursor.execute("""
                         SELECT TOP 1
                             p.pedido_id, p.numero_pedido, p.fecha_pedido, p.fecha_entrega,
-                            p.forma_pago, p.odc, p.proveedor_nombre, p.comprador_nombre,
+                            p.forma_pago, p.mensaje, p.proveedor_nombre, p.comprador_nombre,
                             p.comprador_codigo, p.origen_traslado, p.serie, p.archivo_nombre,
                             p.creado_por, p.estado_id, pe.nombre AS estado_nombre, p.creado_en
                         FROM pedido p
@@ -1406,7 +1406,7 @@ class PedidoCabeceraRepository:
                     cursor.execute("""
                         SELECT TOP 1
                             p.pedido_id, p.numero_pedido, p.fecha_pedido, p.fecha_entrega,
-                            p.forma_pago, p.odc, p.proveedor_nombre, p.comprador_nombre,
+                            p.forma_pago, p.mensaje, p.proveedor_nombre, p.comprador_nombre,
                             p.comprador_codigo, p.origen_traslado, p.serie, p.archivo_nombre,
                             p.creado_por, p.estado_id, pe.nombre AS estado_nombre, p.creado_en
                         FROM pedido p
@@ -1421,7 +1421,7 @@ class PedidoCabeceraRepository:
                     cursor.execute("""
                         SELECT TOP 1
                             pedido_id, numero_pedido, fecha_pedido, fecha_entrega,
-                            forma_pago, odc, proveedor_nombre, comprador_nombre,
+                            forma_pago, mensaje, proveedor_nombre, comprador_nombre,
                             comprador_codigo, origen_traslado, serie, archivo_nombre,
                             creado_por, estado, creado_en
                         FROM pedido
@@ -1432,7 +1432,7 @@ class PedidoCabeceraRepository:
                     cursor.execute("""
                         SELECT TOP 1
                             pedido_id, numero_pedido, fecha_pedido, fecha_entrega,
-                            forma_pago, odc, proveedor_nombre, comprador_nombre,
+                            forma_pago, mensaje, proveedor_nombre, comprador_nombre,
                             comprador_codigo, origen_traslado, serie, archivo_nombre,
                             creado_por, estado, creado_en
                         FROM pedido
@@ -1451,7 +1451,7 @@ class PedidoCabeceraRepository:
                     "fecha_pedido": row[2].isoformat() if row[2] else None,
                     "fecha_entrega": row[3],
                     "forma_pago": row[4],
-                    "odc": row[5],
+                    "mensaje": row[5],
                     "proveedor_nombre": row[6],
                     "comprador_nombre": row[7],
                     "comprador_codigo": row[8],
@@ -1470,7 +1470,7 @@ class PedidoCabeceraRepository:
                 "fecha_pedido": row[2].isoformat() if row[2] else None,
                 "fecha_entrega": row[3],
                 "forma_pago": row[4],
-                "odc": row[5],
+                "mensaje": row[5],
                 "proveedor_nombre": row[6],
                 "comprador_nombre": row[7],
                 "comprador_codigo": row[8],

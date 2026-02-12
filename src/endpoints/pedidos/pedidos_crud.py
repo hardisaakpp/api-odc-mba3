@@ -1659,7 +1659,7 @@ def register_crud_endpoints(app: FastAPI):
                     ("Proveedor", cabecera.get("proveedor_nombre", "N/A")),
                     ("Comprador", cabecera.get("comprador_nombre", "N/A")),
                     ("Código Comprador", cabecera.get("comprador_codigo", "N/A")),
-                    ("ODC", cabecera.get("odc", "N/A")),
+                    ("Mensaje", cabecera.get("mensaje", "N/A")),
                     ("Forma de Pago", cabecera.get("forma_pago", "N/A")),
                     ("Origen Traslado", cabecera.get("origen_traslado", "N/A")),
                     ("Serie", cabecera.get("serie", "N/A")),

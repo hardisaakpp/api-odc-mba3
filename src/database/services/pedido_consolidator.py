@@ -45,7 +45,7 @@ class PedidoConsolidator:
             "fecha_pedido": None,
             "fecha_entrega": None,
             "forma_pago": None,
-            "odc": None,
+            "mensaje": None,
             "proveedor_nombre": None,
             "comprador_nombre": None,
             "comprador_codigo": None,
@@ -85,10 +85,10 @@ class PedidoConsolidator:
         elif "FORMA DE PAGO" in cabecera_parseada:
             cabecera_bd["forma_pago"] = cabecera_parseada["FORMA DE PAGO"]
         
-        if "odc" in cabecera_parseada:
-            cabecera_bd["odc"] = cabecera_parseada["odc"]
-        elif "ODC" in cabecera_parseada:
-            cabecera_bd["odc"] = cabecera_parseada["ODC"]
+        if "mensaje" in cabecera_parseada:
+            cabecera_bd["mensaje"] = cabecera_parseada["mensaje"]
+        elif "MENSAJE" in cabecera_parseada:
+            cabecera_bd["mensaje"] = cabecera_parseada["MENSAJE"]
         
         if "proveedor_nombre" in cabecera_parseada:
             cabecera_bd["proveedor_nombre"] = cabecera_parseada["proveedor_nombre"]

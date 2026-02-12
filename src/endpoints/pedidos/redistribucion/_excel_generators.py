@@ -96,7 +96,7 @@ def generar_excel_distribucion(
         ("Proveedor", cabecera.get("proveedor_nombre", "N/A")),
         ("Comprador", cabecera.get("comprador_nombre", "N/A")),
         ("Forma de Pago", cabecera.get("forma_pago", "N/A")),
-        ("ODC", cabecera.get("odc", "N/A")),
+        ("Mensaje", cabecera.get("mensaje", "N/A")),
         ("Creado Por", cabecera.get("creado_por", "N/A")),
     ]
 

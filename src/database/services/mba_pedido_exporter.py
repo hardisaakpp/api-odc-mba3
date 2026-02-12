@@ -207,7 +207,7 @@ Número secuencial de registro\tValor temporal de pedido, marca el bloque que co
             # Extraer datos del pedido para usar en la exportación
             fecha_pedido = self._format_date(cabecera.get("fecha_pedido"))
             fecha_entrega = self._format_date(cabecera.get("fecha_entrega"))
-            orden_compra_cliente = cabecera.get("odc") or ""
+            orden_compra_cliente = cabecera.get("mensaje") or ""
             bodega = config.bodega or cabecera.get("origen_traslado") or ""
             
             # Construir líneas del archivo
@@ -328,7 +328,7 @@ Número secuencial de registro\tValor temporal de pedido, marca el bloque que co
             # Extraer datos del pedido
             fecha_pedido = self._format_date(cabecera.get("fecha_pedido"))
             fecha_entrega = self._format_date(cabecera.get("fecha_entrega"))
-            orden_compra_cliente = cabecera.get("odc") or ""
+            orden_compra_cliente = cabecera.get("mensaje") or ""
             bodega = config.bodega or cabecera.get("origen_traslado") or ""
             
             # Usar la primera tienda para la sucursal (o el campo bodega del config)

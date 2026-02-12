@@ -37,7 +37,7 @@ class PedidoParserUtils:
         "FECHA DE ENTREGA": "fecha_entrega",
         "FORMA PAGO": "forma_pago",
         "FORMA DE PAGO": "forma_pago",
-        "ODC": "odc",
+        "MENSAJE": "mensaje",
         "NOMBRE PROVEEDOR": "proveedor_nombre",
         "NOMBRE DE PROVEEDOR": "proveedor_nombre",
         "COMPRADOR NOMBRE": "comprador_nombre",

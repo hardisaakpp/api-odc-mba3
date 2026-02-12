@@ -136,7 +136,7 @@ class PedidoUtils:
             "fecha_pedido": row[2].isoformat() if row[2] else None,
             "fecha_entrega": row[3],
             "forma_pago": row[4],
-            "odc": row[5],
+            "mensaje": row[5],
             "proveedor_nombre": row[6],
             "comprador_nombre": row[7],
             "comprador_codigo": row[8],
