@@ -518,4 +518,5 @@ Para reportar bugs o solicitar features:
 ---
 
 **Última actualización**: Diciembre 2024
+**Última revisión**: 2026-02-13 (sin cambios funcionales)
 **Versión**: 1.0.0

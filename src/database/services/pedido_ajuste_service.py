@@ -169,12 +169,22 @@ class PedidoAjusteService:
         conn,
         respuesta: Dict[str, Any],
         pedido: Dict[str, Any],
-        forzar_redistribucion: bool
+        forzar_redistribucion: bool,
+        audit_context: Optional[AuditContext] = None,
+        pedido_id: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """
         Aplica todos los ajustes necesarios (cantidades y costos).
         
         ⚠️ NO hace commit - debe ser parte de transacción mayor.
+        
+        Args:
+            conn: Conexión a la base de datos
+            respuesta: Respuesta del proveedor
+            pedido: Datos del pedido
+            forzar_redistribucion: Si True, redistribuye aunque haya distribución específica
+            audit_context: Contexto de auditoría
+            pedido_id: UUID del pedido
         
         Returns:
             Lista de ajustes realizados
@@ -202,7 +212,9 @@ class PedidoAjusteService:
                 cantidad_confirmada_total=cantidad_confirmada,
                 distribucion_original=detalle_pedido["tiendas"],
                 respuesta_id=respuesta["cabecera"]["respuesta_id"],
-                forzar_redistribucion=forzar_redistribucion
+                forzar_redistribucion=forzar_redistribucion,
+                audit_context=audit_context,
+                pedido_id=pedido_id,
             )
             
             # Recalcular costos si hay cambios de precio
@@ -235,7 +247,9 @@ class PedidoAjusteService:
         cantidad_confirmada_total: int,
         distribucion_original: List[Dict[str, Any]],
         respuesta_id: str,
-        forzar_redistribucion: bool = False
+        forzar_redistribucion: bool = False,
+        audit_context: Optional[AuditContext] = None,
+        pedido_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Ajusta las cantidades por tienda para que coincidan con el total confirmado.
@@ -245,6 +259,16 @@ class PedidoAjusteService:
         ESTRATEGIA:
         1. Si existe distribución específica en pedido_respuesta_proveedor_detalle_tienda, usarla
         2. Si no, redistribuir proporcionalmente según cantidades originales
+        
+        Args:
+            conn: Conexión a la base de datos
+            pedido_detalle_id: ID del detalle del pedido
+            cantidad_confirmada_total: Cantidad total confirmada
+            distribucion_original: Distribución original por tiendas
+            respuesta_id: ID de la respuesta del proveedor
+            forzar_redistribucion: Si True, redistribuye aunque haya distribución específica
+            audit_context: Contexto de auditoría
+            pedido_id: UUID del pedido
         
         Returns:
             Dict con información del ajuste realizado

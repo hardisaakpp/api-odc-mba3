@@ -6,6 +6,7 @@ import logging
 import pyodbc
 from typing import List, Dict, Any, Optional, Tuple
 
+from src.utils.timezone import ahora_naive
 from .utils import serialize_date, serialize_decimal
 
 logger = logging.getLogger(__name__)

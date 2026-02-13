@@ -371,5 +371,6 @@ Para monitorear la transición de permisos legacy a específicos:
 ---
 
 **Última actualización:** 2026-01-23
+**Última revisión:** 2026-02-13 (pendientes sin cambios)
 **Estado:** Fase 1 (Backward Compatibility) - ✅ Implementado
 **Fecha de muerte legacy:** Q2 2026 (30 de junio de 2026)

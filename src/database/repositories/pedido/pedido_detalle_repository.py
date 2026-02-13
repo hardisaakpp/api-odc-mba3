@@ -658,7 +658,8 @@ class PedidoDetalleRepository:
                 WHERE TABLE_NAME = 'pedido_detalle_modificacion_columna'
                 AND COLUMN_NAME = 'valor_anterior'
             """)
-            tiene_valores = (cursor.fetchone()[0] or 0) > 0
+            row = cursor.fetchone()
+            tiene_valores = (row[0] if row else 0) > 0
             
             for mod in modificaciones:
                 pedido_detalle_id = mod.get('pedido_detalle_id')

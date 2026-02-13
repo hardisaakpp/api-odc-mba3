@@ -262,6 +262,7 @@ def register_exportacion_endpoints(app: FastAPI):
                 # Crear libro de Excel
                 wb = Workbook()
                 ws = wb.active
+                assert ws is not None  # wb.active always returns a worksheet for new workbooks
                 ws.title = "datos"
 
                 # --- Estilos ---
@@ -560,6 +561,7 @@ def register_exportacion_endpoints(app: FastAPI):
                 # Crear libro de Excel (mismo formato que descargar-pedido)
                 wb = Workbook()
                 ws = wb.active
+                assert ws is not None  # wb.active always returns a worksheet for new workbooks
                 ws.title = "datos"
 
                 # --- Estilos ---

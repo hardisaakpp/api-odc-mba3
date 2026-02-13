@@ -259,3 +259,4 @@ Las siguientes validaciones **siguen funcionando exactamente igual** (no se toca
 
 - Backend: 2026-02-13
 - Frontend: Pendiente
+**Última revisión:** 2026-02-13 (frontend sigue pendiente)

@@ -63,7 +63,8 @@ class RedistribucionBorradorRepository:
                 SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS
                 WHERE TABLE_NAME = 'redistribucion_borrador' AND COLUMN_NAME = 'modificado_por'
             """)
-            tiene_audit_cols = (cursor.fetchone()[0] or 0) > 0
+            row = cursor.fetchone()
+            tiene_audit_cols = (row[0] if row else 0) > 0
 
             _ahora = ahora_naive()
 
