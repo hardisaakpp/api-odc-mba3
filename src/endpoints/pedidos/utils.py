@@ -47,16 +47,24 @@ def get_user_id(user: Dict) -> str:
     Usa el mismo identificador que se usa al guardar pedidos (creado_por).
     Esto asegura consistencia entre creación y consulta.
     
+    IMPORTANTE: Prioriza información legible (email, username) sobre IDs técnicos (UUID)
+    para que los campos de auditoría sean comprensibles para los usuarios.
+    
     Args:
         user: Diccionario del JWT decodificado
         
     Returns:
-        ID del usuario normalizado
+        ID del usuario normalizado (email preferido, luego username, luego UUID)
         
     Raises:
         HTTPException: Si el usuario no tiene ID válido
     """
-    user_id = user.get('id') or user.get('username')
+    # Priorizar información legible para auditoría
+    user_id = (
+        user.get('email') or      # PRIMERO: Email (más legible para usuarios AD)
+        user.get('username') or   # Segundo: Username (para usuarios no-AD)
+        user.get('id')            # ÚLTIMO RECURSO: UUID (solo si no hay email/username)
+    )
     
     if not user_id:
         raise HTTPException(
