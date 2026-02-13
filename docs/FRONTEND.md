@@ -1110,8 +1110,10 @@ GET /api/plantillas/pedidos?limit=10&offset=0
 | Aspecto | `/api/pedidos` | `/api/plantillas/pedidos` |
 |---------|---------------|---------------------------|
 | Incluye BORRADOR | ❌ No | ✅ Sí |
-| Filtra por usuario | ❌ No (todos los usuarios) | ✅ Sí (solo del usuario actual) |
+| Filtra por usuario | ❌ No (todos los usuarios) | ❌ No (todos los usuarios) |
 | Uso recomendado | Listado general de pedidos | Página cargar-plantilla |
+
+**⚠️ NOTA:** Ambos endpoints muestran pedidos de **todos los usuarios** con permiso `mabel.view`. No hay filtrado automático por usuario para permitir visibilidad compartida de pedidos en equipos.
 
 #### Implementación en Frontend
 
@@ -1157,9 +1159,9 @@ En la sección **"Filtros de búsqueda"** de la página `cargar-plantilla`, el c
 
 **Comportamiento:**
 - **Búsqueda parcial:** Si el usuario escribe `P-12.08`, el endpoint buscará pedidos cuyo `numero_pedido` contenga ese texto (ej: `P-12.08 - 12 - 2025`, `P-12.08 - 01 - 2026`).
-- **Sin parámetro:** Si no se proporciona `numero_pedido`, devuelve los últimos pedidos del usuario.
+- **Sin parámetro:** Si no se proporciona `numero_pedido`, devuelve los últimos pedidos.
 - **Incluye BORRADOR:** A diferencia de otros endpoints, este incluye pedidos en estado BORRADOR (útil para cargar-plantilla).
-- **Filtro por usuario:** Solo devuelve pedidos creados por el usuario autenticado.
+- **Visibilidad compartida:** Muestra pedidos de **todos los usuarios** con permiso `mabel.view` (no filtra por usuario para permitir colaboración en equipo).
 
 **Ejemplo de Respuesta:**
 ```json

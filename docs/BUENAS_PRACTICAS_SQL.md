@@ -52,9 +52,9 @@ BEGIN
         porcentaje DECIMAL(5, 2) NULL,
         
         -- ===== CAMPOS DE AUDITORÍA (OBLIGATORIOS) =====
-        creado_por NVARCHAR(450) NULL,        -- User ID del JWT
+        creado_por NVARCHAR(450) NULL,        -- Email o username del usuario (legible para auditoría)
         creado_fecha DATETIME DEFAULT GETDATE(),
-        modificado_por NVARCHAR(450) NULL,
+        modificado_por NVARCHAR(450) NULL,    -- Email o username del usuario (legible para auditoría)
         modificado_fecha DATETIME NULL,
         activo BIT DEFAULT 1,                  -- Soft delete
         
@@ -122,15 +122,40 @@ Todas las tablas deben incluir estos campos:
 
 ```sql
 -- Campos mínimos obligatorios
-creado_por NVARCHAR(450) NULL,        -- ID del usuario que creó el registro
+creado_por NVARCHAR(450) NULL,        -- Email o username del usuario (prioriza legibilidad)
 creado_fecha DATETIME DEFAULT GETDATE(),
 activo BIT DEFAULT 1,                  -- Para soft delete
 
 -- Campos recomendados
-modificado_por NVARCHAR(450) NULL,
+modificado_por NVARCHAR(450) NULL,    -- Email o username del usuario (prioriza legibilidad)
 modificado_fecha DATETIME NULL,
 origen NVARCHAR(50) NULL,              -- Fuente: 'API', 'WEB', 'EXCEL', 'CELERY'
 ip_origen NVARCHAR(45) NULL,
+```
+
+### ⚠️ Formato de `creado_por` y `modificado_por`
+
+Estos campos almacenan información **legible para humanos**, no UUIDs técnicos:
+
+- **Usuarios AD (Active Directory)**: Email completo (ej: `juan.perez@empresa.com`)
+- **Usuarios locales/admin**: Username (ej: `admin`)
+- **Fallback**: Solo si no hay email ni username, se usa el UUID
+
+**Orden de prioridad en el código:**
+1. Email del JWT (`user.get('email')`)
+2. Username del JWT (`user.get('username')`)
+3. UUID del JWT (`user.get('id')`) - último recurso
+
+**Ejemplo de valores almacenados:**
+```sql
+-- Usuario AD
+creado_por: 'maria.garcia@empresa.com'
+
+-- Usuario admin
+creado_por: 'admin'
+
+-- Usuario antiguo (antes del cambio)
+creado_por: 'c4ba7535-1e65-4009-86d3-0a7b09c44bc6'  -- Se mantiene para compatibilidad
 ```
 
 ### Valores válidos para `origen`:

@@ -6,12 +6,17 @@ que debe incluirse en las operaciones INSERT/UPDATE según las buenas prácticas
 (Sección 3 - Campos de auditoría).
 
 Campos de auditoría:
-- creado_por: Usuario que creó el registro
+- creado_por: Email o username del usuario que creó el registro (legible para auditoría)
 - creado_fecha: Fecha/hora de creación (manejado por DB con DEFAULT)
-- modificado_por: Usuario que realizó la última modificación
+- modificado_por: Email o username del usuario que realizó la última modificación (legible)
 - modificado_fecha: Fecha/hora de la última modificación
 - origen: Fuente del registro ('API', 'WEB', 'EXCEL', 'CELERY', 'MANUAL')
 - ip_origen: Dirección IP del cliente
+
+IMPORTANTE: Los campos creado_por/modificado_por priorizan información legible:
+1. Email (ej: juan.perez@empresa.com) - para usuarios AD
+2. Username (ej: admin) - para usuarios locales
+3. UUID - solo como último recurso
 
 Uso:
     from src.utils.audit_context import AuditContext, get_audit_context

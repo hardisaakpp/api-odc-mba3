@@ -60,6 +60,7 @@ def send_pedido_confirmacion_notification(
     
     try:
         # Determinar destinatario
+        recipients: list[str]
         if email_destino:
             recipients = [email_destino.strip()]
         else:
@@ -208,6 +209,7 @@ def send_rayo_confirmacion_notification(
     
     try:
         # Determinar destinatario
+        recipients: list[str]
         if email_destino:
             recipients = [email_destino.strip()]
         else:
