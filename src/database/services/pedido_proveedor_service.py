@@ -14,6 +14,7 @@ from ..pedido_estados import ESTADO_RESPUESTA_PROVEEDOR_CARGADA
 from ..repositories.pedido_repository import PedidoRepository
 from ..repositories.pedido_respuesta_repository import PedidoRespuestaRepository
 from src.utils.audit_context import AuditContext, ORIGEN_WEB
+from src.exceptions import BusinessException
 
 logger = logging.getLogger(__name__)
 
@@ -312,7 +313,25 @@ class PedidoProveedorService:
             
             # Validar que exista la hoja RESUMEN
             if "RESUMEN" not in excel_file.sheet_names:
-                raise ValueError("Hoja requerida no encontrada: RESUMEN")
+                hojas_disponibles = [str(sheet) for sheet in excel_file.sheet_names]
+                raise BusinessException(
+                    message="El archivo de respuesta del proveedor no tiene el formato correcto",
+                    error_code="FORMATO_RESPUESTA_PROVEEDOR_INVALIDO",
+                    data={
+                        "hojas_encontradas": hojas_disponibles,
+                        "hojas_esperadas": ["RESUMEN"],
+                        "mensaje_detallado": (
+                            f"El archivo debe contener una hoja llamada 'RESUMEN' (en mayúsculas). "
+                            f"Hojas encontradas: {', '.join(hojas_disponibles)}"
+                        ),
+                        "validacion": {
+                            "formato_archivo": {
+                                "valido": False,
+                                "mensaje": "El archivo de respuesta del proveedor debe contener una hoja llamada 'RESUMEN'"
+                            }
+                        }
+                    }
+                )
             
             # Obtener pedido completo para validar
             with get_db_connection_context() as conn:

@@ -850,11 +850,26 @@ class PedidoService:
                 detalles_con_tiendas = list(productos_agrupados.values())
                 
                 if not detalles_con_tiendas:
-                    raise ValueError("No se encontraron datos válidos en el archivo de nuevo formato v1.0")
+                    raise BusinessException(
+                        message="El archivo Excel está vacío o no contiene datos válidos",
+                        error_code="ARCHIVO_SIN_DATOS",
+                        data={
+                            "formato_detectado": "dos_hojas_nuevo_v1_0",
+                            "mensaje_detallado": "No se encontraron productos con distribuciones válidas en las hojas 'cabecera' y 'detalle'",
+                            "validacion": {
+                                "datos_archivo": {
+                                    "valido": False,
+                                    "mensaje": "El archivo debe contener al menos un producto con cantidades para tiendas o bodegas"
+                                }
+                            }
+                        }
+                    )
             
             else:
                 # Solo se soporta el nuevo formato v1.0 (hojas "cabecera" y "detalle")
                 hojas_disponibles = ", ".join(str(sheet) for sheet in excel_file.sheet_names)
+                hojas_disponibles_lista = [str(sheet) for sheet in excel_file.sheet_names]
+                
                 error_msg = (
                     f"Formato de archivo no reconocido. "
                     f"El sistema solo soporta el formato v1.0 con hojas 'cabecera' y 'detalle' (en minúsculas).\n\n"
@@ -862,10 +877,38 @@ class PedidoService:
                     f"Se esperaba: hoja 'cabecera' y hoja 'detalle'"
                 )
                 logger.error(f"❌ {error_msg}")
-                raise ValueError(error_msg)
+                
+                # Lanzar BusinessException con datos estructurados para el frontend
+                raise BusinessException(
+                    message="El archivo Excel no tiene el formato correcto",
+                    error_code="FORMATO_EXCEL_INVALIDO",
+                    data={
+                        "hojas_encontradas": hojas_disponibles_lista,
+                        "hojas_esperadas": ["cabecera", "detalle"],
+                        "mensaje_detallado": error_msg,
+                        "validacion": {
+                            "formato_archivo": {
+                                "valido": False,
+                                "mensaje": "El archivo debe contener dos hojas llamadas 'cabecera' y 'detalle' (en minúsculas)"
+                            }
+                        }
+                    }
+                )
             
             if not detalles_con_tiendas:
-                raise ValueError("No se encontraron datos válidos en el archivo")
+                raise BusinessException(
+                    message="El archivo Excel está vacío o no contiene datos válidos",
+                    error_code="ARCHIVO_SIN_DATOS",
+                    data={
+                        "mensaje_detallado": "No se encontraron productos con distribuciones válidas en el archivo",
+                        "validacion": {
+                            "datos_archivo": {
+                                "valido": False,
+                                "mensaje": "El archivo debe contener al menos un producto con cantidades para tiendas o bodegas"
+                            }
+                        }
+                    }
+                )
             
             # ✅ VALIDACIÓN SAP OBLIGATORIA (para tiendas y bodegas - productos ya validados arriba)
             # Validar tiendas y bodegas contra SAP antes que cualquier otra validación
