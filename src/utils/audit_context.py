@@ -169,13 +169,15 @@ def get_username_from_user(user: Optional[Dict[str, Any]]) -> str:
     if not user:
         return "SYSTEM"
     
-    # Intentar diferentes campos comunes
+    # Priorizar email para usuarios AD (más legible que UUID)
+    # El orden de prioridad asegura que se use información legible antes que IDs técnicos
     username = (
-        user.get("username") or
-        user.get("name") or
-        user.get("sub") or
-        user.get("user_id") or
-        user.get("id")
+        user.get("email") or      # PRIMERO: Email (más legible para usuarios AD)
+        user.get("username") or   # Segundo: Username
+        user.get("name") or       # Tercero: Name
+        user.get("sub") or        # Cuarto: Subject
+        user.get("user_id") or    # Quinto: User ID alternativo
+        user.get("id")            # ÚLTIMO RECURSO: UUID (para compatibilidad)
     )
     
     return str(username) if username else "SYSTEM"
