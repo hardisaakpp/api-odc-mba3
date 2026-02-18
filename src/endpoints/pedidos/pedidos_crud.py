@@ -625,13 +625,15 @@ def register_crud_endpoints(app: FastAPI):
                 pedido["puede_confirmar_redistribucion"] = _eid in ESTADOS_PUEDE_CONFIRMAR_REDISTRIBUCION
                 pedido["puede_finalizar"] = _eid == ESTADO_DESPACHAR_Y_FACTURAR  # Solo en estado Despachar y Facturar (17)
                 
-                # 📢 Notificación SSE a MABEL TRADING cuando EL RAYO abre el pedido (cambio de estado)
+                # 📢 Notificación SSE: mismo permiso (otros EL RAYO) + MABEL cuando EL RAYO abre el pedido
                 if estado_id == ESTADO_NUEVO_PEDIDO:
                     try:
                         from src.utils.notification_manager import notification_manager, NotificationType
                         numero_pedido = pedido.get("cabecera", {}).get("numero_pedido", "")
-                        await notification_manager.notify(
-                            target_permission="mabel.view",
+                        _username = user.get("username") or user.get("sub") or "unknown"
+                        await notification_manager.notify_by_actor(
+                            actor_permission="odcsap.view",
+                            actor_username=_username,
                             title="EL RAYO está gestionando tu pedido",
                             message=f"El pedido {numero_pedido} está siendo revisado por EL RAYO.",
                             notification_type=NotificationType.INFO,
@@ -707,11 +709,13 @@ def register_crud_endpoints(app: FastAPI):
                 pedido["puede_confirmar_redistribucion"] = _eid in ESTADOS_PUEDE_CONFIRMAR_REDISTRIBUCION
                 pedido["puede_finalizar"] = _eid == ESTADO_DESPACHAR_Y_FACTURAR  # Solo en estado Despachar y Facturar (17)
                 
-                # 📢 Notificación en tiempo real a MABEL TRADING
+                # 📢 Notificación: otros EL RAYO + MABEL (excl. autor)
                 try:
                     from src.utils.notification_manager import notification_manager, NotificationType
-                    await notification_manager.notify(
-                        target_permission="mabel.view",
+                    _username = user.get("username") or user.get("sub") or "unknown"
+                    await notification_manager.notify_by_actor(
+                        actor_permission="odcsap.view",
+                        actor_username=_username,
                         title="EL RAYO confirmó tu pedido",
                         message=f"El pedido {numero_pedido} ha sido confirmado por EL RAYO y está listo para redistribución.",
                         notification_type=NotificationType.SUCCESS,
@@ -788,11 +792,15 @@ def register_crud_endpoints(app: FastAPI):
                 pedido["puede_confirmar_redistribucion"] = _eid in ESTADOS_PUEDE_CONFIRMAR_REDISTRIBUCION
                 pedido["puede_finalizar"] = _eid == ESTADO_DESPACHAR_Y_FACTURAR  # Solo en estado Despachar y Facturar (17)
                 
-                # 📢 Notificación en tiempo real a ambos roles
+                # 📢 Notificación a ambos roles (mismo permiso excl. autor)
                 try:
                     from src.utils.notification_manager import notification_manager, NotificationType
-                    await notification_manager.notify_multiple(
-                        target_permissions=["odcsap.view", "mabel.view"],
+                    _username = user.get("username") or user.get("sub") or "unknown"
+                    _perms = user.get("permissions") or []
+                    _actor_perm = "odcsap.view" if "odcsap.view" in _perms else "mabel.view"
+                    await notification_manager.notify_by_actor(
+                        actor_permission=_actor_perm,
+                        actor_username=_username,
                         title="Pedido listo para despacho",
                         message=f"El pedido {numero_pedido} ha sido marcado como Despachar y Facturar.",
                         notification_type=NotificationType.INFO,
@@ -868,11 +876,15 @@ def register_crud_endpoints(app: FastAPI):
                 pedido["puede_confirmar_redistribucion"] = _eid in ESTADOS_PUEDE_CONFIRMAR_REDISTRIBUCION
                 pedido["puede_finalizar"] = _eid == ESTADO_DESPACHAR_Y_FACTURAR  # Solo en estado Despachar y Facturar (17)
                 
-                # 📢 Notificación en tiempo real a ambos roles
+                # 📢 Notificación a ambos roles (mismo permiso excl. autor)
                 try:
                     from src.utils.notification_manager import notification_manager, NotificationType
-                    await notification_manager.notify_multiple(
-                        target_permissions=["odcsap.view", "mabel.view"],
+                    _username = user.get("username") or user.get("sub") or "unknown"
+                    _perms = user.get("permissions") or []
+                    _actor_perm = "odcsap.view" if "odcsap.view" in _perms else "mabel.view"
+                    await notification_manager.notify_by_actor(
+                        actor_permission=_actor_perm,
+                        actor_username=_username,
                         title="Pedido finalizado",
                         message=f"El pedido {numero_pedido} ha sido marcado como Finalizado.",
                         notification_type=NotificationType.SUCCESS,
@@ -1272,12 +1284,14 @@ def register_crud_endpoints(app: FastAPI):
             usuario_id = get_user_id(user)
             resultado = service.enviar_pedido(pedido_id=pedido_id, usuario_id=usuario_id)
             
-            # 📢 Notificación en tiempo real a EL RAYO
+            # 📢 Notificación: otros MABEL + EL RAYO (excl. autor)
             try:
                 from src.utils.notification_manager import notification_manager, NotificationType
                 numero_pedido = resultado.get("numero_pedido", "")
-                await notification_manager.notify(
-                    target_permission="odcsap.view",
+                _username = user.get("username") or user.get("sub") or "unknown"
+                await notification_manager.notify_by_actor(
+                    actor_permission="mabel.view",
+                    actor_username=_username,
                     title="Ingresa pedido de MABEL TRADING",
                     message=f"Se ha recibido el pedido {numero_pedido}. Revisa el detalle para gestionarlo.",
                     notification_type=NotificationType.INFO,
@@ -1396,11 +1410,13 @@ def register_crud_endpoints(app: FastAPI):
                 except Exception as notif_err:
                     logger.warning(f"⚠️ No se pudo enviar notificación de pedido cancelado a EL RAYO: {notif_err}")
                 
-                # 📢 Notificación en tiempo real a EL RAYO
+                # 📢 Notificación: otros MABEL + EL RAYO (excl. autor)
                 try:
                     from src.utils.notification_manager import notification_manager, NotificationType
-                    await notification_manager.notify(
-                        target_permission="odcsap.view",
+                    _username = user.get("username") or user.get("sub") or "unknown"
+                    await notification_manager.notify_by_actor(
+                        actor_permission="mabel.view",
+                        actor_username=_username,
                         title="Pedido cancelado por MABEL TRADING",
                         message=f"El pedido {numero_pedido} ha sido cancelado.",
                         notification_type=NotificationType.WARNING,
@@ -1550,11 +1566,13 @@ def register_crud_endpoints(app: FastAPI):
                     except Exception as notif_err:
                         logger.warning(f"⚠️ No se pudo enviar notificación de pedido descartado a EL RAYO: {notif_err}")
                     
-                    # 📢 Notificación en tiempo real a EL RAYO
+                    # 📢 Notificación: otros MABEL + EL RAYO (excl. autor)
                     try:
                         from src.utils.notification_manager import notification_manager, NotificationType
-                        await notification_manager.notify(
-                            target_permission="odcsap.view",
+                        _username = user.get("username") or user.get("sub") or "unknown"
+                        await notification_manager.notify_by_actor(
+                            actor_permission="mabel.view",
+                            actor_username=_username,
                             title="Pedido descartado por MABEL TRADING",
                             message=f"El pedido {numero_pedido or pedido_id} ha sido descartado.",
                             notification_type=NotificationType.WARNING,
@@ -1645,11 +1663,13 @@ def register_crud_endpoints(app: FastAPI):
                     audit_context=audit,
                 )
                 
-                # 📢 Notificación en tiempo real a MABEL TRADING
+                # 📢 Notificación: otros EL RAYO + MABEL (excl. autor)
                 try:
                     from src.utils.notification_manager import notification_manager, NotificationType
-                    await notification_manager.notify(
-                        target_permission="mabel.view",
+                    _username = user.get("username") or user.get("sub") or "unknown"
+                    await notification_manager.notify_by_actor(
+                        actor_permission="odcsap.view",
+                        actor_username=_username,
                         title="Pedido cancelado por EL RAYO",
                         message=f"El pedido {numero_pedido or pedido_id} ha sido cancelado por EL RAYO.",
                         notification_type=NotificationType.WARNING,

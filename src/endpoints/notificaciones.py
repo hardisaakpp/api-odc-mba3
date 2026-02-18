@@ -89,8 +89,8 @@ def register_notificaciones_endpoints(app: FastAPI):
             f"📢 Nueva conexión SSE de '{username}' con permisos: {relevant_permissions}"
         )
 
-        # Suscribir al bus de notificaciones
-        queue = await notification_manager.subscribe(relevant_permissions)
+        # Suscribir al bus (username permite excluir al autor al notificar mismo permiso)
+        queue = await notification_manager.subscribe(relevant_permissions, username=username)
 
         async def event_stream():
             """Generador de eventos SSE."""

@@ -266,7 +266,7 @@ python scripts/migration_runner.py --verbose
    ```
 
 4. **Reiniciar servicios**
-   - Reiniciar API (si aplica)
+   - Reiniciar API (si aplica): ver comandos en [DEPLOY_PRODUCCION.md](DEPLOY_PRODUCCION.md) (`sudo systemctl restart odc-sap-api`)
    - Verificar logs de aplicación
    - Probar funcionalidad crítica
 

@@ -233,10 +233,22 @@ AND COLUMN_NAME IN ('doc_entry', 'pedido_id');
 
 ### 5.1 Reiniciar Servicios
 
-- [ ] Reiniciar API (si fue detenida)
+En el servidor Linux (ruta `/opt/odc-sap/`):
+
+```bash
+cd /opt/odc-sap/
+source venv/bin/activate
+# Si actualizaste código: git pull origin main && pip install -r requirements.txt
+sudo systemctl restart odc-sap-api
+# Si usas Celery: sudo systemctl restart <servicio-celery>
+```
+
+- [ ] Reiniciar API (`sudo systemctl restart odc-sap-api`)
 - [ ] Reiniciar Celery (si fue detenido)
 - [ ] Reiniciar servicios dependientes
 - [ ] Quitar modo mantenimiento (si aplica)
+
+**Documentación completa:** [docs/DEPLOY_PRODUCCION.md](../docs/DEPLOY_PRODUCCION.md) — actualizar backend y comandos en producción.
 
 **Hora de reinicio:** ______________
 

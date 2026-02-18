@@ -101,6 +101,7 @@ La documentación completa está organizada en el directorio `docs/`.
 ### 📖 Guías de Inicio
 - **[Índice de Documentación](docs/README.md)** ⭐ - Punto de entrada principal
 - **[Configuración](docs/CONFIGURACION.md)** - Setup completo de variables de entorno
+- **[Actualizar backend en producción (Linux)](docs/DEPLOY_PRODUCCION.md)** 🐧 - git pull, pip install, systemctl restart
 - **[Sistema de Migraciones](docs/DEPLOY_MIGRATIONS.md)** 🗄️ - Despliegue seguro de BD
 - **[Celery Quick Start](docs/CELERY_QUICKSTART.md)** 🚀 - Procesos automáticos en 5 pasos
 - **[Quick Start Homologaciones](docs/QUICKSTART_HOMOLOGACIONES.md)** 🚀 - SKU en 3 pasos

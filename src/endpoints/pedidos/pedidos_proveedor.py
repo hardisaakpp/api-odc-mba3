@@ -180,7 +180,7 @@ def register_proveedor_endpoints(app: FastAPI):
             # Determinar si hubo transición a CONFIRMADO en esta petición
             transicion_a_confirmado = estado_id_antes is not None and estado_id_antes != ESTADO_REDISTRIBUCION
             
-            # 📢 Notificación en tiempo real a MABEL TRADING
+            # 📢 Notificación: otros EL RAYO + MABEL (excl. autor)
             if resultado.get("status") == "success" and transicion_a_confirmado:
                 try:
                     from src.utils.notification_manager import notification_manager, NotificationType
@@ -190,8 +190,10 @@ def register_proveedor_endpoints(app: FastAPI):
                         _repo = _PedidoRepo(_conn)
                         _pedido = _repo.get_pedido_completo(pedido_id)
                         _num = (_pedido.get("cabecera") or {}).get("numero_pedido", "") if _pedido else ""
-                    await notification_manager.notify(
-                        target_permission="mabel.view",
+                    _username = user.get("username") or user.get("sub") or "unknown"
+                    await notification_manager.notify_by_actor(
+                        actor_permission="odcsap.view",
+                        actor_username=_username,
                         title="EL RAYO confirmó tu pedido",
                         message=f"El pedido {_num} ha sido confirmado por EL RAYO y está listo para redistribución.",
                         notification_type=NotificationType.SUCCESS,
