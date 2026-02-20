@@ -627,7 +627,11 @@ class PedidoService:
             "formato_detectado": None,
             "articulos_cargados": 0,
             "distribuciones_cargadas": 0,
-            "errores": []
+            "errores": [],
+            "correcciones_aplicadas": [
+                {"codigo_original": k, "codigo_corregido": v}
+                for k, v in (correcciones_codigos or {}).items()
+            ]
         }
         
         try:

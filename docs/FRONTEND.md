@@ -1036,6 +1036,9 @@ El endpoint `POST /api/plantillas/upload` devuelve:
   "articulos_cargados": 150,
   "distribuciones_cargadas": 450,
   "validation": { ... },
+  "correcciones_aplicadas": [
+    { "codigo_original": "R225.1012.BCO", "codigo_corregido": "R225.1012.BCO-SAP" }
+  ],
   "file_info": {
     "filename": "pedido.xlsx",
     "size_mb": 2.5
@@ -1046,6 +1049,8 @@ El endpoint `POST /api/plantillas/upload` devuelve:
   }
 }
 ```
+
+- **`correcciones_aplicadas`**: Lista de objetos `{ codigo_original, codigo_corregido }` cuando el usuario eligió una sugerencia de código y envió el formulario con "Aplicar correcciones y continuar". Usar esta lista para **resaltar la celda del código de producto corregido** (p. ej. con un color distintivo como fondo verde claro o borde) en la tabla/grilla del detalle del pedido: localizar la fila cuyo código de producto coincide con `codigo_corregido` (o la que antes mostraba `codigo_original`) y aplicar una clase CSS (ej. `celda-codigo-corregido`) a esa celda.
 
 **Checklist de Implementación:**
 

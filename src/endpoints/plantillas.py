@@ -178,6 +178,7 @@ def register_plantillas_endpoints(app: FastAPI):
                 "articulos_cargados": resultado.get("articulos_cargados", 0),
                 "distribuciones_cargadas": resultado.get("distribuciones_cargadas", 0),
                 "validation": resultado.get("validation"),
+                "correcciones_aplicadas": resultado.get("correcciones_aplicadas", []),
                 "file_info": {
                     "filename": file.filename,
                     "size_mb": round(file_size / (1024 * 1024), 2)
