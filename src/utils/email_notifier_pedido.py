@@ -19,6 +19,7 @@ from src.config import (
     EMAIL_FROM,
     EMAIL_FROM_NAME,
     EMAIL_MABEL_TRADING,
+    EMAIL_TO_OPERACIONES,
     ENABLE_EMAIL_NOTIFICATIONS
 )
 
@@ -296,4 +297,231 @@ Fecha y Hora: {fecha_ejecucion.strftime('%Y-%m-%d %H:%M:%S')}
         
     except Exception as e:
         logger.error(f"❌ Error al enviar email de confirmación de El Rayo: {e}", exc_info=True)
+        return False
+
+
+def send_despachar_y_facturar_notification(
+    pedido_id: str,
+    numero_pedido: str,
+    usuario_rayo: Optional[str] = None,
+    email_destino: Optional[str] = None,
+    fecha_ejecucion: Optional[datetime] = None
+) -> bool:
+    """
+    Envía correo a MABEL TRADING notificando que EL RAYO marcó el pedido como "Despachar y Facturar".
+
+    Se usa cuando un usuario con permiso odcsap.view (EL RAYO) hace clic en
+    "Despachar y Facturar" en el detalle del pedido.
+
+    DESTINATARIO: email_destino (si se proporciona) o EMAIL_MABEL_TRADING
+
+    Args:
+        pedido_id: UUID del pedido
+        numero_pedido: Número del pedido
+        usuario_rayo: Username o identificador del usuario EL RAYO que realizó la acción (opcional)
+        email_destino: Email del destinatario (opcional, usa EMAIL_MABEL_TRADING si no se proporciona)
+        fecha_ejecucion: Fecha y hora de la ejecución (por defecto ahora)
+
+    Returns:
+        True si el email se envió correctamente, False en caso contrario
+    """
+    if not ENABLE_EMAIL_NOTIFICATIONS:
+        logger.debug("⏭️ Notificaciones por email deshabilitadas")
+        return False
+
+    if not fecha_ejecucion:
+        fecha_ejecucion = ahora_naive()
+
+    try:
+        recipients: list[str]
+        if email_destino:
+            recipients = [email_destino.strip()]
+        else:
+            recipients = EMAIL_MABEL_TRADING if isinstance(EMAIL_MABEL_TRADING, list) else [EMAIL_MABEL_TRADING] if EMAIL_MABEL_TRADING else []
+            if not recipients:
+                logger.warning("⚠️ No hay email configurado para MABEL TRADING")
+                return False
+
+        if not recipients:
+            logger.warning("⚠️ No hay destinatarios configurados")
+            return False
+
+        base_url = os.getenv("FRONTEND_URL", "http://localhost:3000")
+        numero_pedido_encoded = numero_pedido.replace(" ", "%20")
+        url_pedido = f"{base_url}/mba3-consultas/pedidos/{pedido_id}"
+
+        from src.utils.email_template import (
+            build_email, info_section, success_badge_section,
+            button_section, paragraph, badge_html, create_email_message,
+        )
+
+        info_items = [
+            ("N&uacute;mero de Pedido", numero_pedido),
+            ("Pedido ID", pedido_id),
+        ]
+        if usuario_rayo:
+            info_items.append(("Usuario EL RAYO", usuario_rayo))
+        info_items.append(("Estado", badge_html("DESPACHAR Y FACTURAR", "#e3f2fd", "#1565c0")))
+
+        body_html = build_email(
+            title="Pedido marcado como Despachar y Facturar",
+            subtitle=f"Pedido: {numero_pedido}",
+            sections=[
+                success_badge_section("EL RAYO ha marcado el pedido como Despachar y Facturar"),
+                paragraph("El pedido est&aacute; listo para despacho y facturaci&oacute;n. MABEL TRADING puede proceder con los pasos finales del flujo."),
+                info_section("Informaci&oacute;n del Pedido", info_items, accent="blue"),
+                button_section("Ver Pedido", url_pedido, accent="blue"),
+            ],
+            accent="blue",
+            timestamp=fecha_ejecucion,
+        )
+
+        body_text = f"""Pedido marcado como Despachar y Facturar - {numero_pedido}
+{'=' * 40}
+
+EL RAYO ha marcado el pedido como Despachar y Facturar.
+
+Informacion del Pedido:
+- Numero de Pedido: {numero_pedido}
+- Pedido ID: {pedido_id}
+{f'- Usuario EL RAYO: {usuario_rayo}' if usuario_rayo else ''}
+- Estado: DESPACHAR Y FACTURAR
+
+Ver Pedido: {url_pedido}
+
+Fecha y Hora: {fecha_ejecucion.strftime('%Y-%m-%d %H:%M:%S')}
+"""
+
+        msg = create_email_message(
+            subject=f"Pedido Despachar y Facturar - {numero_pedido}",
+            recipients=recipients,
+            body_html=body_html,
+            body_text=body_text,
+        )
+
+        with smtplib.SMTP(EMAIL_SMTP_SERVER, EMAIL_SMTP_PORT) as server:
+            if EMAIL_SMTP_PORT == 587:
+                server.starttls()
+            if EMAIL_SMTP_PASSWORD:
+                server.login(EMAIL_SMTP_USER, EMAIL_SMTP_PASSWORD)
+            server.send_message(msg, to_addrs=recipients)
+
+        logger.info(f"✅ Email Despachar y Facturar enviado a {', '.join(recipients)} (Pedido: {numero_pedido})")
+        return True
+
+    except Exception as e:
+        logger.error(f"❌ Error al enviar email Despachar y Facturar: {e}", exc_info=True)
+        return False
+
+
+def send_finalizar_pedido_notification(
+    pedido_id: str,
+    numero_pedido: str,
+    usuario_mabel: Optional[str] = None,
+    email_destino: Optional[str] = None,
+    fecha_ejecucion: Optional[datetime] = None
+) -> bool:
+    """
+    Envía correo a EL RAYO (Operaciones) notificando que MABEL TRADING finalizó el pedido.
+
+    Se usa cuando un usuario con permiso mabel.view (MABEL TRADING) hace clic en
+    "Finalizar Pedido" en la pantalla cargar-plantilla (ej. /cargar-plantilla/PREG-02.04.2026).
+
+    DESTINATARIO: email_destino (si se proporciona) o EMAIL_TO_OPERACIONES (EL RAYO).
+
+    Args:
+        pedido_id: UUID del pedido
+        numero_pedido: Número del pedido
+        usuario_mabel: Username o identificador del usuario MABEL TRADING que realizó la acción (opcional)
+        email_destino: Email del destinatario (opcional, usa EMAIL_TO_OPERACIONES si no se proporciona)
+        fecha_ejecucion: Fecha y hora de la ejecución (por defecto ahora)
+
+    Returns:
+        True si el email se envió correctamente, False en caso contrario
+    """
+    if not ENABLE_EMAIL_NOTIFICATIONS:
+        logger.debug("⏭️ Notificaciones por email deshabilitadas")
+        return False
+
+    if not fecha_ejecucion:
+        fecha_ejecucion = ahora_naive()
+
+    try:
+        recipients: list[str]
+        if email_destino:
+            recipients = [email_destino.strip()]
+        else:
+            recipients = EMAIL_TO_OPERACIONES if isinstance(EMAIL_TO_OPERACIONES, list) else [EMAIL_TO_OPERACIONES] if EMAIL_TO_OPERACIONES else []
+            if not recipients:
+                logger.warning("⚠️ No hay email configurado para EL RAYO (EMAIL_TO_OPERACIONES)")
+                return False
+
+        if not recipients:
+            logger.warning("⚠️ No hay destinatarios configurados")
+            return False
+
+        base_url = os.getenv("FRONTEND_URL", "http://localhost:3000")
+        url_pedido = f"{base_url}/mba3-consultas/pedidos/{pedido_id}"
+
+        from src.utils.email_template import (
+            build_email, info_section, success_badge_section,
+            button_section, paragraph, badge_html, create_email_message,
+        )
+
+        info_items = [
+            ("N&uacute;mero de Pedido", numero_pedido),
+            ("Pedido ID", pedido_id),
+        ]
+        if usuario_mabel:
+            info_items.append(("Usuario MABEL TRADING", usuario_mabel))
+        info_items.append(("Estado", badge_html("FINALIZADO", "#e8f5e9", "#2e7d32")))
+
+        body_html = build_email(
+            title="Pedido finalizado",
+            subtitle=f"Pedido: {numero_pedido}",
+            sections=[
+                success_badge_section("MABEL TRADING ha finalizado el pedido"),
+                paragraph("El pedido ha sido marcado como <strong>Finalizado</strong>. Es el estado final del flujo."),
+                info_section("Informaci&oacute;n del Pedido", info_items, accent="green"),
+                button_section("Ver Pedido", url_pedido, accent="green"),
+            ],
+            accent="green",
+            timestamp=fecha_ejecucion,
+        )
+
+        body_text = f"""Pedido finalizado - {numero_pedido}
+{'=' * 40}
+
+MABEL TRADING ha finalizado el pedido.
+
+Informacion del Pedido:
+- Numero de Pedido: {numero_pedido}
+- Pedido ID: {pedido_id}
+{f'- Usuario MABEL TRADING: {usuario_mabel}' if usuario_mabel else ''}
+- Estado: FINALIZADO
+
+Ver Pedido: {url_pedido}
+
+Fecha y Hora: {fecha_ejecucion.strftime('%Y-%m-%d %H:%M:%S')}
+"""
+
+        msg = create_email_message(
+            subject=f"Pedido finalizado - {numero_pedido}",
+            recipients=recipients,
+            body_html=body_html,
+            body_text=body_text,
+        )
+
+        with smtplib.SMTP(EMAIL_SMTP_SERVER, EMAIL_SMTP_PORT) as server:
+            if EMAIL_SMTP_PORT == 587:
+                server.starttls()
+            if EMAIL_SMTP_PASSWORD:
+                server.login(EMAIL_SMTP_USER, EMAIL_SMTP_PASSWORD)
+            server.send_message(msg, to_addrs=recipients)
+
+        logger.info(f"✅ Email Pedido finalizado enviado a EL RAYO {', '.join(recipients)} (Pedido: {numero_pedido})")
+        return True
+
+    except Exception as e:
+        logger.error(f"❌ Error al enviar email Pedido finalizado a EL RAYO: {e}", exc_info=True)
         return False

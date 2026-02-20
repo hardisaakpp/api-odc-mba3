@@ -808,7 +808,20 @@ def register_crud_endpoints(app: FastAPI):
                     )
                 except Exception as notif_err:
                     logger.warning(f"⚠️ Error al enviar notificación en tiempo real: {notif_err}")
-                
+
+                # 📧 Email a MABEL TRADING cuando EL RAYO marca "Despachar y Facturar"
+                if "odcsap.view" in (user.get("permissions") or []):
+                    try:
+                        from src.utils.email_notifier_pedido import send_despachar_y_facturar_notification
+                        _username_email = user.get("username") or user.get("sub") or "EL RAYO"
+                        send_despachar_y_facturar_notification(
+                            pedido_id=pedido_id,
+                            numero_pedido=numero_pedido,
+                            usuario_rayo=_username_email,
+                        )
+                    except Exception as email_err:
+                        logger.warning(f"⚠️ Error al enviar email Despachar y Facturar a MABEL TRADING: {email_err}")
+
                 return JSONResponse(status_code=status.HTTP_200_OK, content=pedido)
         except HTTPException:
             raise
@@ -892,7 +905,20 @@ def register_crud_endpoints(app: FastAPI):
                     )
                 except Exception as notif_err:
                     logger.warning(f"⚠️ Error al enviar notificación en tiempo real: {notif_err}")
-                
+
+                # 📧 Email a EL RAYO cuando MABEL TRADING hace "Finalizar Pedido" (ej. en cargar-plantilla)
+                if "mabel.view" in (user.get("permissions") or []):
+                    try:
+                        from src.utils.email_notifier_pedido import send_finalizar_pedido_notification
+                        _username_email = user.get("username") or user.get("sub") or "MABEL TRADING"
+                        send_finalizar_pedido_notification(
+                            pedido_id=pedido_id,
+                            numero_pedido=numero_pedido,
+                            usuario_mabel=_username_email,
+                        )
+                    except Exception as email_err:
+                        logger.warning(f"⚠️ Error al enviar email Pedido finalizado a EL RAYO: {email_err}")
+
                 return JSONResponse(status_code=status.HTTP_200_OK, content=pedido)
         except HTTPException:
             raise
