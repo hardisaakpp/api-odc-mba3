@@ -302,7 +302,9 @@ EMAIL_FROM = os.getenv("EMAIL_FROM", "integrationsap@mabeltrading.com.ec")
 # Nombre del remitente para los correos
 EMAIL_FROM_NAME = os.getenv("EMAIL_FROM_NAME", "INTEGRACIÃ“N SAP")
 
-# EMAIL_TO - SEGMENTADO POR TIPO DE USUARIO
+# EMAIL_TO - SEGMENTADO POR TIPO (fallback desde .env)
+# La app lee primero de la tabla notificacion_destinatarios; si no hay datos, usa estas listas.
+# Tipos: OPERACIONES, MABEL_TRADING, HOMOLOGACIONES, TECNICOS (ver get_destinatarios_por_tipo).
 # Usuario Principal: Operaciones/Despachos (recibe notificaciones de NUEVOS DESPACHOS)
 _email_operaciones = os.getenv("EMAIL_TO_OPERACIONES", "cortiz@mabeltrading.com.ec,pchafuel@mabeltrading.com.ec")
 EMAIL_TO_OPERACIONES = [email.strip() for email in _email_operaciones.split(",") if email.strip()]

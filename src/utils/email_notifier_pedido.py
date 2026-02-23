@@ -18,10 +18,9 @@ from src.config import (
     EMAIL_SMTP_PASSWORD,
     EMAIL_FROM,
     EMAIL_FROM_NAME,
-    EMAIL_MABEL_TRADING,
-    EMAIL_TO_OPERACIONES,
     ENABLE_EMAIL_NOTIFICATIONS
 )
+from src.utils.notificacion_destinatarios import get_destinatarios_por_tipo
 
 logger = logging.getLogger(__name__)
 
@@ -65,7 +64,7 @@ def send_pedido_confirmacion_notification(
         if email_destino:
             recipients = [email_destino.strip()]
         else:
-            recipients = EMAIL_MABEL_TRADING if isinstance(EMAIL_MABEL_TRADING, list) else [EMAIL_MABEL_TRADING] if EMAIL_MABEL_TRADING else []
+            recipients = get_destinatarios_por_tipo("MABEL_TRADING")
             if not recipients:
                 logger.warning("⚠️ No hay email configurado para MABEL TRADING")
                 return False
@@ -214,7 +213,7 @@ def send_rayo_confirmacion_notification(
         if email_destino:
             recipients = [email_destino.strip()]
         else:
-            recipients = EMAIL_MABEL_TRADING if isinstance(EMAIL_MABEL_TRADING, list) else [EMAIL_MABEL_TRADING] if EMAIL_MABEL_TRADING else []
+            recipients = get_destinatarios_por_tipo("MABEL_TRADING")
             if not recipients:
                 logger.warning("⚠️ No hay email configurado para MABEL TRADING")
                 return False
@@ -337,7 +336,7 @@ def send_despachar_y_facturar_notification(
         if email_destino:
             recipients = [email_destino.strip()]
         else:
-            recipients = EMAIL_MABEL_TRADING if isinstance(EMAIL_MABEL_TRADING, list) else [EMAIL_MABEL_TRADING] if EMAIL_MABEL_TRADING else []
+            recipients = get_destinatarios_por_tipo("MABEL_TRADING")
             if not recipients:
                 logger.warning("⚠️ No hay email configurado para MABEL TRADING")
                 return False
@@ -451,9 +450,9 @@ def send_finalizar_pedido_notification(
         if email_destino:
             recipients = [email_destino.strip()]
         else:
-            recipients = EMAIL_TO_OPERACIONES if isinstance(EMAIL_TO_OPERACIONES, list) else [EMAIL_TO_OPERACIONES] if EMAIL_TO_OPERACIONES else []
+            recipients = get_destinatarios_por_tipo("OPERACIONES")
             if not recipients:
-                logger.warning("⚠️ No hay email configurado para EL RAYO (EMAIL_TO_OPERACIONES)")
+                logger.warning("⚠️ No hay email configurado para EL RAYO (OPERACIONES)")
                 return False
 
         if not recipients:

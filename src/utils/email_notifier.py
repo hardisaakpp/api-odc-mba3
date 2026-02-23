@@ -23,15 +23,12 @@ from src.config import (
     EMAIL_FROM,
     EMAIL_FROM_NAME,
     EMAIL_TO,
-    EMAIL_TO_OPERACIONES,
-    EMAIL_TO_HOMOLOGACIONES,
-    EMAIL_TO_TECNICOS,
-    EMAIL_MABEL_TRADING,
     ENABLE_EMAIL_NOTIFICATIONS,
     EMAIL_WARNING_TIME_LIMIT_PERCENT,
     EMAIL_WARNING_HIGH_VOLUME_THRESHOLD,
     EMAIL_WARNING_FAILURES_THRESHOLD
 )
+from src.utils.notificacion_destinatarios import get_destinatarios_por_tipo
 
 logger = logging.getLogger(__name__)
 
@@ -69,8 +66,8 @@ def send_migration_notification(
         fecha_ejecucion = ahora_naive()
     
     try:
-        # USAR EMAIL_TO_OPERACIONES en lugar de EMAIL_TO
-        recipients: list[str] = EMAIL_TO_OPERACIONES if isinstance(EMAIL_TO_OPERACIONES, list) else [EMAIL_TO_OPERACIONES] if EMAIL_TO_OPERACIONES else []
+        # Destinatarios: BD (notificacion_destinatarios) o fallback .env
+        recipients: list[str] = get_destinatarios_por_tipo("OPERACIONES")
         
         if not recipients:
             logger.warning("⚠️ No hay destinatarios de OPERACIONES configurados")
@@ -157,8 +154,8 @@ def send_error_notification(
         fecha_ejecucion = ahora_naive()
     
     try:
-        # USAR EMAIL_TO_TECNICOS en lugar de EMAIL_TO
-        recipients: list[str] = EMAIL_TO_TECNICOS if isinstance(EMAIL_TO_TECNICOS, list) else [EMAIL_TO_TECNICOS] if EMAIL_TO_TECNICOS else []
+        # Destinatarios: BD o fallback .env
+        recipients: list[str] = get_destinatarios_por_tipo("TECNICOS")
         
         if not recipients:
             logger.warning("⚠️ No hay destinatarios TÉCNICOS configurados")
@@ -295,8 +292,8 @@ def send_homologacion_notification(
             productos_a_notificar = productos_no_homologados
     
     try:
-        # USAR EMAIL_TO_HOMOLOGACIONES en lugar de EMAIL_TO
-        recipients: list[str] = EMAIL_TO_HOMOLOGACIONES if isinstance(EMAIL_TO_HOMOLOGACIONES, list) else [EMAIL_TO_HOMOLOGACIONES] if EMAIL_TO_HOMOLOGACIONES else []
+        # Destinatarios: BD o fallback .env
+        recipients: list[str] = get_destinatarios_por_tipo("HOMOLOGACIONES")
         
         if not recipients:
             logger.warning("⚠️ No hay destinatarios de HOMOLOGACIONES configurados")
@@ -640,7 +637,7 @@ def send_capacity_warning_notification(
         fecha_ejecucion = ahora_naive()
     
     try:
-        recipients: list[str] = EMAIL_TO_TECNICOS if isinstance(EMAIL_TO_TECNICOS, list) else [EMAIL_TO_TECNICOS] if EMAIL_TO_TECNICOS else []
+        recipients: list[str] = get_destinatarios_por_tipo("TECNICOS")
         
         if not recipients:
             logger.warning("⚠️ No hay destinatarios TÉCNICOS configurados")
@@ -767,7 +764,7 @@ def send_oc_to_supplier(
             recipients = [proveedor_email.strip()]
         else:
             # Fallback: enviar a operaciones para que lo reenvíen manualmente
-            recipients = EMAIL_TO_OPERACIONES if isinstance(EMAIL_TO_OPERACIONES, list) else [EMAIL_TO_OPERACIONES] if EMAIL_TO_OPERACIONES else []
+            recipients = get_destinatarios_por_tipo("OPERACIONES")
             logger.warning(f"⚠️ No se proporcionó email del proveedor, enviando a operaciones: {recipients}")
         
         if not recipients:
@@ -958,8 +955,8 @@ def send_oc_ready_for_dispatch_notification(
         fecha_ejecucion = ahora_naive()
     
     try:
-        # Usar EMAIL_TO_OPERACIONES (Operaciones/Despachos) para notificar a El Rayo
-        recipients: list[str] = EMAIL_TO_OPERACIONES if isinstance(EMAIL_TO_OPERACIONES, list) else [EMAIL_TO_OPERACIONES] if EMAIL_TO_OPERACIONES else []
+        # Destinatarios: BD o fallback .env (Operaciones/Despachos - El Rayo)
+        recipients: list[str] = get_destinatarios_por_tipo("OPERACIONES")
         
         if not recipients:
             logger.warning("⚠️ No hay destinatarios configurados para notificación de despacho")
@@ -1307,8 +1304,8 @@ def send_plantilla_upload_notification(
         fecha_ejecucion = ahora_naive()
     
     try:
-        # Usar EMAIL_TO_OPERACIONES (Operaciones/Despachos) para notificar a El Rayo
-        recipients: list[str] = EMAIL_TO_OPERACIONES if isinstance(EMAIL_TO_OPERACIONES, list) else [EMAIL_TO_OPERACIONES] if EMAIL_TO_OPERACIONES else []
+        # Destinatarios: BD o fallback .env (Operaciones/Despachos - El Rayo)
+        recipients: list[str] = get_destinatarios_por_tipo("OPERACIONES")
         
         if not recipients:
             logger.warning("⚠️ No hay destinatarios configurados para notificación de plantilla")
@@ -1406,7 +1403,8 @@ def send_pedido_cancelado_notification(
         fecha_ejecucion = ahora_naive()
 
     try:
-        recipients: list[str] = EMAIL_TO_OPERACIONES if isinstance(EMAIL_TO_OPERACIONES, list) else [EMAIL_TO_OPERACIONES] if EMAIL_TO_OPERACIONES else []
+        # Destinatarios: BD o fallback .env
+        recipients: list[str] = get_destinatarios_por_tipo("OPERACIONES")
 
         if not recipients:
             logger.warning("⚠️ No hay destinatarios configurados para notificación de pedido descartado")
@@ -1494,7 +1492,8 @@ def send_pedido_descartado_notification(
         fecha_ejecucion = ahora_naive()
 
     try:
-        recipients: list[str] = EMAIL_TO_OPERACIONES if isinstance(EMAIL_TO_OPERACIONES, list) else [EMAIL_TO_OPERACIONES] if EMAIL_TO_OPERACIONES else []
+        # Destinatarios: BD o fallback .env
+        recipients: list[str] = get_destinatarios_por_tipo("OPERACIONES")
 
         if not recipients:
             logger.warning("⚠️ No hay destinatarios configurados para notificación de pedido descartado")
@@ -1585,8 +1584,8 @@ def send_mabel_redistribucion_confirmacion_notification(
         fecha_ejecucion = ahora_naive()
     
     try:
-        # Usar EMAIL_TO_OPERACIONES (Operaciones/Despachos) para notificar a El Rayo
-        recipients: list[str] = EMAIL_TO_OPERACIONES if isinstance(EMAIL_TO_OPERACIONES, list) else [EMAIL_TO_OPERACIONES] if EMAIL_TO_OPERACIONES else []
+        # Destinatarios: BD o fallback .env (Operaciones/Despachos - El Rayo)
+        recipients: list[str] = get_destinatarios_por_tipo("OPERACIONES")
         
         if not recipients:
             logger.warning("⚠️ No hay destinatarios configurados para notificación de redistribución")
@@ -1704,8 +1703,8 @@ def send_pedido_eliminado_mabel_notification(
         fecha_ejecucion = ahora_naive()
 
     try:
-        # Usar EMAIL_MABEL_TRADING
-        recipients: list[str] = EMAIL_MABEL_TRADING if isinstance(EMAIL_MABEL_TRADING, list) else [EMAIL_MABEL_TRADING] if EMAIL_MABEL_TRADING else []
+        # Destinatarios: BD o fallback .env (MABEL TRADING)
+        recipients: list[str] = get_destinatarios_por_tipo("MABEL_TRADING")
 
         if not recipients:
             logger.warning("⚠️ No hay destinatarios de MABEL TRADING configurados")
