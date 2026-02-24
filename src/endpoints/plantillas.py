@@ -409,7 +409,14 @@ def register_plantillas_endpoints(app: FastAPI):
         if estado.get("user_id") and estado["user_id"] != user_id:
             raise HTTPException(status_code=403, detail="No tienes acceso a este proceso")
         if estado["status"] == "completed":
-            return estado.get("resultado", {})
+            resultado = estado.get("resultado") or {}
+            if not isinstance(resultado, dict):
+                resultado = {}
+            resultado.setdefault("correcciones_aplicadas", [])
+            correcciones = resultado.get("correcciones_aplicadas") or []
+            if correcciones:
+                logger.info(f"GET resultado {process_id}: enviando correcciones_aplicadas con {len(correcciones)} código(s) para resaltado")
+            return resultado
         if estado["status"] == "error":
             content = {
                 "status": "error",
@@ -479,7 +486,10 @@ def register_plantillas_endpoints(app: FastAPI):
                     if "data" in estado_actual:
                         payload["data"] = estado_actual["data"]
                     if estado_actual["status"] == "completed":
-                        payload["resultado"] = estado_actual.get("resultado")
+                        res = estado_actual.get("resultado") or {}
+                        if isinstance(res, dict):
+                            res.setdefault("correcciones_aplicadas", [])
+                        payload["resultado"] = res
                     if estado_actual["status"] == "error":
                         payload["error"] = estado_actual.get("error")
                     yield f"data: {json.dumps(payload)}\n\n"

@@ -1052,6 +1052,36 @@ El endpoint `POST /api/plantillas/upload` devuelve:
 
 - **`correcciones_aplicadas`**: Lista de objetos `{ codigo_original, codigo_corregido }` cuando el usuario eligió una sugerencia de código y envió el formulario con "Aplicar correcciones y continuar". Usar esta lista para **resaltar la celda del código de producto corregido** (p. ej. con un color distintivo como fondo verde claro o borde) en la tabla/grilla del detalle del pedido: localizar la fila cuyo código de producto coincide con `codigo_corregido` (o la que antes mostraba `codigo_original`) y aplicar una clase CSS (ej. `celda-codigo-corregido`) a esa celda.
 
+**Forma del payload con upload asíncrono (Celery):** Si se usa **GET** `/api/plantillas/resultado/{process_id}` cuando `status === 'completed'`, el **cuerpo de la respuesta es directamente el resultado** (no hay clave `resultado` ni `result`). Por tanto `correcciones_aplicadas` está en el objeto raíz: `response.data.correcciones_aplicadas`. Si se usa **SSE** (`/api/plantillas/stream/{process_id}`), el evento tiene el resultado anidado: `event.resultado.correcciones_aplicadas`. Para el resaltado, usar `codigo_corregido` (con trim) en el Set y comparar con `detalle.codigo_interno` (también con trim).
+
+#### Por qué se pierde el resaltado con upload asíncrono y cómo recuperarlo
+
+Con **upload síncrono** (`POST /api/plantillas/upload`), la respuesta llega en la misma petición y el mismo componente puede llamar a `onUploadSuccess(response)` y rellenar el Set de códigos a resaltar; la tabla se pinta en la misma vista y el resaltado se ve.
+
+Con **upload asíncrono** (Celery), el flujo es distinto:
+
+1. Se sube el archivo → el backend devuelve `process_id` y la UI hace polling a **GET** `/api/plantillas/resultado/{process_id}` o escucha **SSE** `/api/plantillas/stream/{process_id}`.
+2. Cuando `status === 'completed'`, la respuesta (GET) o el evento (SSE) traen el **mismo** objeto que en sync: `status`, `numero_pedido`, `correcciones_aplicadas`, etc.
+3. Normalmente después se hace **redirect** a `/mba3-consultas/cargar-plantilla/{numero_pedido}` (o a pedidos).
+4. La **nueva** página carga el pedido con **GET** `/api/plantillas/ultimo` o **GET** `/api/pedidos/{id}`. Esos endpoints devuelven el pedido (cabecera, detalle con `codigo_interno` ya corregido), pero **no** devuelven `correcciones_aplicadas`. Esa lista solo existe en la respuesta del upload (GET resultado o SSE).
+5. Por tanto, en la vista de cargar-plantilla/pedido el Set de “códigos a resaltar” está vacío y el resaltado no se aplica.
+
+**Qué hacer en el frontend para que el resaltado vuelva a verse (flujo async):**
+
+- En el mismo sitio donde se recibe el resultado completado (por polling o SSE), **antes de hacer el redirect**:
+  1. Extraer `correcciones_aplicadas` del payload (en GET es el cuerpo de la respuesta; en SSE es `event.resultado.correcciones_aplicadas`).
+  2. Guardar esa lista en un **estado que sobreviva al redirect**:
+     - **Opción A (recomendada):** Store global (Pinia/Vuex), por ejemplo `correccionesParaResaltadoPorPedido[numero_pedido] = correcciones_aplicadas`, o un store dedicado “último upload con correcciones” con `numero_pedido` y la lista.
+     - **Opción B:** `sessionStorage` con clave por pedido, p. ej. `sessionStorage.setItem('resaltado_codigos_' + numero_pedido, JSON.stringify(correcciones_aplicadas))`.
+  3. Llamar a la misma lógica que en sync rellena el Set de códigos a resaltar (p. ej. pasar el resultado a `onUploadSuccess` o a una función que actualice el store), de modo que el estado quede escrito **antes** del `router.push`.
+- En la **vista de cargar-plantilla** (o detalle del pedido) que muestra la tabla:
+  - Al montar o al recibir el pedido, leer del store (o de `sessionStorage`) las `correcciones_aplicadas` para ese `numero_pedido`.
+  - Construir el Set de códigos a resaltar con los `codigo_corregido` (y `codigoCorregido`) haciendo **trim**.
+  - En la celda del código interno usar la misma función que en sync, p. ej. `isCodigoCorregidoHighlight(detalle.codigo_interno)` comparando con ese Set (con trim).
+- Opcional: limpiar el store o `sessionStorage` al salir de la ruta o tras un tiempo, para no resaltar en visitas posteriores al mismo pedido si no aplica.
+
+El backend ya devuelve en GET resultado y en SSE el mismo formato que el upload síncrono, incluyendo siempre `correcciones_aplicadas` (array, vacío si no hubo correcciones). La diferencia es solo que ese dato llega en la respuesta del proceso async y no en la respuesta de “cargar pedido”; por eso el frontend debe **persistir** `correcciones_aplicadas` antes del redirect y **recuperarla** en la vista donde se pinta la tabla.
+
 **Checklist de Implementación:**
 
 - [ ] NO redirigir a `/mba3-consultas/pedidos/{numero_pedido}` después de cargar
