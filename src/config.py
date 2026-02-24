@@ -333,6 +333,10 @@ EMAIL_PROVEEDOR_PRUEBAS = os.getenv("EMAIL_PROVEEDOR_PRUEBAS", "cortiz@mabeltrad
 _email_mabel_trading = os.getenv("EMAIL_MABEL_TRADING", "cortiz@mabeltrading.com.ec,pchafuel@mabeltrading.com.ec")
 EMAIL_MABEL_TRADING = [email.strip() for email in _email_mabel_trading.split(",") if email.strip()]
 
+# Override en desarrollo: todos los correos van a este destinatario (ignora BD).
+# Solo aplica cuando ENVIRONMENT=development. En producción no se usa.
+_email_dev_override_str = os.getenv("EMAIL_DEV_OVERRIDE", "")
+EMAIL_DEV_OVERRIDE = [e.strip() for e in _email_dev_override_str.split(",") if e.strip()]
 
 # ConfiguraciÃ³n de advertencias tÃ©cnicas
 # Porcentaje del time limit para enviar advertencia

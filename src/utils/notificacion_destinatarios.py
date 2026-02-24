@@ -2,20 +2,23 @@
 Destinatarios de notificaciones por email: BD con fallback a .env.
 
 Estrategia:
-  1. Intentar leer desde tabla notificacion_destinatarios (por tipo).
-  2. Si no hay filas o hay error de BD → usar listas de config (.env).
+  - Si ENVIRONMENT=development y EMAIL_DEV_OVERRIDE está configurado → devolver solo ese(s) correo(s).
+  - Si no: intentar leer desde tabla notificacion_destinatarios (por tipo).
+  - Si no hay filas o hay error de BD → usar listas de config (.env).
 
-Así se puede migrar de .env a BD sin redeploy y sin romper producción.
+Así en desarrollo solo el dev recibe todos los correos; en producción se usa la BD.
 """
 
 import logging
 from typing import List
 
 from src.config import (
+    EMAIL_DEV_OVERRIDE,
     EMAIL_MABEL_TRADING,
     EMAIL_TO_HOMOLOGACIONES,
     EMAIL_TO_OPERACIONES,
     EMAIL_TO_TECNICOS,
+    ENVIRONMENT,
 )
 from src.database.connection import get_db_connection_context
 from src.database.repositories.notificacion_destinatario_repository import (
@@ -37,9 +40,9 @@ def get_destinatarios_por_tipo(tipo_notificacion: str) -> List[str]:
     """
     Devuelve la lista de emails destinatarios para un tipo de notificación.
 
-    Primero consulta la tabla notificacion_destinatarios. Si hay al menos un
-    destinatario activo, devuelve esa lista. Si la tabla no existe, está vacía
-    o hay error, devuelve la lista configurada en .env (EMAIL_TO_OPERACIONES, etc.).
+    En desarrollo (ENVIRONMENT=development), si EMAIL_DEV_OVERRIDE está configurado,
+    se devuelve solo esa lista para todos los tipos. En producción se consulta la
+    tabla notificacion_destinatarios; si no hay datos, se usa el fallback .env por tipo.
 
     Args:
         tipo_notificacion: OPERACIONES | MABEL_TRADING | HOMOLOGACIONES | TECNICOS.
@@ -50,6 +53,11 @@ def get_destinatarios_por_tipo(tipo_notificacion: str) -> List[str]:
     tipo = (tipo_notificacion or "").strip().upper()
     if not tipo:
         return []
+
+    # Desarrollo: todos los correos al destinatario override (ignora BD)
+    if ENVIRONMENT == "development" and EMAIL_DEV_OVERRIDE:
+        logger.debug("Destinatarios (%s): usando EMAIL_DEV_OVERRIDE en desarrollo", tipo)
+        return list(EMAIL_DEV_OVERRIDE)
 
     fallback_list = _FALLBACK.get(tipo)
     if fallback_list is None:
