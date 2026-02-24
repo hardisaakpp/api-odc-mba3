@@ -6,21 +6,25 @@ NOTA DE RENDIMIENTO:
     bloquear el event loop de asyncio. Esto permite que SSE heartbeats,
     polling y otras peticiones se procesen normalmente mientras este
     endpoint trabaja (~40 segundos de operaciones síncronas).
+
+    Para ejecución en segundo plano (Celery), usar POST .../proceso-completo-sap-async
+    y consultar GET .../proceso-sap/resultado/{process_id} o .../proceso-sap/stream/{process_id}.
 """
 
 import asyncio
+import json
 import logging
 from typing import Dict, List
 
 from fastapi import FastAPI, Depends, HTTPException, Path, Body, status, Request
-from datetime import datetime
+from fastapi.responses import JSONResponse, StreamingResponse
 
 from src.utils.timezone import ahora_naive
-
 from src.database.connection import get_db_connection_context
 from src.database.pedido_estados import ESTADO_PEDIDO_CONFIRMADO
 from src.database.repositories.distribucion_confirmada_repository import DistribucionConfirmadaRepository
 from src.database.repositories.pedido_repository import PedidoRepository
+from src.database.services.proceso_estado_service import ProcesoEstadoService
 from src.database.services.redistribucion_validator import RedistribucionValidator
 from src.security.jwt_auth import verify_jwt_token, require_permission
 from src.utils.audit_context import AuditContext, get_audit_context, ORIGEN_WEB
@@ -322,7 +326,7 @@ def _ejecutar_proceso_completo_sync(
 
 
 def register_proceso_completo_endpoints(app: FastAPI):
-    """Endpoint de proceso completo SAP."""
+    """Endpoint de proceso completo SAP (síncrono en thread y asíncrono con Celery)."""
 
     @app.post("/api/pedidos/{numero_pedido}/proceso-completo-sap",
              tags=["Pedidos - Redistribución"])
@@ -337,6 +341,7 @@ def register_proceso_completo_endpoints(app: FastAPI):
 
         La lógica pesada (BD, SAP, email) se ejecuta en un thread separado
         para no bloquear el event loop de asyncio (~40s de operaciones síncronas).
+        Para ejecución en segundo plano con Celery, usar POST .../proceso-completo-sap-async.
         """
         user_id = get_user_id(user)
 
@@ -406,3 +411,176 @@ def register_proceso_completo_endpoints(app: FastAPI):
                     "error_detalle": str(e)
                 }
             )
+
+    # -------------------------------------------------------------------------
+    # Proceso completo SAP en segundo plano (Celery) - mismo patrón que plantillas
+    # -------------------------------------------------------------------------
+    @app.post("/api/pedidos/{numero_pedido}/proceso-completo-sap-async",
+              tags=["Pedidos - Redistribución"])
+    async def proceso_completo_sap_async(
+        numero_pedido: str = Path(..., description="Número del pedido"),
+        request_body: RedistribucionConfirmarRequest = Body(..., description="Datos de redistribución"),
+        user: Dict = Depends(verify_jwt_token),
+        _: None = Depends(require_permission('mabel.view'))
+    ):
+        """
+        Encola el proceso completo SAP (Redistribución + ODC + Envío a SAP) en Celery.
+
+        Responde de inmediato con 202 y process_id. El resultado se consulta con
+        GET /api/pedidos/proceso-sap/resultado/{process_id} o
+        GET /api/pedidos/proceso-sap/stream/{process_id}.
+        """
+        user_id = get_user_id(user)
+        estado_service = ProcesoEstadoService()
+        process_id = estado_service.crear_proceso_sap(user_id=user_id, numero_pedido=numero_pedido)
+
+        try:
+            # Serializar ajustes_detalle a list of dicts para que Celery pueda enviar JSON al broker
+            ajustes_serialized = [
+                a.model_dump() if hasattr(a, "model_dump") else a.dict()
+                for a in request_body.ajustes_detalle
+            ]
+            from src.tasks.celery_proceso_sap import ejecutar_proceso_completo_sap
+            ejecutar_proceso_completo_sap.delay(
+                process_id=process_id,
+                numero_pedido=numero_pedido,
+                user_id=user_id,
+                ajustes_detalle=ajustes_serialized,
+            )
+        except Exception as e:
+            logger.error(f"Error al encolar proceso SAP: {e}", exc_info=True)
+            estado_service.marcar_error(
+                process_id,
+                str(e),
+                error_data={"error": "queue_error", "error_detalle": str(e)},
+            )
+            raise HTTPException(
+                status_code=500,
+                detail={"error": "queue_error", "message": "No se pudo encolar el proceso. Intente de nuevo."}
+            )
+
+        logger.info(f"📤 Proceso SAP encolado: {process_id} (pedido: {numero_pedido}, usuario: {user_id})")
+        return JSONResponse(
+            status_code=202,
+            content={
+                "status": "accepted",
+                "process_id": process_id,
+                "message": "Proceso en segundo plano. Consulta el resultado con resultado_url o stream_url.",
+                "resultado_url": f"/api/pedidos/proceso-sap/resultado/{process_id}",
+                "stream_url": f"/api/pedidos/proceso-sap/stream/{process_id}",
+            },
+        )
+
+    @app.get("/api/pedidos/proceso-sap/resultado/{process_id}", tags=["Pedidos - Redistribución"])
+    async def obtener_resultado_proceso_sap(
+        process_id: str,
+        user: Dict = Depends(verify_jwt_token),
+        _: None = Depends(require_permission('mabel.view'))
+    ):
+        """
+        Obtiene el resultado del proceso completo SAP ejecutado en segundo plano.
+        Usar el process_id devuelto por POST .../proceso-completo-sap-async.
+        """
+        if not process_id.startswith("proceso-sap-"):
+            raise HTTPException(status_code=400, detail="process_id debe ser de tipo proceso-sap (proceso-sap-xxx)")
+        estado_service = ProcesoEstadoService()
+        estado = estado_service.obtener_estado(process_id)
+        if not estado:
+            raise HTTPException(status_code=404, detail="Proceso no encontrado")
+        user_id = get_user_id(user)
+        if estado.get("user_id") and estado["user_id"] != user_id:
+            raise HTTPException(status_code=403, detail="No tienes acceso a este proceso")
+
+        if estado["status"] == "completed":
+            resultado = estado.get("resultado") or {}
+            if not isinstance(resultado, dict):
+                resultado = {}
+            # Incluir process_status y progress para que el frontend cierre el modal y muestre 100%
+            resultado["process_status"] = "completed"
+            resultado["progress"] = 100
+            return resultado
+        if estado["status"] == "error":
+            content = {
+                "status": "error",
+                "message": estado.get("message", estado.get("error", "Error desconocido")),
+                "error": estado.get("error"),
+            }
+            error_data = estado.get("error_data")
+            if error_data:
+                content["paso_fallido"] = error_data.get("paso_fallido")
+                content["error_detalle"] = error_data.get("error_detalle")
+            return JSONResponse(status_code=400, content=content)
+        return {
+            "status": estado["status"],
+            "step": estado.get("step"),
+            "progress": estado.get("progress", 0),
+            "message": estado.get("message"),
+            "process_id": process_id,
+            "numero_pedido": estado.get("numero_pedido"),
+        }
+
+    @app.get("/api/pedidos/proceso-sap/stream/{process_id}", tags=["Pedidos - Redistribución"])
+    async def stream_progreso_proceso_sap(
+        process_id: str,
+        request: Request,
+        user: Dict = Depends(verify_jwt_token),
+        _: None = Depends(require_permission('mabel.view'))
+    ):
+        """
+        Stream SSE del progreso del proceso completo SAP.
+        Mismo formato que plantillas/stream y cruce-productos/stream.
+        """
+        if not process_id.startswith("proceso-sap-"):
+            raise HTTPException(status_code=400, detail="process_id debe ser de tipo proceso-sap (proceso-sap-xxx)")
+        estado_service = ProcesoEstadoService()
+        estado = estado_service.obtener_estado(process_id)
+        if not estado:
+            raise HTTPException(status_code=404, detail="Proceso no encontrado")
+        user_id = get_user_id(user)
+        if estado.get("user_id") and estado["user_id"] != user_id:
+            raise HTTPException(status_code=403, detail="No tienes acceso a este proceso")
+
+        async def event_stream():
+            ultimo_updated_at = None
+            ultima_version = None
+            while True:
+                if await request.is_disconnected():
+                    break
+                estado_actual = estado_service.obtener_estado(process_id)
+                if not estado_actual:
+                    yield f"data: {json.dumps({'error': 'Proceso no encontrado'})}\n\n"
+                    break
+                updated_at = estado_actual.get("updated_at")
+                version = estado_actual.get("version", 0)
+                if updated_at != ultimo_updated_at or version != ultima_version:
+                    payload = {
+                        "process_id": estado_actual["process_id"],
+                        "status": estado_actual["status"],
+                        "step": estado_actual["step"],
+                        "progress": estado_actual["progress"],
+                        "message": estado_actual["message"],
+                        "updated_at": updated_at,
+                        "version": version,
+                        "numero_pedido": estado_actual.get("numero_pedido"),
+                    }
+                    if "data" in estado_actual:
+                        payload["data"] = estado_actual["data"]
+                    if estado_actual["status"] == "completed":
+                        res = estado_actual.get("resultado") or {}
+                        if isinstance(res, dict):
+                            res = {**res, "process_status": "completed", "progress": 100}
+                        payload["resultado"] = res
+                    if estado_actual["status"] == "error":
+                        payload["error"] = estado_actual.get("error")
+                        payload["error_data"] = estado_actual.get("error_data")
+                    yield f"data: {json.dumps(payload)}\n\n"
+                    ultimo_updated_at = updated_at
+                    ultima_version = version
+                if estado_actual["status"] in ("completed", "error"):
+                    break
+                await asyncio.sleep(1)
+        return StreamingResponse(
+            event_stream(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"},
+        )

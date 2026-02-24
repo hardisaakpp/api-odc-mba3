@@ -80,10 +80,12 @@ class ProcesoEstadoService:
     
     def _key(self, process_id: str) -> str:
         """
-        Devuelve la clave Redis según el tipo de proceso (cruce vs plantilla).
+        Devuelve la clave Redis según el tipo de proceso (cruce vs plantilla vs proceso-sap).
         """
         if process_id.startswith("plantilla-"):
             return f"proceso:plantilla:{process_id}"
+        if process_id.startswith("proceso-sap-"):
+            return f"proceso:sap:{process_id}"
         return f"proceso:cruce:{process_id}"
 
     def crear_proceso(self, user_id: Optional[str] = None) -> str:
@@ -136,6 +138,34 @@ class ProcesoEstadoService:
         }
         self._guardar_estado(process_id, estado_inicial)
         logger.info(f"📝 Proceso plantilla creado: {process_id} (usuario: {user_id})")
+        return process_id
+
+    def crear_proceso_sap(self, user_id: Optional[str] = None, numero_pedido: Optional[str] = None) -> str:
+        """
+        Crea un nuevo proceso de envío ODC a SAP (proceso completo en segundo plano).
+
+        Args:
+            user_id: ID del usuario que inicia el proceso (para auditoría)
+            numero_pedido: Número de pedido (opcional, para mostrar en estado)
+
+        Returns:
+            ID del proceso creado (formato: proceso-sap-{uuid})
+        """
+        process_id = f"proceso-sap-{uuid.uuid4().hex[:12]}"
+        estado_inicial = {
+            "process_id": process_id,
+            "status": "processing",
+            "step": "iniciando",
+            "progress": 0,
+            "message": "Enviando ODC a SAP en segundo plano...",
+            "user_id": user_id,
+            "numero_pedido": numero_pedido,
+            "created_at": ahora_naive().isoformat(),
+            "updated_at": ahora_naive().isoformat(),
+            "version": 1,
+        }
+        self._guardar_estado(process_id, estado_inicial)
+        logger.info(f"📝 Proceso SAP creado: {process_id} (usuario: {user_id}, pedido: {numero_pedido})")
         return process_id
     
     def actualizar_progreso(
@@ -199,11 +229,17 @@ class ProcesoEstadoService:
             logger.warning(f"⚠️ Proceso {process_id} no encontrado al completar")
             return
         
+        default_message = "Cruce completado exitosamente"
+        if process_id.startswith("plantilla-"):
+            default_message = "Plantilla procesada exitosamente"
+        elif process_id.startswith("proceso-sap-"):
+            default_message = "Proceso SAP completado. ODC enviada."
+        
         estado.update({
             "status": "completed",
             "step": "completado",
             "progress": 100,
-            "message": "Cruce completado exitosamente" if process_id.startswith("cruce-") else "Plantilla procesada exitosamente",
+            "message": default_message,
             "resultado": resultado,
             "completed_at": ahora_naive().isoformat(),
             "updated_at": ahora_naive().isoformat(),
@@ -382,4 +418,3 @@ class ProcesoEstadoService:
         except Exception as e:
             logger.error(f"❌ Error guardando estado {process_id}: {e}")
             raise
-

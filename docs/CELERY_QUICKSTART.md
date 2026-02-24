@@ -6,6 +6,7 @@ Guía rápida para poner en marcha Celery y eliminar el cuello de botella entre 
 
 - **Celery**: broker y backend (colas de tareas).
 - **Procesamiento de plantillas Excel en segundo plano**: upload async sin bloquear la app; estado y resultado en Redis.
+- **Proceso completo SAP (Enviar ODC a SAP)**: ejecución en segundo plano; estado y resultado en Redis (mismo patrón que plantillas).
 - **Cruce de productos y sugerencias**: estado de procesos (ProcesoEstadoService) y puntero al último resultado.
 - **Opcional (legacy)**: migración automática y sincronización de maestros, si se activan en `.env`.
 
@@ -150,7 +151,19 @@ Para que la **carga de plantillas Excel** no bloquee la aplicación (y otros usu
    ```
 3. **ENABLE_FILE_STORAGE=true** en `.env` (MinIO/S3 para archivos temporales).
 
-**Resumen para arrancar todo (plantillas async + migración automática):**
+## 📤 Proceso completo SAP (Enviar ODC a SAP) en segundo plano
+
+El flujo **"Enviar ODC a SAP"** (Redistribución + Generar ODC + Enviar a SAP) puede ejecutarse en segundo plano con Celery, igual que la carga de plantillas:
+
+- **POST /api/pedidos/{numero_pedido}/proceso-completo-sap-async** → body: `{ "ajustes_detalle": [...] }`; responde **202** con `process_id`, `resultado_url`, `stream_url`.
+- **GET /api/pedidos/proceso-sap/resultado/{process_id}** → consultar resultado (polling). Si `status === "completed"`, el cuerpo es el mismo que el endpoint síncrono (incluye `envio_sap.oc_id` para descargar el PDF).
+- **GET /api/pedidos/proceso-sap/stream/{process_id}** → progreso en tiempo real (SSE).
+
+**Requisitos:** Redis y Celery Worker en marcha (mismos que para plantillas). No requiere ENABLE_FILE_STORAGE.
+
+El frontend en `/mba3-consultas/proceso` debe llamar al **async** y usar `resultado_url` o `stream_url` para mostrar progreso y, al terminar, el modal de éxito con opción de descargar PDF (`GET /ordenes-compra/{oc_id}/pdf`).
+
+**Resumen para arrancar todo (plantillas async + proceso SAP async + migración automática):**
 
 | Terminal | Comando |
 |----------|--------|
@@ -202,4 +215,3 @@ MIGRATE_DATE_FILTER_DAYS=180  # Cambiar de 365 a 180 días
 ---
 
 **✅ ¡Listo!** El proceso automático ahora corre en un proceso completamente aislado sin afectar al proceso manual.
-

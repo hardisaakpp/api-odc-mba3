@@ -43,6 +43,7 @@ celery_app = Celery(
         'src.tasks.celery_sync_productos',
         'src.tasks.celery_cruce_productos',
         'src.tasks.celery_plantilla_upload',
+        'src.tasks.celery_proceso_sap',
     ]
 )
 
@@ -179,4 +180,3 @@ logger.info("✅ Celery configurado correctamente")
 logger.info(f"   Broker: {REDIS_URL}")
 logger.info(f"   Backend: {REDIS_URL}")
 logger.info(f"   Auto-migrate: {'cada ' + str(AUTO_MIGRATE_INTERVAL_MINUTES) + ' min' if ENABLE_AUTO_MIGRATE else 'deshabilitado (legacy)'}")
-
