@@ -10,11 +10,12 @@ Incluye:
 import logging
 import base64
 import json
+import asyncio
 from typing import Dict, Optional
 from datetime import datetime
 
 from src.utils.timezone import ahora_naive
-from fastapi import FastAPI, UploadFile, File, Depends, HTTPException, Query, Form, Path
+from fastapi import FastAPI, UploadFile, File, Depends, HTTPException, Query, Form, Path, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 import io
 
@@ -27,6 +28,7 @@ from src.security.jwt_auth import verify_jwt_token, require_permission, require_
 from src.exceptions import BusinessException
 from src.endpoints.pedidos.utils import validate_excel_file, get_user_id, MAX_FILE_SIZE
 from src.config import ENABLE_FILE_STORAGE
+from src.database.services.proceso_estado_service import ProcesoEstadoService
 
 logger = logging.getLogger(__name__)
 
@@ -287,6 +289,210 @@ def register_plantillas_endpoints(app: FastAPI):
                 status_code=500,
                 detail=f"Error interno al procesar la plantilla: {str(e)}"
             )
+
+    # -------------------------------------------------------------------------
+    # Upload asíncrono (Celery + storage temporal) - no bloquea la app
+    # -------------------------------------------------------------------------
+    @app.post("/api/plantillas/upload-async", tags=["Plantillas"])
+    async def upload_plantilla_async(
+        file: UploadFile = File(..., description="Archivo Excel (.xlsx o .xls)"),
+        validar: bool = Query(True, description="Validar datos antes de guardar"),
+        bloquea_con_errores: bool = Query(True, description="Bloquear guardado si hay errores críticos"),
+        modo_tiendas: str = Query(
+            "validar_estricto",
+            description="Modo de validación de tiendas",
+            pattern="^(validar_estricto|crear_si_no_existe|sincronizar_maestro)$"
+        ),
+        confirmar_sincronizacion: bool = Query(False, description="Requerido si modo_tiendas='sincronizar_maestro'"),
+        correcciones_codigos: Optional[str] = Form(None, description="JSON con mapa de correcciones de códigos"),
+        user: Dict = Depends(verify_jwt_token),
+        _: None = Depends(require_permission('mabel.view'))
+    ):
+        """
+        Sube una plantilla Excel para procesamiento en segundo plano (Celery).
+        Responde de inmediato con process_id; el resultado se consulta con
+        GET /api/plantillas/resultado/{process_id} o GET /api/plantillas/stream/{process_id}.
+        Requiere ENABLE_FILE_STORAGE=true (MinIO/S3) para almacenamiento temporal.
+        """
+        if not ENABLE_FILE_STORAGE:
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "error": "storage_required",
+                    "message": "El upload asíncrono requiere almacenamiento de archivos (ENABLE_FILE_STORAGE=true). "
+                               "Usa POST /api/plantillas/upload para procesamiento síncrono."
+                }
+            )
+        if modo_tiendas == "sincronizar_maestro" and not confirmar_sincronizacion:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "confirmation_required",
+                    "message": "El modo 'sincronizar_maestro' requiere confirmar_sincronizacion=true."
+                }
+            )
+        validate_excel_file(file)
+        content = await file.read()
+        file_size = len(content)
+        if file_size > MAX_FILE_SIZE:
+            raise HTTPException(
+                status_code=400,
+                detail=f"El archivo es demasiado grande. Tamaño máximo: {MAX_FILE_SIZE / (1024*1024):.1f} MB"
+            )
+        if file_size == 0:
+            raise HTTPException(status_code=400, detail="El archivo está vacío")
+        user_id = get_user_id(user)
+        correcciones_dict: Optional[Dict[str, str]] = None
+        if correcciones_codigos:
+            try:
+                correcciones_dict = json.loads(correcciones_codigos)
+                if not isinstance(correcciones_dict, dict):
+                    raise ValueError("correcciones_codigos debe ser un objeto JSON")
+            except json.JSONDecodeError as e:
+                raise HTTPException(status_code=400, detail=f"Formato JSON inválido en correcciones_codigos: {str(e)}")
+        try:
+            from src.services.file_storage_service import get_file_storage, FileStorageError
+            estado_service = ProcesoEstadoService()
+            process_id = estado_service.crear_proceso_plantilla(user_id=user_id)
+            storage = get_file_storage()
+            storage_path = storage.guardar_archivo_temporal(
+                contenido=content,
+                process_id=process_id,
+                nombre_original=file.filename or "sin_nombre.xlsx"
+            )
+            from src.tasks.celery_plantilla_upload import procesar_plantilla_upload
+            procesar_plantilla_upload.delay(
+                process_id=process_id,
+                user_id=user_id,
+                storage_path=storage_path,
+                filename=file.filename or "sin_nombre.xlsx",
+                validar=validar,
+                bloquea_con_errores=bloquea_con_errores,
+                modo_tiendas=modo_tiendas,
+                correcciones_codigos=correcciones_dict
+            )
+            logger.info(f"📤 Plantilla encolada: {process_id} (usuario: {user_id})")
+            return JSONResponse(
+                status_code=202,
+                content={
+                    "status": "accepted",
+                    "process_id": process_id,
+                    "message": "Plantilla en procesamiento. Consulta GET /api/plantillas/resultado/{process_id} o GET /api/plantillas/stream/{process_id}.",
+                    "resultado_url": f"/api/plantillas/resultado/{process_id}",
+                    "stream_url": f"/api/plantillas/stream/{process_id}"
+                }
+            )
+        except FileStorageError as e:
+            logger.error(f"Error storage al subir plantilla async: {e}", exc_info=True)
+            raise HTTPException(status_code=503, detail=f"Error de almacenamiento: {str(e)}")
+        except Exception as e:
+            logger.error(f"Error al encolar plantilla: {e}", exc_info=True)
+            raise HTTPException(status_code=500, detail=f"Error al encolar plantilla: {str(e)}")
+
+    @app.get("/api/plantillas/resultado/{process_id}", tags=["Plantillas"])
+    async def obtener_resultado_plantilla(
+        process_id: str,
+        user: Dict = Depends(verify_jwt_token),
+        _: None = Depends(require_permission('mabel.view'))
+    ):
+        """
+        Obtiene el resultado del procesamiento async de una plantilla.
+        Usar el process_id devuelto por POST /api/plantillas/upload-async.
+        """
+        if not process_id.startswith("plantilla-"):
+            raise HTTPException(status_code=400, detail="process_id debe ser de tipo plantilla (plantilla-xxx)")
+        estado_service = ProcesoEstadoService()
+        estado = estado_service.obtener_estado(process_id)
+        if not estado:
+            raise HTTPException(status_code=404, detail="Proceso no encontrado")
+        user_id = get_user_id(user)
+        if estado.get("user_id") and estado["user_id"] != user_id:
+            raise HTTPException(status_code=403, detail="No tienes acceso a este proceso")
+        if estado["status"] == "completed":
+            return estado.get("resultado", {})
+        if estado["status"] == "error":
+            content = {
+                "status": "error",
+                "message": estado.get("message", estado.get("error", "Error desconocido")),
+                "error": estado.get("error")
+            }
+            # Incluir datos estructurados para UI de corrección de códigos SAP (validacion_sap, sugerencias)
+            error_data = estado.get("error_data")
+            if error_data:
+                content["validacion"] = error_data.get("validacion")
+                content["validacion_sap"] = error_data.get("validacion_sap")
+                logger.debug(f"GET resultado {process_id}: enviando validacion_sap con detalle_validacion")
+            else:
+                logger.warning(f"GET resultado {process_id}: no hay error_data en estado (reiniciar Celery worker si se esperaban sugerencias SAP)")
+            return JSONResponse(status_code=400, content=content)
+        return {
+            "status": estado["status"],
+            "step": estado.get("step"),
+            "progress": estado.get("progress", 0),
+            "message": estado.get("message"),
+            "process_id": process_id
+        }
+
+    @app.get("/api/plantillas/stream/{process_id}", tags=["Plantillas"])
+    async def stream_progreso_plantilla(
+        process_id: str,
+        request: Request,
+        user: Dict = Depends(verify_jwt_token),
+        _: None = Depends(require_permission('mabel.view'))
+    ):
+        """
+        Stream SSE del progreso del procesamiento de plantilla.
+        Mismo formato que cruce-productos/stream.
+        """
+        if not process_id.startswith("plantilla-"):
+            raise HTTPException(status_code=400, detail="process_id debe ser de tipo plantilla (plantilla-xxx)")
+        estado_service = ProcesoEstadoService()
+        estado = estado_service.obtener_estado(process_id)
+        if not estado:
+            raise HTTPException(status_code=404, detail="Proceso no encontrado")
+        user_id = get_user_id(user)
+        if estado.get("user_id") and estado["user_id"] != user_id:
+            raise HTTPException(status_code=403, detail="No tienes acceso a este proceso")
+
+        async def event_stream():
+            ultimo_updated_at = None
+            ultima_version = None
+            while True:
+                if await request.is_disconnected():
+                    break
+                estado_actual = estado_service.obtener_estado(process_id)
+                if not estado_actual:
+                    yield f"data: {json.dumps({'error': 'Proceso no encontrado'})}\n\n"
+                    break
+                updated_at = estado_actual.get("updated_at")
+                version = estado_actual.get("version", 0)
+                if updated_at != ultimo_updated_at or version != ultima_version:
+                    payload = {
+                        "process_id": estado_actual["process_id"],
+                        "status": estado_actual["status"],
+                        "step": estado_actual["step"],
+                        "progress": estado_actual["progress"],
+                        "message": estado_actual["message"],
+                        "updated_at": updated_at,
+                        "version": version
+                    }
+                    if "data" in estado_actual:
+                        payload["data"] = estado_actual["data"]
+                    if estado_actual["status"] == "completed":
+                        payload["resultado"] = estado_actual.get("resultado")
+                    if estado_actual["status"] == "error":
+                        payload["error"] = estado_actual.get("error")
+                    yield f"data: {json.dumps(payload)}\n\n"
+                    ultimo_updated_at = updated_at
+                    ultima_version = version
+                if estado_actual["status"] in ("completed", "error"):
+                    break
+                await asyncio.sleep(1)
+        return StreamingResponse(
+            event_stream(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"}
+        )
     
     @app.get("/api/plantillas/ultimo", tags=["Plantillas"])
     async def get_ultimo_pedido(

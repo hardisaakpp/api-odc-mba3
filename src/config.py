@@ -250,10 +250,11 @@ elif ENVIRONMENT == "development":
         logger.warning("=" * 70)
 
 # ============================================================================
-# ConfiguraciÃ³n de MigraciÃ³n AutomÃ¡tica
+# ConfiguraciÃ³n de MigraciÃ³n AutomÃ¡tica (LEGACY - deshabilitada por defecto)
 # ============================================================================
-# Habilitar migraciÃ³n automÃ¡tica (ejecuta /migrar cada N minutos)
-ENABLE_AUTO_MIGRATE = os.getenv("ENABLE_AUTO_MIGRATE", "true").lower() == "true"
+# Habilitar migraciÃ³n automÃ¡tica (ejecuta /migrar cada N minutos).
+# Por defecto false: no se programa en Celery Beat. Activar con ENABLE_AUTO_MIGRATE=true en .env
+ENABLE_AUTO_MIGRATE = os.getenv("ENABLE_AUTO_MIGRATE", "false").lower() == "true"
 
 # Intervalo en minutos entre ejecuciones automÃ¡ticas
 # Configurar en .env: AUTO_MIGRATE_INTERVAL_MINUTES=15

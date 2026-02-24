@@ -171,6 +171,25 @@ class FileStorageService:
         
         path = f"plantillas/{año}/{mes}/{pedido_id}/{ts}_{nombre_seguro}"
         return path
+
+    def _generar_storage_path_temporal(
+        self,
+        process_id: str,
+        nombre_original: str,
+        timestamp: Optional[datetime] = None
+    ) -> str:
+        """
+        Genera la ruta de almacenamiento temporal para procesamiento async de plantilla.
+        Estructura: temp/plantilla-upload/{process_id}/{timestamp}_{nombre_original}
+        """
+        if timestamp is None:
+            timestamp = ahora_naive()
+        nombre_seguro = "".join(
+            c if c.isalnum() or c in ".-_" else "_"
+            for c in nombre_original
+        )
+        ts = timestamp.strftime("%Y%m%d_%H%M%S")
+        return f"temp/plantilla-upload/{process_id}/{ts}_{nombre_seguro}"
     
     def guardar_archivo(
         self,
@@ -229,6 +248,52 @@ class FileStorageService:
         except Exception as e:
             logger.error(f"❌ Error al guardar archivo en storage: {e}")
             raise FileStorageError(f"No se pudo guardar el archivo: {str(e)}")
+
+    def guardar_archivo_temporal(
+        self,
+        contenido: bytes,
+        process_id: str,
+        nombre_original: str,
+        content_type: str = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    ) -> str:
+        """
+        Guarda un archivo en storage temporal para procesamiento async (Celery).
+        La ruta debe usarse en la tarea Celery; después del procesamiento
+        debe eliminarse con eliminar_archivo(storage_path).
+        
+        Args:
+            contenido: Contenido del archivo en bytes
+            process_id: ID del proceso (ej. plantilla-abc123)
+            nombre_original: Nombre original del archivo
+            
+        Returns:
+            Ruta del archivo en el storage (storage_path)
+        """
+        client = self._get_client()
+        timestamp = ahora_naive()
+        storage_path = self._generar_storage_path_temporal(process_id, nombre_original, timestamp)
+        metadata = {
+            "process-id": str(process_id),
+            "nombre-original": nombre_original.encode('ascii', 'replace').decode('ascii'),
+            "fecha-subida": timestamp.isoformat(),
+            "tamano-bytes": str(len(contenido))
+        }
+        try:
+            client.put_object(
+                Bucket=self._bucket,
+                Key=storage_path,
+                Body=contenido,
+                ContentType=content_type,
+                Metadata=metadata
+            )
+            logger.info(
+                f"✅ Archivo temporal guardado: {storage_path} "
+                f"(process_id={process_id}, tamaño={len(contenido)/1024:.1f}KB)"
+            )
+            return storage_path
+        except Exception as e:
+            logger.error(f"❌ Error al guardar archivo temporal en storage: {e}")
+            raise FileStorageError(f"No se pudo guardar el archivo temporal: {str(e)}")
     
     def descargar_archivo(self, storage_path: str) -> Tuple[bytes, Dict[str, Any]]:
         """

@@ -78,6 +78,14 @@ class ProcesoEstadoService:
         """Inicializa el servicio con cliente Redis singleton."""
         self.redis_client = get_redis_client()
     
+    def _key(self, process_id: str) -> str:
+        """
+        Devuelve la clave Redis según el tipo de proceso (cruce vs plantilla).
+        """
+        if process_id.startswith("plantilla-"):
+            return f"proceso:plantilla:{process_id}"
+        return f"proceso:cruce:{process_id}"
+
     def crear_proceso(self, user_id: Optional[str] = None) -> str:
         """
         Crea un nuevo proceso y devuelve su ID.
@@ -102,6 +110,32 @@ class ProcesoEstadoService:
         }
         self._guardar_estado(process_id, estado_inicial)
         logger.info(f"📝 Proceso creado: {process_id} (usuario: {user_id})")
+        return process_id
+
+    def crear_proceso_plantilla(self, user_id: Optional[str] = None) -> str:
+        """
+        Crea un nuevo proceso de carga de plantilla Excel y devuelve su ID.
+        
+        Args:
+            user_id: ID del usuario que inicia el proceso (para auditoría)
+            
+        Returns:
+            ID del proceso creado (formato: plantilla-{uuid})
+        """
+        process_id = f"plantilla-{uuid.uuid4().hex[:12]}"
+        estado_inicial = {
+            "process_id": process_id,
+            "status": "processing",
+            "step": "iniciando",
+            "progress": 0,
+            "message": "Plantilla recibida. Procesando en segundo plano...",
+            "user_id": user_id,
+            "created_at": ahora_naive().isoformat(),
+            "updated_at": ahora_naive().isoformat(),
+            "version": 1
+        }
+        self._guardar_estado(process_id, estado_inicial)
+        logger.info(f"📝 Proceso plantilla creado: {process_id} (usuario: {user_id})")
         return process_id
     
     def actualizar_progreso(
@@ -169,7 +203,7 @@ class ProcesoEstadoService:
             "status": "completed",
             "step": "completado",
             "progress": 100,
-            "message": "Cruce completado exitosamente",
+            "message": "Cruce completado exitosamente" if process_id.startswith("cruce-") else "Plantilla procesada exitosamente",
             "resultado": resultado,
             "completed_at": ahora_naive().isoformat(),
             "updated_at": ahora_naive().isoformat(),
@@ -177,36 +211,41 @@ class ProcesoEstadoService:
         })
         self._guardar_estado(process_id, estado)
         
-        # ✅ AJUSTE 1: Guardar puntero al último completado (O(1) en lugar de keys())
-        # TTL: 15 minutos - mismo que max_age_minutes en obtener_ultimo_completado
-        try:
-            self.redis_client.setex(
-                "proceso:cruce:ultimo_completado",
-                self.TTL_ULTIMO_COMPLETADO_SEGUNDOS,
-                process_id
-            )
-            logger.debug(f"📌 Puntero actualizado: último_completado → {process_id}")
-        except Exception as e:
-            logger.warning(f"⚠️ Error guardando puntero último completado: {e}")
-            # No fallar el proceso si falla el puntero
+        # Solo para cruce: guardar puntero al último completado (sugerencias)
+        if process_id.startswith("cruce-"):
+            try:
+                self.redis_client.setex(
+                    "proceso:cruce:ultimo_completado",
+                    self.TTL_ULTIMO_COMPLETADO_SEGUNDOS,
+                    process_id
+                )
+                logger.debug(f"📌 Puntero actualizado: último_completado → {process_id}")
+            except Exception as e:
+                logger.warning(f"⚠️ Error guardando puntero último completado: {e}")
         
         logger.info(f"✅ Proceso completado: {process_id}")
     
-    def marcar_error(self, process_id: str, error: str):
+    def marcar_error(
+        self,
+        process_id: str,
+        error: str,
+        error_data: Optional[Dict[str, Any]] = None
+    ):
         """
         Marca el proceso como error.
-        
+
         Args:
             process_id: ID del proceso
             error: Mensaje de error
+            error_data: Datos estructurados para el frontend (ej. validacion_sap, sugerencias).
+                       Se devuelve en GET resultado para permitir UI de corrección de códigos.
         """
         estado = self._obtener_estado(process_id)
         if not estado:
             logger.warning(f"⚠️ Proceso {process_id} no encontrado al marcar error")
             return
-        
-        # Mantener último progress, no resetear a 0
-        estado.update({
+
+        update: Dict[str, Any] = {
             "status": "error",
             "step": "error",
             "progress": estado.get("progress", 0),  # NO resetear progress
@@ -215,7 +254,10 @@ class ProcesoEstadoService:
             "error_at": ahora_naive().isoformat(),
             "updated_at": ahora_naive().isoformat(),
             "version": estado.get("version", 0) + 1
-        })
+        }
+        if error_data is not None:
+            update["error_data"] = error_data
+        estado.update(update)
         self._guardar_estado(process_id, estado)
         logger.error(f"❌ Proceso con error: {process_id} - {error}")
     
@@ -304,7 +346,7 @@ class ProcesoEstadoService:
         Returns:
             Estado del proceso o None si no existe
         """
-        key = f"proceso:cruce:{process_id}"
+        key = self._key(process_id)
         try:
             # Con decode_responses=True, get() devuelve str | None
             data = cast(Optional[str], self.redis_client.get(key))
@@ -329,7 +371,7 @@ class ProcesoEstadoService:
         Raises:
             redis.RedisError: Si hay error guardando en Redis
         """
-        key = f"proceso:cruce:{process_id}"
+        key = self._key(process_id)
         ttl_seconds = self.TTL_HORAS * 3600
         try:
             self.redis_client.setex(

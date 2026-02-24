@@ -6,20 +6,31 @@ Write-Host "MBA3 Consultas - Inicio de Celery" -ForegroundColor Cyan
 Write-Host "=" * 70 -ForegroundColor Cyan
 Write-Host ""
 
-# Verificar que Redis está corriendo
+# Verificar que Redis está corriendo (Docker o nativo)
 Write-Host "Verificando Redis..." -ForegroundColor Yellow
+$redisOk = $false
+# 1) Intentar Redis en Docker (recomendado)
 try {
-    $redisTest = redis-cli ping 2>&1
-    if ($redisTest -eq "PONG") {
-        Write-Host "✅ Redis está corriendo" -ForegroundColor Green
-    } else {
-        Write-Host "❌ Redis no responde correctamente" -ForegroundColor Red
-        Write-Host "   Inicia Redis con: redis-server" -ForegroundColor Yellow
-        exit 1
+    $dockerTest = docker exec redis redis-cli ping 2>&1
+    if ($LASTEXITCODE -eq 0 -and ($dockerTest -match "PONG")) {
+        Write-Host "✅ Redis está corriendo (contenedor Docker 'redis')" -ForegroundColor Green
+        $redisOk = $true
     }
-} catch {
-    Write-Host "❌ Redis no está instalado o no está en el PATH" -ForegroundColor Red
-    Write-Host "   Instala Redis: choco install redis-64" -ForegroundColor Yellow
+} catch { }
+# 2) Si no, intentar redis-cli en PATH (instalación nativa)
+if (-not $redisOk) {
+    try {
+        $redisTest = redis-cli ping 2>&1
+        if ($redisTest -eq "PONG") {
+            Write-Host "✅ Redis está corriendo (nativo)" -ForegroundColor Green
+            $redisOk = $true
+        }
+    } catch { }
+}
+if (-not $redisOk) {
+    Write-Host "❌ Redis no está disponible en localhost:6379" -ForegroundColor Red
+    Write-Host "   Con Docker (recomendado): docker run -d --name redis -p 6379:6379 redis" -ForegroundColor Yellow
+    Write-Host "   Ver docs/CELERY_QUICKSTART.md para más opciones." -ForegroundColor Yellow
     exit 1
 }
 

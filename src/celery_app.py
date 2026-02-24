@@ -25,6 +25,7 @@ from celery.signals import worker_process_init, worker_process_shutdown, beat_in
 # Todo se maneja en un solo lugar: src/config.py
 from src.config import (
     REDIS_URL,
+    ENABLE_AUTO_MIGRATE,
     AUTO_MIGRATE_INTERVAL_MINUTES,
     SYNC_PRODUCTOS_HOUR,
     SYNC_PRODUCTOS_MINUTE
@@ -37,7 +38,12 @@ celery_app = Celery(
     'mba3_auto_migrate',
     broker=REDIS_URL,
     backend=REDIS_URL,
-    include=['src.tasks.celery_auto_migrate', 'src.tasks.celery_sync_productos', 'src.tasks.celery_cruce_productos']  # Incluir módulos de tareas
+    include=[
+        'src.tasks.celery_auto_migrate',
+        'src.tasks.celery_sync_productos',
+        'src.tasks.celery_cruce_productos',
+        'src.tasks.celery_plantilla_upload',
+    ]
 )
 
 # Configuración de Celery
@@ -51,15 +57,15 @@ celery_app.conf.update(
     result_serializer='json',
     accept_content=['json'],
     
-    # Programación de tarea automática (Celery Beat)
+    # Programación de tareas (Celery Beat). Auto-migrate solo si ENABLE_AUTO_MIGRATE=true (legacy)
     beat_schedule={
-        'auto-migrate-periodic': {
-            'task': 'src.tasks.celery_auto_migrate.execute_auto_migration',
-            'schedule': float(AUTO_MIGRATE_INTERVAL_MINUTES * 60),  # Convertir minutos a segundos
-            'options': {
-                'expires': 60.0,  # Expira si no se ejecuta en 60 segundos
+        **({
+            'auto-migrate-periodic': {
+                'task': 'src.tasks.celery_auto_migrate.execute_auto_migration',
+                'schedule': float(AUTO_MIGRATE_INTERVAL_MINUTES * 60),
+                'options': {'expires': 60.0},
             }
-        },
+        } if ENABLE_AUTO_MIGRATE else {}),
         'sync-productos-maestro': {
             'task': 'src.tasks.celery_sync_productos.sync_productos_maestro',
             'schedule': crontab(hour=SYNC_PRODUCTOS_HOUR, minute=SYNC_PRODUCTOS_MINUTE),  # type: ignore[arg-type] # Diario a las 3:00 AM - crontab acepta enteros aunque los stubs indiquen str
@@ -108,9 +114,12 @@ def init_worker(**kwargs):
     """
     import os
     logger.info("=" * 70)
-    logger.info("🔧 Iniciando worker Celery para migración automática")
+    logger.info("🔧 Iniciando worker Celery")
     logger.info(f"   PID: {os.getpid()}")
-    logger.info(f"   Intervalo de migración: cada {AUTO_MIGRATE_INTERVAL_MINUTES} minutos")
+    if ENABLE_AUTO_MIGRATE:
+        logger.info(f"   Intervalo de migración automática: cada {AUTO_MIGRATE_INTERVAL_MINUTES} minutos")
+    else:
+        logger.info("   Migración automática: DESHABILITADA (ENABLE_AUTO_MIGRATE=false)")
     logger.info("   ⚠️ Este proceso está AISLADO de FastAPI")
     logger.info("   ⚠️ No compite por recursos con el proceso manual")
     logger.info("=" * 70)
@@ -138,7 +147,10 @@ def init_beat(**kwargs):
     """
     logger.info("=" * 70)
     logger.info("⏰ Iniciando Celery Beat (scheduler)")
-    logger.info(f"   Programación: migración automática cada {AUTO_MIGRATE_INTERVAL_MINUTES} minutos")
+    if ENABLE_AUTO_MIGRATE:
+        logger.info(f"   Programación: migración automática cada {AUTO_MIGRATE_INTERVAL_MINUTES} minutos")
+    else:
+        logger.info("   Migración automática: DESHABILITADA (legacy)")
     logger.info("   Las tareas se encolarán en Redis y serán ejecutadas por los workers")
     logger.info("=" * 70)
 
@@ -146,34 +158,25 @@ def init_beat(**kwargs):
 @worker_ready.connect
 def on_worker_ready(sender, **kwargs):
     """
-    Se ejecuta cuando el worker está completamente listo y puede recibir tareas.
-    
-    Ejecuta la migración automática inmediatamente al iniciar para:
-    - Ver resultados inmediatos
-    - Monitorear funcionamiento desde el inicio
-    - Realizar correcciones si es necesario
-    
-    Después continuará ejecutándose cada N minutos según la programación de Beat.
+    Se ejecuta cuando el worker está listo. Solo ejecuta migración automática inicial si ENABLE_AUTO_MIGRATE=true.
     """
     import os
     logger.info("=" * 70)
-    logger.info("🚀 Worker listo - Ejecutando migración automática inicial...")
+    logger.info("🚀 Worker listo")
     logger.info(f"   PID: {os.getpid()}")
-    logger.info(f"   Esta migración consultará MBA3 y guardará en SQL Server")
-    logger.info(f"   Próxima ejecución automática: en {AUTO_MIGRATE_INTERVAL_MINUTES} minutos")
+    if ENABLE_AUTO_MIGRATE:
+        logger.info("   Migración automática inicial programada (iniciará en 3 segundos)")
+        logger.info(f"   Próxima ejecución: cada {AUTO_MIGRATE_INTERVAL_MINUTES} minutos")
+        from src.tasks.celery_auto_migrate import execute_auto_migration
+        execute_auto_migration.apply_async(countdown=3)
+    else:
+        logger.info("   Migración automática: DESHABILITADA (legacy)")
     logger.info("=" * 70)
-    
-    # Importar y ejecutar la tarea inmediatamente
-    # countdown=3 da tiempo para que el log se muestre antes de comenzar
-    from src.tasks.celery_auto_migrate import execute_auto_migration
-    execute_auto_migration.apply_async(countdown=3)
-    
-    logger.info("✅ Migración automática inicial programada (iniciará en 3 segundos)")
 
 
 # Log de inicialización
 logger.info("✅ Celery configurado correctamente")
 logger.info(f"   Broker: {REDIS_URL}")
 logger.info(f"   Backend: {REDIS_URL}")
-logger.info(f"   Intervalo de migración: {AUTO_MIGRATE_INTERVAL_MINUTES} minutos")
+logger.info(f"   Auto-migrate: {'cada ' + str(AUTO_MIGRATE_INTERVAL_MINUTES) + ' min' if ENABLE_AUTO_MIGRATE else 'deshabilitado (legacy)'}")
 

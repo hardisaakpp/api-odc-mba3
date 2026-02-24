@@ -2,19 +2,45 @@
 
 Guía rápida para poner en marcha Celery y eliminar el cuello de botella entre el proceso manual y automático.
 
-## ✅ Paso 1: Instalar Redis
+## ¿Para qué se usa Redis en este proyecto?
 
-**Windows (usando Chocolatey):**
+- **Celery**: broker y backend (colas de tareas).
+- **Procesamiento de plantillas Excel en segundo plano**: upload async sin bloquear la app; estado y resultado en Redis.
+- **Cruce de productos y sugerencias**: estado de procesos (ProcesoEstadoService) y puntero al último resultado.
+- **Opcional (legacy)**: migración automática y sincronización de maestros, si se activan en `.env`.
+
+Todo se conecta a **`redis://localhost:6379/0`** (o la URL que pongas en `REDIS_URL`).
+
+---
+
+## ✅ Paso 1: Redis
+
+En Windows no viene Redis instalado. **Recomendación: usar Docker** (no hace falta `redis-server` ni Chocolatey en el sistema).
+
+**Opción A – Docker (recomendada):**
+```powershell
+docker run -d --name redis -p 6379:6379 redis
+```
+Redis queda en segundo plano en `localhost:6379`. Para parar: `docker stop redis`. Para arrancar de nuevo: `docker start redis`.
+
+**Comprobar que funciona:**
+```powershell
+docker exec -it redis redis-cli ping
+```
+Debe responder: `PONG`.
+
+Si obtienes **"port is already allocated"**, ya tienes un Redis en el 6379 (por ejemplo el contenedor **redis**). Comprueba con `docker ps -a` y úsalo; verifica con `docker exec -it redis redis-cli ping`. Si creaste otro contenedor que no pudo arrancar, elimínalo con `docker rm <nombre_contenedor>`.
+
+Si tenías el paquete antiguo de Chocolatey (`redis-64`) y ya usas Docker, puedes desinstalarlo: `choco uninstall redis-64`.
+
+**Opción B – Chocolatey (Redis nativo en Windows):**
 ```powershell
 choco install redis-64
-redis-server
+# Ejecutar por ruta completa si no está en PATH, ej: & "C:\ProgramData\chocolatey\lib\redis-64\tools\redis-server.exe"
 ```
 
-**Verificar instalación:**
-```bash
-redis-cli ping
-# Debe responder: PONG
-```
+**Opción C – Memurai:**  
+[memurai.com](https://www.memurai.com/) — Redis compatible para Windows.
 
 ## ✅ Paso 2: Instalar dependencias de Python
 
@@ -36,10 +62,9 @@ Agregar al archivo `.env`:
 # Redis para Celery
 REDIS_URL=redis://localhost:6379/0
 
-# Habilitar migración automática
-ENABLE_AUTO_MIGRATE=true
-AUTO_MIGRATE_INTERVAL_MINUTES=15
-MIGRATE_DATE_FILTER_DAYS=365
+# Migración automática (opcional, legacy; por defecto está deshabilitada)
+# ENABLE_AUTO_MIGRATE=false   # por defecto: no se programa migración periódica
+# Si la activas: ENABLE_AUTO_MIGRATE=true y AUTO_MIGRATE_INTERVAL_MINUTES=15
 ```
 
 ## ✅ Paso 4: Ejecutar los procesos
@@ -106,6 +131,35 @@ celery -A src.celery_app flower
 - **Proceso automático** (Celery): Corre cada 15 minutos sin afectar al manual
 - **Base de datos**: Context managers previenen conexiones huérfanas
 - **Monitoreo**: Flower muestra el estado de las tareas en tiempo real
+
+## 📤 Upload de plantillas en segundo plano (async)
+
+Para que la **carga de plantillas Excel** no bloquee la aplicación (y otros usuarios puedan seguir navegando), el frontend puede usar el endpoint **async**:
+
+- **POST /api/plantillas/upload-async** → responde de inmediato con `process_id`
+- **GET /api/plantillas/resultado/{process_id}** → consultar resultado (polling)
+- **GET /api/plantillas/stream/{process_id}** → progreso en tiempo real (SSE)
+
+**Requisitos:**
+
+1. **Redis** en marcha (mismo que para migración automática).
+2. **Celery Worker** en marcha (misma terminal que arriba):
+   ```powershell
+   cd C:\Users\cortiz\PycharmProjects\mba3-consultas
+   celery -A src.celery_app worker --loglevel=info --pool=solo
+   ```
+3. **ENABLE_FILE_STORAGE=true** en `.env` (MinIO/S3 para archivos temporales).
+
+**Resumen para arrancar todo (plantillas async + migración automática):**
+
+| Terminal | Comando |
+|----------|--------|
+| 1. FastAPI | `cd mba3-consultas` → `python src/api_server.py` |
+| 2. Redis | `redis-server` (o ya instalado como servicio) |
+| 3. Celery Worker | `cd mba3-consultas` → `celery -A src.celery_app worker --loglevel=info --pool=solo` |
+| 4. Celery Beat (opcional) | `celery -A src.celery_app beat --loglevel=info` |
+
+Verificar Redis: `redis-cli ping` → debe responder `PONG`.
 
 ## 📚 Documentación Completa
 
