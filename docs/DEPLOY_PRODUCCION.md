@@ -7,7 +7,7 @@ Guía para aplicar cambios del backend en el servidor de producción (Linux). El
 ## 📍 Entorno de Producción
 
 - **Ruta del proyecto:** `/opt/odc-sap/`
-- **Servicio systemd:** `odc-sap-api`
+- **Servicio systemd:** `odc-sap-api` (usar siempre este nombre en `systemctl status/restart`, no `odc-sap`)
 - **Puerto API:** 8000
 
 La aplicación carga las variables de entorno desde `/opt/odc-sap/.env` (ver `src/api_server.py`).
