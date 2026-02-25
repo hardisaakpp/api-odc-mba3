@@ -333,3 +333,10 @@ migrations:
     description: "Auditoría completa: valor_anterior/valor_nuevo en modificaciones, campos audit en redistribucion_borrador, tabla pedido_audit_log"
     category: "alter"
     dependencies: ["004", "015"]
+
+  - version: "607"
+    name: "add_orden_linea_pedido_detalle_original"
+    file: "add_orden_linea_pedido_detalle_original.sql"
+    description: "Agregar orden_linea a pedido_detalle_original para conservar orden de la plantilla en Descargar Pedido Original"
+    category: "alter"
+    dependencies: ["605"]

@@ -7,6 +7,7 @@ Se usan para generar el Excel "Descargar Pedido Original".
 
 CHANGELOG:
 - 2026-02-12: Creado
+- 2026-02-25: Agregado orden_linea para conservar orden original de la plantilla en Descargar Pedido Original
 """
 
 import logging
@@ -93,21 +94,22 @@ class PedidoOriginalRepository:
                 raise ValueError("No se pudo obtener el ID del pedido original insertado")
             pedido_original_id = str(row[0])
 
-            # --- Insertar detalles originales ---
-            for detalle in detalles:
+            # --- Insertar detalles originales (conservando orden de la plantilla) ---
+            for orden_linea, detalle in enumerate(detalles):
                 cursor.execute(
                     """
                     INSERT INTO pedido_detalle_original (
-                        pedido_original_id, pedido_detalle_id,
+                        pedido_original_id, pedido_detalle_id, orden_linea,
                         codigo_interno, descripcion_sap, marca, codigo_barras,
                         pack, costo_doc_sin_iva, descuento_1, pvp,
                         subtotal, total, comentario
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         pedido_original_id,
                         detalle.get("pedido_detalle_id"),
+                        orden_linea,
                         detalle.get("codigo_interno"),
                         detalle.get("descripcion_sap"),
                         detalle.get("marca"),
@@ -193,7 +195,7 @@ class PedidoOriginalRepository:
 
             pedido_original_id = cabecera["pedido_original_id"]
 
-            # Obtener detalles originales
+            # Obtener detalles originales en el mismo orden que la plantilla (orden_linea)
             cursor.execute(
                 """
                 SELECT
@@ -203,7 +205,7 @@ class PedidoOriginalRepository:
                     subtotal, total, comentario
                 FROM pedido_detalle_original
                 WHERE pedido_original_id = ?
-                ORDER BY codigo_interno
+                ORDER BY orden_linea, codigo_interno
                 """,
                 (pedido_original_id,),
             )
