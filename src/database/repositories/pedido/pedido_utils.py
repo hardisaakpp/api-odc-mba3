@@ -33,8 +33,9 @@ class PedidoUtils:
         """
         Verifica si la tabla pedido tiene la columna estado_id (FK a pedido_estado).
         """
-        if self._tiene_estado_id_cache is not None:
-            return self._tiene_estado_id_cache
+        cached = self._tiene_estado_id_cache
+        if cached is not None:
+            return cached
         cursor.execute("""
             SELECT COUNT(*)
             FROM INFORMATION_SCHEMA.COLUMNS
@@ -56,9 +57,10 @@ class PedidoUtils:
         Returns:
             True si existe la columna estado, False en caso contrario
         """
-        if self._tiene_estado_cache is not None:
-            return self._tiene_estado_cache
-        
+        cached = self._tiene_estado_cache
+        if cached is not None:
+            return cached
+
         cursor.execute("""
             SELECT COUNT(*) 
             FROM INFORMATION_SCHEMA.COLUMNS 
@@ -80,9 +82,10 @@ class PedidoUtils:
         Returns:
             True si existe la columna es_bodega, False en caso contrario
         """
-        if self._tiene_es_bodega_cache is not None:
-            return self._tiene_es_bodega_cache
-        
+        cached = self._tiene_es_bodega_cache
+        if cached is not None:
+            return cached
+
         cursor.execute("""
             SELECT COUNT(*) 
             FROM INFORMATION_SCHEMA.COLUMNS 

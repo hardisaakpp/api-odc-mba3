@@ -387,7 +387,13 @@ def register_plantillas_endpoints(app: FastAPI):
             raise HTTPException(status_code=503, detail=f"Error de almacenamiento: {str(e)}")
         except Exception as e:
             logger.error(f"Error al encolar plantilla: {e}", exc_info=True)
-            raise HTTPException(status_code=500, detail=f"Error al encolar plantilla: {str(e)}")
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "error": "celery_unavailable",
+                    "message": "Procesamiento en segundo plano no disponible. Se usará carga síncrona."
+                }
+            )
 
     @app.get("/api/plantillas/resultado/{process_id}", tags=["Plantillas"])
     async def obtener_resultado_plantilla(

@@ -146,8 +146,9 @@ def procesar_plantilla_upload(
         logger.error(f"❌ Error en plantilla Celery {process_id}: {e}", exc_info=True)
         # Por si la excepción es BusinessException pero no fue capturada (ej. worker con código antiguo)
         error_data = None
-        if hasattr(e, "data") and e.data and isinstance(getattr(e, "data"), dict):
-            error_data = _sanitize_resultado_for_redis(getattr(e, "data"))
+        data_attr = getattr(e, "data", None)
+        if data_attr and isinstance(data_attr, dict):
+            error_data = _sanitize_resultado_for_redis(data_attr)
             logger.info(f"📋 Error con .data detectado, guardando error_data para {process_id}")
         estado_service.marcar_error(process_id, str(e), error_data=error_data)
         raise

@@ -1010,7 +1010,13 @@ def register_cruce_productos_endpoints(app: FastAPI):
             }
         except Exception as e:
             logger.error(f"❌ Error al iniciar cruce: {e}", exc_info=True)
-            raise HTTPException(status_code=500, detail=f"Error al iniciar cruce: {str(e)}")
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "error": "celery_unavailable",
+                    "message": "Cruce en segundo plano no disponible. Intente el cruce síncrono."
+                }
+            )
     
     @app.get("/cruce-productos/stream/{process_id}", tags=["Cruce de Productos"])
     async def stream_progreso_cruce(

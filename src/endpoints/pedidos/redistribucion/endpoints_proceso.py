@@ -452,11 +452,14 @@ def register_proceso_completo_endpoints(app: FastAPI):
             estado_service.marcar_error(
                 process_id,
                 str(e),
-                error_data={"error": "queue_error", "error_detalle": str(e)},
+                error_data={"error": "celery_unavailable", "error_detalle": str(e)},
             )
             raise HTTPException(
-                status_code=500,
-                detail={"error": "queue_error", "message": "No se pudo encolar el proceso. Intente de nuevo."}
+                status_code=503,
+                detail={
+                    "error": "celery_unavailable",
+                    "message": "Proceso en segundo plano no disponible. Se puede intentar el proceso síncrono."
+                }
             )
 
         logger.info(f"📤 Proceso SAP encolado: {process_id} (pedido: {numero_pedido}, usuario: {user_id})")
