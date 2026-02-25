@@ -10,7 +10,7 @@ Así en desarrollo solo el dev recibe todos los correos; en producción se usa l
 """
 
 import logging
-from typing import List
+from typing import Callable, List
 
 from src.config import (
     EMAIL_DEV_OVERRIDE,
@@ -27,8 +27,8 @@ from src.database.repositories.notificacion_destinatario_repository import (
 
 logger = logging.getLogger(__name__)
 
-# Mapeo tipo_notificacion -> lista de fallback desde config
-_FALLBACK: dict[str, List[str]] = {
+# Mapeo tipo_notificacion -> callable que devuelve lista de fallback desde config
+_FALLBACK: dict[str, Callable[[], List[str]]] = {
     "OPERACIONES": lambda: EMAIL_TO_OPERACIONES if isinstance(EMAIL_TO_OPERACIONES, list) else [EMAIL_TO_OPERACIONES] if EMAIL_TO_OPERACIONES else [],
     "MABEL_TRADING": lambda: EMAIL_MABEL_TRADING if isinstance(EMAIL_MABEL_TRADING, list) else [EMAIL_MABEL_TRADING] if EMAIL_MABEL_TRADING else [],
     "HOMOLOGACIONES": lambda: EMAIL_TO_HOMOLOGACIONES if isinstance(EMAIL_TO_HOMOLOGACIONES, list) else [EMAIL_TO_HOMOLOGACIONES] if EMAIL_TO_HOMOLOGACIONES else [],
