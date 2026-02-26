@@ -4,6 +4,9 @@ Tarea Celery para procesar plantilla Excel en segundo plano.
 El archivo se sube a storage temporal (MinIO/S3); esta tarea lo descarga,
 ejecuta validar_y_procesar_archivo_excel y guarda el resultado en Redis.
 Opcionalmente guarda el archivo original en la ruta definitiva y elimina el temporal.
+
+La respuesta guardada en Redis tiene la misma estructura que el upload síncrono
+(archivo_original, file_info.size_mb, metadata.uploaded_at) para paridad con el flujo sync.
 """
 import logging
 from typing import Optional, Dict, Any
@@ -13,6 +16,7 @@ from src.celery_app import celery_app
 from src.database.services.pedido_service import PedidoService
 from src.database.services.proceso_estado_service import ProcesoEstadoService
 from src.exceptions import BusinessException
+from src.utils.timezone import ahora_naive
 
 logger = logging.getLogger(__name__)
 
@@ -84,7 +88,13 @@ def procesar_plantilla_upload(
         )
 
         # Guardar archivo original en ruta definitiva si procesamiento OK y está habilitado
+        # (misma lógica que upload síncrono; respuesta con archivo_original para paridad)
         from src.config import ENABLE_FILE_STORAGE
+        archivo_original: Dict[str, Any] = {
+            "guardado": False,
+            "mensaje": "Almacenamiento deshabilitado o no aplicable" if not ENABLE_FILE_STORAGE else "No guardado",
+            "descarga_disponible": False
+        }
         if ENABLE_FILE_STORAGE and resultado.get("status") == "success" and resultado.get("pedido_id"):
             try:
                 path_final = storage.guardar_archivo(
@@ -105,10 +115,21 @@ def procesar_plantilla_upload(
                         subido_por=user_id
                     )
                 logger.info(f"✅ Archivo original guardado en storage definitivo: {path_final}")
+                archivo_original = {
+                    "guardado": True,
+                    "storage_path": path_final,
+                    "descarga_disponible": True
+                }
             except Exception as e:
                 logger.warning(f"⚠️ No se pudo guardar archivo original en storage definitivo: {e}")
+                archivo_original = {
+                    "guardado": False,
+                    "error": str(e),
+                    "descarga_disponible": False
+                }
 
-        # Resultado para el cliente (misma forma que el upload síncrono)
+        # Resultado para el cliente (misma forma que el upload síncrono: paridad async/sync)
+        file_size = len(file_content)
         response_result = {
             "status": resultado.get("status", "error"),
             "message": _mensaje_respuesta(resultado),
@@ -119,8 +140,15 @@ def procesar_plantilla_upload(
             "distribuciones_cargadas": resultado.get("distribuciones_cargadas", 0),
             "validation": resultado.get("validation"),
             "correcciones_aplicadas": resultado.get("correcciones_aplicadas", []),
-            "file_info": {"filename": filename},
-            "metadata": {"uploaded_by": user_id}
+            "file_info": {
+                "filename": filename,
+                "size_mb": round(file_size / (1024 * 1024), 2)
+            },
+            "metadata": {
+                "uploaded_by": user_id,
+                "uploaded_at": ahora_naive().isoformat()
+            },
+            "archivo_original": archivo_original
         }
         response_result = _sanitize_resultado_for_redis(response_result)
 

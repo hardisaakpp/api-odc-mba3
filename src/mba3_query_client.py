@@ -20,6 +20,10 @@ from src.config import ENVIRONMENT
 
 logger = logging.getLogger(__name__)
 
+# Timeouts: conexión corta para fallar rápido si MBA3 no está disponible; lectura larga para consultas pesadas
+MBA3_CONNECT_TIMEOUT = 10  # segundos para establecer conexión (evita colgar cuando el servidor no responde)
+MBA3_READ_TIMEOUT = 90     # segundos para leer respuesta (consultas grandes)
+
 
 class MBA3APIClient:
     """Cliente para interactuar con la API de MBA3 (4D)."""
@@ -265,7 +269,7 @@ class MBA3APIClient:
                 url,
                 data=form_data,
                 headers=headers,
-                timeout=90  # Aumentado de 30 a 90 segundos para consultas grandes
+                timeout=(MBA3_CONNECT_TIMEOUT, MBA3_READ_TIMEOUT)
             )
             
             if response.status_code == 200:
@@ -350,7 +354,7 @@ class MBA3APIClient:
                             url,
                             data=form_data,
                             headers=headers,
-                            timeout=30
+                            timeout=(MBA3_CONNECT_TIMEOUT, 30)
                         )
                         if response.status_code == 200:
                             try:
@@ -400,7 +404,7 @@ class MBA3APIClient:
                             url,
                             data=form_data,
                             headers=headers,
-                            timeout=30
+                            timeout=(MBA3_CONNECT_TIMEOUT, 30)
                         )
                         if response.status_code == 200:
                             try:

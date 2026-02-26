@@ -6,9 +6,13 @@ Extraído de pedido_validator.py para mejorar separación de responsabilidades.
 import logging
 import re
 import asyncio
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from typing import Dict, Any, List, Optional
 
 logger = logging.getLogger(__name__)
+
+# Timeout para consultas MBA3 durante validación de plantilla (evitar bloqueo si MBA3 no está disponible)
+MBA3_LOOKUP_TIMEOUT_SECONDS = 10
 
 
 class PedidoSAPValidator:
@@ -350,7 +354,7 @@ class PedidoSAPValidator:
             # Escapar comillas simples
             codigo_escaped = codigo_clean.replace("'", "''")
             
-            # Consulta a MBA3
+            # Consulta a MBA3 con timeout para no bloquear el flujo si MBA3 no está disponible
             query = (
                 "SELECT PRODUCT_ID, PRODUCT_NAME, CORP, GrupoPrenda, Talla, PRESENTACION, "
                 "GROUP_CODE, Tipo_Origen, Descontinuado, INACTIVE "
@@ -358,10 +362,23 @@ class PedidoSAPValidator:
                 f"WHERE PRODUCT_ID = '{codigo_escaped}' "
                 "LIMIT 1"
             )
-            
-            mba3_service = MBA3Service()
-            result = mba3_service.execute_query(query)
-            
+
+            def _run_mba3_query() -> Any:
+                mba3_service = MBA3Service()
+                return mba3_service.execute_query(query)
+
+            with ThreadPoolExecutor(max_workers=1) as executor:
+                future = executor.submit(_run_mba3_query)
+                try:
+                    result = future.result(timeout=MBA3_LOOKUP_TIMEOUT_SECONDS)
+                except FuturesTimeoutError:
+                    logger.warning(
+                        "⚠️ Timeout al buscar código %s en MBA3 (%ds). MBA3 puede no estar disponible.",
+                        codigo_clean,
+                        MBA3_LOOKUP_TIMEOUT_SECONDS,
+                    )
+                    return None
+
             # Normalizar resultado
             if isinstance(result, list):
                 productos = result

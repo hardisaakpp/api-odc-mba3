@@ -418,6 +418,7 @@ def register_proceso_completo_endpoints(app: FastAPI):
     @app.post("/api/pedidos/{numero_pedido}/proceso-completo-sap-async",
               tags=["Pedidos - Redistribución"])
     async def proceso_completo_sap_async(
+        request: Request,
         numero_pedido: str = Path(..., description="Número del pedido"),
         request_body: RedistribucionConfirmarRequest = Body(..., description="Datos de redistribución"),
         user: Dict = Depends(verify_jwt_token),
@@ -429,13 +430,15 @@ def register_proceso_completo_endpoints(app: FastAPI):
         Responde de inmediato con 202 y process_id. El resultado se consulta con
         GET /api/pedidos/proceso-sap/resultado/{process_id} o
         GET /api/pedidos/proceso-sap/stream/{process_id}.
+
+        Si Redis/Celery no están disponibles, se ejecuta automáticamente en primer plano
+        y se devuelve 200 con el resultado (campo "fallback": "sync" en la respuesta).
         """
         user_id = get_user_id(user)
-        estado_service = ProcesoEstadoService()
-        process_id = estado_service.crear_proceso_sap(user_id=user_id, numero_pedido=numero_pedido)
 
         try:
-            # Serializar ajustes_detalle a list of dicts para que Celery pueda enviar JSON al broker
+            estado_service = ProcesoEstadoService()
+            process_id = estado_service.crear_proceso_sap(user_id=user_id, numero_pedido=numero_pedido)
             ajustes_serialized = [
                 a.model_dump() if hasattr(a, "model_dump") else a.dict()
                 for a in request_body.ajustes_detalle
@@ -447,20 +450,35 @@ def register_proceso_completo_endpoints(app: FastAPI):
                 user_id=user_id,
                 ajustes_detalle=ajustes_serialized,
             )
+        except HTTPException:
+            raise
         except Exception as e:
-            logger.error(f"Error al encolar proceso SAP: {e}", exc_info=True)
-            estado_service.marcar_error(
-                process_id,
-                str(e),
-                error_data={"error": "celery_unavailable", "error_detalle": str(e)},
+            logger.warning(
+                f"Proceso en segundo plano no disponible ({e}). Ejecutando en primer plano (fallback sync)."
             )
-            raise HTTPException(
-                status_code=503,
-                detail={
-                    "error": "celery_unavailable",
-                    "message": "Proceso en segundo plano no disponible. Se puede intentar el proceso síncrono."
-                }
+            audit = get_audit_context(request, user, origen=ORIGEN_WEB)
+            resultado = await asyncio.to_thread(
+                _ejecutar_proceso_completo_sync,
+                numero_pedido,
+                request_body.ajustes_detalle,
+                user_id,
+                audit,
             )
+            if resultado.get("_notify_sap"):
+                try:
+                    nd = resultado["_notify_data"]
+                    await notificar_odc_enviada_a_sap(
+                        nd["pedido_id"], nd["numero_pedido"], nd.get("doc_num")
+                    )
+                except Exception as notif_err:
+                    logger.warning(f"⚠️ Error al enviar notificación SSE de ODC enviada a SAP: {notif_err}")
+            response = resultado["response"]
+            if hasattr(response, "model_dump"):
+                out = response.model_dump()
+            else:
+                out = dict(response) if response is not None else {}
+            out["fallback"] = "sync"
+            return JSONResponse(status_code=200, content=out)
 
         logger.info(f"📤 Proceso SAP encolado: {process_id} (pedido: {numero_pedido}, usuario: {user_id})")
         return JSONResponse(

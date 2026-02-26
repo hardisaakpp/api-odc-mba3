@@ -35,6 +35,27 @@ logger = logging.getLogger(__name__)
 # Exportar función principal para el linter
 __all__ = ["register_plantillas_endpoints"]
 
+# Timeout para comprobar si hay workers Celery disponibles (evitar colgar si Redis responde pero no hay worker)
+CELERY_WORKER_PING_TIMEOUT = 2.5
+
+
+def _celery_workers_available() -> bool:
+    """
+    Comprueba si hay al menos un worker Celery disponible.
+    Si no hay workers o hay error/timeout, retorna False (priorizar flujo síncrono).
+    """
+    try:
+        from src.celery_app import celery_app
+        inspect = celery_app.control.inspect(timeout=CELERY_WORKER_PING_TIMEOUT)
+        result = inspect.ping()
+        available = bool(result and len(result) > 0)
+        if not available:
+            logger.debug("No hay workers Celery disponibles (ping sin respuesta)")
+        return available
+    except Exception as e:
+        logger.debug("Comprobación de workers Celery fallida: %s", e)
+        return False
+
 
 def register_plantillas_endpoints(app: FastAPI):
     """
@@ -304,6 +325,10 @@ def register_plantillas_endpoints(app: FastAPI):
             pattern="^(validar_estricto|crear_si_no_existe|sincronizar_maestro)$"
         ),
         confirmar_sincronizacion: bool = Query(False, description="Requerido si modo_tiendas='sincronizar_maestro'"),
+        force_sync: bool = Query(
+            False,
+            description="Si True, ejecuta en primer plano y devuelve 200 con el resultado (útil si el worker no está disponible)"
+        ),
         correcciones_codigos: Optional[str] = Form(None, description="JSON con mapa de correcciones de códigos"),
         user: Dict = Depends(verify_jwt_token),
         _: None = Depends(require_permission('mabel.view'))
@@ -312,17 +337,11 @@ def register_plantillas_endpoints(app: FastAPI):
         Sube una plantilla Excel para procesamiento en segundo plano (Celery).
         Responde de inmediato con process_id; el resultado se consulta con
         GET /api/plantillas/resultado/{process_id} o GET /api/plantillas/stream/{process_id}.
-        Requiere ENABLE_FILE_STORAGE=true (MinIO/S3) para almacenamiento temporal.
+
+        Si Redis/Celery o el almacenamiento temporal no están disponibles, se procesa
+        automáticamente en primer plano y se devuelve 200 con el resultado ("fallback": "sync").
+        Con force_sync=true se ejecuta siempre en primer plano (200 + resultado, misma forma que sync).
         """
-        if not ENABLE_FILE_STORAGE:
-            raise HTTPException(
-                status_code=503,
-                detail={
-                    "error": "storage_required",
-                    "message": "El upload asíncrono requiere almacenamiento de archivos (ENABLE_FILE_STORAGE=true). "
-                               "Usa POST /api/plantillas/upload para procesamiento síncrono."
-                }
-            )
         if modo_tiendas == "sincronizar_maestro" and not confirmar_sincronizacion:
             raise HTTPException(
                 status_code=400,
@@ -350,50 +369,139 @@ def register_plantillas_endpoints(app: FastAPI):
                     raise ValueError("correcciones_codigos debe ser un objeto JSON")
             except json.JSONDecodeError as e:
                 raise HTTPException(status_code=400, detail=f"Formato JSON inválido en correcciones_codigos: {str(e)}")
-        try:
-            from src.services.file_storage_service import get_file_storage, FileStorageError
-            estado_service = ProcesoEstadoService()
-            process_id = estado_service.crear_proceso_plantilla(user_id=user_id)
-            storage = get_file_storage()
-            storage_path = storage.guardar_archivo_temporal(
-                contenido=content,
-                process_id=process_id,
-                nombre_original=file.filename or "sin_nombre.xlsx"
+
+        run_async = ENABLE_FILE_STORAGE and not force_sync
+        # Si no hay workers Celery disponibles, usar flujo síncrono automáticamente (prioridad: async, fallback: sync)
+        if run_async and not _celery_workers_available():
+            logger.info(
+                "No hay workers Celery disponibles. Ejecutando carga de plantilla en primer plano (fallback sync)."
             )
-            from src.tasks.celery_plantilla_upload import procesar_plantilla_upload
-            procesar_plantilla_upload.delay(
-                process_id=process_id,
-                user_id=user_id,
-                storage_path=storage_path,
+            run_async = False
+        if run_async:
+            try:
+                from src.services.file_storage_service import get_file_storage, FileStorageError
+                estado_service = ProcesoEstadoService()
+                process_id = estado_service.crear_proceso_plantilla(user_id=user_id)
+                storage = get_file_storage()
+                storage_path = storage.guardar_archivo_temporal(
+                    contenido=content,
+                    process_id=process_id,
+                    nombre_original=file.filename or "sin_nombre.xlsx"
+                )
+                from src.tasks.celery_plantilla_upload import procesar_plantilla_upload
+                procesar_plantilla_upload.delay(
+                    process_id=process_id,
+                    user_id=user_id,
+                    storage_path=storage_path,
+                    filename=file.filename or "sin_nombre.xlsx",
+                    validar=validar,
+                    bloquea_con_errores=bloquea_con_errores,
+                    modo_tiendas=modo_tiendas,
+                    correcciones_codigos=correcciones_dict
+                )
+                logger.info(f"📤 Plantilla encolada: {process_id} (usuario: {user_id})")
+                return JSONResponse(
+                    status_code=202,
+                    content={
+                        "status": "accepted",
+                        "process_id": process_id,
+                        "message": "Plantilla en procesamiento. Consulta GET /api/plantillas/resultado/{process_id} o GET /api/plantillas/stream/{process_id}.",
+                        "resultado_url": f"/api/plantillas/resultado/{process_id}",
+                        "stream_url": f"/api/plantillas/stream/{process_id}"
+                    }
+                )
+            except Exception as e:
+                logger.warning(
+                    "Procesamiento en segundo plano no disponible (%s). Ejecutando en primer plano (fallback sync).",
+                    e,
+                )
+                run_async = False
+
+        if not run_async:
+            from src.database.services.pedido_service import PedidoService
+            service = PedidoService()
+            resultado = service.validar_y_procesar_archivo_excel(
+                file_content=content,
                 filename=file.filename or "sin_nombre.xlsx",
-                validar=validar,
+                usuario_id=user_id,
+                validar_antes_de_guardar=validar,
                 bloquea_con_errores=bloquea_con_errores,
+                tiendas_permitidas=None,
                 modo_tiendas=modo_tiendas,
                 correcciones_codigos=correcciones_dict
             )
-            logger.info(f"📤 Plantilla encolada: {process_id} (usuario: {user_id})")
-            return JSONResponse(
-                status_code=202,
-                content={
-                    "status": "accepted",
-                    "process_id": process_id,
-                    "message": "Plantilla en procesamiento. Consulta GET /api/plantillas/resultado/{process_id} o GET /api/plantillas/stream/{process_id}.",
-                    "resultado_url": f"/api/plantillas/resultado/{process_id}",
-                    "stream_url": f"/api/plantillas/stream/{process_id}"
+            mensaje_respuesta = "Plantilla procesada y guardada exitosamente"
+            if resultado["status"] == "validation_error":
+                mensaje_respuesta = resultado.get("errores", ["Error de validación"])[0] if resultado.get("errores") else "Plantilla validada pero tiene errores críticos"
+            elif resultado["status"] == "error":
+                mensaje_respuesta = resultado.get("message", "Error al procesar plantilla")
+            response_data = {
+                "status": resultado["status"],
+                "message": mensaje_respuesta,
+                "pedido_id": resultado.get("pedido_id"),
+                "numero_pedido": resultado.get("numero_pedido"),
+                "formato_detectado": resultado.get("formato_detectado"),
+                "articulos_cargados": resultado.get("articulos_cargados", 0),
+                "distribuciones_cargadas": resultado.get("distribuciones_cargadas", 0),
+                "validation": resultado.get("validation"),
+                "correcciones_aplicadas": resultado.get("correcciones_aplicadas", []),
+                "file_info": {
+                    "filename": file.filename,
+                    "size_mb": round(file_size / (1024 * 1024), 2)
+                },
+                "metadata": {
+                    "uploaded_by": user_id,
+                    "uploaded_at": ahora_naive().isoformat()
+                },
+                "fallback": "sync",
+                "process_id": None,
+                "async": False,
+            }
+            if resultado["status"] == "validation_error":
+                return JSONResponse(status_code=400, content=response_data)
+            if resultado["status"] == "error":
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Error al procesar plantilla: {resultado.get('errores', ['Error desconocido'])}"
+                )
+            if ENABLE_FILE_STORAGE and resultado.get("pedido_id"):
+                try:
+                    from src.services.file_storage_service import get_file_storage, FileStorageError
+                    storage = get_file_storage()
+                    storage_path = storage.guardar_archivo(
+                        contenido=content,
+                        pedido_id=resultado["pedido_id"],
+                        nombre_original=file.filename or "sin_nombre.xlsx",
+                        usuario_id=user_id
+                    )
+                    with get_db_connection_context() as conn:
+                        archivo_repo = ArchivoPlantillaRepository(conn)
+                        archivo_repo.crear(
+                            pedido_id=resultado["pedido_id"],
+                            nombre_original=file.filename or "sin_nombre.xlsx",
+                            storage_path=storage_path,
+                            tamaño_bytes=file_size,
+                            subido_por=user_id
+                        )
+                    response_data["archivo_original"] = {
+                        "guardado": True,
+                        "storage_path": storage_path,
+                        "descarga_disponible": True
+                    }
+                except Exception as storage_err:
+                    logger.warning("No se pudo guardar archivo en storage (fallback): %s", storage_err)
+                    response_data["archivo_original"] = {
+                        "guardado": False,
+                        "error": str(storage_err),
+                        "descarga_disponible": False
+                    }
+            else:
+                response_data["archivo_original"] = {
+                    "guardado": False,
+                    "mensaje": "Almacenamiento deshabilitado o no aplicable" if not ENABLE_FILE_STORAGE else "No guardado",
+                    "descarga_disponible": False
                 }
-            )
-        except FileStorageError as e:
-            logger.error(f"Error storage al subir plantilla async: {e}", exc_info=True)
-            raise HTTPException(status_code=503, detail=f"Error de almacenamiento: {str(e)}")
-        except Exception as e:
-            logger.error(f"Error al encolar plantilla: {e}", exc_info=True)
-            raise HTTPException(
-                status_code=503,
-                detail={
-                    "error": "celery_unavailable",
-                    "message": "Procesamiento en segundo plano no disponible. Se usará carga síncrona."
-                }
-            )
+            return JSONResponse(status_code=200, content=response_data)
 
     @app.get("/api/plantillas/resultado/{process_id}", tags=["Plantillas"])
     async def obtener_resultado_plantilla(

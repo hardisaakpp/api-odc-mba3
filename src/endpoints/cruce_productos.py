@@ -984,39 +984,41 @@ def register_cruce_productos_endpoints(app: FastAPI):
         Para seguir el progreso, usa:
         - GET /cruce-productos/stream/{process_id} (SSE)
         - GET /cruce-productos/resultado/{process_id} (polling)
+
+        Si Redis/Celery no están disponibles, se ejecuta el cruce en primer plano
+        y se devuelve 200 con el resultado completo ("fallback": "sync").
         
         Returns:
-            {
-                "status": "success",
-                "process_id": "cruce-abc123",
-                "message": "Cruce iniciado..."
-            }
+            Si async: 202 con process_id.
+            Si fallback sync: 200 con "data", "message", "fallback": "sync".
         """
+        user_id = user.get('id') or user.get('username', 'unknown')
         try:
             estado_service = ProcesoEstadoService()
-            user_id = user.get('id') or user.get('username', 'unknown')
             process_id = estado_service.crear_proceso(user_id=user_id)
-            
-            # Ejecutar en Celery (background task)
             from src.tasks.celery_cruce_productos import ejecutar_cruce_productos
             ejecutar_cruce_productos.delay(process_id, user_id)
-            
             logger.info(f"🚀 Cruce iniciado: {process_id} (usuario: {user_id})")
-            
             return {
                 "status": "success",
                 "process_id": process_id,
                 "message": "Cruce iniciado. Usa GET /cruce-productos/stream/{process_id} para ver progreso."
             }
+        except HTTPException:
+            raise
         except Exception as e:
-            logger.error(f"❌ Error al iniciar cruce: {e}", exc_info=True)
-            raise HTTPException(
-                status_code=503,
-                detail={
-                    "error": "celery_unavailable",
-                    "message": "Cruce en segundo plano no disponible. Intente el cruce síncrono."
-                }
+            logger.warning(
+                "Cruce en segundo plano no disponible (%s). Ejecutando en primer plano (fallback sync).",
+                e,
             )
+            service = CruceProductosService()
+            resultado = await asyncio.to_thread(service.realizar_cruce)
+            return {
+                "status": "success",
+                "data": resultado,
+                "message": "Cruce de productos completado exitosamente (ejecutado en primer plano)",
+                "fallback": "sync",
+            }
     
     @app.get("/cruce-productos/stream/{process_id}", tags=["Cruce de Productos"])
     async def stream_progreso_cruce(
