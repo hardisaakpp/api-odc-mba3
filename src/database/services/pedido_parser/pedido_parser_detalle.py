@@ -10,7 +10,7 @@ import pandas as pd
 import io
 from typing import Dict, Any, List, Optional
 
-from .pedido_parser_utils import PedidoParserUtils, normalize_column_name
+from .pedido_parser_utils import PedidoParserUtils, normalize_column_name, normalize_codigo_columna
 
 logger = logging.getLogger(__name__)
 
@@ -83,9 +83,23 @@ class PedidoParserDetalle:
                 engine='openpyxl'
             )
             
-            df_detalle.columns = [str(col).strip() if pd.notna(col) else f"col_{i}" 
-                                 for i, col in enumerate(df_detalle.columns)]
-            
+            _raw_cols = [
+                normalize_codigo_columna(str(col)) if pd.notna(col) and str(col).strip() else f"col_{i}"
+                for i, col in enumerate(df_detalle.columns)
+            ]
+            # Asegurar unicidad: si la normalización duplicó nombres (ej. OOUT-CD y OUT-CD -> OUT-CD), renumerar
+            seen: Dict[str, int] = {}
+            new_cols = []
+            for c in _raw_cols:
+                base = c
+                if base not in seen:
+                    seen[base] = 1
+                    new_cols.append(base)
+                else:
+                    new_cols.append(f"{base}.{seen[base]}")
+                    seen[base] += 1
+            df_detalle.columns = new_cols
+
             logger.info(f"📋 Nombres de columnas (fila 1) detectados: {list(df_detalle.columns)[:15]}...")
             
             codigos_columnas = {}
@@ -108,7 +122,7 @@ class PedidoParserDetalle:
                 for col_idx in range(len(fila_codigos)):
                     codigo_val = fila_codigos.iloc[col_idx]
                     if codigo_val is not None and not pd.isna(codigo_val) and str(codigo_val).strip():
-                        codigo_str = str(codigo_val).strip().upper()
+                        codigo_str = normalize_codigo_columna(codigo_val).upper()
                         codigos_columnas[col_idx] = codigo_str
             
             columnas_producto = self.identificar_columnas_producto(df_detalle)
@@ -415,8 +429,11 @@ class PedidoParserDetalle:
             for bodega_codigo, col_bodega_name in columnas_bodegas.items():
                 cantidad_raw = row.get(col_bodega_name)
                 if cantidad_raw is not None and not pd.isna(cantidad_raw):
+                    raw_str = str(cantidad_raw).strip().replace(",", ".")
+                    if raw_str.upper() in ("", "-", "N/A", "NA"):
+                        continue
                     try:
-                        cantidad = int(float(str(cantidad_raw).strip().replace(",", ".")))
+                        cantidad = int(float(raw_str))
                         if cantidad > 0:
                             bodega_codigo_final = str(bodega_codigo).strip().upper()
                             resultado["data"].append({
@@ -443,21 +460,25 @@ class PedidoParserDetalle:
                     col_name = df_detalle.columns[col_idx]
                     cantidad_raw = row.get(col_name)
                     if cantidad_raw is not None and not pd.isna(cantidad_raw):
-                        try:
-                            cantidad = int(float(str(cantidad_raw).strip().replace(",", ".")))
-                            if cantidad > 0:
-                                codigo_tienda_final = str(codigo_tienda).strip().upper()
-                                resultado["data"].append({
-                                    "codigoProducto": codigo_producto,
-                                    "idTienda": codigo_tienda_final,
-                                    "nombreTienda": nombre_tienda,
-                                    "cantidad": cantidad,
-                                    "filaOrigen": row_num,
-                                    "es_bodega": False,
-                                    "info_producto": info_producto
-                                })
-                                logger.debug(f"   Fila {row_num}: {codigo_producto} → {codigo_tienda_final} ({nombre_tienda}) x{cantidad} (tienda)")
-                        except (ValueError, TypeError):
-                            logger.warning(f"⚠️ Fila {row_num}: Cantidad inválida en tienda {codigo_tienda}: {cantidad_raw}")
+                        raw_str = str(cantidad_raw).strip().replace(",", ".")
+                        if raw_str.upper() in ("", "-", "N/A", "NA"):
+                            pass  # omitir sin warning
+                        else:
+                            try:
+                                cantidad = int(float(raw_str))
+                                if cantidad > 0:
+                                    codigo_tienda_final = str(codigo_tienda).strip().upper()
+                                    resultado["data"].append({
+                                        "codigoProducto": codigo_producto,
+                                        "idTienda": codigo_tienda_final,
+                                        "nombreTienda": nombre_tienda,
+                                        "cantidad": cantidad,
+                                        "filaOrigen": row_num,
+                                        "es_bodega": False,
+                                        "info_producto": info_producto
+                                    })
+                                    logger.debug(f"   Fila {row_num}: {codigo_producto} → {codigo_tienda_final} ({nombre_tienda}) x{cantidad} (tienda)")
+                            except (ValueError, TypeError):
+                                logger.warning(f"⚠️ Fila {row_num}: Cantidad inválida en tienda {codigo_tienda}: {cantidad_raw}")
             
             resultado["resumen"]["filasValidas"] += 1

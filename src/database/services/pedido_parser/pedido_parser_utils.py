@@ -24,6 +24,24 @@ def normalize_column_name(value: Any) -> str:
     return str(value).strip().lower()
 
 
+def normalize_codigo_columna(value: Any) -> str:
+    """
+    Normaliza código de columna (bodega/tienda) para evitar artefactos de lectura Excel.
+    - Quita espacios.
+    - Si las dos primeras letras son iguales (ej. OOUT-CD, TTRL-SNL), quita la primera.
+    Así se corrigen columnas leídas con carácter duplicado (merged cells, encoding, etc.).
+    """
+    if value is None or (hasattr(pd, "isna") and pd.isna(value)):
+        return ""
+    s = str(value).strip()
+    if not s:
+        return s
+    # Quitar primer carácter duplicado: OOUT-CD -> OUT-CD, TTRL-SNL -> TRL-SNL, RRG-CD -> RG-CD
+    if len(s) >= 2 and s[0].upper() == s[1].upper():
+        return s[1:].strip()
+    return s
+
+
 class PedidoParserUtils:
     """Utilidades compartidas para parsers de pedido."""
 

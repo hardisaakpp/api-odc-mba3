@@ -1022,6 +1022,73 @@ const handleUpload = async () => {
 </script>
 ```
 
+### 0.5.12.2 Upload asíncrono (Celery): actualizar la interfaz al terminar
+
+**Problema:** Si la carga de plantilla se hace con **Celery** (`POST /api/plantillas/upload-async`), el backend responde **202** con `process_id` y el resultado no está listo hasta que la tarea termina. Si el frontend no consulta el resultado ni actualiza la UI al terminar, **la información no se carga automáticamente** en `http://localhost:3000/mba3-consultas/cargar-plantilla`.
+
+**Solución obligatoria en el frontend:**
+
+1. Tras recibir **202** de `POST /api/plantillas/upload-async`, guardar `process_id`.
+2. **Consultar el resultado** hasta que termine:
+   - **Opción A (polling):** llamar `GET /api/plantillas/resultado/{process_id}` cada 1–2 s hasta que la respuesta tenga `status === 'completed'` o `status === 'error'`.
+   - **Opción B (recomendada):** abrir **SSE** `GET /api/plantillas/stream/{process_id}` y reaccionar al evento donde `status === 'completed'` o `status === 'error'`.
+3. **Cuando `status === 'completed`:**
+   - Con **polling:** el cuerpo de `GET /api/plantillas/resultado/{process_id}` es directamente el resultado (incluye `numero_pedido`, `correcciones_aplicadas`, etc.).
+   - Con **SSE:** el evento trae `resultado` con esos mismos campos.
+   - A partir de ese resultado:
+     - **Refrescar la lista de pedidos:** `GET /api/plantillas/pedidos` (para que el nuevo pedido aparezca en el contenedor "Pedidos").
+     - **Navegar** a `/mba3-consultas/cargar-plantilla/{encodeURIComponent(numero_pedido)}` (con `replace: true`).
+     - **Cargar los datos del pedido** en esa vista (p. ej. `GET /api/plantillas/ultimo` o `GET /api/pedidos/{id}` o el endpoint que use la página) para pintar la tabla.
+   - Opcional: guardar `correcciones_aplicadas` en store o `sessionStorage` por `numero_pedido` para el resaltado de códigos corregidos (ver 0.5.12 / flujo async).
+4. **Cuando `status === 'error':** mostrar el mensaje de error y, si viene `validacion_sap` / `error_data`, la UI de corrección de códigos si aplica.
+
+**Ejemplo (polling) después de recibir 202:**
+
+```tsx
+// Tras response.status === 202 y data.process_id
+const processId = data.process_id;
+
+const pollResult = async (): Promise<{ status: string; numero_pedido?: string; [k: string]: unknown }> => {
+  const res = await fetch(`/api/plantillas/resultado/${processId}`, {
+    headers: { 'Authorization': `Bearer ${token}` }
+  });
+  const body = await res.json();
+  // Cuando status === 'completed', el cuerpo ES el resultado (numero_pedido, correcciones_aplicadas, etc.)
+  if (body.status === 'completed') return body;
+  if (body.status === 'error') return body;
+  return body; // procesando, etc.
+};
+
+let result;
+while (true) {
+  result = await pollResult();
+  if (result.status === 'completed' || result.status === 'error') break;
+  await new Promise(r => setTimeout(r, 1500));
+}
+
+if (result.status === 'error') {
+  showErrorNotification(result.message || result.error || 'Error al procesar plantilla');
+  setUploading(false);
+  return;
+}
+
+// Éxito: actualizar interfaz
+const numeroPedido = result.numero_pedido;
+await refetchListaPedidos(); // GET /api/plantillas/pedidos
+navigate(`/mba3-consultas/cargar-plantilla/${encodeURIComponent(numeroPedido)}`, { replace: true });
+await cargarDatosPedido(numeroPedido); // cargar detalle en esta vista
+setUploading(false);
+showSuccessNotification('Plantilla cargada exitosamente');
+```
+
+**Checklist para que la información se cargue automáticamente al terminar Celery:**
+
+- [ ] Si se usa `upload-async`, no tratar la respuesta 202 como éxito con datos listos.
+- [ ] Implementar polling a `GET /api/plantillas/resultado/{process_id}` o SSE `GET /api/plantillas/stream/{process_id}` hasta `completed`/`error`.
+- [ ] Al recibir `completed`: refrescar lista de pedidos, navegar a `cargar-plantilla/{numero_pedido}` y cargar los datos del pedido en esa interfaz.
+
+---
+
 **Estructura de Respuesta del Backend:**
 
 El endpoint `POST /api/plantillas/upload` devuelve:

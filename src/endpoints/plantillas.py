@@ -181,19 +181,26 @@ def register_plantillas_endpoints(app: FastAPI):
             )
             
             # Construir mensaje de respuesta
+            # Si se guardó el pedido (hay pedido_id), considerar éxito para mensaje y redirección
+            tiene_pedido_guardado = bool(resultado.get("pedido_id"))
             mensaje_respuesta = "Plantilla procesada y guardada exitosamente"
             if resultado["status"] == "validation_error":
-                errores = resultado.get("errores", [])
-                if errores:
-                    mensaje_respuesta = errores[0]
+                if tiene_pedido_guardado:
+                    mensaje_respuesta = "Plantilla procesada y guardada con advertencias. Revisa el detalle si lo deseas."
                 else:
-                    mensaje_respuesta = "Plantilla validada pero tiene errores críticos"
+                    errores = resultado.get("errores", [])
+                    mensaje_respuesta = errores[0] if errores else "Plantilla validada pero tiene errores críticos"
             elif resultado["status"] == "error":
                 mensaje_respuesta = resultado.get("message", "Error al procesar plantilla")
             
+            # Para que el frontend redirija a cargar-plantilla/{numero_pedido}, devolver status "success" cuando hubo persistencia
+            status_respuesta = resultado["status"]
+            if resultado["status"] == "validation_error" and tiene_pedido_guardado:
+                status_respuesta = "success"
+            
             # Construir respuesta
             response_data = {
-                "status": resultado["status"],
+                "status": status_respuesta,
                 "message": mensaje_respuesta,
                 "pedido_id": resultado.get("pedido_id"),
                 "numero_pedido": resultado.get("numero_pedido"),
@@ -220,8 +227,8 @@ def register_plantillas_endpoints(app: FastAPI):
                 response_data["validation_log_excel_base64"] = base64.b64encode(excel_bytes).decode('utf-8')
                 response_data["validation_log_filename"] = f"validation_log_{ahora_naive().strftime('%Y%m%d_%H%M%S')}.xlsx"
             
-            # Si hay errores de validación, retornar 400 pero con detalles
-            if resultado["status"] == "validation_error":
+            # Si hay errores de validación y NO se guardó pedido, retornar 400 con detalles
+            if resultado["status"] == "validation_error" and not tiene_pedido_guardado:
                 return JSONResponse(
                     status_code=400,
                     content=response_data
@@ -430,13 +437,21 @@ def register_plantillas_endpoints(app: FastAPI):
                 modo_tiendas=modo_tiendas,
                 correcciones_codigos=correcciones_dict
             )
+            # Misma lógica que upload sync: si se guardó el pedido, éxito para mensaje y redirección
+            tiene_pedido_guardado = bool(resultado.get("pedido_id"))
             mensaje_respuesta = "Plantilla procesada y guardada exitosamente"
             if resultado["status"] == "validation_error":
-                mensaje_respuesta = resultado.get("errores", ["Error de validación"])[0] if resultado.get("errores") else "Plantilla validada pero tiene errores críticos"
+                if tiene_pedido_guardado:
+                    mensaje_respuesta = "Plantilla procesada y guardada con advertencias. Revisa el detalle si lo deseas."
+                else:
+                    mensaje_respuesta = resultado.get("errores", ["Error de validación"])[0] if resultado.get("errores") else "Plantilla validada pero tiene errores críticos"
             elif resultado["status"] == "error":
                 mensaje_respuesta = resultado.get("message", "Error al procesar plantilla")
+            status_respuesta = resultado["status"]
+            if resultado["status"] == "validation_error" and tiene_pedido_guardado:
+                status_respuesta = "success"
             response_data = {
-                "status": resultado["status"],
+                "status": status_respuesta,
                 "message": mensaje_respuesta,
                 "pedido_id": resultado.get("pedido_id"),
                 "numero_pedido": resultado.get("numero_pedido"),
@@ -457,7 +472,7 @@ def register_plantillas_endpoints(app: FastAPI):
                 "process_id": None,
                 "async": False,
             }
-            if resultado["status"] == "validation_error":
+            if resultado["status"] == "validation_error" and not tiene_pedido_guardado:
                 return JSONResponse(status_code=400, content=response_data)
             if resultado["status"] == "error":
                 raise HTTPException(

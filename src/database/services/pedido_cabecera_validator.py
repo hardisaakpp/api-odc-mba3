@@ -6,8 +6,8 @@ CHANGELOG:
 """
 
 import logging
-from typing import Dict, Any, List
-from datetime import datetime, date
+from typing import Any, Dict, List
+from datetime import date, datetime
 
 from .pedido_validation_types import ValidationIssue, ValidationSeverity
 
@@ -108,21 +108,34 @@ class PedidoCabeceraValidator:
         """
         Parsea una fecha desde string o date.
 
+        Acepta: YYYY-MM-DD, DD/MM/YYYY, YYYY-MM-DD HH:MM:SS (datetime)
+        y objetos date/datetime.
+
         Args:
-            fecha_value: Valor a parsear (str o date)
+            fecha_value: Valor a parsear (str, date o datetime)
 
         Returns:
             Objeto date si es válido, None si no se pudo parsear
         """
+        if isinstance(fecha_value, datetime):
+            return fecha_value.date()
         if isinstance(fecha_value, date):
             return fecha_value
         if isinstance(fecha_value, str):
-            try:
-                return datetime.strptime(fecha_value, "%Y-%m-%d").date()
-            except ValueError:
+            s = fecha_value.strip()
+            if not s:
+                return None
+            # Intentar formatos en orden: solo fecha, luego datetime
+            for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%Y-%m-%d %H:%M:%S", "%d/%m/%Y %H:%M:%S"):
                 try:
-                    return datetime.strptime(fecha_value, "%d/%m/%Y").date()
+                    return datetime.strptime(s, fmt).date()
                 except ValueError:
-                    return None
+                    continue
+            # Si la cadena es larga (ej. "2026-02-25 00:00:00"), usar solo los primeros 10 para %Y-%m-%d
+            if len(s) >= 10:
+                try:
+                    return datetime.strptime(s[:10], "%Y-%m-%d").date()
+                except ValueError:
+                    pass
         return None
 

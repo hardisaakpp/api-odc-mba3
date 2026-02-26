@@ -95,7 +95,7 @@ def procesar_plantilla_upload(
             "mensaje": "Almacenamiento deshabilitado o no aplicable" if not ENABLE_FILE_STORAGE else "No guardado",
             "descarga_disponible": False
         }
-        if ENABLE_FILE_STORAGE and resultado.get("status") == "success" and resultado.get("pedido_id"):
+        if ENABLE_FILE_STORAGE and resultado.get("pedido_id"):
             try:
                 path_final = storage.guardar_archivo(
                     contenido=file_content,

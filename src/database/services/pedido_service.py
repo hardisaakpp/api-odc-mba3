@@ -1101,7 +1101,8 @@ class PedidoService:
                     }
                 }
                 
-                # Si hay errores críticos y está configurado para bloquear, no guardar
+                # Si hay errores críticos y está configurado para bloquear, marcar pero seguir para persistir
+                # (sync y async: la información se guarda en pedido para que el toast muestre pedido_id y conteos)
                 if not validation_result["valid"] and bloquea_con_errores:
                     resultado["status"] = "validation_error"
                     resultado["errores"].append(
@@ -1109,9 +1110,9 @@ class PedidoService:
                     )
                     logger.warning(
                         f"⚠️ Validación fallida para {filename}: "
-                        f"{validation_result['errors']} error(es), {validation_result['warnings']} advertencia(s)"
+                        f"{validation_result['errors']} error(es), {validation_result['warnings']} advertencia(s). Se persistirá igual para mantener datos."
                     )
-                    return resultado
+                    # No return: continuar para persistir pedido y devolver pedido_id/articulos/distribuciones
             
             # ✅ Preparar validación SAP para persistencia (ya validada arriba)
             # La validación SAP obligatoria ya se ejecutó arriba, aquí solo preparamos para persistencia
@@ -1587,11 +1588,8 @@ class PedidoService:
             validar_sap: Si True, filtra productos no validados en SAP
             validacion_sap: Resultado de validación SAP (opcional)
         """
-        # ✅ NO GUARDAR si hay errores de validación
-        if resultado.get("status") != "success":
-            logger.warning(f"⚠️ No se guardó el pedido debido a errores de validación. Status: {resultado.get('status')}")
-            return
-        
+        # Persistir siempre que se invoque: ya se pasó validación SAP y hay cabecera/detalles.
+        # Si status es validation_error, igual se guarda para que sync/async devuelvan pedido_id y conteos.
         # ✅ FILTRAR productos no validados en SAP (si se validó SAP)
         with get_db_connection_context() as conn:
             repository = PedidoRepository(conn)
