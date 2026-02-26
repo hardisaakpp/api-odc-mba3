@@ -16,12 +16,12 @@ import json
 import logging
 from typing import Dict, List
 
-from fastapi import FastAPI, Depends, HTTPException, Path, Body, status, Request
+from fastapi import FastAPI, Depends, HTTPException, Path, Body, Query, status, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from src.utils.timezone import ahora_naive
 from src.database.connection import get_db_connection_context
-from src.database.pedido_estados import ESTADO_PEDIDO_CONFIRMADO
+from src.database.pedido_estados import ESTADO_PEDIDO_CONFIRMADO, ESTADO_CONFIRMADO_ENVIADO
 from src.database.repositories.distribucion_confirmada_repository import DistribucionConfirmadaRepository
 from src.database.repositories.pedido_repository import PedidoRepository
 from src.database.services.proceso_estado_service import ProcesoEstadoService
@@ -41,6 +41,27 @@ from ._sap_processing import procesar_pedido_sap_con_homologacion_sync
 from ._notifications import notificar_odc_enviada_a_sap
 
 logger = logging.getLogger(__name__)
+
+# Timeout para comprobar si hay workers Celery (evitar 202 sin worker y polling colgado)
+CELERY_WORKER_PING_TIMEOUT = 2.5
+
+
+def _celery_workers_available() -> bool:
+    """
+    Comprueba si hay al menos un worker Celery disponible.
+    Si no hay workers o hay error/timeout, retorna False (priorizar flujo síncrono).
+    """
+    try:
+        from src.celery_app import celery_app
+        inspect = celery_app.control.inspect(timeout=CELERY_WORKER_PING_TIMEOUT)
+        result = inspect.ping()
+        available = bool(result and len(result) > 0)
+        if not available:
+            logger.debug("No hay workers Celery disponibles (ping sin respuesta)")
+        return available
+    except Exception as e:
+        logger.debug("Comprobación de workers Celery fallida: %s", e)
+        return False
 
 
 def _ejecutar_proceso_completo_sync(
@@ -247,6 +268,10 @@ def _ejecutar_proceso_completo_sync(
             if success:
                 logger.info(f"✅ PASO 3/3 completado: ODC enviada a SAP (DocNum: {doc_num})")
 
+                # Actualizar pedido a "Confirmado y enviado" (ODC enviada a SAP correctamente)
+                repo_pedido.update_estado(pedido_id, ESTADO_CONFIRMADO_ENVIADO, audit_context=audit)
+                logger.debug(f"✅ Estado actualizado para pedido {pedido_id}: estado_id={ESTADO_CONFIRMADO_ENVIADO} (Confirmado y enviado)")
+
                 # Enviar email de confirmación (síncrono - OK, estamos en thread)
                 try:
                     from src.utils.email_notifier import send_mabel_redistribucion_confirmacion_notification
@@ -421,6 +446,10 @@ def register_proceso_completo_endpoints(app: FastAPI):
         request: Request,
         numero_pedido: str = Path(..., description="Número del pedido"),
         request_body: RedistribucionConfirmarRequest = Body(..., description="Datos de redistribución"),
+        force_sync: bool = Query(
+            False,
+            description="Si True, ejecuta en primer plano y devuelve 200 con el resultado (útil si el worker no está disponible)"
+        ),
         user: Dict = Depends(verify_jwt_token),
         _: None = Depends(require_permission('mabel.view'))
     ):
@@ -431,31 +460,57 @@ def register_proceso_completo_endpoints(app: FastAPI):
         GET /api/pedidos/proceso-sap/resultado/{process_id} o
         GET /api/pedidos/proceso-sap/stream/{process_id}.
 
-        Si Redis/Celery no están disponibles, se ejecuta automáticamente en primer plano
-        y se devuelve 200 con el resultado (campo "fallback": "sync" en la respuesta).
+        Si Redis/Celery no están disponibles o no hay workers, se ejecuta automáticamente
+        en primer plano y se devuelve 200 con el resultado ("fallback": "sync",
+        process_id: null, async: false). Con force_sync=true se ejecuta siempre en
+        primer plano (200 + resultado, misma forma que sync).
         """
         user_id = get_user_id(user)
+        run_async = not force_sync
 
-        try:
-            estado_service = ProcesoEstadoService()
-            process_id = estado_service.crear_proceso_sap(user_id=user_id, numero_pedido=numero_pedido)
-            ajustes_serialized = [
-                a.model_dump() if hasattr(a, "model_dump") else a.dict()
-                for a in request_body.ajustes_detalle
-            ]
-            from src.tasks.celery_proceso_sap import ejecutar_proceso_completo_sap
-            ejecutar_proceso_completo_sap.delay(
-                process_id=process_id,
-                numero_pedido=numero_pedido,
-                user_id=user_id,
-                ajustes_detalle=ajustes_serialized,
+        # Si no hay workers Celery, usar flujo síncrono (evitar 202 y polling colgado)
+        if run_async and not _celery_workers_available():
+            logger.info(
+                "No hay workers Celery disponibles. Ejecutando proceso SAP en primer plano (fallback sync)."
             )
-        except HTTPException:
-            raise
-        except Exception as e:
-            logger.warning(
-                f"Proceso en segundo plano no disponible ({e}). Ejecutando en primer plano (fallback sync)."
-            )
+            run_async = False
+
+        if run_async:
+            try:
+                estado_service = ProcesoEstadoService()
+                process_id = estado_service.crear_proceso_sap(user_id=user_id, numero_pedido=numero_pedido)
+                ajustes_serialized = [
+                    a.model_dump() if hasattr(a, "model_dump") else a.dict()
+                    for a in request_body.ajustes_detalle
+                ]
+                from src.tasks.celery_proceso_sap import ejecutar_proceso_completo_sap
+                ejecutar_proceso_completo_sap.delay(
+                    process_id=process_id,
+                    numero_pedido=numero_pedido,
+                    user_id=user_id,
+                    ajustes_detalle=ajustes_serialized,
+                )
+                logger.info(f"📤 Proceso SAP encolado: {process_id} (pedido: {numero_pedido}, usuario: {user_id})")
+                return JSONResponse(
+                    status_code=202,
+                    content={
+                        "status": "accepted",
+                        "process_id": process_id,
+                        "message": "Proceso en segundo plano. Consulta el resultado con resultado_url o stream_url.",
+                        "resultado_url": f"/api/pedidos/proceso-sap/resultado/{process_id}",
+                        "stream_url": f"/api/pedidos/proceso-sap/stream/{process_id}",
+                    },
+                )
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.warning(
+                    "Proceso en segundo plano no disponible (%s). Ejecutando en primer plano (fallback sync).",
+                    e,
+                )
+                run_async = False
+
+        if not run_async:
             audit = get_audit_context(request, user, origen=ORIGEN_WEB)
             resultado = await asyncio.to_thread(
                 _ejecutar_proceso_completo_sync,
@@ -474,23 +529,21 @@ def register_proceso_completo_endpoints(app: FastAPI):
                     logger.warning(f"⚠️ Error al enviar notificación SSE de ODC enviada a SAP: {notif_err}")
             response = resultado["response"]
             if hasattr(response, "model_dump"):
-                out = response.model_dump()
+                # mode='json' serializa datetime a string (evita TypeError en JSONResponse)
+                try:
+                    out = response.model_dump(mode="json")
+                except TypeError:
+                    out = response.model_dump()
+                    if "fecha_proceso" in out and hasattr(out.get("fecha_proceso"), "isoformat"):
+                        out["fecha_proceso"] = out["fecha_proceso"].isoformat()
             else:
                 out = dict(response) if response is not None else {}
+                if "fecha_proceso" in out and hasattr(out.get("fecha_proceso"), "isoformat"):
+                    out["fecha_proceso"] = out["fecha_proceso"].isoformat()
             out["fallback"] = "sync"
+            out["process_id"] = None
+            out["async"] = False
             return JSONResponse(status_code=200, content=out)
-
-        logger.info(f"📤 Proceso SAP encolado: {process_id} (pedido: {numero_pedido}, usuario: {user_id})")
-        return JSONResponse(
-            status_code=202,
-            content={
-                "status": "accepted",
-                "process_id": process_id,
-                "message": "Proceso en segundo plano. Consulta el resultado con resultado_url o stream_url.",
-                "resultado_url": f"/api/pedidos/proceso-sap/resultado/{process_id}",
-                "stream_url": f"/api/pedidos/proceso-sap/stream/{process_id}",
-            },
-        )
 
     @app.get("/api/pedidos/proceso-sap/resultado/{process_id}", tags=["Pedidos - Redistribución"])
     async def obtener_resultado_proceso_sap(
