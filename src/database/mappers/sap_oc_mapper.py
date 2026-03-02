@@ -107,12 +107,14 @@ class SAPOCMapper:
         
         # Construir JSON completo con UDFs de trazabilidad
         # ⚠️ NOTA: Purchase Orders usa DocDueDate (no DueDate), que es correcto para este endpoint
+        # PriceList: 2 = "Último precio determinado" (según configuración SAP)
         purchase_order = {
             "CardCode": proveedor,
             "DocDate": fecha,
             "DocDueDate": fecha,  # ⚠️ Correcto para Purchase Orders (POST /PurchaseOrders)
             "TaxDate": fecha,
             "Comments": f"Ref: {oc_cabecera.get('referencia_despacho', 'N/A')}",
+            "PriceList": -2,
             
             # UDFs de trazabilidad
             "U_ORIGEN": "C",  # Sistema origen (C = consultas)

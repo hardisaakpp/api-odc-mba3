@@ -1,0 +1,57 @@
+# MBA3 Consultas - Servidor de pruebas con Docker
+# Uso: docker compose up -d --build
+# Requiere .env en la misma carpeta (REDIS_URL se sobrescribe aquí para los contenedores).
+
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    restart: unless-stopped
+
+  api:
+    build: .
+    ports:
+      - "8000:8000"
+    env_file: .env
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+    depends_on:
+      - redis
+    restart: unless-stopped
+
+  celery-worker:
+    build: .
+    command: celery -A src.celery_app worker --loglevel=info --pool=solo
+    env_file: .env
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+    depends_on:
+      - redis
+      - api
+    restart: unless-stopped
+
+  # Descomentar para tareas programadas (Celery Beat)
+  # celery-beat:
+  #   build: .
+  #   command: celery -A src.celery_app beat --loglevel=info
+  #   env_file: .env
+  #   environment:
+  #     - REDIS_URL=redis://redis:6379/0
+  #   depends_on:
+  #     - redis
+  #   restart: unless-stopped
+
+  # Descomentar para monitoreo con Flower (puerto 5555)
+  # flower:
+  #   build: .
+  #   command: celery -A src.celery_app flower --port=5555
+  #   env_file: .env
+  #   environment:
+  #     - REDIS_URL=redis://redis:6379/0
+  #   ports:
+  #     - "5555:5555"
+  #   depends_on:
+  #     - redis
+  #     - celery-worker
+  #   restart: unless-stopped

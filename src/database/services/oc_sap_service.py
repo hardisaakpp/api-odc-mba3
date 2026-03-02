@@ -215,24 +215,6 @@ class OCSAPService:
                     else:
                         logger.warning(f"⚠️ No se pudo determinar bodega para ODC {oc_id}. La ODC se enviará sin WarehouseCode.")
             
-            # DESACTIVADO: Generar JSON de SAP y guardar en output/ (diagnóstico, antes de validaciones)
-            # try:
-            #     purchase_order_json_preview = SAPOCMapper.to_sap_purchase_order(
-            #         oc_cabecera,
-            #         oc_detalles,
-            #         warehouse_code,
-            #         usuario_id=oc_cabecera.get("creado_por"),
-            #         pedido_id=oc_cabecera.get("pedido_id")
-            #     )
-            #     output_dir = PROJECT_ROOT / "output"
-            #     output_dir.mkdir(parents=True, exist_ok=True)
-            #     out_file = output_dir / f"odc_{oc_id}.json"
-            #     with open(out_file, "w", encoding="utf-8") as f:
-            #         json.dump(purchase_order_json_preview, f, ensure_ascii=False, indent=2, default=str)
-            #     logger.info(f"📥 ODC (preview) guardada en {out_file}")
-            # except Exception as e:
-            #     logger.warning(f"⚠️ No se pudo generar/guardar preview de ODC en output/: {e}")
-            
             # 3. Validar antes de crear OC
             validacion = self._validar_antes_de_crear_oc(oc_cabecera, oc_detalles)
             
@@ -302,6 +284,17 @@ class OCSAPService:
                     usuario_id=oc_cabecera.get("creado_por"),  # Usuario de la cabecera
                     pedido_id=oc_cabecera.get("pedido_id")     # Pedido relacionado
                 )
+                # ⭐ Rehabilitado: exponer y persistir el JSON del request a SAP (diagnóstico)
+                result["sap_request_json"] = purchase_order_json
+                try:
+                    output_dir = PROJECT_ROOT / "output"
+                    output_dir.mkdir(parents=True, exist_ok=True)
+                    out_file = output_dir / f"odc_{oc_id}.json"
+                    with open(out_file, "w", encoding="utf-8") as f:
+                        json.dump(purchase_order_json, f, ensure_ascii=False, indent=2, default=str)
+                    logger.info(f"📥 ODC (request SAP) guardada en {out_file}")
+                except Exception as e:
+                    logger.warning(f"⚠️ No se pudo guardar ODC en output/: {e}")
             except ValueError as e:
                 error_msg = f"Error al construir JSON de SAP: {str(e)}"
                 result["error"] = error_msg

@@ -343,6 +343,7 @@ def register_sap_endpoints(app: FastAPI):
                     error = resultado.get("error")
                     doc_entry = resultado.get("doc_entry")
                     doc_num = resultado.get("doc_num")
+                    sap_request_json = resultado.get("sap_request_json")  # JSON enviado a SAP (debug)
                     sap_response = resultado.get("sap_response")  # Respuesta completa de SAP
                     error_code = resultado.get("error_code")  # Código de error de SAP
                     error_source = resultado.get("error_source")  # Origen del error (SAP, BACKEND, etc.)
@@ -396,6 +397,7 @@ def register_sap_endpoints(app: FastAPI):
                         "error_message": error,  # Alias para compatibilidad con frontend
                         "error_code": error_code,  # Código de error de SAP (ej: -4013)
                         "error_source": error_source,  # Origen: "SAP", "BACKEND", "SAP_CONNECTION", o None si éxito
+                        "sap_request_json": sap_request_json,  # Payload usado para POST /PurchaseOrders
                         "sap_response": sap_response,  # Respuesta completa de SAP (éxito)
                         "sap_error_details": sap_error_details,  # Detalles del error de SAP (si aplica)
                         "solicitudes_transferencia": resultado_st,  # Resultado de ST por tienda (para evaluación de cierre)
