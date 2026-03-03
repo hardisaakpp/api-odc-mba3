@@ -2,7 +2,11 @@
 -- Migración: Cambiar cantidad en pedido_detalle_tienda de INT a DECIMAL
 -- ============================================================================
 -- Descripción: Permite cantidades decimales en la distribución por tienda
---              (ej. 1.5, 2.25) en lugar de solo enteros.
+--              (ej. 0.5, 1.5, 2.25) en lugar de solo enteros.
+--              Sin esta migración, valores como 0.5 se truncarían a 0.
+-- Cuándo ejecutar: Si la tabla fue creada con cantidad INT (instalaciones
+--                  antiguas o scripts previos). Las nuevas instalaciones con
+--                  create_pedido_tables.sql ya usan DECIMAL(18,4).
 -- Fecha: 2026-03-02
 -- ============================================================================
 

@@ -290,14 +290,16 @@ class PedidoAjusteService:
             
             distribucion_especifica = {}
             for row in cursor.fetchall():
-                distribucion_especifica[str(row[0])] = int(row[1])
+                # Preservar decimales (columna puede ser DECIMAL)
+                distribucion_especifica[str(row[0])] = float(row[1]) if row[1] is not None else 0.0
             
             # Calcular total de distribución específica
             total_distribucion_especifica = sum(distribucion_especifica.values())
+            cantidad_confirmada_float = float(cantidad_confirmada_total) if cantidad_confirmada_total is not None else 0.0
             
             usar_distribucion_especifica = (
                 len(distribucion_especifica) > 0 
-                and total_distribucion_especifica == cantidad_confirmada_total
+                and abs(total_distribucion_especifica - cantidad_confirmada_float) < 1e-6
                 and not forzar_redistribucion
             )
             
@@ -305,15 +307,16 @@ class PedidoAjusteService:
                 # Usar distribución específica del proveedor
                 ajustes = []
                 for pedido_detalle_tienda_id, cantidad_confirmada in distribucion_especifica.items():
+                    cantidad_val = float(cantidad_confirmada)
                     cursor.execute("""
                         UPDATE pedido_detalle_tienda
                         SET cantidad = ?
                         WHERE id = ?
-                    """, (cantidad_confirmada, pedido_detalle_tienda_id))
+                    """, (cantidad_val, pedido_detalle_tienda_id))
                     ajustes.append({
                         "pedido_detalle_tienda_id": pedido_detalle_tienda_id,
                         "cantidad_anterior": None,
-                        "cantidad_nueva": cantidad_confirmada,
+                        "cantidad_nueva": cantidad_val,
                         "metodo": "distribucion_especifica"
                     })
                 
@@ -340,41 +343,41 @@ class PedidoAjusteService:
                     "ajustes": ajustes
                 }
             else:
-                # Redistribuir proporcionalmente
-                cantidad_total_original = sum(t["cantidad"] for t in distribucion_original)
+                # Redistribuir proporcionalmente (admite decimales; columna cantidad es DECIMAL(18,4))
+                cantidad_total_original = sum(float(t["cantidad"]) for t in distribucion_original)
                 
                 if cantidad_total_original == 0:
                     raise ValueError(
                         f"No hay cantidades originales para redistribuir en detalle {pedido_detalle_id}"
                     )
                 
-                # ✅ CORRECCIÓN: Redondeo seguro con Decimal
                 ajustes = []
                 cantidad_asignada = Decimal(0)
-                cantidad_confirmada_decimal = Decimal(cantidad_confirmada_total)
+                cantidad_confirmada_decimal = Decimal(str(cantidad_confirmada_total))
                 
                 # Ordenar por cantidad (mayor a menor) para mejor distribución
                 distribucion_ordenada = sorted(
                     distribucion_original,
-                    key=lambda x: x["cantidad"],
+                    key=lambda x: float(x["cantidad"]),
                     reverse=True
                 )
                 
                 for i, tienda in enumerate(distribucion_ordenada):
                     if i == len(distribucion_ordenada) - 1:
                         # Última tienda: asignar el resto para que sume exactamente
-                        cantidad_nueva = int(cantidad_confirmada_decimal - cantidad_asignada)
+                        resto = cantidad_confirmada_decimal - cantidad_asignada
+                        cantidad_nueva = round(float(resto), 4)
                     else:
-                        # Calcular proporción con Decimal
-                        proporcion = Decimal(tienda["cantidad"]) / Decimal(cantidad_total_original)
+                        # Calcular proporción con Decimal; redondear a 4 decimales
+                        proporcion = Decimal(str(tienda["cantidad"])) / Decimal(str(cantidad_total_original))
                         cantidad_calculada = (cantidad_confirmada_decimal * proporcion).quantize(
-                            Decimal('1'), 
+                            Decimal('0.0001'),
                             rounding=ROUND_HALF_UP
                         )
-                        cantidad_nueva = int(cantidad_calculada)
-                        cantidad_asignada += Decimal(cantidad_nueva)
+                        cantidad_nueva = float(cantidad_calculada)
+                        cantidad_asignada += cantidad_calculada
                     
-                    # Actualizar cantidad en BD (sin commit)
+                    # Actualizar cantidad en BD (DECIMAL(18,4))
                     cursor.execute("""
                         UPDATE pedido_detalle_tienda
                         SET cantidad = ?
@@ -382,12 +385,13 @@ class PedidoAjusteService:
                             AND tienda_id = ?
                     """, (cantidad_nueva, pedido_detalle_id, tienda["tienda_id"]))
                     
+                    cant_anterior = float(tienda["cantidad"]) if tienda.get("cantidad") is not None else 0.0
                     ajustes.append({
                         "tienda_id": tienda["tienda_id"],
                         "tienda_codigo": tienda["codigo"],
-                        "cantidad_anterior": tienda["cantidad"],
+                        "cantidad_anterior": cant_anterior,
                         "cantidad_nueva": cantidad_nueva,
-                        "diferencia": cantidad_nueva - tienda["cantidad"],
+                        "diferencia": round(cantidad_nueva - cant_anterior, 4),
                         "metodo": "redistribucion_proporcional"
                     })
                 

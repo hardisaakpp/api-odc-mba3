@@ -203,11 +203,14 @@ class PedidoUtils:
         
         tiendas_distribucion = []
         for dist_row in cursor.fetchall():
+            # cantidad puede ser Decimal o float (columna DECIMAL(18,4)); normalizar a float
+            cantidad_val = dist_row[0]
+            cantidad_float = float(cantidad_val) if cantidad_val is not None else 0.0
             dist_item = {
                 "tienda_id": str(dist_row[1]),
                 "codigo": dist_row[2],
                 "nombre": dist_row[3],
-                "cantidad": dist_row[0],
+                "cantidad": cantidad_float,
             }
             if tiene_es_bodega:
                 # Convertir SQL Server bit (0 o 1) a Python bool

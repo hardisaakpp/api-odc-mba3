@@ -119,11 +119,12 @@ class PedidoTiendaRepository:
                     
                     if not tienda_id or cantidad is None or cantidad < 0:
                         continue
-                    
+                    # Asegurar float para que se persista correctamente en columna DECIMAL(18,4)
+                    cantidad_decimal = float(cantidad)
                     if es_bodega:
-                        logger.info(f"📦 Insertando bodega en BD: pedido_detalle_id={pedido_detalle_id}, tienda_id={tienda_id}, cantidad={cantidad}, es_bodega={es_bodega}, tiene_es_bodega_col={tiene_es_bodega}")
+                        logger.info(f"📦 Insertando bodega en BD: pedido_detalle_id={pedido_detalle_id}, tienda_id={tienda_id}, cantidad={cantidad_decimal}, es_bodega={es_bodega}, tiene_es_bodega_col={tiene_es_bodega}")
                     
-                    valores = [pedido_detalle_id, tienda_id, cantidad]
+                    valores = [pedido_detalle_id, tienda_id, cantidad_decimal]
                     
                     if tiene_fila_origen:
                         valores.append(fila_origen)
