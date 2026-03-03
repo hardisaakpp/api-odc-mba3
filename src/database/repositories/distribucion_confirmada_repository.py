@@ -364,9 +364,13 @@ class DistribucionConfirmadaRepository:
                 distribuciones_orig = distribuciones_originales.get(pedido_detalle_id, {})
                 
                 # Calcular proporción de confirmación (si hay confirmación parcial)
-                cantidad_solicitada_total = respuesta.get("cantidad_solicitada_total", 0)
+                # Nota: los totales pueden venir como Decimal desde la BD; normalizar a float.
+                cantidad_solicitada_total_raw = respuesta.get("cantidad_solicitada_total", 0)
+                cantidad_confirmada_total_raw = respuesta.get("cantidad_confirmada_total", 0)
+                cantidad_solicitada_total = float(cantidad_solicitada_total_raw) if cantidad_solicitada_total_raw else 0.0
+                cantidad_confirmada_total = float(cantidad_confirmada_total_raw) if cantidad_confirmada_total_raw else 0.0
                 factor_proporcion = (
-                    cantidad_confirmada_total / cantidad_solicitada_total 
+                    cantidad_confirmada_total / cantidad_solicitada_total
                     if cantidad_solicitada_total > 0 else 1.0
                 )
                 
@@ -379,17 +383,25 @@ class DistribucionConfirmadaRepository:
                     cantidad_solicitada = distrib_orig.get("cantidad_solicitada", 0)
                     costo_unitario_original = distrib_orig.get("costo_unitario")
                     
-                    # Calcular cantidad confirmada proporcional (permite decimales, ej. 0.5)
-                    cantidad_confirmada = round(float(cantidad_solicitada) * factor_proporcion, 4) if cantidad_solicitada > 0 else 0
+                    # Normalizar cantidades a float para evitar mezclar float y Decimal
+                    cantidad_solicitada_float = float(cantidad_solicitada) if cantidad_solicitada else 0.0
+                    cantidad_asignada_float = float(cantidad_asignada) if cantidad_asignada else 0.0
+                    factor_proporcion_float = float(factor_proporcion)
                     
-                    # Calcular costos
+                    # Calcular cantidad confirmada proporcional (permite decimales, ej. 0.5)
+                    cantidad_confirmada = (
+                        round(cantidad_solicitada_float * factor_proporcion_float, 4)
+                        if cantidad_solicitada_float > 0 else 0.0
+                    )
+                    
+                    # Calcular costos (todo en float)
                     costo_unitario_ajustado = costo_unitario_original
                     subtotal_original = (
-                        float(costo_unitario_original * cantidad_solicitada) 
+                        float(costo_unitario_original) * cantidad_solicitada_float
                         if costo_unitario_original is not None else None
                     )
                     subtotal_ajustado = (
-                        float(costo_unitario_ajustado * cantidad_asignada) 
+                        float(costo_unitario_ajustado) * cantidad_asignada_float
                         if costo_unitario_ajustado is not None else None
                     )
                     
