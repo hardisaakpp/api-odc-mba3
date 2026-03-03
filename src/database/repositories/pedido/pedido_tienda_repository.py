@@ -117,7 +117,7 @@ class PedidoTiendaRepository:
                     fila_origen = dist.get("fila_origen")
                     es_bodega = dist.get("es_bodega", False)
                     
-                    if not tienda_id or not cantidad or cantidad <= 0:
+                    if not tienda_id or cantidad is None or cantidad < 0:
                         continue
                     
                     if es_bodega:
@@ -284,6 +284,29 @@ class PedidoTiendaRepository:
             cursor.execute("SELECT tienda_id FROM tienda WHERE codigo = ?", (codigo,))
             row = cursor.fetchone()
             return str(row[0]) if row else None
+        finally:
+            cursor.close()
+
+    def get_nombre_by_codigo(self, codigo: str) -> Optional[str]:
+        """
+        Obtiene el nombre de la tienda por código.
+        Usado para enriquecer distribucion_tiendas cuando el nombre viene vacío (ej. cantidades < 1).
+
+        Args:
+            codigo: Código de tienda
+
+        Returns:
+            nombre de la tienda o None si no existe o no tiene nombre
+        """
+        if not codigo or not str(codigo).strip():
+            return None
+        cursor = self.conn.cursor()
+        try:
+            cursor.execute("SELECT nombre FROM tienda WHERE codigo = ?", (codigo.strip(),))
+            row = cursor.fetchone()
+            if row and row[0] and str(row[0]).strip():
+                return str(row[0]).strip()
+            return None
         finally:
             cursor.close()
 

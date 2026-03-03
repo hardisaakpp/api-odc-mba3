@@ -114,7 +114,11 @@ class PedidoRespuestaRepository:
                 
                 if not pedido_detalle_id or cantidad_solicitada_total is None or cantidad_confirmada_total is None:
                     continue
-                
+
+                # Persistir cantidades como float (decimales); la columna debe ser DECIMAL(18,4) ver alter_pedido_respuesta_detalle_cantidad_decimal.sql
+                cantidad_solicitada_total = float(cantidad_solicitada_total)
+                cantidad_confirmada_total = float(cantidad_confirmada_total)
+
                 # Obtener precios originales desde pedido_detalle
                 cursor.execute("""
                     SELECT costo_doc_sin_iva, descuento_1
@@ -173,7 +177,34 @@ class PedidoRespuestaRepository:
             raise
         finally:
             cursor.close()
-    
+
+    def eliminar_detalles_por_respuesta_id(self, respuesta_id: str) -> int:
+        """
+        Elimina todos los detalles de una respuesta (para reemplazarlos con valores actuales).
+        Usado cuando ya existía respuesta y el usuario confirma de nuevo: se actualizan
+        cantidad_confirmada_total etc. con los totales actuales del pedido (incl. decimales).
+
+        Returns:
+            Número de filas eliminadas.
+        """
+        cursor = self.conn.cursor()
+        try:
+            cursor.execute(
+                "DELETE FROM pedido_respuesta_proveedor_detalle WHERE respuesta_id = ?",
+                (respuesta_id,),
+            )
+            count = cursor.rowcount
+            self.conn.commit()
+            if count > 0:
+                logger.debug(f"✅ {count} detalles de respuesta eliminados para respuesta_id={respuesta_id}")
+            return count
+        except Exception as e:
+            self.conn.rollback()
+            logger.error(f"❌ Error al eliminar detalles de respuesta: {e}", exc_info=True)
+            raise
+        finally:
+            cursor.close()
+
     def obtener_respuesta_activa(self, pedido_id: str) -> Optional[Dict[str, Any]]:
         """
         Obtiene la respuesta más reciente (última versión) del proveedor para un pedido.
@@ -262,13 +293,22 @@ class PedidoRespuestaRepository:
             
             detalles = []
             for det_row in cursor.fetchall():
+                # Normalizar cantidades a float para preservar decimales (ej. 0.5)
+                try:
+                    cant_sol = float(det_row[2]) if det_row[2] is not None else 0.0
+                except (TypeError, ValueError):
+                    cant_sol = 0.0
+                try:
+                    cant_conf = float(det_row[3]) if det_row[3] is not None else 0.0
+                except (TypeError, ValueError):
+                    cant_conf = 0.0
                 detalle_dict = {
                     "id": str(det_row[0]),
                     "pedido_detalle_id": str(det_row[1]),
                     "codigo_producto": det_row[9],
                     "descripcion": det_row[10],
-                    "cantidad_solicitada_total": det_row[2],
-                    "cantidad_confirmada_total": det_row[3],
+                    "cantidad_solicitada_total": cant_sol,
+                    "cantidad_confirmada_total": cant_conf,
                     "costo_doc_sin_iva_original": float(det_row[4]) if det_row[4] else None,
                     "costo_doc_sin_iva_ajustado": float(det_row[5]) if det_row[5] else None,
                     "descuento_1_original": float(det_row[6]) if det_row[6] else None,

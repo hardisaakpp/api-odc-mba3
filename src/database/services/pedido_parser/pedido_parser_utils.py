@@ -129,28 +129,19 @@ class PedidoParserUtils:
             return tienda if tienda else None
         return None
     
-    def validar_cantidad(self, cantidad_raw: Any, row_num: int, errores_fila: List[Dict]) -> Optional[int]:
-        """Valida y normaliza cantidad."""
+    def validar_cantidad(self, cantidad_raw: Any, row_num: int, errores_fila: List[Dict]) -> Optional[float]:
+        """Valida y normaliza cantidad (acepta decimales)."""
         if cantidad_raw is not None and not pd.isna(cantidad_raw):
             try:
                 cantidad_str = str(cantidad_raw).strip().replace(",", ".")
-                cantidad_float = float(cantidad_str)
-                cantidad = int(cantidad_float)
+                cantidad = float(cantidad_str)
                 
-                if cantidad_float != cantidad:
+                if cantidad < 0:
                     errores_fila.append({
                         "fila": row_num,
                         "campo": "Cantidad",
                         "tipo": "ERROR",
-                        "mensaje": f"Cantidad debe ser un número entero. Valor recibido: {cantidad_raw}"
-                    })
-                    return None
-                elif cantidad <= 0:
-                    errores_fila.append({
-                        "fila": row_num,
-                        "campo": "Cantidad",
-                        "tipo": "ERROR",
-                        "mensaje": f"Cantidad debe ser mayor a 0. Valor recibido: {cantidad_raw}"
+                        "mensaje": f"Cantidad no puede ser negativa. Valor recibido: {cantidad_raw}"
                     })
                     return None
                 return cantidad
@@ -159,7 +150,7 @@ class PedidoParserUtils:
                     "fila": row_num,
                     "campo": "Cantidad",
                     "tipo": "ERROR",
-                    "mensaje": f"Cantidad no es un entero válido. Valor recibido: {cantidad_raw}"
+                    "mensaje": f"Cantidad no es un número válido. Valor recibido: {cantidad_raw}"
                 })
                 return None
         else:

@@ -217,7 +217,7 @@ def validation_error_response(
         "details": {
             "errors": [
                 {"field": "email", "message": "Email inválido", "code": "invalid_format"},
-                {"field": "cantidad", "message": "Debe ser mayor a 0", "code": "min_value"}
+                {"field": "cantidad", "message": "Debe ser >= 0 (acepta decimales)", "code": "min_value"}
             ],
             "error_count": 2
         }

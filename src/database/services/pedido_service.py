@@ -429,7 +429,7 @@ class PedidoService:
                                 tienda_codigo = dist.get("tienda_codigo")
                                 cantidad = dist.get("cantidad")
                                 
-                                if tienda_codigo and cantidad and cantidad > 0:
+                                if tienda_codigo and cantidad is not None and cantidad >= 0:
                                     # Obtener o crear tienda
                                     tienda_id = repository.get_or_create_tienda(
                                         codigo=tienda_codigo,
@@ -1524,14 +1524,14 @@ class PedidoService:
                             for dist in detalle_data["distribuciones"]:
                                 tienda_codigo = dist.get("tienda_codigo")
                                 cantidad = dist.get("cantidad")
-                                if tienda_codigo and cantidad and cantidad > 0:
+                                if tienda_codigo and cantidad is not None and cantidad >= 0:
                                     tienda_id = repository.get_or_create_tienda(
                                         codigo=tienda_codigo,
                                         nombre=dist.get("tienda_nombre")
                                     )
                                     distribuciones.append({
                                         "tienda_id": tienda_id,
-                                        "cantidad": int(cantidad),
+                                        "cantidad": float(cantidad),
                                         "es_bodega": dist.get("es_bodega", False)  # ⭐ NUEVO: Preservar flag de bodega
                                     })
                             if distribuciones:
@@ -1678,7 +1678,7 @@ class PedidoService:
                             fila_origen = dist.get("fila_origen")  # Preservar fila origen si existe
                             es_bodega = dist.get("es_bodega", False)
                             
-                            if tienda_codigo and cantidad and cantidad > 0:
+                            if tienda_codigo and cantidad is not None and cantidad >= 0:
                                 # ⭐ LOG: Registrar bodegas para debugging
                                 if es_bodega:
                                     logger.info(f"📦 Procesando bodega: {tienda_codigo}, cantidad: {cantidad}, producto: {detalle_data.get('detalle', {}).get('codigo_interno')}")
@@ -1689,7 +1689,7 @@ class PedidoService:
                                 )
                                 distribucion_item = {
                                     "tienda_id": tienda_id,
-                                    "cantidad": int(cantidad),
+                                    "cantidad": float(cantidad),
                                     "es_bodega": es_bodega  # ⭐ NUEVO: Preservar flag de bodega
                                 }
                                 # Agregar fila_origen si está disponible
@@ -1711,12 +1711,12 @@ class PedidoService:
     
     def enviar_pedido(self, pedido_id: str, usuario_id: Optional[str] = None) -> Dict[str, Any]:
         """
-        Acción de negocio "Enviar": valida que el pedido esté en BORRADOR, envía correo a EL RAYO
-        y cambia el estado a NUEVO_PEDIDO. Todo en una operación lógica: si el correo falla,
-        el pedido no se marca como enviado.
+        Acción de negocio "Enviar": valida que el pedido esté en BORRADOR, intenta enviar correo a EL RAYO
+        y cambia el estado a NUEVO_PEDIDO. Si el correo falla (ej. IP en Spamhaus), el pedido se marca
+        como enviado igualmente y la respuesta incluye email_enviado=False.
 
         Raises:
-            BusinessException: not_found, estado_no_borrador, sin_detalles, email_failed
+            BusinessException: not_found, estado_no_borrador, sin_detalles
         """
         if not ENABLE_SQL_SERVER_STORAGE:
             raise BusinessException(
@@ -1748,7 +1748,8 @@ class PedidoService:
             articulos_cargados = len(detalles)
             distribuciones_cargadas = sum(len(d.get("tiendas", [])) for d in detalles)
 
-        # Enviar correo antes de cambiar estado: si falla, el pedido sigue en BORRADOR
+        # Enviar correo a EL RAYO (best-effort: si falla, el pedido se envía igual y se avisa)
+        email_enviado = False
         try:
             from src.utils.email_notifier import send_plantilla_upload_notification
             email_enviado = send_plantilla_upload_notification(
@@ -1761,17 +1762,13 @@ class PedidoService:
                 formato_detectado="Enviado desde pantalla"
             )
             if not email_enviado:
-                raise BusinessException(
-                    "No se pudo enviar la notificación por correo. El pedido no ha sido enviado.",
-                    error_code="email_failed"
+                logger.warning(
+                    "⚠️ No se pudo enviar la notificación por correo (pedido se marcará como enviado igualmente)"
                 )
-        except BusinessException:
-            raise
         except Exception as e:
-            logger.warning(f"⚠️ Error al enviar correo en enviar_pedido: {e}", exc_info=True)
-            raise BusinessException(
-                "No se pudo enviar la notificación por correo. El pedido no ha sido enviado.",
-                error_code="email_failed"
+            logger.warning(
+                f"⚠️ Error al enviar correo en enviar_pedido (pedido se marcará como enviado igualmente): {e}",
+                exc_info=True,
             )
 
         # Copiar snapshot original ANTES de cambiar estado (los datos aún están intactos)
@@ -1808,6 +1805,7 @@ class PedidoService:
             "numero_pedido": numero_pedido,
             "estado_id": ESTADO_NUEVO_PEDIDO,
             "estado_nombre": "NUEVO_PEDIDO",
+            "email_enviado": email_enviado,
         }
 
     def _convertir_a_decimal(self, valor) -> Optional[float]:

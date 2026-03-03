@@ -12,6 +12,7 @@ from fastapi.responses import JSONResponse
 from src.database.connection import get_db_connection_context
 from src.database.repositories.pedido_repository import PedidoRepository
 from src.database.repositories.pedido_respuesta_repository import PedidoRespuestaRepository
+from src.database.repositories.common.serialization import make_json_serializable
 from src.security.jwt_auth import verify_jwt_token, require_any_permission
 from .pedidos_crud_helpers import enrich_pedido_with_ui_flags
 
@@ -112,7 +113,9 @@ def register_pedidos_detalle_endpoints(app: FastAPI):
                 # Descartar (Cargar Plantilla): solo Borrador o Nuevo Pedido. Cancelar Pedido (Redistribución): deshabilitar desde Confirmado redistribución (10) en adelante.
                 enrich_pedido_with_ui_flags(pedido)
 
-                return JSONResponse(status_code=200, content=pedido)
+                # Asegurar que Decimal (p. ej. cantidad_solicitada_total, cantidad_confirmada_total, total, cantidad) sea JSON serializable
+                content = make_json_serializable(pedido)
+                return JSONResponse(status_code=200, content=content)
             
         except HTTPException:
             raise

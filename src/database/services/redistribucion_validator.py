@@ -52,14 +52,9 @@ class RedistribucionValidator:
                         f"Producto {pedido_detalle_id}: cantidad_asignada no puede ser negativa "
                         f"(tienda {distribucion['tienda_id']}: {cantidad_asignada})"
                     )
-                
-                # Validar que sea un número entero (no decimal)
-                if isinstance(cantidad_asignada, float) and cantidad_asignada % 1 != 0:
-                    errores.append(
-                        f"Producto {pedido_detalle_id}: cantidad_asignada debe ser un número entero "
-                        f"(tienda {distribucion['tienda_id']}: {cantidad_asignada})"
-                    )
-                
+
+                # Acepta decimales (ej. 0.5, 1.25); alineado con frontend y AjusteDetalle/DistribucionTiendaFrontend (float).
+
                 # Validar rango razonable (máximo 1,000,000 unidades por tienda)
                 if cantidad_asignada > 1000000:
                     errores.append(
@@ -79,15 +74,9 @@ class RedistribucionValidator:
             respuesta = respuestas_proveedor.get(pedido_detalle_id, {})
             cantidad_confirmada_total = respuesta.get("cantidad_confirmada_total", 0)
             
-            # Validar que la suma total sea un entero
-            if isinstance(cantidad_asignada_total, float) and cantidad_asignada_total % 1 != 0:
-                errores.append(
-                    f"Producto {pedido_detalle_id}: La suma total de cantidades asignadas debe ser un número entero "
-                    f"(suma actual: {cantidad_asignada_total})"
-                )
-            
-            # Validar que la suma de cantidades asignadas sea igual a la cantidad confirmada
-            if cantidad_asignada_total != cantidad_confirmada_total:
+            # Validar que la suma de cantidades asignadas sea igual a la cantidad confirmada (acepta decimales, ej. 0.5)
+            _tol = 1e-6
+            if abs(float(cantidad_asignada_total) - float(cantidad_confirmada_total)) > _tol:
                 diferencia = cantidad_confirmada_total - cantidad_asignada_total
                 errores.append(
                     f"Producto {pedido_detalle_id}: La suma de cantidades asignadas ({cantidad_asignada_total}) "

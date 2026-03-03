@@ -22,6 +22,7 @@ import io
 from src.database.connection import get_db_connection_context
 from src.database.repositories.pedido_repository import PedidoRepository
 from src.database.repositories.pedido_respuesta_repository import PedidoRespuestaRepository
+from src.database.repositories.common.serialization import make_json_serializable
 from src.database.repositories.archivo_plantilla_repository import ArchivoPlantillaRepository
 from src.database.pedido_estados import ESTADOS_PUEDE_DESCARTAR, ESTADOS_PUEDE_CONFIRMAR_REDISTRIBUCION
 from src.security.jwt_auth import verify_jwt_token, require_permission, require_any_permission
@@ -685,7 +686,8 @@ def register_plantillas_endpoints(app: FastAPI):
                 pedido_completo["puede_descartar"] = _eid in ESTADOS_PUEDE_DESCARTAR
                 pedido_completo["puede_confirmar_redistribucion"] = _eid in ESTADOS_PUEDE_CONFIRMAR_REDISTRIBUCION
 
-                return JSONResponse(status_code=200, content=pedido_completo)
+                content = make_json_serializable(pedido_completo)
+                return JSONResponse(status_code=200, content=content)
             
         except HTTPException:
             raise

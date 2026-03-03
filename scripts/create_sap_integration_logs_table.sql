@@ -22,7 +22,7 @@ BEGIN
         
         -- Información de la OC
         oc_id UNIQUEIDENTIFIER NULL,
-        referencia_despacho VARCHAR(50) NULL,
+        referencia_despacho NVARCHAR(100) NULL,
         proveedor VARCHAR(100) NULL,
         
         -- Información de SAP (si aplica)

@@ -638,14 +638,14 @@ class ActualizarCostoRequest(BaseModel):
 
 
 class ActualizarTotalRequest(BaseModel):
-    """Modelo para el request de actualizar total de un detalle de pedido."""
+    """Modelo para el request de actualizar total de un detalle de pedido. Acepta decimales (ej. 0.5)."""
     
-    total: int = Field(..., ge=0, description="Nuevo total del detalle (ENTERO, debe ser >= 0, incluye 0)")
+    total: float = Field(..., ge=0, description="Nuevo total del detalle (>= 0, acepta decimales)")
     
     class Config:
         json_schema_extra = {
             "example": {
-                "total": 510
+                "total": 0.5
             }
         }
 
@@ -943,11 +943,11 @@ class ConfirmarRedistribucionResponse(BaseModel):
 # ============================================================================
 
 class DistribucionTiendaFrontend(BaseModel):
-    """Modelo para distribución por tienda (compatible con frontend)."""
+    """Modelo para distribución por tienda (compatible con frontend). Acepta decimales (ej. 0.5)."""
     
     tienda_codigo: str = Field(..., description="Código de la tienda")
     tienda_nombre: Optional[str] = Field(None, description="Nombre de la tienda")
-    cantidad: int = Field(..., ge=0, description="Cantidad asignada a esta tienda")
+    cantidad: float = Field(..., ge=0, description="Cantidad asignada a esta tienda (acepta decimales)")
     es_bodega: Optional[bool] = Field(default=False, description="Indica si es una bodega central (RL-CD, OUT-CD, REG-CD)")
     
     class Config:
@@ -962,13 +962,13 @@ class DistribucionTiendaFrontend(BaseModel):
 
 
 class AjusteDetalle(BaseModel):
-    """Modelo para ajuste de un producto (compatible con frontend AjusteDetalle)."""
+    """Modelo para ajuste de un producto (compatible con frontend AjusteDetalle). Acepta decimales (ej. 0.5)."""
     
     codigo_producto: str = Field(..., description="Código del producto")
     descripcion: str = Field(..., description="Descripción del producto")
-    cantidad_solicitada: int = Field(..., ge=0, description="Cantidad solicitada original")
-    cantidad_confirmada: int = Field(..., ge=0, description="Cantidad confirmada por el proveedor")
-    cantidad_ajustada: int = Field(..., ge=0, description="Cantidad ajustada/redistribuida")
+    cantidad_solicitada: float = Field(..., ge=0, description="Cantidad solicitada original (acepta decimales)")
+    cantidad_confirmada: float = Field(..., ge=0, description="Cantidad confirmada por el proveedor (acepta decimales)")
+    cantidad_ajustada: float = Field(..., ge=0, description="Cantidad ajustada/redistribuida (acepta decimales)")
     distribucion_tiendas: List[DistribucionTiendaFrontend] = Field(..., min_length=1, description="Distribución por tienda")
     costo_original: Optional[float] = Field(None, ge=0, description="Costo unitario original")
     costo_ajustado: Optional[float] = Field(None, ge=0, description="Costo unitario ajustado")
@@ -1025,15 +1025,15 @@ class RedistribucionConfirmarRequest(BaseModel):
 
 
 class ResumenConfirmacion(BaseModel):
-    """Modelo para resumen de confirmación."""
+    """Modelo para resumen de confirmación. Cantidades aceptan decimales."""
     
     total_productos: int = Field(..., ge=0)
-    total_cantidad_solicitada: int = Field(..., ge=0)
-    total_cantidad_confirmada: int = Field(..., ge=0)
-    total_cantidad_ajustada: int = Field(..., ge=0)
+    total_cantidad_solicitada: float = Field(..., ge=0)
+    total_cantidad_confirmada: float = Field(..., ge=0)
+    total_cantidad_ajustada: float = Field(..., ge=0)
     total_costo_original: Optional[float] = None
     total_costo_ajustado: Optional[float] = None
-    diferencia_cantidad: int = Field(..., description="cantidad_ajustada - cantidad_confirmada")
+    diferencia_cantidad: float = Field(..., description="cantidad_ajustada - cantidad_confirmada")
     diferencia_costo: Optional[float] = Field(None, description="costo_ajustado - costo_original")
 
 
@@ -1268,11 +1268,11 @@ class CrearPedidoRequest(BaseModel):
     """Modelo para crear un pedido manualmente desde la pantalla web."""
     
     # Campos de cabecera
-    numero_pedido: str = Field(..., description="Número único del pedido")
+    numero_pedido: str = Field(..., max_length=100, description="Número único del pedido (máx. 100 caracteres)")
     fecha_pedido: Optional[str] = Field(None, description="Fecha del pedido (YYYY-MM-DD)")
     fecha_entrega: Optional[str] = Field(None, description="Fecha de entrega (YYYY-MM-DD o 'INMEDIATO')")
     forma_pago: Optional[str] = Field(None, description="Forma de pago")
-    mensaje: Optional[str] = Field(None, description="Mensaje del pedido")
+    mensaje: Optional[str] = Field(None, max_length=100, description="Mensaje del pedido (máx. 100 caracteres)")
     proveedor_nombre: Optional[str] = Field(None, description="Nombre del proveedor")
     comprador_nombre: Optional[str] = Field(None, description="Nombre del comprador")
     comprador_codigo: Optional[str] = Field(None, description="Código del comprador")
@@ -1338,7 +1338,7 @@ class ModificarPedidoCabeceraRequest(BaseModel):
     fecha_pedido: Optional[str] = Field(None, description="Fecha del pedido (YYYY-MM-DD)")
     fecha_entrega: Optional[str] = Field(None, description="Fecha de entrega (YYYY-MM-DD o 'INMEDIATO')")
     forma_pago: Optional[str] = Field(None, description="Forma de pago")
-    mensaje: Optional[str] = Field(None, description="Mensaje del pedido")
+    mensaje: Optional[str] = Field(None, max_length=100, description="Mensaje del pedido (máx. 100 caracteres)")
     proveedor_nombre: Optional[str] = Field(None, description="Nombre del proveedor")
     comprador_nombre: Optional[str] = Field(None, description="Nombre del comprador")
     comprador_codigo: Optional[str] = Field(None, description="Código del comprador")

@@ -15,12 +15,40 @@ logger = logging.getLogger(__name__)
 def setup_exception_handlers(app: FastAPI):
     """Configura los exception handlers para la aplicación."""
     
+    # Mensajes amigables para validaciones de longitud (numero_pedido, mensaje)
+    _MENSAJES_VALIDACION = {
+        "numero_pedido": "El número de pedido no puede superar 100 caracteres.",
+        "mensaje": "El mensaje del pedido no puede superar 100 caracteres.",
+    }
+
+    def _traducir_error_validacion(err: dict) -> dict:
+        """Traduce errores de Pydantic a mensajes amigables para el usuario."""
+        loc = err.get("loc", [])
+        msg = str(err.get("msg", ""))
+        err_type = str(err.get("type", ""))
+        ctx = err.get("ctx") or {}
+        # loc puede ser ["body", "numero_pedido"] o ["body", "mensaje"]
+        field = loc[-1] if (len(loc) >= 1 and isinstance(loc[-1], str) and loc[-1] in _MENSAJES_VALIDACION) else None
+        # Detectar error de longitud máxima (Pydantic v1: max_length; v2: string_too_long; ctx.max_length)
+        es_longitud = (
+            "max_length" in err_type
+            or "string_too_long" in err_type
+            or "max_length" in msg.lower()
+            or "at most" in msg.lower()
+            or "100 character" in msg.lower()
+            or ctx.get("max_length") == 100
+        )
+        if field and es_longitud:
+            err = {**err, "msg": _MENSAJES_VALIDACION[field]}
+        return err
+
     @app.exception_handler(RequestValidationError)
     async def validation_exception_handler(request: Request, exc: RequestValidationError):
         """
         Maneja errores de validación de Pydantic (422).
         
         Esto ocurre cuando el body del request no coincide con el modelo esperado.
+        Traduce mensajes de numero_pedido/mensaje (max_length) al español.
         """
         # Obtener el body del request para logging
         body = None
@@ -34,15 +62,23 @@ def setup_exception_handlers(app: FastAPI):
                 logger.error(f"   Body recibido: {body_str}")
         except Exception:
             pass
-        
-        logger.error(f"❌ Errores de validación: {exc.errors()}")
-        
+
+        errors = exc.errors()
+        logger.error(f"❌ Errores de validación: {errors}")
+
+        # Traducir mensajes para numero_pedido y mensaje (max 100 caracteres)
+        details = [_traducir_error_validacion(e) for e in errors]
+        # Mensaje principal para el frontend: primero en español si aplica
+        first_msg = details[0].get("msg", "Error de validación del request") if details else "Error de validación del request"
+        error_summary = first_msg if isinstance(first_msg, str) and len(first_msg) < 200 else "Error de validación del request"
+
         return JSONResponse(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             content={
-                "error": "Error de validación del request",
+                "error": error_summary,
+                "message": error_summary,
                 "type": "validation_error",
-                "details": exc.errors(),
+                "details": details,
                 "body_received": body.decode('utf-8')[:200] if body else None
             }
         )

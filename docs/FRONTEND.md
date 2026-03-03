@@ -2193,6 +2193,23 @@ El botón **"Guardar Borrador"** permite al usuario guardar el progreso de su tr
 | **¿Persiste al refrescar la página?** | **SÍ**. El frontend debe recuperar el borrador al cargar la vista. |
 | **¿Persiste si el token expira?** | **SÍ**. Los datos están en la BD, no en memoria. |
 
+#### Cantidades decimales en redistribución
+
+La API de redistribución **acepta y devuelve cantidades en decimales** (ej. `0.5`, `1.25`). El frontend debe poder **visualizar y editar** estos valores sin tratarlos como enteros.
+
+- **GET** `.../redistribucion/inicial` y **GET** `.../redistribucion/borrador`: en cada `ajuste_detalle`, los campos `cantidad_solicitada`, `cantidad_confirmada`, `cantidad_ajustada` y cada `distribucion_tiendas[].cantidad` son **números** (pueden ser decimales). Mostrarlos con el formato adecuado (ej. 0,5 o 0.5 según locale) y permitir edición con `input type="number"` con `step="any"` o `step="0.01"`.
+- **POST** `.../redistribucion/borrador` y **POST** `.../redistribucion/confirmar`: el body puede enviar decimales en las mismas propiedades. El backend valida que la suma de cantidades por tienda coincida con la cantidad confirmada usando una tolerancia de redondeo (`1e-6`), por lo que es correcto usar comparaciones con tolerancia en el frontend para “Completo” / “Listo para confirmar”.
+- **Resumen:** Para que en `/mba3-consultas/pedidos/{numero_pedido}/redistribucion` se puedan ver y cambiar números a decimales, el frontend debe: (1) formatear números con decimales cuando existan (ej. hasta 4 decimales), (2) usar inputs que acepten decimales (`step="any"` o `step` según decimales elegidos), (3) usar tolerancia en comparaciones con 0 o entre suma y total para evitar fallos por redondeo de punto flotante.
+
+**Cambios de frontend recomendados (alineados con este backend):**
+
+- **Formatters:** función tipo `formatNumberWithDecimals(value, decimals)` (0–4 decimales, locale) para visualización; no cambia lo que se envía al backend.
+- **ExcelLikeGridView:** prop `decimalPlaces` (ej. defecto 2), `step` del input según decimales (0→1, 1→0.1, …, 4→0.0001), `formatNumberWithDecimals` en celdas numéricas, `inputmode="decimal"`, commit en blur (ej. `"2."` → 2).
+- **RedistribucionTiendas:** selector “Decimales: 0 1 2 3 4”, pasar `decimalPlaces` a la vista tipo Excel, mismo `step` en inputs de cantidad en vista compacta, `handleValidarYCorregirCantidad` con actualización en blur.
+- **useRedistribucion:** aceptar coma como decimal (`replace(',', '.')`), entrada parcial (no commitear si termina en `'.'`/`','` hasta blur), redondeo a 4 decimales al guardar; payload al backend sigue siendo número con hasta 4 decimales.
+
+El backend **no** exige un número fijo de decimales (ej. “siempre 2”); acepta cantidades como número con hasta 4 decimales y valida con tolerancia `1e-6`. No hay reglas que contradigan el selector 0–4 decimales ni el uso de coma/punto en el frontend.
+
 #### Endpoints
 
 **Guardar borrador:**

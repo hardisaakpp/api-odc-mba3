@@ -209,8 +209,8 @@ class DistribucionConfirmadaRepository:
             respuestas_proveedor = {}
             for row in cursor.fetchall():
                 respuestas_proveedor[str(row[0])] = {
-                    "cantidad_solicitada_total": int(row[1]) if row[1] is not None else 0,
-                    "cantidad_confirmada_total": int(row[2]) if row[2] is not None else 0,
+                    "cantidad_solicitada_total": float(row[1]) if row[1] is not None else 0.0,
+                    "cantidad_confirmada_total": float(row[2]) if row[2] is not None else 0.0,
                 }
             
             # Calcular totales por producto (usar fuente de verdad para solicitada/confirmada)
@@ -379,8 +379,8 @@ class DistribucionConfirmadaRepository:
                     cantidad_solicitada = distrib_orig.get("cantidad_solicitada", 0)
                     costo_unitario_original = distrib_orig.get("costo_unitario")
                     
-                    # Calcular cantidad confirmada proporcional
-                    cantidad_confirmada = int(cantidad_solicitada * factor_proporcion) if cantidad_solicitada > 0 else 0
+                    # Calcular cantidad confirmada proporcional (permite decimales, ej. 0.5)
+                    cantidad_confirmada = round(float(cantidad_solicitada) * factor_proporcion, 4) if cantidad_solicitada > 0 else 0
                     
                     # Calcular costos
                     costo_unitario_ajustado = costo_unitario_original

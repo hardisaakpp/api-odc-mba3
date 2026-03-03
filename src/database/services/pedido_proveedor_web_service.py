@@ -406,15 +406,6 @@ class PedidoProveedorWebService:
                     logger.warning(f"Detalle {pedido_detalle_id} sin codigo_interno, usando 'SIN_CODIGO'")
                     codigo_producto = "SIN_CODIGO"
                 
-                # Validar que tenga tiendas
-                tiendas = detalle.get("tiendas", [])
-                if not tiendas:
-                    logger.warning(f"Detalle {pedido_detalle_id} sin tiendas, omitiendo")
-                    continue
-                
-                # Obtener cantidad solicitada total (suma de todas las tiendas)
-                cantidad_solicitada_total = sum(t.get("cantidad", 0) for t in tiendas)
-                
                 # ⭐ MEJORADO: Leer total directamente desde BD para asegurar valor más reciente
                 # y verificar si fue modificado manualmente por EL RAYO
                 cursor = conn.cursor()
@@ -442,13 +433,33 @@ class PedidoProveedorWebService:
                 finally:
                     cursor.close()
                 
+                # Obtener cantidad solicitada: desde tiendas si hay, si no desde total del detalle
+                # Permite decimales (ej. 0.5) sin truncar a entero
+                tiendas = detalle.get("tiendas", [])
+                if tiendas:
+                    cantidad_solicitada_total = sum(
+                        float(t.get("cantidad", 0)) if t.get("cantidad") is not None else 0
+                        for t in tiendas
+                    )
+                else:
+                    # Detalle sin distribución por tienda: usar total del detalle (permite crear respuesta igualmente)
+                    if total_value is not None:
+                        try:
+                            cantidad_solicitada_total = float(total_value)
+                        except (ValueError, TypeError):
+                            cantidad_solicitada_total = 0.0
+                    else:
+                        cantidad_solicitada_total = 0.0
+                    logger.debug(
+                        f"Detalle {pedido_detalle_id} sin tiendas, usando total del detalle como cantidad solicitada: {cantidad_solicitada_total}"
+                    )
+                
                 # ⭐ MEJORADO: Obtener cantidad confirmada desde el campo "total" del detalle
                 # NOTA: En el frontend, cuando EL RAYO edita, el campo "total" se usa para la cantidad confirmada
-                # El valor 0 es válido para la lógica del negocio
+                # El valor 0 es válido; se permiten decimales (ej. 0.5) sin truncar a entero
                 if total_value is not None:
-                    # Convertir a entero (puede venir como float desde la BD)
                     try:
-                        cantidad_confirmada_total = int(float(total_value))
+                        cantidad_confirmada_total = float(total_value)
                         
                         # ⭐ VALIDACIÓN: Si EL RAYO modificó manualmente el total, validar explícitamente
                         if total_modificado_manual:
@@ -601,8 +612,8 @@ class PedidoProveedorWebService:
                 finally:
                     cursor.close()
             
-            # Guardar detalles (solo si no existía respuesta, o si se quiere actualizar)
-            # Por ahora, solo actualizamos si no existía
+            # Guardar detalles: si no existía respuesta, INSERT; si ya existía, reemplazar con valores actuales
+            # (para que cantidad_confirmada_total refleje los TOTAL actuales del pedido, incl. decimales)
             if not ya_existia_respuesta:
                 resultado_guardado = respuesta_repo.guardar_respuesta_detalles(
                     respuesta_id=respuesta_id,
@@ -610,12 +621,16 @@ class PedidoProveedorWebService:
                     respuestas_precios=respuestas_precios
                 )
             else:
-                # Si ya existía respuesta, no actualizamos los detalles
-                resultado_guardado = {
-                    "cantidades_guardadas": 0,
-                    "precios_guardados": 0
-                }
-                logger.info(f"Respuesta ya existía, no se actualizan detalles de respuesta (solo se registrará confirmación si hay cambios)")
+                respuesta_repo.eliminar_detalles_por_respuesta_id(respuesta_id)
+                resultado_guardado = respuesta_repo.guardar_respuesta_detalles(
+                    respuesta_id=respuesta_id,
+                    respuestas_cantidades=respuestas_cantidades,
+                    respuestas_precios=respuestas_precios
+                )
+                logger.info(
+                    f"Respuesta ya existía; detalles reemplazados con valores actuales del pedido "
+                    f"({resultado_guardado.get('cantidades_guardadas', 0)} cantidades, incl. decimales)"
+                )
             
             # Actualizar estado del pedido a REDISTRIBUCION (flujo unificado: confirmar respuesta EL RAYO = ir a redistribución)
             estado_id_actual = pedido["cabecera"].get("estado_id")

@@ -41,13 +41,13 @@ BEGIN
         pedido_id UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
         
         -- Business key (único pero no PK)
-        numero_pedido NVARCHAR(50) NOT NULL,
+        numero_pedido NVARCHAR(100) NOT NULL,
         
         fecha_pedido DATE NULL,
         fecha_entrega NVARCHAR(50) NULL,  -- Puede ser "INMEDIATO" o fecha
         forma_pago NVARCHAR(50) NULL,
         
-        mensaje NVARCHAR(50) NULL,
+        mensaje NVARCHAR(100) NULL,
         proveedor_nombre NVARCHAR(150) NULL,
         comprador_nombre NVARCHAR(150) NULL,
         comprador_codigo NVARCHAR(50) NULL,
@@ -134,8 +134,8 @@ BEGIN
         pedido_detalle_id UNIQUEIDENTIFIER NOT NULL,
         tienda_id UNIQUEIDENTIFIER NOT NULL,
         
-        -- Aquí vive la cantidad (único campo que cambia por tienda)
-        cantidad INT NOT NULL CHECK (cantidad > 0),
+        -- Aquí vive la cantidad (único campo que cambia por tienda; acepta decimales, ej. 0.5, 1.25)
+        cantidad DECIMAL(18, 4) NOT NULL CHECK (cantidad >= 0),
         
         created_at DATETIME DEFAULT GETDATE(),
         

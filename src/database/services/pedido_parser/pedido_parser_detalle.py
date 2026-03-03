@@ -433,8 +433,8 @@ class PedidoParserDetalle:
                     if raw_str.upper() in ("", "-", "N/A", "NA"):
                         continue
                     try:
-                        cantidad = int(float(raw_str))
-                        if cantidad > 0:
+                        cantidad = float(raw_str)
+                        if cantidad >= 0:
                             bodega_codigo_final = str(bodega_codigo).strip().upper()
                             resultado["data"].append({
                                 "codigoProducto": codigo_producto,
@@ -465,8 +465,8 @@ class PedidoParserDetalle:
                             pass  # omitir sin warning
                         else:
                             try:
-                                cantidad = int(float(raw_str))
-                                if cantidad > 0:
+                                cantidad = float(raw_str)
+                                if cantidad >= 0:
                                     codigo_tienda_final = str(codigo_tienda).strip().upper()
                                     resultado["data"].append({
                                         "codigoProducto": codigo_producto,

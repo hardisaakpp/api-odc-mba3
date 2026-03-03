@@ -24,7 +24,7 @@ from src.models import (
 )
 from ..utils import get_user_id
 from ._helpers import obtener_pedido_o_404, obtener_respuestas_proveedor
-from ._converters import construir_distribucion_proporcional
+from ._converters import construir_distribucion_proporcional, enriquecer_distribucion_tiendas_con_nombre
 
 logger = logging.getLogger(__name__)
 
@@ -138,13 +138,20 @@ def register_borrador_endpoints(app: FastAPI):
                         total_actual = detalle_pedido.get("total")
                         if total_actual is not None:
                             try:
-                                cantidad_confirmada_actual = int(float(total_actual))
+                                cantidad_confirmada_actual = float(total_actual)
                                 ajuste_dict["cantidad_confirmada"] = cantidad_confirmada_actual
-                                if ajuste_dict.get("cantidad_ajustada", 0) > cantidad_confirmada_actual:
+                                cantidad_ajustada_actual = float(ajuste_dict.get("cantidad_ajustada", 0) or 0)
+                                if cantidad_ajustada_actual > cantidad_confirmada_actual:
                                     ajuste_dict["cantidad_ajustada"] = cantidad_confirmada_actual
                             except (ValueError, TypeError):
                                 pass
 
+                    # Asegurar nombre de tienda siempre (también para cantidades < 1)
+                    dist_tiendas = ajuste_dict.get("distribucion_tiendas", [])
+                    if dist_tiendas:
+                        ajuste_dict["distribucion_tiendas"] = enriquecer_distribucion_tiendas_con_nombre(
+                            dist_tiendas, repo_pedido.tienda_repo
+                        )
                     ajustes_detalle_sincronizados.append(AjusteDetalle(**ajuste_dict))
 
                 return BorradorResponse(
@@ -200,13 +207,16 @@ def register_borrador_endpoints(app: FastAPI):
                                 DistribucionTiendaFrontend(
                                     tienda_codigo=d.get("tienda_codigo") or "",
                                     tienda_nombre=d.get("tienda_nombre") or "",
-                                    cantidad=int(d.get("cantidad_asignada", 0)),
+                                    cantidad=float(d.get("cantidad_asignada", 0)),
                                     es_bodega=bool(d.get("es_bodega", False)),
                                 )
                                 for d in p.get("distribuciones", [])
                             ]
                             if not dist_tiendas:
                                 continue
+                            dist_tiendas = enriquecer_distribucion_tiendas_con_nombre(
+                                dist_tiendas, repo_pedido.tienda_repo
+                            )
                             primer_d = p.get("distribuciones", [{}])[0]
                             costo = None
                             if primer_d.get("costo_unitario_ajustado") is not None:
@@ -217,9 +227,9 @@ def register_borrador_endpoints(app: FastAPI):
                                 AjusteDetalle(
                                     codigo_producto=codigo,
                                     descripcion=descripcion,
-                                    cantidad_solicitada=int(p.get("cantidad_solicitada_total", 0)),
-                                    cantidad_confirmada=int(p.get("cantidad_confirmada_total", 0)),
-                                    cantidad_ajustada=int(p.get("cantidad_asignada_total", 0)),
+                                    cantidad_solicitada=float(p.get("cantidad_solicitada_total", 0)),
+                                    cantidad_confirmada=float(p.get("cantidad_confirmada_total", 0)),
+                                    cantidad_ajustada=float(p.get("cantidad_asignada_total", 0)),
                                     distribucion_tiendas=dist_tiendas,
                                     costo_original=costo,
                                     costo_ajustado=costo,
@@ -245,17 +255,18 @@ def register_borrador_endpoints(app: FastAPI):
                         continue
 
                     respuesta = respuestas_map.get(pedido_detalle_id, {})
-                    cantidad_solicitada = respuesta.get("cantidad_solicitada_total", 0)
-                    cantidad_confirmada = respuesta.get("cantidad_confirmada_total", 0)
+                    # Asegurar float para no truncar decimales (ej. 0.5) en el flujo confirmación -> redistribución
+                    cantidad_solicitada = float(respuesta.get("cantidad_solicitada_total", 0) or 0)
+                    cantidad_confirmada = float(respuesta.get("cantidad_confirmada_total", 0) or 0)
 
                     if cantidad_solicitada == 0:
-                        cantidad_solicitada = sum(t.get("cantidad", 0) for t in detalle.get("tiendas", []))
+                        cantidad_solicitada = sum(float(t.get("cantidad", 0) or 0) for t in detalle.get("tiendas", []))
 
                     if cantidad_confirmada == 0:
                         total_value = detalle.get("total")
                         if total_value is not None:
                             try:
-                                cantidad_confirmada = int(float(total_value))
+                                cantidad_confirmada = float(total_value)
                             except (ValueError, TypeError):
                                 cantidad_confirmada = cantidad_solicitada
                         else:
@@ -264,11 +275,14 @@ def register_borrador_endpoints(app: FastAPI):
                     costo_actual = detalle.get("costo_doc_sin_iva")
 
                     tiendas_del_detalle = detalle.get("tiendas", [])
-                    cantidad_total_original = sum(t.get("cantidad", 0) for t in tiendas_del_detalle)
+                    cantidad_total_original = sum(float(t.get("cantidad", 0) or 0) for t in tiendas_del_detalle)
                     distribucion_tiendas = construir_distribucion_proporcional(
                         tiendas=tiendas_del_detalle,
                         cantidad_confirmada=cantidad_confirmada,
                         cantidad_total_original=cantidad_total_original,
+                    )
+                    distribucion_tiendas = enriquecer_distribucion_tiendas_con_nombre(
+                        distribucion_tiendas, repo_pedido.tienda_repo
                     )
 
                     costo_modificado = detalle.get("costo_modificado_manual", False)

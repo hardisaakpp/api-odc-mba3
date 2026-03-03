@@ -126,13 +126,9 @@ def register_edicion_endpoints(app: FastAPI):
             if not isinstance(nuevo_total, (int, float)):
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
                                   detail={"error": "validation_error", "message": "El total debe ser un número válido"})
-            if isinstance(nuevo_total, float) and nuevo_total % 1 != 0:
-                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
-                                  detail={"error": "validation_error", 
-                                         "message": "El total debe ser un número entero (sin decimales)"})
-            
-            nuevo_total = int(nuevo_total)
-            
+
+            nuevo_total = float(nuevo_total)
+
             if nuevo_total < 0:
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
                                   detail={"error": "validation_error", "message": "El total no puede ser negativo"})

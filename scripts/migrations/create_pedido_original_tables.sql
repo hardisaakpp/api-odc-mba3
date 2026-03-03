@@ -30,11 +30,11 @@ BEGIN
         pedido_id UNIQUEIDENTIFIER NOT NULL,
 
         -- Campos copiados de la tabla pedido (cabecera)
-        numero_pedido NVARCHAR(50) NOT NULL,
+        numero_pedido NVARCHAR(100) NOT NULL,
         fecha_pedido DATE NULL,
         fecha_entrega NVARCHAR(50) NULL,
         forma_pago NVARCHAR(50) NULL,
-        mensaje NVARCHAR(50) NULL,
+        mensaje NVARCHAR(100) NULL,
         proveedor_nombre NVARCHAR(150) NULL,
         comprador_nombre NVARCHAR(150) NULL,
         comprador_codigo NVARCHAR(50) NULL,

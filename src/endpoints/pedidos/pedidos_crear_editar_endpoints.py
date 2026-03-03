@@ -394,14 +394,15 @@ def register_pedidos_crear_editar_endpoints(app: FastAPI):
         _: None = Depends(require_permission('mabel.view'))
     ):
         """
-        Enviar pedido a EL RAYO: cambia estado de BORRADOR a NUEVO_PEDIDO y envia notificacion por correo.
+        Enviar pedido a EL RAYO: cambia estado de BORRADOR a NUEVO_PEDIDO y envía notificación por correo.
 
         Solo se permite para pedidos en estado BORRADOR (estado_id = 1).
-        Valida que el pedido tenga detalles; si el correo falla, el pedido no se marca como enviado.
+        Valida que el pedido tenga detalles. Si el correo falla, el pedido se marca como enviado
+        igualmente; la respuesta incluye email_enviado: true/false.
 
         - **404**: Pedido no encontrado.
-        - **400**: Pedido no en BORRADOR, sin detalles o fallo al enviar correo.
-        - **200**: Pedido enviado (estado actualizado, correo enviado).
+        - **400**: Pedido no en BORRADOR o sin detalles.
+        - **200**: Pedido enviado (estado actualizado; email_enviado indica si el correo se envió).
         """
         try:
             from src.database.services.pedido_service import PedidoService

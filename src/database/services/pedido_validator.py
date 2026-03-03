@@ -219,7 +219,7 @@ class PedidoValidator:
                         ))
                     tiendas_usadas.add(tienda_codigo_str)
 
-                # Validar cantidad
+                # Validar cantidad (acepta enteros y decimales)
                 if cantidad is None:
                     issues.append(ValidationIssue(
                         row_number=row_number,
@@ -230,41 +230,33 @@ class PedidoValidator:
                     ))
                 else:
                     try:
-                        cantidad_int = int(cantidad)
-                        if cantidad_int <= 0:
+                        cantidad_val = float(cantidad)
+                        if cantidad_val < 0:
                             issues.append(ValidationIssue(
                                 row_number=row_number,
                                 field="cantidad",
                                 severity=ValidationSeverity.ERROR,
-                                message=f"La cantidad debe ser mayor a 0. Valor recibido: {cantidad}",
-                                value=cantidad
-                            ))
-                        elif cantidad_int != cantidad:  # Verificar que sea entero
-                            issues.append(ValidationIssue(
-                                row_number=row_number,
-                                field="cantidad",
-                                severity=ValidationSeverity.WARNING,
-                                message=f"La cantidad debería ser un número entero. Se recibió: {cantidad}, se usará: {cantidad_int}",
+                                message=f"La cantidad no puede ser negativa. Valor recibido: {cantidad}",
                                 value=cantidad
                             ))
                         else:
-                            cantidad_total += cantidad_int
+                            cantidad_total += cantidad_val
 
                             # Validar límite por tienda
-                            if self.max_cantidad_por_tienda and cantidad_int > self.max_cantidad_por_tienda:
+                            if self.max_cantidad_por_tienda and cantidad_val > self.max_cantidad_por_tienda:
                                 issues.append(ValidationIssue(
                                     row_number=row_number,
                                     field="cantidad",
                                     severity=ValidationSeverity.WARNING,
-                                    message=f"La cantidad para la tienda '{tienda_codigo}' ({cantidad_int}) excede el límite razonable por tienda ({self.max_cantidad_por_tienda})",
-                                    value=cantidad_int
+                                    message=f"La cantidad para la tienda '{tienda_codigo}' ({cantidad_val}) excede el límite razonable por tienda ({self.max_cantidad_por_tienda})",
+                                    value=cantidad_val
                                 ))
                     except (ValueError, TypeError):
                         issues.append(ValidationIssue(
                             row_number=row_number,
                             field="cantidad",
                             severity=ValidationSeverity.ERROR,
-                            message=f"La cantidad debe ser un número entero válido. Valor recibido: {cantidad}",
+                            message=f"La cantidad debe ser un número válido. Valor recibido: {cantidad}",
                             value=cantidad
                         ))
 

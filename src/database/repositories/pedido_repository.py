@@ -252,9 +252,18 @@ class PedidoRepository:
 
         respuestas_proveedor: Dict[str, Dict[str, Any]] = {}
         for row in cursor.fetchall():
+            # Normalizar a float para preservar decimales (ej. 0.5); evita truncado si el driver devuelve int/Decimal
+            try:
+                sol = float(row[1]) if row[1] is not None else 0.0
+            except (TypeError, ValueError):
+                sol = 0.0
+            try:
+                conf = float(row[2]) if row[2] is not None else 0.0
+            except (TypeError, ValueError):
+                conf = 0.0
             respuestas_proveedor[str(row[0])] = {
-                "cantidad_solicitada_total": row[1],
-                "cantidad_confirmada_total": row[2],
+                "cantidad_solicitada_total": sol,
+                "cantidad_confirmada_total": conf,
             }
 
         return respuestas_proveedor

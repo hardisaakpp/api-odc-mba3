@@ -228,8 +228,8 @@ Número secuencial de registro\tValor temporal de pedido, marca el bloque que co
                 for tienda in detalle.get("tiendas", []):
                     cantidad = tienda.get("cantidad", 0)
                     
-                    # Omitir si la cantidad es 0
-                    if cantidad <= 0:
+                    # Omitir solo si la cantidad es negativa (0 y decimales como 0.5 se exportan)
+                    if cantidad < 0:
                         continue
                     
                     tienda_codigo = tienda.get("codigo") or ""
@@ -258,7 +258,7 @@ Número secuencial de registro\tValor temporal de pedido, marca el bloque que co
                         self._format_boolean(config.confirmado),  # 19. Confirmado
                         sucursal,  # 20. Sucursal (3 caracteres)
                         codigo_producto,  # 21. Código Producto
-                        self._format_number(cantidad, 0),  # 22. Cantidad Pedido
+                        self._format_number(cantidad, 4),  # 22. Cantidad Pedido (acepta decimales)
                         "FALSE",  # 23. BackOrder (siempre FALSE)
                         self._format_number(precio_unitario, 3),  # 24. Precio Final
                         self._format_boolean(config.aplica_impuesto_1),  # 25. Aplica Impuesto 1
@@ -351,7 +351,7 @@ Número secuencial de registro\tValor temporal de pedido, marca el bloque que co
                 # Consolidar cantidad total de todas las tiendas
                 cantidad_total = sum(t.get("cantidad", 0) for t in detalle.get("tiendas", []))
                 
-                if cantidad_total <= 0:
+                if cantidad_total < 0:
                     continue
                 
                 columnas = [
@@ -376,7 +376,7 @@ Número secuencial de registro\tValor temporal de pedido, marca el bloque que co
                     self._format_boolean(config.confirmado),
                     sucursal_default,
                     codigo_producto,
-                    self._format_number(cantidad_total, 0),
+                    self._format_number(cantidad_total, 4),  # Cantidad total (acepta decimales)
                     "FALSE",
                     self._format_number(precio_unitario, 3),
                     self._format_boolean(config.aplica_impuesto_1),

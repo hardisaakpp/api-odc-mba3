@@ -129,9 +129,9 @@ class PedidoParserTiendas:
                     continue
                 
                 try:
-                    cantidad = int(float(str(cantidad_raw).replace(",", ".")))
-                    if cantidad <= 0:
-                        resultado["errores"].append(f"Fila {fila_num}: 'CANTIDAD' debe ser > 0")
+                    cantidad = float(str(cantidad_raw).replace(",", "."))
+                    if cantidad < 0:
+                        resultado["errores"].append(f"Fila {fila_num}: 'CANTIDAD' no puede ser negativa")
                         continue
                 except (ValueError, TypeError):
                     resultado["errores"].append(f"Fila {fila_num}: 'CANTIDAD' no es un número válido")
@@ -235,8 +235,8 @@ class PedidoParserTiendas:
             if es_codigo_tienda or es_formato_antiguo:
                 cantidad = self.utils.get_numeric_value(row, col_name)
                 
-                if cantidad and cantidad > 0:
-                    cantidad_int = int(cantidad)
+                if cantidad is not None and cantidad >= 0:
+                    cantidad_val = float(cantidad) if not isinstance(cantidad, float) else cantidad
                     
                     if es_codigo_tienda:
                         tienda_codigo = col_upper
@@ -267,7 +267,7 @@ class PedidoParserTiendas:
                         distribuciones.append({
                             "tienda_codigo": tienda_codigo,
                             "tienda_nombre": tienda_nombre,
-                            "cantidad": cantidad_int,
+                            "cantidad": cantidad_val,
                             "validacion": validacion_tienda
                         })
                     else:
@@ -275,7 +275,7 @@ class PedidoParserTiendas:
                         distribuciones.append({
                             "tienda_codigo": nombre_tienda.upper(),
                             "tienda_nombre": nombre_tienda.title(),
-                            "cantidad": cantidad_int,
+                            "cantidad": cantidad_val,
                             "validacion": {"valida": True, "errores": [], "warnings": []}
                         })
         

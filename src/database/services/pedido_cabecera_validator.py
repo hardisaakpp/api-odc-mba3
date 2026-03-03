@@ -44,7 +44,7 @@ class PedidoCabeceraValidator:
         """
         issues = []
 
-        # Validar numero_pedido (obligatorio)
+        # Validar numero_pedido (obligatorio y máx. 100 caracteres)
         numero_pedido = cabecera.get("numero_pedido")
         if not numero_pedido or not str(numero_pedido).strip():
             issues.append(ValidationIssue(
@@ -53,6 +53,25 @@ class PedidoCabeceraValidator:
                 severity=ValidationSeverity.ERROR,
                 message="El número de pedido es obligatorio",
                 value=numero_pedido
+            ))
+        elif len(str(numero_pedido).strip()) > 100:
+            issues.append(ValidationIssue(
+                row_number=row_number,
+                field="numero_pedido",
+                severity=ValidationSeverity.ERROR,
+                message="El número de pedido no puede superar 100 caracteres",
+                value=numero_pedido
+            ))
+
+        # Validar mensaje (máx. 100 caracteres)
+        mensaje = cabecera.get("mensaje")
+        if mensaje is not None and str(mensaje).strip() and len(str(mensaje).strip()) > 100:
+            issues.append(ValidationIssue(
+                row_number=row_number,
+                field="mensaje",
+                severity=ValidationSeverity.ERROR,
+                message="El mensaje no puede superar 100 caracteres",
+                value=mensaje
             ))
 
         # Validar fecha_pedido

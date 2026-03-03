@@ -6,7 +6,7 @@ BEGIN
     CREATE TABLE redistribucion_borrador (
         id UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
         pedido_id UNIQUEIDENTIFIER NOT NULL,
-        numero_pedido NVARCHAR(50) NOT NULL,
+        numero_pedido NVARCHAR(100) NOT NULL,
         ajustes_detalle NVARCHAR(MAX) NOT NULL,
         creado_por NVARCHAR(450) NULL,
         fecha_guardado DATETIME DEFAULT GETDATE(),

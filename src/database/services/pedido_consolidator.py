@@ -305,11 +305,11 @@ class PedidoConsolidator:
                 continue
             
             # Sumar todas las cantidades de este producto (todas las tiendas)
-            cantidad_total = 0
+            cantidad_total = 0.0
             for dist in distribuciones:
                 cantidad = dist.get("cantidad", 0)
-                if cantidad and isinstance(cantidad, (int, float)):
-                    cantidad_total += int(cantidad)
+                if cantidad is not None and isinstance(cantidad, (int, float)):
+                    cantidad_total += float(cantidad)
             
             productos_consolidados.append({
                 "codigo_producto": codigo_producto,
