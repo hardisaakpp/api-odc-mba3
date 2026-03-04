@@ -54,9 +54,9 @@ def test_all_endpoints_registered_correctly():
     app = FastAPI()
     register_crud_endpoints(app)
     
-    # Obtener todas las rutas registradas
+    # Obtener todas las rutas registradas (getattr evita reportAttributeAccessIssue con BaseRoute)
     routes = [r for r in app.routes if hasattr(r, 'path')]
-    route_paths = {r.path for r in routes}
+    route_paths = {getattr(r, 'path', '') for r in routes}
     
     # Verificar que las rutas clave están presentes
     expected_paths = {
