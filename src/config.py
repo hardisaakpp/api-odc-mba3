@@ -297,6 +297,8 @@ EMAIL_SMTP_SERVER = os.getenv("EMAIL_SMTP_SERVER", "mabeltrading-com-ec.mail.pro
 EMAIL_SMTP_PORT = int(os.getenv("EMAIL_SMTP_PORT", "25"))  # Puerto 25 para relay interno (sin TLS)
 EMAIL_SMTP_USER = os.getenv("EMAIL_SMTP_USER", "")
 EMAIL_SMTP_PASSWORD = os.getenv("EMAIL_SMTP_PASSWORD", "")  # VacÃ­o para relay interno sin autenticaciÃ³n
+# Timeout en segundos para conexiones SMTP (evita que la app quede colgada si el servidor no responde)
+EMAIL_SMTP_TIMEOUT = float(os.getenv("EMAIL_SMTP_TIMEOUT", "5.0"))
 
 # Direcciones de correo
 EMAIL_FROM = os.getenv("EMAIL_FROM", "integrationsap@mabeltrading.com.ec")

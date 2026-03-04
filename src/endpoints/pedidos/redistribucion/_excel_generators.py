@@ -139,9 +139,9 @@ def generar_excel_distribucion(
     for producto in productos_enriquecidos:
         codigo_interno = producto.get("codigo_interno", "")
         descripcion = producto.get("descripcion_sap", "")
-        cantidad_solicitada = producto.get("cantidad_solicitada_total", 0)
-        cantidad_confirmada = producto.get("cantidad_confirmada_total", 0)
-        cantidad_asignada = producto.get("cantidad_asignada_total", 0)
+        cantidad_solicitada = float(producto.get("cantidad_solicitada_total", 0) or 0)
+        cantidad_confirmada = float(producto.get("cantidad_confirmada_total", 0) or 0)
+        cantidad_asignada = float(producto.get("cantidad_asignada_total", 0) or 0)
         diferencia = cantidad_confirmada - cantidad_asignada
 
         total_solicitada += cantidad_solicitada

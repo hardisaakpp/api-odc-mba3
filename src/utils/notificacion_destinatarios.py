@@ -20,6 +20,7 @@ from src.config import (
     EMAIL_TO_OPERACIONES,
     EMAIL_TO_TECNICOS,
     ENVIRONMENT,
+    EMAIL_DEV_OVERRIDE,
 )
 from src.database.connection import get_db_connection_context
 from src.database.repositories.notificacion_destinatario_repository import (
@@ -58,6 +59,16 @@ def get_destinatarios_por_tipo(tipo_notificacion: str) -> List[str]:
     tipo = (tipo_notificacion or "").strip().upper()
     if not tipo:
         return []
+
+    # En desarrollo, si EMAIL_DEV_OVERRIDE está configurado, TODOS los correos
+    # de notificaciones se redirigen a esa(s) dirección(es), ignorando BD y .env.
+    if ENVIRONMENT == "development" and EMAIL_DEV_OVERRIDE:
+        logger.info(
+            "📧 EMAIL_DEV_OVERRIDE activo en desarrollo: redirigiendo tipo '%s' a %s",
+            tipo,
+            EMAIL_DEV_OVERRIDE,
+        )
+        return list(EMAIL_DEV_OVERRIDE)
 
     # En desarrollo, para OPERACIONES (EL RAYO) y MABEL_TRADING dejamos de usar
     # correos de .env y obligamos a que vengan desde BD.

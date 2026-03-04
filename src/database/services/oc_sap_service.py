@@ -672,7 +672,7 @@ class OCSAPService:
                         pedido_numero=pedido_numero
                     )
                     if email_enviado:
-                        logger.info(f"📧 Notificación de OC lista para despacho enviada a El Rayo (OC #{doc_num})")
+                        logger.info(f"📧 Notificación de OC lista para despacho enviada a El Rayo y MABEL TRADING (OC #{doc_num})")
                     else:
                         logger.warning(f"⚠️ No se pudo enviar notificación a El Rayo (no crítico)")
                 except Exception as e:

@@ -26,7 +26,8 @@ from src.config import (
     ENABLE_EMAIL_NOTIFICATIONS,
     EMAIL_WARNING_TIME_LIMIT_PERCENT,
     EMAIL_WARNING_HIGH_VOLUME_THRESHOLD,
-    EMAIL_WARNING_FAILURES_THRESHOLD
+    EMAIL_WARNING_FAILURES_THRESHOLD,
+    EMAIL_SMTP_TIMEOUT,
 )
 from src.utils.notificacion_destinatarios import get_destinatarios_por_tipo
 
@@ -112,7 +113,7 @@ Mensaje automatico del sistema - Mabel Trading
         )
         
         # Enviar email
-        with smtplib.SMTP(EMAIL_SMTP_SERVER, EMAIL_SMTP_PORT) as server:
+        with smtplib.SMTP(EMAIL_SMTP_SERVER, EMAIL_SMTP_PORT, timeout=EMAIL_SMTP_TIMEOUT) as server:
             # Solo usar TLS si el puerto es 587 (no para puerto 25 - relay interno)
             if EMAIL_SMTP_PORT == 587:
                 server.starttls()
@@ -197,7 +198,7 @@ Por favor, revisa los logs del sistema para mas informacion.
             body_text=body_text,
         )
         
-        with smtplib.SMTP(EMAIL_SMTP_SERVER, EMAIL_SMTP_PORT) as server:
+        with smtplib.SMTP(EMAIL_SMTP_SERVER, EMAIL_SMTP_PORT, timeout=EMAIL_SMTP_TIMEOUT) as server:
             # Solo usar TLS si el puerto es 587 (no para puerto 25 - relay interno)
             if EMAIL_SMTP_PORT == 587:
                 server.starttls()
@@ -582,7 +583,7 @@ def send_homologacion_notification(
         )
         
         # Enviar email
-        with smtplib.SMTP(EMAIL_SMTP_SERVER, EMAIL_SMTP_PORT) as server:
+        with smtplib.SMTP(EMAIL_SMTP_SERVER, EMAIL_SMTP_PORT, timeout=EMAIL_SMTP_TIMEOUT) as server:
             # Solo usar TLS si el puerto es 587 (no para puerto 25 - relay interno)
             if EMAIL_SMTP_PORT == 587:
                 server.starttls()
@@ -703,7 +704,7 @@ Accion Recomendada: Revisar los logs del sistema.
             body_text=body_text,
         )
         
-        with smtplib.SMTP(EMAIL_SMTP_SERVER, EMAIL_SMTP_PORT) as server:
+        with smtplib.SMTP(EMAIL_SMTP_SERVER, EMAIL_SMTP_PORT, timeout=EMAIL_SMTP_TIMEOUT) as server:
             if EMAIL_SMTP_PORT == 587:
                 server.starttls()
             if EMAIL_SMTP_PASSWORD:
@@ -900,7 +901,7 @@ Detalle:
         )
         
         # Enviar email
-        with smtplib.SMTP(EMAIL_SMTP_SERVER, EMAIL_SMTP_PORT) as server:
+        with smtplib.SMTP(EMAIL_SMTP_SERVER, EMAIL_SMTP_PORT, timeout=EMAIL_SMTP_TIMEOUT) as server:
             # Solo usar TLS si el puerto es 587 (no para puerto 25 - relay interno)
             if EMAIL_SMTP_PORT == 587:
                 server.starttls()
@@ -929,12 +930,12 @@ def send_oc_ready_for_dispatch_notification(
     fecha_ejecucion: Optional[datetime] = None
 ) -> bool:
     """
-    Envía notificación a El Rayo indicando que la OC y Solicitudes de Transferencia
+    Envía notificación a El Rayo y a MABEL TRADING indicando que la OC y Solicitudes de Transferencia
     han sido generadas en SAP y pueden proceder con despacho y facturación.
     
     HU-04: Alertar al personal de El Rayo para proceder con el despacho y facturación
     
-    DESTINATARIO: EMAIL_TO_OPERACIONES (Operaciones/Despachos)
+    DESTINATARIOS: OPERACIONES (El Rayo) + MABEL_TRADING
     
     Args:
         oc_cabecera: Datos de cabecera de la orden de compra
@@ -955,11 +956,19 @@ def send_oc_ready_for_dispatch_notification(
         fecha_ejecucion = ahora_naive()
     
     try:
-        # Destinatarios: BD o fallback .env (Operaciones/Despachos - El Rayo)
-        recipients: list[str] = get_destinatarios_por_tipo("OPERACIONES")
+        # Destinatarios: El Rayo (OPERACIONES) + MABEL TRADING (sin duplicados)
+        operaciones: list[str] = get_destinatarios_por_tipo("OPERACIONES")
+        mabel_trading: list[str] = get_destinatarios_por_tipo("MABEL_TRADING")
+        seen: set[str] = set()
+        recipients: list[str] = []
+        for email in operaciones + mabel_trading:
+            e = (email or "").strip().lower()
+            if e and e not in seen:
+                seen.add(e)
+                recipients.append(email.strip())
         
         if not recipients:
-            logger.warning("⚠️ No hay destinatarios configurados para notificación de despacho")
+            logger.warning("⚠️ No hay destinatarios configurados para notificación de despacho (OPERACIONES ni MABEL_TRADING)")
             return False
         
         # Extraer información de la OC
@@ -1249,7 +1258,7 @@ Mensaje automatico del sistema de integracion SAP - Mabel Trading
         msg.attach(MIMEText(body_html, 'html', 'utf-8'))
         
         # Enviar email
-        with smtplib.SMTP(EMAIL_SMTP_SERVER, EMAIL_SMTP_PORT) as server:
+        with smtplib.SMTP(EMAIL_SMTP_SERVER, EMAIL_SMTP_PORT, timeout=EMAIL_SMTP_TIMEOUT) as server:
             # Solo usar TLS si el puerto es 587 (no para puerto 25 - relay interno)
             if EMAIL_SMTP_PORT == 587:
                 server.starttls()
@@ -1355,7 +1364,7 @@ Fecha y Hora: {fecha_ejecucion.strftime('%Y-%m-%d %H:%M:%S')}
         )
         
         # Enviar email
-        with smtplib.SMTP(EMAIL_SMTP_SERVER, EMAIL_SMTP_PORT) as server:
+        with smtplib.SMTP(EMAIL_SMTP_SERVER, EMAIL_SMTP_PORT, timeout=EMAIL_SMTP_TIMEOUT) as server:
             # Solo usar TLS si el puerto es 587 (no para puerto 25 - relay interno)
             if EMAIL_SMTP_PORT == 587:
                 server.starttls()
@@ -1448,7 +1457,7 @@ El pedido permanece en el sistema con estado CANCELADO y no sera procesado.
             body_text=body_text,
         )
 
-        with smtplib.SMTP(EMAIL_SMTP_SERVER, EMAIL_SMTP_PORT) as server:
+        with smtplib.SMTP(EMAIL_SMTP_SERVER, EMAIL_SMTP_PORT, timeout=EMAIL_SMTP_TIMEOUT) as server:
             if EMAIL_SMTP_PORT == 587:
                 server.starttls()
             if EMAIL_SMTP_PASSWORD:
@@ -1535,7 +1544,7 @@ El pedido ya no esta disponible en el sistema.
             body_text=body_text,
         )
 
-        with smtplib.SMTP(EMAIL_SMTP_SERVER, EMAIL_SMTP_PORT) as server:
+        with smtplib.SMTP(EMAIL_SMTP_SERVER, EMAIL_SMTP_PORT, timeout=EMAIL_SMTP_TIMEOUT) as server:
             if EMAIL_SMTP_PORT == 587:
                 server.starttls()
             if EMAIL_SMTP_PASSWORD:
@@ -1655,7 +1664,7 @@ Fecha y Hora: {fecha_ejecucion.strftime('%Y-%m-%d %H:%M:%S')}
         )
         
         # Enviar email
-        with smtplib.SMTP(EMAIL_SMTP_SERVER, EMAIL_SMTP_PORT) as server:
+        with smtplib.SMTP(EMAIL_SMTP_SERVER, EMAIL_SMTP_PORT, timeout=EMAIL_SMTP_TIMEOUT) as server:
             # Solo usar TLS si el puerto es 587 (no para puerto 25 - relay interno)
             if EMAIL_SMTP_PORT == 587:
                 server.starttls()
@@ -1749,7 +1758,7 @@ Nota: Operacion irreversible. Para crear el pedido nuevamente, cargarlo desde ce
             body_text=body_text,
         )
 
-        with smtplib.SMTP(EMAIL_SMTP_SERVER, EMAIL_SMTP_PORT) as server:
+        with smtplib.SMTP(EMAIL_SMTP_SERVER, EMAIL_SMTP_PORT, timeout=EMAIL_SMTP_TIMEOUT) as server:
             if EMAIL_SMTP_PORT == 587:
                 server.starttls()
             if EMAIL_SMTP_PASSWORD:

@@ -5,7 +5,39 @@ Este módulo contiene helpers puros extraídos para reducir duplicación
 y mejorar la mantenibilidad del código de endpoints CRUD de pedidos.
 """
 
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
+
+
+def calcular_totales_detalles(detalles: List[Dict[str, Any]]) -> Dict[str, float]:
+    """
+    Calcula los totales de la tabla de detalles (suma de costo_doc_sin_iva, subtotal, total).
+    No se persisten en BD; el backend los calcula en cada petición para que el frontend
+    muestre siempre la misma fuente de verdad.
+
+    Args:
+        detalles: Lista de dicts con keys costo_doc_sin_iva, subtotal, total (pueden ser None).
+
+    Returns:
+        {"total_costo_unitario": float, "total_subtotal": float, "total_total": float}
+    """
+    total_costo = 0.0
+    total_subtotal = 0.0
+    total_total = 0.0
+    for d in detalles or []:
+        v = d.get("costo_doc_sin_iva")
+        if v is not None:
+            total_costo += float(v)
+        v = d.get("subtotal")
+        if v is not None:
+            total_subtotal += float(v)
+        v = d.get("total")
+        if v is not None:
+            total_total += float(v)
+    return {
+        "total_costo_unitario": round(total_costo, 2),
+        "total_subtotal": round(total_subtotal, 2),
+        "total_total": round(total_total, 2),
+    }
 from src.database.pedido_estados import (
     ESTADO_REDISTRIBUCION,
     ESTADO_DESPACHAR_Y_FACTURAR,

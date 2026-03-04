@@ -11,7 +11,7 @@ from fastapi.responses import JSONResponse
 from src.database.connection import get_db_connection_context
 from src.database.repositories.pedido_repository import PedidoRepository
 from src.database.pedido_estados import ESTADO_GESTIONAR_PEDIDO
-from src.security.jwt_auth import verify_jwt_token, require_any_permission
+from src.security.jwt_auth import verify_jwt_token
 from src.models import (
     ActualizarCostoRequest,
     ActualizarTotalRequest,
@@ -21,6 +21,7 @@ from src.models import (
     ObtenerModificacionesColumnasResponse,
     ModificacionColumnaItem
 )
+from .pedidos_crud_helpers import calcular_totales_detalles
 from .utils import get_user_id
 
 logger = logging.getLogger(__name__)
@@ -51,9 +52,8 @@ def register_edicion_endpoints(app: FastAPI):
         pedido_detalle_id: str = Path(..., description="UUID del detalle del pedido"),
         request_body: ActualizarCostoRequest = Body(..., description="Datos del costo a actualizar"),
         user: Dict = Depends(verify_jwt_token),
-        _: None = Depends(require_any_permission(['odcsap.view', 'mabel.view']))
     ):
-        """Actualiza el costo unitario de una línea de detalle del pedido."""
+        """Actualiza el costo unitario de una línea de detalle del pedido. Cualquier usuario autenticado puede editar (estado GESTIONAR PEDIDO). Devuelve totales recalculados."""
         try:
             nuevo_costo = request_body.costo_doc_sin_iva
             
@@ -72,6 +72,7 @@ def register_edicion_endpoints(app: FastAPI):
                                          "message": f"El costo ({nuevo_costo}) excede el límite máximo permitido (1,000,000)"})
             
             user_id = get_user_id(user)
+            totales = None
             
             with get_db_connection_context() as conn:
                 repo = PedidoRepository(conn)
@@ -89,14 +90,19 @@ def register_edicion_endpoints(app: FastAPI):
                                       detail={"error": "estado_no_editable",
                                              "message": "Solo se pueden editar COSTO UNIT., TOTAL y COMENTARIO cuando el pedido está en estado GESTIONAR PEDIDO."})
                 resultado = repo.update_costo_detalle(pedido_detalle_id, nuevo_costo, modificado_por=user_id)
+                if resultado.get("success"):
+                    pedido_actualizado = _get_pedido_por_identificador(repo, numero_pedido)
+                    totales = calcular_totales_detalles(pedido_actualizado.get("detalles", [])) if pedido_actualizado else {}
             
             if resultado["success"]:
                 logger.info(f"✅ Costo actualizado para detalle {pedido_detalle_id} por usuario {user.get('username', 'UNKNOWN')}")
-                return JSONResponse(status_code=status.HTTP_200_OK,
-                                  content={"status": "success", "message": resultado["mensaje"],
-                                          "pedido_detalle_id": resultado["pedido_detalle_id"],
-                                          "costo_anterior": resultado["costo_anterior"],
-                                          "costo_nuevo": resultado["costo_nuevo"]})
+                content = {"status": "success", "message": resultado["mensaje"],
+                          "pedido_detalle_id": resultado["pedido_detalle_id"],
+                          "costo_anterior": resultado["costo_anterior"],
+                          "costo_nuevo": resultado["costo_nuevo"]}
+                if totales is not None:
+                    content["totales"] = totales
+                return JSONResponse(status_code=status.HTTP_200_OK, content=content)
             else:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
                                   detail={"error": "detalle_not_found", "message": resultado["mensaje"]})
@@ -114,9 +120,8 @@ def register_edicion_endpoints(app: FastAPI):
         pedido_detalle_id: str = Path(..., description="UUID del detalle del pedido"),
         request_body: ActualizarTotalRequest = Body(..., description="Datos del total a actualizar"),
         user: Dict = Depends(verify_jwt_token),
-        _: None = Depends(require_any_permission(['odcsap.view', 'mabel.view']))
     ):
-        """Actualiza el total de una línea de detalle del pedido."""
+        """Actualiza el total de una línea de detalle del pedido. Cualquier usuario autenticado puede editar (estado GESTIONAR PEDIDO). Devuelve totales recalculados."""
         try:
             nuevo_total = request_body.total
             
@@ -138,6 +143,7 @@ def register_edicion_endpoints(app: FastAPI):
                                          "message": f"El total ({nuevo_total}) excede el límite máximo permitido (10,000,000)"})
             
             user_id = get_user_id(user)
+            totales = None
             
             with get_db_connection_context() as conn:
                 repo = PedidoRepository(conn)
@@ -155,15 +161,20 @@ def register_edicion_endpoints(app: FastAPI):
                                       detail={"error": "estado_no_editable",
                                              "message": "Solo se pueden editar COSTO UNIT., TOTAL y COMENTARIO cuando el pedido está en estado GESTIONAR PEDIDO."})
                 resultado = repo.update_total_detalle(pedido_detalle_id, nuevo_total, modificado_por=user_id)
+                if resultado.get("success"):
+                    pedido_actualizado = _get_pedido_por_identificador(repo, numero_pedido)
+                    totales = calcular_totales_detalles(pedido_actualizado.get("detalles", [])) if pedido_actualizado else {}
             
             if resultado["success"]:
                 logger.info(f"✅ Total actualizado para detalle {pedido_detalle_id} por usuario {user.get('username', 'UNKNOWN')}")
-                return JSONResponse(status_code=status.HTTP_200_OK,
-                                  content={"status": "success", "message": resultado["mensaje"],
-                                          "pedido_detalle_id": resultado["pedido_detalle_id"],
-                                          "total_anterior": resultado["total_anterior"],
-                                          "total_nuevo": resultado["total_nuevo"],
-                                          "costo_actualizado": resultado["costo_actualizado"]})
+                content = {"status": "success", "message": resultado["mensaje"],
+                          "pedido_detalle_id": resultado["pedido_detalle_id"],
+                          "total_anterior": resultado["total_anterior"],
+                          "total_nuevo": resultado["total_nuevo"],
+                          "costo_actualizado": resultado["costo_actualizado"]}
+                if totales is not None:
+                    content["totales"] = totales
+                return JSONResponse(status_code=status.HTTP_200_OK, content=content)
             else:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
                                   detail={"error": "detalle_not_found", "message": resultado["mensaje"]})
@@ -181,7 +192,6 @@ def register_edicion_endpoints(app: FastAPI):
         pedido_detalle_id: str = Path(..., description="UUID del detalle del pedido"),
         request_body: ActualizarComentarioRequest = Body(..., description="Datos del comentario a actualizar"),
         user: Dict = Depends(verify_jwt_token),
-        _: None = Depends(require_any_permission(['odcsap.view', 'mabel.view']))
     ):
         """Actualiza el comentario de una línea de detalle del pedido."""
         try:
@@ -244,7 +254,6 @@ def register_edicion_endpoints(app: FastAPI):
         numero_pedido: str = Path(..., description="Número del pedido o pedido_id (UUID); el backend acepta ambos."),
         request_body: GuardarModificacionesColumnasRequest = Body(..., description="Datos de las modificaciones"),
         user: Dict = Depends(verify_jwt_token),
-        _: None = Depends(require_any_permission(['odcsap.view', 'mabel.view']))
     ):
         """Guarda o actualiza las modificaciones de columnas para un pedido."""
         try:
@@ -298,7 +307,6 @@ def register_edicion_endpoints(app: FastAPI):
     async def obtener_modificaciones_columnas(
         numero_pedido: str = Path(..., description="Número del pedido o pedido_id (UUID); el backend acepta ambos."),
         user: Dict = Depends(verify_jwt_token),
-        _: None = Depends(require_any_permission(['odcsap.view', 'mabel.view']))
     ):
         """Obtiene las modificaciones de columnas para un pedido."""
         try:

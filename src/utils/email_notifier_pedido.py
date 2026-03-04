@@ -18,7 +18,8 @@ from src.config import (
     EMAIL_SMTP_PASSWORD,
     EMAIL_FROM,
     EMAIL_FROM_NAME,
-    ENABLE_EMAIL_NOTIFICATIONS
+    ENABLE_EMAIL_NOTIFICATIONS,
+    EMAIL_SMTP_TIMEOUT,
 )
 from src.utils.notificacion_destinatarios import get_destinatarios_por_tipo
 
@@ -157,7 +158,7 @@ Fecha y Hora: {fecha_ejecucion.strftime('%Y-%m-%d %H:%M:%S')}
         )
         
         # Enviar email
-        with smtplib.SMTP(EMAIL_SMTP_SERVER, EMAIL_SMTP_PORT) as server:
+        with smtplib.SMTP(EMAIL_SMTP_SERVER, EMAIL_SMTP_PORT, timeout=EMAIL_SMTP_TIMEOUT) as server:
             # Solo usar TLS si el puerto es 587 (no para puerto 25 - relay interno)
             if EMAIL_SMTP_PORT == 587:
                 server.starttls()
@@ -280,7 +281,7 @@ Fecha y Hora: {fecha_ejecucion.strftime('%Y-%m-%d %H:%M:%S')}
         )
         
         # Enviar email
-        with smtplib.SMTP(EMAIL_SMTP_SERVER, EMAIL_SMTP_PORT) as server:
+        with smtplib.SMTP(EMAIL_SMTP_SERVER, EMAIL_SMTP_PORT, timeout=EMAIL_SMTP_TIMEOUT) as server:
             # Solo usar TLS si el puerto es 587 (no para puerto 25 - relay interno)
             if EMAIL_SMTP_PORT == 587:
                 server.starttls()
@@ -398,7 +399,7 @@ Fecha y Hora: {fecha_ejecucion.strftime('%Y-%m-%d %H:%M:%S')}
             body_text=body_text,
         )
 
-        with smtplib.SMTP(EMAIL_SMTP_SERVER, EMAIL_SMTP_PORT) as server:
+        with smtplib.SMTP(EMAIL_SMTP_SERVER, EMAIL_SMTP_PORT, timeout=EMAIL_SMTP_TIMEOUT) as server:
             if EMAIL_SMTP_PORT == 587:
                 server.starttls()
             if EMAIL_SMTP_PASSWORD:
@@ -511,7 +512,7 @@ Fecha y Hora: {fecha_ejecucion.strftime('%Y-%m-%d %H:%M:%S')}
             body_text=body_text,
         )
 
-        with smtplib.SMTP(EMAIL_SMTP_SERVER, EMAIL_SMTP_PORT) as server:
+        with smtplib.SMTP(EMAIL_SMTP_SERVER, EMAIL_SMTP_PORT, timeout=EMAIL_SMTP_TIMEOUT) as server:
             if EMAIL_SMTP_PORT == 587:
                 server.starttls()
             if EMAIL_SMTP_PASSWORD:
