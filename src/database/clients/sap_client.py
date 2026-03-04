@@ -25,9 +25,9 @@ logger = logging.getLogger(__name__)
 class SAPClient:
     """Cliente para consultar información de productos desde SAP."""
     
-    # Patrón permitido para ItemCode: alfanumérico, guiones, puntos, espacios
-    # Longitud máxima: 50 caracteres (ajustable según necesidades)
-    ITEM_CODE_PATTERN = re.compile(r'^[A-Za-z0-9.\- ]{1,50}$')
+    # Patrón permitido para ItemCode: alfanumérico, guiones, puntos, espacios, barra, guion bajo
+    # SAP puede usar códigos como R463.1012.GR/AZ; longitud máxima 50 caracteres
+    ITEM_CODE_PATTERN = re.compile(r'^[A-Za-z0-9.\-_/ ]{1,50}$')
     
     def __init__(self):
         """Inicializa el cliente SAP."""

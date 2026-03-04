@@ -347,7 +347,8 @@ class PedidoSAPValidator:
                 return None
             
             codigo_clean = codigo.strip()
-            if not re.match(r'^[A-Za-z0-9.\- ]{1,50}$', codigo_clean):
+            # Permitir mismos caracteres que SAP (incl. / y _) para consistencia
+            if not re.match(r'^[A-Za-z0-9.\-_/ ]{1,50}$', codigo_clean):
                 logger.warning(f"⚠️ Código con formato inválido para MBA3: {codigo_clean}")
                 return None
             

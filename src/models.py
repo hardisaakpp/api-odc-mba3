@@ -814,9 +814,9 @@ class DistribucionConfirmadaItem(BaseModel):
     tienda_id: str = Field(..., description="UUID de la tienda")
     tienda_codigo: Optional[str] = Field(None, description="Código de la tienda")
     tienda_nombre: Optional[str] = Field(None, description="Nombre de la tienda")
-    cantidad_solicitada: int = Field(..., ge=0)
-    cantidad_confirmada: int = Field(..., ge=0)
-    cantidad_asignada: int = Field(..., ge=0)
+    cantidad_solicitada: float = Field(..., ge=0, description="Cantidad (p. ej. docenas, puede ser fraccionaria)")
+    cantidad_confirmada: float = Field(..., ge=0)
+    cantidad_asignada: float = Field(..., ge=0)
     costo_unitario_original: Optional[float] = None
     costo_unitario_ajustado: Optional[float] = None
     subtotal_original: Optional[float] = None
@@ -833,9 +833,9 @@ class DistribucionProductoResponse(BaseModel):
     pedido_detalle_id: str = Field(..., description="UUID del detalle del pedido")
     codigo_interno: Optional[str] = None
     descripcion_sap: Optional[str] = None
-    cantidad_solicitada_total: int = Field(..., ge=0)
-    cantidad_confirmada_total: int = Field(..., ge=0)
-    cantidad_asignada_total: int = Field(..., ge=0)
+    cantidad_solicitada_total: float = Field(..., ge=0, description="Cantidad total (p. ej. docenas, puede ser fraccionaria)")
+    cantidad_confirmada_total: float = Field(..., ge=0)
+    cantidad_asignada_total: float = Field(..., ge=0)
     distribuciones: List[DistribucionConfirmadaItem] = Field(default_factory=list)
 
 
@@ -863,10 +863,10 @@ class DiferenciaProductoItem(BaseModel):
     pedido_detalle_id: str = Field(..., description="UUID del detalle del pedido")
     codigo_interno: Optional[str] = None
     descripcion_sap: Optional[str] = None
-    cantidad_solicitada: int = Field(..., ge=0)
-    cantidad_confirmada: int = Field(..., ge=0)
-    cantidad_asignada: int = Field(..., ge=0)
-    diferencia_cantidad: int = Field(..., description="cantidad_asignada - cantidad_confirmada (puede ser negativa)")
+    cantidad_solicitada: float = Field(..., ge=0, description="Cantidad (p. ej. docenas, puede ser fraccionaria)")
+    cantidad_confirmada: float = Field(..., ge=0)
+    cantidad_asignada: float = Field(..., ge=0)
+    diferencia_cantidad: float = Field(..., description="cantidad_asignada - cantidad_confirmada (puede ser negativa)")
     costo_unitario_original: Optional[float] = None
     costo_unitario_ajustado: Optional[float] = None
     subtotal_original: Optional[float] = None
@@ -880,10 +880,10 @@ class DiferenciaTiendaItem(BaseModel):
     tienda_id: str = Field(..., description="UUID de la tienda")
     tienda_codigo: Optional[str] = None
     tienda_nombre: Optional[str] = None
-    cantidad_solicitada: int = Field(..., ge=0)
-    cantidad_confirmada: int = Field(..., ge=0)
-    cantidad_asignada: int = Field(..., ge=0)
-    diferencia_cantidad: int = Field(..., description="cantidad_asignada - cantidad_confirmada")
+    cantidad_solicitada: float = Field(..., ge=0)
+    cantidad_confirmada: float = Field(..., ge=0)
+    cantidad_asignada: float = Field(..., ge=0)
+    diferencia_cantidad: float = Field(..., description="cantidad_asignada - cantidad_confirmada")
 
 
 class ReporteDiferenciasResponse(BaseModel):
@@ -896,10 +896,10 @@ class ReporteDiferenciasResponse(BaseModel):
     
     # Resumen total
     total_productos: int = Field(..., ge=0)
-    total_cantidad_solicitada: int = Field(..., ge=0)
-    total_cantidad_confirmada: int = Field(..., ge=0)
-    total_cantidad_asignada: int = Field(..., ge=0)
-    total_diferencia_cantidad: int = Field(..., description="Total diferencia de cantidad")
+    total_cantidad_solicitada: float = Field(..., ge=0)
+    total_cantidad_confirmada: float = Field(..., ge=0)
+    total_cantidad_asignada: float = Field(..., ge=0)
+    total_diferencia_cantidad: float = Field(..., description="Total diferencia de cantidad")
     total_costo_original: Optional[float] = None
     total_costo_ajustado: Optional[float] = None
     total_diferencia_costo: Optional[float] = Field(None, description="Total diferencia de costo")

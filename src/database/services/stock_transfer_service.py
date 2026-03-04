@@ -657,7 +657,10 @@ class StockTransferService:
                     
                     # Calcular factor de conversión para distribuir cantidad_sap proporcionalmente
                     cantidad_original_total = producto_dist.get("cantidad_total_solicitada", cantidad_total_distribuida_tiendas)
-                    factor_conversion = cantidad_sap / cantidad_original_total if cantidad_original_total > 0 else 1
+                    # Asegurar tipos numéricos (evitar float/Decimal en misma operación)
+                    _cant_orig = float(cantidad_original_total) if cantidad_original_total is not None else 0.0
+                    _cant_sap = float(cantidad_sap) if cantidad_sap is not None else 0.0
+                    factor_conversion = _cant_sap / _cant_orig if _cant_orig > 0 else 1.0
                     
                     for dist in distribuciones_tiendas:
                         tienda_id = dist.get("tienda_id")
@@ -717,7 +720,7 @@ class StockTransferService:
                             continue
                         
                         # Convertir cantidad_asignada a unidades SAP proporcionalmente
-                        cantidad_sap_asignada = cantidad_asignada * factor_conversion
+                        cantidad_sap_asignada = float(cantidad_asignada) * factor_conversion
                         
                         # ⭐ Obtener código exacto de SAP (WhsCode) para usar en la ST
                         codigo_exacto_sap = mapeo_codigo_exacto_sap.get(tienda_codigo_upper, tienda_codigo_upper)

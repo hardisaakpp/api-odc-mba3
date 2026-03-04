@@ -340,3 +340,10 @@ migrations:
     description: "Agregar orden_linea a pedido_detalle_original para conservar orden de la plantilla en Descargar Pedido Original"
     category: "alter"
     dependencies: ["605"]
+
+  - version: "608"
+    name: "alter_distribucion_confirmada_cantidad_decimal"
+    file: "migrations/alter_distribucion_confirmada_cantidad_decimal.sql"
+    description: "Cambiar cantidad_solicitada, cantidad_confirmada, cantidad_asignada en distribucion_confirmada e historial de INT a DECIMAL(18,4) para soportar decimales (ej. 0.5) al enviar ODC a SAP"
+    category: "alter"
+    dependencies: ["006"]
