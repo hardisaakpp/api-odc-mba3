@@ -6,9 +6,9 @@
 --              snapshot de todos los cambios (valores antes y después)
 -- Fecha: 2026-01-15
 -- ============================================================================
-
-USE [MBA3_Consultas]
-GO
+-- Ejecuta en la base de datos actual (la de la conexión); no usar USE para
+-- permitir distintos nombres de BD (ej. store_control, MBA3_Consultas, etc.).
+-- ============================================================================
 
 -- ============================================================================
 -- Tabla principal: pedido_confirmacion_rayo

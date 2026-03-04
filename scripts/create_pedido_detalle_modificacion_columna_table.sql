@@ -5,9 +5,8 @@
 --              (costo_doc_sin_iva, total, comentario) con información de auditoría
 -- Fecha: 2026-01-15
 -- ============================================================================
-
-USE [MBA3_Consultas]
-GO
+-- Ejecuta en la base de datos actual (la de la conexión).
+-- ============================================================================
 
 -- Crear tabla si no existe
 IF NOT EXISTS (

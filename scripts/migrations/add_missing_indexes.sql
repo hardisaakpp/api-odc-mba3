@@ -9,9 +9,6 @@
 SET NOCOUNT ON;
 GO
 
-USE [MBA3_Consultas]
-GO
-
 PRINT '🔧 Iniciando migración: Agregar índices faltantes para optimización';
 PRINT '============================================================================';
 GO

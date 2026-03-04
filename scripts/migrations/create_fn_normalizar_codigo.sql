@@ -24,9 +24,6 @@
 --       Mantener ambas sincronizadas si se modifica la lógica.
 -- ============================================================================
 
-USE [MBA3_Consultas]
-GO
-
 PRINT '============================================================================';
 PRINT '🔧 Iniciando migración: Crear función fn_normalizar_codigo';
 PRINT '============================================================================';

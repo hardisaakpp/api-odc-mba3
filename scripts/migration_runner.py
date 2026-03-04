@@ -91,8 +91,24 @@ class MigrationRunner:
                     f"No se encontró el script de inicialización: {init_script}\n"
                     "Ejecuta primero: scripts/migrations/000_create_schema_migrations.sql"
                 )
-            
-            self._execute_script(init_script, version='000', name='create_schema_migrations')
+            # Usar autocommit para que el DDL (CREATE TABLE) persista de inmediato en SQL Server
+            prev_autocommit = self.conn.autocommit
+            try:
+                self.conn.autocommit = True
+                self._execute_script(init_script, version='000', name='create_schema_migrations')
+            finally:
+                self.conn.autocommit = prev_autocommit
+            # Verificar que la tabla quedó creada
+            self.cursor.execute("""
+                SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES
+                WHERE TABLE_NAME = 'schema_migrations'
+            """)
+            row = self.cursor.fetchone()
+            if not row or row[0] == 0:
+                raise RuntimeError(
+                    "La tabla schema_migrations no existe después de ejecutar el script inicial. "
+                    "Comprueba permisos y que el script 000_create_schema_migrations.sql se ejecutó sin errores."
+                )
             logger.info("✅ Tabla schema_migrations creada")
         else:
             logger.info("✅ Tabla schema_migrations existe")
@@ -240,8 +256,8 @@ class MigrationRunner:
         
         try:
             for i, block in enumerate(blocks, 1):
-                # Saltar comentarios y líneas vacías
-                if not block or block.startswith('--'):
+                # Saltar solo bloques completamente vacíos (no saltar por comentarios al inicio)
+                if not block:
                     continue
                 
                 try:
@@ -255,15 +271,16 @@ class MigrationRunner:
                 except Exception as e:
                     error_msg = str(e)
                     
-                    # Algunos errores son esperables (columna ya existe, etc)
-                    if any(code in error_msg for code in ['4922', '1913', '1914', '2714', '2705']):
+                    # Algunos errores son esperables (columna ya existe, propiedad ya existe, etc)
+                    if any(code in error_msg for code in ['4922', '1913', '1914', '2714', '2705', '15233']):
                         logger.debug(f"   ℹ️  Bloque {i}/{len(blocks)}: {error_msg[:100]}")
                         continue
                     else:
                         logger.error(f"   ❌ Error en bloque {i}/{len(blocks)}: {error_msg}")
                         raise
             
-            self.conn.commit()
+            if not self.conn.autocommit:
+                self.conn.commit()
             
             execution_time_ms = int((datetime.now() - start_time).total_seconds() * 1000)
             logger.info(f"   ✅ Ejecutados {executed}/{len(blocks)} bloques ({execution_time_ms}ms)")

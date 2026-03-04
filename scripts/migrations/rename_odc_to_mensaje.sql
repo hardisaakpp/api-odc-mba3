@@ -5,9 +5,6 @@
 -- Fecha: 2026-02-12
 -- ============================================================================
 
-USE [MBA3_Consultas]
-GO
-
 PRINT '🔧 Iniciando migración: Renombrar columna odc → mensaje';
 GO
 

@@ -5,9 +5,6 @@
 -- Fecha: 2026-02-04
 -- ============================================================================
 
-USE [MBA3_Consultas]
-GO
-
 PRINT '🔧 Iniciando migración: Agregar estado CANCELADO';
 GO
 

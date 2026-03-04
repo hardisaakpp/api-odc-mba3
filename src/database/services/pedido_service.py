@@ -411,9 +411,10 @@ class PedidoService:
                     raise
                 resultado["pedido_id"] = pedido_id
                 
-                # Procesar cada artículo con sus distribuciones
-                for detalle_data in detalles_con_tiendas:
+                # Procesar cada artículo con sus distribuciones (orden = orden de plantilla)
+                for orden_linea, detalle_data in enumerate(detalles_con_tiendas):
                     try:
+                        detalle_data["detalle"]["orden_linea"] = orden_linea
                         # Insertar detalle (artículo)
                         # NOTA: subtotal y total se guardan tal cual vienen, sin recalcular
                         pedido_detalle_id = repository.insert_detalle(
@@ -1515,8 +1516,9 @@ class PedidoService:
                 resultado["estado_nombre"] = "BORRADOR"
                 resultado["estado"] = "BORRADOR"  # compat API
                 
-                for detalle_data in detalles_con_tiendas:
+                for orden_linea, detalle_data in enumerate(detalles_con_tiendas):
                     try:
+                        detalle_data["detalle"]["orden_linea"] = orden_linea
                         pedido_detalle_id = repository.insert_detalle(pedido_id, detalle_data["detalle"], audit_context=audit)
                         resultado["articulos_cargados"] += 1
                         if detalle_data.get("distribuciones"):
@@ -1632,7 +1634,9 @@ class PedidoService:
                     if detalle.get("existe") and detalle.get("info"):
                         info_sap_por_codigo[codigo] = detalle["info"]
             
-            for detalle_data in detalles_con_tiendas:
+            for orden_linea, detalle_data in enumerate(detalles_con_tiendas):
+                # Orden de plantilla para interfaces y Excel
+                detalle_data["detalle"]["orden_linea"] = orden_linea
                 # ✅ AJUSTE 2: NO guardar codigo_interno si no hay info SAP válida
                 codigo_interno = detalle_data.get("detalle", {}).get("codigo_interno")
                 

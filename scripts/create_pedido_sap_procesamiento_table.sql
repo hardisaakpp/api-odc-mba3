@@ -9,9 +9,8 @@
 --       Solo se crea esta tabla de detalle para información SAP procesada.
 -- Fecha: 2026-01-21
 -- ============================================================================
-
-USE [MBA3_Consultas]
-GO
+-- Ejecuta en la base de datos actual (la de la conexión).
+-- ============================================================================
 
 -- ============================================================================
 -- Tabla: pedido_sap_procesamiento_detalle

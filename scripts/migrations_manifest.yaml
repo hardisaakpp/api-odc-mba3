@@ -272,7 +272,8 @@ migrations:
     description: "Renumerar estados para GESTIONAR_PEDIDO"
     category: "config"
     dependencies: ["005"]
-    warning: "⚠️ Esta migración modifica IDs de estados. Ejecutar solo si se coordina con el código."
+    manual: true
+    warning: "⚠️ Esta migración modifica IDs de estados y falla si hay FKs (pedido.estado_id). Ejecutar solo en BD vacía o con procedimiento coordinado."
 
   # SAP - Configuración de servidores vinculados
   - version: "501"
@@ -308,35 +309,35 @@ migrations:
 
   - version: "603"
     name: "add_estado_cancelado"
-    file: "add_estado_cancelado.sql"
+    file: "migrations/add_estado_cancelado.sql"
     description: "Agregar estado CANCELADO (id=19) a pedido_estado"
     category: "estado"
     dependencies: ["005"]
 
   - version: "604"
     name: "add_estado_cancelado_por_el_rayo"
-    file: "add_estado_cancelado_por_el_rayo.sql"
+    file: "migrations/add_estado_cancelado_por_el_rayo.sql"
     description: "Agregar estado CANCELADO POR EL RAYO (id=20) a pedido_estado"
     category: "estado"
     dependencies: ["603"]
 
   - version: "605"
     name: "create_pedido_original_tables"
-    file: "create_pedido_original_tables.sql"
+    file: "migrations/create_pedido_original_tables.sql"
     description: "Crear tablas pedido_original y pedido_detalle_original para snapshot inmutable del pedido al momento del envío"
     category: "base"
     dependencies: ["004"]
 
   - version: "606"
     name: "audit_completa_pedidos"
-    file: "audit_completa_pedidos.sql"
+    file: "migrations/audit_completa_pedidos.sql"
     description: "Auditoría completa: valor_anterior/valor_nuevo en modificaciones, campos audit en redistribucion_borrador, tabla pedido_audit_log"
     category: "alter"
     dependencies: ["004", "015"]
 
   - version: "607"
     name: "add_orden_linea_pedido_detalle_original"
-    file: "add_orden_linea_pedido_detalle_original.sql"
+    file: "migrations/add_orden_linea_pedido_detalle_original.sql"
     description: "Agregar orden_linea a pedido_detalle_original para conservar orden de la plantilla en Descargar Pedido Original"
     category: "alter"
     dependencies: ["605"]
@@ -347,3 +348,10 @@ migrations:
     description: "Cambiar cantidad_solicitada, cantidad_confirmada, cantidad_asignada en distribucion_confirmada e historial de INT a DECIMAL(18,4) para soportar decimales (ej. 0.5) al enviar ODC a SAP"
     category: "alter"
     dependencies: ["006"]
+
+  - version: "609"
+    name: "add_orden_linea_pedido_detalle"
+    file: "migrations/add_orden_linea_pedido_detalle.sql"
+    description: "Agregar orden_linea a pedido_detalle para conservar orden de la plantilla en interfaces y Excel"
+    category: "alter"
+    dependencies: ["004"]

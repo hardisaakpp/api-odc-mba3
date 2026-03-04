@@ -291,7 +291,7 @@ class PedidoUtils:
         Returns:
             Lista de diccionarios con los detalles del pedido
         """
-        # Intentar obtener detalles con todos los campos
+        # Intentar obtener detalles con todos los campos; orden = orden de plantilla (orden_linea)
         try:
             cursor.execute("""
                 SELECT 
@@ -304,39 +304,55 @@ class PedidoUtils:
                     ISNULL(pd.comentario_modificado_manual, 0) AS comentario_modificado_manual
                 FROM pedido_detalle pd
                 WHERE pd.pedido_id = ?
-                ORDER BY pd.created_at
+                ORDER BY pd.orden_linea, pd.codigo_interno
             """, (pedido_id,))
             tiene_comentario = True
             tiene_campos_modificados = True
         except Exception:
-            # Si algún campo no existe, intentar sin ellos
+            # Si orden_linea no existe o falla, intentar con created_at
             try:
                 cursor.execute("""
                     SELECT 
                         pd.pedido_detalle_id,
                         pd.codigo_interno, pd.descripcion_sap, pd.marca, pd.codigo_barras,
                         pd.pack, pd.costo_doc_sin_iva, pd.descuento_1, pd.pvp,
-                        pd.subtotal, pd.total, pd.comentario
+                        pd.subtotal, pd.total, pd.comentario,
+                        ISNULL(pd.costo_modificado_manual, 0) AS costo_modificado_manual,
+                        ISNULL(pd.total_modificado_manual, 0) AS total_modificado_manual,
+                        ISNULL(pd.comentario_modificado_manual, 0) AS comentario_modificado_manual
                     FROM pedido_detalle pd
                     WHERE pd.pedido_id = ?
                     ORDER BY pd.created_at
                 """, (pedido_id,))
                 tiene_comentario = True
-                tiene_campos_modificados = False
+                tiene_campos_modificados = True
             except Exception:
-                # Si el campo comentario no existe, usar consulta sin él
-                cursor.execute("""
-                    SELECT 
-                        pd.pedido_detalle_id,
-                        pd.codigo_interno, pd.descripcion_sap, pd.marca, pd.codigo_barras,
-                        pd.pack, pd.costo_doc_sin_iva, pd.descuento_1, pd.pvp,
-                        pd.subtotal, pd.total
-                    FROM pedido_detalle pd
-                    WHERE pd.pedido_id = ?
-                    ORDER BY pd.created_at
-                """, (pedido_id,))
-                tiene_comentario = False
-                tiene_campos_modificados = False
+                try:
+                    cursor.execute("""
+                        SELECT 
+                            pd.pedido_detalle_id,
+                            pd.codigo_interno, pd.descripcion_sap, pd.marca, pd.codigo_barras,
+                            pd.pack, pd.costo_doc_sin_iva, pd.descuento_1, pd.pvp,
+                            pd.subtotal, pd.total, pd.comentario
+                        FROM pedido_detalle pd
+                        WHERE pd.pedido_id = ?
+                        ORDER BY pd.created_at
+                    """, (pedido_id,))
+                    tiene_comentario = True
+                    tiene_campos_modificados = False
+                except Exception:
+                    cursor.execute("""
+                        SELECT 
+                            pd.pedido_detalle_id,
+                            pd.codigo_interno, pd.descripcion_sap, pd.marca, pd.codigo_barras,
+                            pd.pack, pd.costo_doc_sin_iva, pd.descuento_1, pd.pvp,
+                            pd.subtotal, pd.total
+                        FROM pedido_detalle pd
+                        WHERE pd.pedido_id = ?
+                        ORDER BY pd.created_at
+                    """, (pedido_id,))
+                    tiene_comentario = False
+                    tiene_campos_modificados = False
         
         detalles = []
         for row in cursor.fetchall():

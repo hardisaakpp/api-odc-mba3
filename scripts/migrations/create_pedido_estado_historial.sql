@@ -22,9 +22,6 @@
 --   - comentario: observación opcional
 -- ============================================================================
 
-USE [MBA3_Consultas]
-GO
-
 SET NOCOUNT ON;
 GO
 

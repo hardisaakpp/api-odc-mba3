@@ -6,9 +6,6 @@
 -- Fecha: 2026-01-09
 -- ============================================================================
 
-USE [MBA3_Consultas]
-GO
-
 -- Agregar campo updated_at si no existe
 IF NOT EXISTS (
     SELECT * 

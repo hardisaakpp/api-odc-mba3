@@ -7,9 +7,6 @@
 -- Fecha: 2026-02-12
 -- ============================================================================
 
-USE [$(DatabaseName)]
-GO
-
 PRINT '🔧 Iniciando migración: Agregar estado CANCELADO POR EL RAYO';
 GO
 

@@ -75,7 +75,64 @@ class PedidoDetalleRepository:
             result = cursor.fetchone()
             tiene_comentario = result[0] > 0 if result else False
             
-            if tiene_comentario:
+            # Verificar si existe la columna orden_linea (orden de plantilla Excel)
+            cursor.execute("""
+                SELECT COUNT(*)
+                FROM INFORMATION_SCHEMA.COLUMNS
+                WHERE TABLE_NAME = 'pedido_detalle'
+                AND COLUMN_NAME = 'orden_linea'
+            """)
+            result_orden = cursor.fetchone()
+            tiene_orden_linea = result_orden[0] > 0 if result_orden else False
+            
+            orden_linea_val = datos_detalle.get("orden_linea", 0)
+            if orden_linea_val is None:
+                orden_linea_val = 0
+            
+            if tiene_comentario and tiene_orden_linea:
+                sql = """
+                INSERT INTO pedido_detalle (
+                    pedido_detalle_id,
+                    pedido_id,
+                    codigo_interno,
+                    descripcion_sap,
+                    marca,
+                    codigo_barras,
+                    pack,
+                    costo_doc_sin_iva,
+                    descuento_1,
+                    pvp,
+                    subtotal,
+                    total,
+                    comentario,
+                    orden_linea,
+                    creado_por,
+                    origen,
+                    ip_origen,
+                    created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """
+                values = (
+                    pedido_detalle_id,
+                    pedido_id,
+                    datos_detalle.get("codigo_interno"),
+                    datos_detalle.get("descripcion_sap"),
+                    datos_detalle.get("marca"),
+                    datos_detalle.get("codigo_barras"),
+                    datos_detalle.get("pack"),
+                    datos_detalle.get("costo_doc_sin_iva"),
+                    datos_detalle.get("descuento_1"),
+                    datos_detalle.get("pvp"),
+                    datos_detalle.get("subtotal"),
+                    datos_detalle.get("total"),
+                    datos_detalle.get("comentario"),
+                    orden_linea_val,
+                    audit.get_creado_por(),
+                    audit.origen,
+                    audit.ip_origen,
+                    ahora_naive(),
+                )
+            elif tiene_comentario:
                 sql = """
                 INSERT INTO pedido_detalle (
                     pedido_detalle_id,
@@ -97,7 +154,6 @@ class PedidoDetalleRepository:
                     created_at
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """
-                
                 values = (
                     pedido_detalle_id,
                     pedido_id,
@@ -112,6 +168,47 @@ class PedidoDetalleRepository:
                     datos_detalle.get("subtotal"),
                     datos_detalle.get("total"),
                     datos_detalle.get("comentario"),
+                    audit.get_creado_por(),
+                    audit.origen,
+                    audit.ip_origen,
+                    ahora_naive(),
+                )
+            elif tiene_orden_linea:
+                sql = """
+                INSERT INTO pedido_detalle (
+                    pedido_detalle_id,
+                    pedido_id,
+                    codigo_interno,
+                    descripcion_sap,
+                    marca,
+                    codigo_barras,
+                    pack,
+                    costo_doc_sin_iva,
+                    descuento_1,
+                    pvp,
+                    subtotal,
+                    total,
+                    orden_linea,
+                    creado_por,
+                    origen,
+                    ip_origen,
+                    created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """
+                values = (
+                    pedido_detalle_id,
+                    pedido_id,
+                    datos_detalle.get("codigo_interno"),
+                    datos_detalle.get("descripcion_sap"),
+                    datos_detalle.get("marca"),
+                    datos_detalle.get("codigo_barras"),
+                    datos_detalle.get("pack"),
+                    datos_detalle.get("costo_doc_sin_iva"),
+                    datos_detalle.get("descuento_1"),
+                    datos_detalle.get("pvp"),
+                    datos_detalle.get("subtotal"),
+                    datos_detalle.get("total"),
+                    orden_linea_val,
                     audit.get_creado_por(),
                     audit.origen,
                     audit.ip_origen,
@@ -138,7 +235,6 @@ class PedidoDetalleRepository:
                     created_at
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """
-                
                 values = (
                     pedido_detalle_id,
                     pedido_id,

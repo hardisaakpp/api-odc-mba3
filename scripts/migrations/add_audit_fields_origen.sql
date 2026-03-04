@@ -17,9 +17,6 @@
 SET NOCOUNT ON;
 GO
 
-USE [MBA3_Consultas]
-GO
-
 PRINT '🔧 Iniciando migración: Agregar campos de auditoría (origen, ip_origen)';
 PRINT '============================================================================';
 GO

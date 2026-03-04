@@ -7,9 +7,6 @@
 -- Fecha: 2026-01-09
 -- ============================================================================
 
-USE [MBA3_Consultas]
-GO
-
 -- Agregar campo costo_modificado_manual si no existe
 IF NOT EXISTS (
     SELECT * 

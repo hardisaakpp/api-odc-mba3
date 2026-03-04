@@ -5,8 +5,7 @@
 -- Para soportar trazabilidad completa con SAP y flujo de pedidos confirmados
 -- ============================================================================
 
-USE store_control;
-GO
+-- Ejecuta en la base de datos actual (la de la conexión).
 
 -- Agregar campo doc_entry (obligatorio para trazabilidad SAP)
 IF NOT EXISTS (
@@ -101,8 +100,8 @@ ELSE
 BEGIN
     PRINT 'ℹ️ FK FK_oc_pedido ya existe';
 END
-GO
 */
+GO
 
 -- Verificación final (ejecutar manualmente si necesitas verificar)
 -- SELECT 

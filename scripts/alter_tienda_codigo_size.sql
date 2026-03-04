@@ -7,9 +7,6 @@
 -- SOLUCIÓN: Aumentar el tamaño a NVARCHAR(100) para permitir nombres más largos
 -- ============================================================================
 
-USE [store_control]
-GO
-
 -- Verificar que la tabla existe antes de hacer cambios
 IF EXISTS (SELECT * FROM sys.objects WHERE object_id = OBJECT_ID(N'[dbo].[tienda]') AND type in (N'U'))
 BEGIN

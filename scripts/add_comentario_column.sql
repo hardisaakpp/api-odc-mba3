@@ -6,9 +6,6 @@
 -- Fecha: 2026-01-09
 -- ============================================================================
 
-USE [MBA3_Consultas]
-GO
-
 -- Verificar si la columna ya existe antes de agregarla
 IF NOT EXISTS (
     SELECT * 
