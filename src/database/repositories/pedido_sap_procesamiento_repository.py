@@ -14,6 +14,16 @@ from src.utils.timezone import ahora_naive
 logger = logging.getLogger(__name__)
 
 
+def _round_decimal_4(value: Any) -> Optional[float]:
+    """Redondea a 4 decimales para columnas DECIMAL(18,4). None se mantiene."""
+    if value is None:
+        return None
+    try:
+        return round(float(value), 4)
+    except (TypeError, ValueError):
+        return None
+
+
 class PedidoSAPProcesamientoRepository:
     """Repositorio para operaciones de procesamiento SAP de pedidos."""
     
@@ -100,8 +110,8 @@ class PedidoSAPProcesamientoRepository:
                 datos.get("cantidad_sap"),
                 datos.get("precio_unitario_original"),
                 datos.get("precio_unitario_sap"),
-                datos.get("total_linea_original"),
-                datos.get("total_linea_sap"),
+                _round_decimal_4(datos.get("total_linea_original")),
+                _round_decimal_4(datos.get("total_linea_sap")),
                 datos.get("producto_homologado", True),
                 datos.get("tipo_problema"),
                 datos.get("item_code_sap_encontrado"),
@@ -171,8 +181,8 @@ class PedidoSAPProcesamientoRepository:
                 datos.get("cantidad_sap"),
                 datos.get("precio_unitario_original"),
                 datos.get("precio_unitario_sap"),
-                datos.get("total_linea_original"),
-                datos.get("total_linea_sap"),
+                _round_decimal_4(datos.get("total_linea_original")),
+                _round_decimal_4(datos.get("total_linea_sap")),
                 datos.get("producto_homologado", True),
                 datos.get("tipo_problema"),
                 datos.get("item_code_sap_encontrado"),

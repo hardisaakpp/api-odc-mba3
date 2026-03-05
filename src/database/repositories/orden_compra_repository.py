@@ -253,14 +253,20 @@ class OrdenCompraRepository:
             
             for detalle in detalles:
                 try:
+                    # Redondear a 4 decimales (tabla orden_compra_detalle: DECIMAL(18,4))
+                    precio_unitario = detalle.get("precio_unitario")
+                    precio_unitario = round(float(precio_unitario), 4) if precio_unitario is not None else None
+                    total_linea = detalle.get("total_linea")
+                    total_linea = round(float(total_linea), 4) if total_linea is not None else None
+
                     values = (
                         oc_id,
                         detalle.get("sku_sap"),
                         detalle.get("cantidad_sap"),
                         detalle.get("unidad_sap"),
                         detalle.get("referencia_detalle"),
-                        detalle.get("precio_unitario"),
-                        detalle.get("total_linea"),
+                        precio_unitario,
+                        total_linea,
                         detalle.get("cantidad_origen"),
                         detalle.get("codigo_bodega"),  # ⭐ NUEVO: Persistir bodega por línea
                         creado_por,

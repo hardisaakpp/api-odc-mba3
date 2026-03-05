@@ -146,10 +146,12 @@ R5000.911.AJCL | Artículo | 1 | 6.9 | - | ... | 5 | 3 | 2 | ... | 3 | 2 | 1
 | `sku` | `sku_sap` | ItemCode SAP |
 | `cantidad_pack_sap` | `cantidad_sap` | Cantidad en packs |
 | `unidad_sap` | `unidad_sap` | UoM SAP |
-| `precio_unitario_sap` | `precio_unitario` | Precio por pack |
-| `total_linea_mba3` | `total_linea` | Subtotal |
+| `precio_unitario_sap` | `precio_unitario` | Precio por pack (4 decimales) |
+| `total_linea_mba3` | `total_linea` | Subtotal (4 decimales) |
 | `cantidad_docena_mba3` | `cantidad_origen` | Auditoría |
 | `descuento` | `descuento` | Si aplica |
+
+**Nota:** En BD, `orden_compra_detalle.precio_unitario` y `orden_compra_detalle.total_linea` son `DECIMAL(18,4)`. El frontend debe mostrar estos valores con **4 decimales** (p. ej. P. Unit. y Total en listados/ODC).
 
 ### Uso
 

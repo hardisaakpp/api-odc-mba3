@@ -800,7 +800,7 @@ def send_oc_to_supplier(
             total_linea = detalle.get("total_linea", 0)
             table_rows.append((
                 str(idx), f"<strong>{sku}</strong>", nombre,
-                f"{cantidad:.2f}", unidad, f"${precio_unit:.2f}", f"${total_linea:.2f}",
+                f"{cantidad:.2f}", unidad, f"${precio_unit:.4f}", f"${total_linea:.4f}",
             ))
         
         footer_note = f"... y {len(oc_detalles) - 50} l&iacute;nea(s) m&aacute;s" if len(oc_detalles) > 50 else None
@@ -822,7 +822,7 @@ def send_oc_to_supplier(
                     ("Referencia", referencia),
                     ("Total L&iacute;neas", total_lineas),
                     ("Total Cantidad", f"{total_cantidad:.2f}"),
-                    ("Total Valor", f"${total_valor:.2f}"),
+                    ("Total Valor", f"${total_valor:.4f}"),
                 ], accent="green", highlight_first=True),
                 table_section("Detalle de la Orden de Compra",
                     ["#", "SKU", "Producto", "Cantidad", "Unidad", "P. Unit.", "Total"],
@@ -844,7 +844,7 @@ Informacion de la ODC:
 - Referencia: {referencia}
 - Total Lineas: {total_lineas}
 - Total Cantidad: {total_cantidad:.2f}
-- Total Valor: ${total_valor:.2f}
+- Total Valor: ${total_valor:.4f}
 
 Detalle:
 """
@@ -855,7 +855,7 @@ Detalle:
             unidad = detalle.get("unidad_sap", "N/A")
             precio_unit = detalle.get("precio_unitario", 0)
             total_linea = detalle.get("total_linea", 0)
-            body_text += f"  {idx}. {sku} - {nombre} | {cantidad:.2f} {unidad} | ${total_linea:.2f}\n"
+            body_text += f"  {idx}. {sku} - {nombre} | {cantidad:.2f} {unidad} | ${precio_unit:.4f} | ${total_linea:.4f}\n"
         
         if len(oc_detalles) > 50:
             body_text += f"  ... y {len(oc_detalles) - 50} linea(s) mas\n"

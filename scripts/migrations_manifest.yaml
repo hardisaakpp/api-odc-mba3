@@ -355,3 +355,15 @@ migrations:
     description: "Agregar orden_linea a pedido_detalle para conservar orden de la plantilla en interfaces y Excel"
     category: "alter"
     dependencies: ["004"]
+
+  - version: "610"
+    name: "alter_orden_compra_detalle_decimal_4"
+    file: "migrations/alter_orden_compra_detalle_decimal_4.sql"
+    description: "orden_compra_detalle: total_linea y precio_unitario a DECIMAL(18,4) (4 decimales)"
+    category: "alter"
+
+  - version: "611"
+    name: "alter_pedido_sap_procesamiento_detalle_decimal_4"
+    file: "migrations/alter_pedido_sap_procesamiento_detalle_decimal_4.sql"
+    description: "pedido_sap_procesamiento_detalle: total_linea_original y total_linea_sap a DECIMAL(18,4) (4 decimales)"
+    category: "alter"
