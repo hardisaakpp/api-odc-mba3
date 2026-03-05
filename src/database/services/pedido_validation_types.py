@@ -26,3 +26,18 @@ class ValidationIssue:
     message: str
     value: Any = None  # Valor que causó el problema
 
+    def __init__(
+        self,
+        *,
+        row_number: int,
+        field: str,
+        severity: ValidationSeverity,
+        message: str,
+        value: Any = None,
+    ) -> None:
+        self.row_number = row_number
+        self.field = field
+        self.severity = severity
+        self.message = message
+        self.value = value
+
