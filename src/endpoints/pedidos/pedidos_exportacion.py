@@ -71,13 +71,13 @@ def register_exportacion_endpoints(app: FastAPI):
     @app.get("/api/pedidos/{pedido_id}/exportar-plano-mba", tags=["Pedidos - El Rayo"])
     async def exportar_pedido_plano_mba(
         pedido_id: str = Path(..., description="UUID del pedido o número de pedido"),
-        codigo_cliente: str = Query("", description="Código de cliente MBA (ej: CLI0495)"),
-        codigo_subcliente: str = Query("", description="Código de subcliente MBA (ej: GO05)"),
-        moneda: str = Query("US", description="Código de moneda (ej: US, DOP)"),
+        codigo_cliente: str = Query("CLI1795", description="Código de cliente MBA (por defecto CLI1795)"),
+        codigo_subcliente: str = Query("", description="Código de subcliente MBA (dejar vacío si no aplica)"),
+        moneda: str = Query("US", description="Moneda/divisa local (por defecto US dólar)"),
         bodega: str = Query("", description="Código de bodega MBA (si vacío, usa origen_traslado del pedido)"),
-        vendedor: str = Query("", description="Código de vendedor MBA (ej: JPC)"),
-        numero_pedido_mba: int = Query(1, ge=1, description="Número de pedido temporal para agrupar líneas en MBA"),
-        consolidado: bool = Query(False, description="Si True, consolida cantidades por producto; si False, genera una línea por tienda/sucursal"),
+        vendedor: str = Query("", description="Código de vendedor MBA"),
+        numero_pedido_mba: int = Query(1, ge=1, description="Número de pedido temporal para agrupar líneas en MBA (col. B)"),
+        consolidado: bool = Query(False, description="Si True, consolida cantidades por producto; si False, una línea por tienda/sucursal"),
         incluir_encabezado: bool = Query(True, description="Incluir las 19 líneas de encabezado del formato MBA"),
         user: Dict = Depends(verify_jwt_token),
         _: None = Depends(require_permission('odcsap.view'))
@@ -97,17 +97,19 @@ def register_exportacion_endpoints(app: FastAPI):
         - **19 líneas de encabezado** (se eliminan automáticamente al importar en MBA)
         - Una línea por cada combinación producto-tienda (o consolidado por producto)
         
-        ## Parámetros de configuración
+        ## Parámetros de configuración (valores por defecto para "Descargar para MBA")
         
-        Los siguientes campos deben configurarse según los datos del cliente en MBA:
+        Del sistema se toman: Fecha Pedido, Fecha Entrega, Orden Compra Cliente (mensaje),
+        Código Producto, Precio Final. Columnas fijas: A=secuencial, B=número pedido (agrupa),
+        C=CLI1795, G=moneda US, AI=secuencial.
         
-        | Parámetro | Ejemplo | Descripción |
+        | Parámetro | Default | Descripción |
         |-----------|---------|-------------|
-        | codigo_cliente | CLI0495 | Código del cliente en MBA |
-        | codigo_subcliente | GO05 | Subcategoría del cliente (opcional) |
-        | moneda | US | Código de moneda (US, DOP, etc.) |
-        | bodega | BPT | Código de bodega en MBA |
-        | vendedor | JPC | Código del vendedor |
+        | codigo_cliente | CLI1795 | Código del cliente en MBA |
+        | codigo_subcliente | (vacío) | Subcategoría del cliente (opcional) |
+        | moneda | US | Divisa local (dólar) |
+        | bodega | (origen_traslado) | Código de bodega en MBA |
+        | vendedor | (vacío) | Código del vendedor |
         
         ## Modos de exportación
         

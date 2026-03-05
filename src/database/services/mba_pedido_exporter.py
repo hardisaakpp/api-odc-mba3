@@ -25,16 +25,20 @@ logger = logging.getLogger(__name__)
 class MBAExportConfig:
     """Configuración para exportación a formato MBA.
     
-    Estos valores deben ser configurados según los requerimientos del cliente.
-    Algunos pueden venir del pedido, otros son constantes o configurables.
-    """
-    # Datos del cliente/empresa
-    codigo_cliente: str = ""  # Ej: CLI0495
-    codigo_subcliente: str = ""  # Ej: GO05 (dejar vacío si no aplica)
+    Valores por defecto para El Rayo: código cliente CLI1795, moneda US (dólar).
+    Otros campos pueden venir del pedido (fecha_pedido, fecha_entrega, mensaje como
+    Orden Compra Cliente, codigo_interno, costo_doc_sin_iva como Precio Final).
     
-    # Configuración de moneda y bodega
-    moneda: str = "US"  # Moneda por defecto
-    bodega: str = ""  # Código de bodega MBA
+    Columnas fijas en el TXT: A=secuencial, B=número pedido (agrupa líneas), C=CLI1795,
+    G=moneda (US), AI/35=secuencial.
+    """
+    # Datos del cliente/empresa (por defecto El Rayo)
+    codigo_cliente: str = "CLI1795"  # Código cliente MBA - fijo para esta implementación
+    codigo_subcliente: str = ""  # Dejar vacío si no aplica
+    
+    # Configuración de moneda y bodega (moneda local = dólar US)
+    moneda: str = "US"  # Divisa local
+    bodega: str = ""  # Código de bodega MBA (si vacío, se usa origen_traslado del pedido)
     
     # Vendedor
     vendedor: str = ""  # Código de vendedor MBA
@@ -45,7 +49,7 @@ class MBAExportConfig:
     aplica_impuesto_1: bool = True
     aplica_impuesto_2: bool = False
     
-    # Número de pedido temporal (para agrupar líneas del mismo pedido)
+    # Número de pedido temporal (col B: agrupa todas las líneas del mismo pedido)
     numero_pedido_temporal: int = 1
 
 
@@ -204,11 +208,14 @@ Número secuencial de registro\tValor temporal de pedido, marca el bloque que co
             
             logger.info(f"📄 Exportando pedido {pedido_id} a formato MBA ({len(detalles)} productos)")
             
-            # Extraer datos del pedido para usar en la exportación
+            # Extraer datos del pedido (del sistema) para la exportación
+            # Fecha Pedido (col 5), Fecha Entrega (col 6), Orden Compra Cliente (col 12)
             fecha_pedido = self._format_date(cabecera.get("fecha_pedido"))
             fecha_entrega = self._format_date(cabecera.get("fecha_entrega"))
-            orden_compra_cliente = cabecera.get("mensaje") or ""
+            orden_compra_cliente = (cabecera.get("mensaje") or "").strip()
             bodega = config.bodega or cabecera.get("origen_traslado") or ""
+            codigo_cliente = (config.codigo_cliente or "CLI1795").strip()
+            moneda = (config.moneda or "US").strip()
             
             # Construir líneas del archivo
             lines = []
@@ -222,8 +229,15 @@ Número secuencial de registro\tValor temporal de pedido, marca el bloque que co
             
             # Generar una línea por cada combinación producto-tienda
             for detalle in detalles:
-                codigo_producto = detalle.get("codigo_interno") or ""
-                precio_unitario = detalle.get("costo_doc_sin_iva") or 0
+                codigo_producto = (detalle.get("codigo_interno") or "").strip()  # Col 21 Código Producto
+                # Precio Final (col 24): precio unitario del sistema
+                precio_unitario = detalle.get("costo_doc_sin_iva")
+                if precio_unitario is None:
+                    precio_unitario = detalle.get("pvp") or 0
+                try:
+                    precio_unitario = float(precio_unitario)
+                except (TypeError, ValueError):
+                    precio_unitario = 0
                 
                 for tienda in detalle.get("tiendas", []):
                     cantidad = tienda.get("cantidad", 0)
@@ -235,20 +249,20 @@ Número secuencial de registro\tValor temporal de pedido, marca el bloque que co
                     tienda_codigo = tienda.get("codigo") or ""
                     sucursal = self._get_sucursal_from_tienda(tienda_codigo)
                     
-                    # Construir las 35 columnas
+                    # Construir las 35 columnas (TXTN SUBIR PEDIDOS CON PRECIO)
                     columnas = [
-                        self._format_number(numero_secuencial, 0),  # 1. Numero
-                        self._format_number(config.numero_pedido_temporal, 0),  # 2. Número Pedido
-                        config.codigo_cliente,  # 3. Código Cliente
+                        self._format_number(numero_secuencial, 0),  # 1. Numero (col A - secuencial)
+                        self._format_number(config.numero_pedido_temporal, 0),  # 2. Número Pedido (col B - agrupa líneas)
+                        codigo_cliente,  # 3. Código Cliente (col C - CLI1795)
                         config.codigo_subcliente,  # 4. Código SubCliente
                         fecha_pedido,  # 5. Fecha Pedido
                         fecha_entrega,  # 6. Fecha Entrega
-                        config.moneda,  # 7. Moneda
+                        moneda,  # 7. Moneda (col G - divisa local US)
                         bodega,  # 8. Bodega
                         config.vendedor,  # 9. Vendedor
                         "",  # 10. Pedido Manual
                         "",  # 11. Contrato
-                        orden_compra_cliente,  # 12. Orden Compra Cliente
+                        orden_compra_cliente,  # 12. Orden Compra Cliente (mensaje del pedido)
                         "",  # 13. Cotización Original
                         "",  # 14. Medio Captura
                         "",  # 15. Transporte
@@ -260,7 +274,7 @@ Número secuencial de registro\tValor temporal de pedido, marca el bloque que co
                         codigo_producto,  # 21. Código Producto
                         self._format_number(cantidad, 4),  # 22. Cantidad Pedido (acepta decimales)
                         "FALSE",  # 23. BackOrder (siempre FALSE)
-                        self._format_number(precio_unitario, 3),  # 24. Precio Final
+                        self._format_number(precio_unitario, 3),  # 24. Precio Final (del sistema)
                         self._format_boolean(config.aplica_impuesto_1),  # 25. Aplica Impuesto 1
                         "",  # 26. Departamento
                         "",  # 27. Centro Costo
@@ -271,7 +285,7 @@ Número secuencial de registro\tValor temporal de pedido, marca el bloque que co
                         "",  # 32. Análisis 3
                         "0",  # 33. Precio Solicitado
                         self._format_boolean(config.aplica_impuesto_2),  # 34. Aplica Impuesto 2
-                        self._format_number(numero_secuencial, 0),  # 35. Numero (repetido)
+                        self._format_number(numero_secuencial, 0),  # 35. Numero (col AI - secuencial)
                     ]
                     
                     # Unir columnas con TAB
@@ -325,11 +339,13 @@ Número secuencial de registro\tValor temporal de pedido, marca el bloque que co
             
             logger.info(f"📄 Exportando pedido {pedido_id} a formato MBA consolidado ({len(detalles)} productos)")
             
-            # Extraer datos del pedido
+            # Extraer datos del pedido (del sistema)
             fecha_pedido = self._format_date(cabecera.get("fecha_pedido"))
             fecha_entrega = self._format_date(cabecera.get("fecha_entrega"))
-            orden_compra_cliente = cabecera.get("mensaje") or ""
+            orden_compra_cliente = (cabecera.get("mensaje") or "").strip()
             bodega = config.bodega or cabecera.get("origen_traslado") or ""
+            codigo_cliente = (config.codigo_cliente or "CLI1795").strip()
+            moneda = (config.moneda or "US").strip()
             
             # Usar la primera tienda para la sucursal (o el campo bodega del config)
             sucursal_default = ""
@@ -345,8 +361,14 @@ Número secuencial de registro\tValor temporal de pedido, marca el bloque que co
             numero_secuencial = 1
             
             for detalle in detalles:
-                codigo_producto = detalle.get("codigo_interno") or ""
-                precio_unitario = detalle.get("costo_doc_sin_iva") or 0
+                codigo_producto = (detalle.get("codigo_interno") or "").strip()
+                precio_unitario = detalle.get("costo_doc_sin_iva")
+                if precio_unitario is None:
+                    precio_unitario = detalle.get("pvp") or 0
+                try:
+                    precio_unitario = float(precio_unitario)
+                except (TypeError, ValueError):
+                    precio_unitario = 0
                 
                 # Consolidar cantidad total de todas las tiendas
                 cantidad_total = sum(t.get("cantidad", 0) for t in detalle.get("tiendas", []))
@@ -357,11 +379,11 @@ Número secuencial de registro\tValor temporal de pedido, marca el bloque que co
                 columnas = [
                     self._format_number(numero_secuencial, 0),
                     self._format_number(config.numero_pedido_temporal, 0),
-                    config.codigo_cliente,
+                    codigo_cliente,
                     config.codigo_subcliente,
                     fecha_pedido,
                     fecha_entrega,
-                    config.moneda,
+                    moneda,
                     bodega,
                     config.vendedor,
                     "",  # Pedido Manual

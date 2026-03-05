@@ -4,6 +4,10 @@
 
 Este documento describe la implementación en el backend y las indicaciones para implementar un modal informativo en el frontend que muestre los resultados de la integración con SAP cuando se envía una ODC.
 
+### ⚠️ Requisito: Solicitudes de Transferencia en el modal
+
+**Las Solicitudes de Transferencia (ITR) solo se muestran hoy en el correo electrónico.** Es obligatorio que el modal de la UI muestre la **misma información** que el correo: resumen (X de Y creadas), lista por tienda (código, nombre, estado, DocNum o error). Los datos ya vienen en la respuesta del backend en `metadata.detalles[].solicitudes_transferencia` (misma estructura que usa el email). El modal debe incluir siempre una sección visible para Solicitudes de Transferencia cuando haya `detalle` de integración, mostrando el contenido o un mensaje tipo "No hay información de Solicitudes de Transferencia" si no aplica.
+
 ## ✅ Cambios Implementados en el Backend
 
 ### 1. Campo `tienda_nombre` agregado
@@ -123,7 +127,8 @@ El modal debe mostrar:
 - **DocEntry:** `doc_entry` (ej: "32230") - opcional, puede ir en tooltip
 - **Mensaje:** "Orden de Compra enviada exitosamente a SAP" o mensaje de error
 
-#### **Sección 2: Solicitudes de Transferencia (ITR)**
+#### **Sección 2: Solicitudes de Transferencia (ITR)** *(obligatoria en el modal — misma información que el correo)*
+- Origen de datos: `detalle.solicitudes_transferencia` (misma estructura que se envía en el email).
 - **Resumen:**
   - "X de Y Solicitudes de Transferencia creadas exitosamente"
   - Si hay errores: "X exitosas, Y con errores"
@@ -231,6 +236,11 @@ El modal debe mostrar:
 - Mensaje de error principal
 - Código de error si está disponible
 - No mostrar sección de Solicitudes de Transferencia (no se intentaron crear)
+
+#### **Caso 4: Mostrar siempre el bloque de Solicitudes de Transferencia**
+- Cuando hay `detalle` de integración (OC procesada), la sección "Solicitudes de Transferencia" debe **mostrarse siempre** (mismo contenedor/estilo que la sección de OC).
+- Si `solicitudes_transferencia` es `null` o no viene en la respuesta: mostrar dentro del mismo bloque el mensaje *"No hay información de Solicitudes de Transferencia para este resultado."*
+- Así el usuario ve en la UI la misma información que recibe por correo, sin depender solo del email.
 
 ### 4. Código de Ejemplo (Pseudocódigo)
 
