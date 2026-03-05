@@ -217,12 +217,17 @@ def register_borrador_endpoints(app: FastAPI):
                             dist_tiendas = enriquecer_distribucion_tiendas_con_nombre(
                                 dist_tiendas, repo_pedido.tienda_repo
                             )
-                            primer_d = p.get("distribuciones", [{}])[0]
-                            costo = None
-                            if primer_d.get("costo_unitario_ajustado") is not None:
-                                costo = float(primer_d["costo_unitario_ajustado"])
-                            elif primer_d.get("costo_unitario_original") is not None:
-                                costo = float(primer_d["costo_unitario_original"])
+                            # Usar el mismo origen de precio que la vista normal: pedido_detalle.costo_doc_sin_iva,
+                            # para que la columna PRECIO coincida entre vista editable y solo lectura.
+                            costo = detalle.get("costo_doc_sin_iva")
+                            if costo is not None:
+                                costo = round(float(costo), 4)
+                            else:
+                                primer_d = p.get("distribuciones", [{}])[0]
+                                if primer_d.get("costo_unitario_ajustado") is not None:
+                                    costo = round(float(primer_d["costo_unitario_ajustado"]), 4)
+                                elif primer_d.get("costo_unitario_original") is not None:
+                                    costo = round(float(primer_d["costo_unitario_original"]), 4)
                             ajustes_detalle_confirmada.append(
                                 AjusteDetalle(
                                     codigo_producto=codigo,
@@ -273,6 +278,8 @@ def register_borrador_endpoints(app: FastAPI):
                             cantidad_confirmada = cantidad_solicitada
 
                     costo_actual = detalle.get("costo_doc_sin_iva")
+                    if costo_actual is not None:
+                        costo_actual = round(float(costo_actual), 4)
 
                     tiendas_del_detalle = detalle.get("tiendas", [])
                     cantidad_total_original = sum(float(t.get("cantidad", 0) or 0) for t in tiendas_del_detalle)

@@ -52,6 +52,18 @@ def generar_excel_reporte_diferencias(
     return output
 
 
+def _costos_detalle_por_pedido_detalle_id(pedido_data: Dict[str, Any]) -> Dict[str, Optional[float]]:
+    """Mapa pedido_detalle_id -> costo_doc_sin_iva (misma fuente que vista normal/solo lectura)."""
+    out = {}
+    for d in pedido_data.get("detalles", []):
+        pid = d.get("pedido_detalle_id")
+        if not pid:
+            continue
+        costo = d.get("costo_doc_sin_iva")
+        out[pid] = round(float(costo), 4) if costo is not None else None
+    return out
+
+
 def generar_excel_distribucion(
     pedido_id: str,
     pedido_data: Dict[str, Any],
@@ -62,6 +74,7 @@ def generar_excel_distribucion(
 ) -> BytesIO:
     """Genera el libro Excel de distribución confirmada."""
     cabecera = pedido_data.get("cabecera", {})
+    costos_detalle = _costos_detalle_por_pedido_detalle_id(pedido_data)
 
     wb = Workbook()
     default_sheet = wb.active
@@ -201,6 +214,13 @@ def generar_excel_distribucion(
         codigo_interno = producto.get("codigo_interno", "")
         descripcion = producto.get("descripcion_sap", "")
         distribuciones = producto.get("distribuciones", [])
+        # Costo unitario: misma fuente que vista normal/solo lectura (pedido_detalle.costo_doc_sin_iva)
+        pedido_detalle_id = producto.get("pedido_detalle_id")
+        costo_unitario = costos_detalle.get(pedido_detalle_id) if pedido_detalle_id else None
+        if costo_unitario is None and distribuciones:
+            primer_dist = distribuciones[0]
+            costo_unitario = primer_dist.get("costo_unitario_ajustado") or primer_dist.get("costo_unitario_original")
+        costo_unitario = round(float(costo_unitario), 4) if costo_unitario is not None else 0.0
 
         if distribuciones:
             for dist in distribuciones:
@@ -210,12 +230,12 @@ def generar_excel_distribucion(
                 ws_detalle.cell(row=row, column=3, value=tienda_codigo)
                 ws_detalle.cell(row=row, column=4, value=dist.get("tienda_nombre", ""))
                 ws_detalle.cell(row=row, column=5, value=dist.get("cantidad_asignada", 0))
-                ws_detalle.cell(row=row, column=6, value=float(dist.get("costo_unitario_ajustado", 0.0)))
+                ws_detalle.cell(row=row, column=6, value=costo_unitario)
                 ws_detalle.cell(row=row, column=7, value=dist.get("observaciones", ""))
                 # Número Solicitud Transferencia (DocNum del ITR en SAP)
                 doc_num_itr = itr_por_tienda.get(tienda_codigo)
                 ws_detalle.cell(row=row, column=8, value=doc_num_itr if doc_num_itr else "")
-                ws_detalle.cell(row=row, column=6).number_format = "#,##0.00"
+                ws_detalle.cell(row=row, column=6).number_format = "#,##0.0000"
                 row += 1
         else:
             ws_detalle.cell(row=row, column=1, value=codigo_interno)
