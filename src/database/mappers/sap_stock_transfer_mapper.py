@@ -177,8 +177,11 @@ class SAPStockTransferMapper:
                 "FromWarehouse": bodega_origen_upper,
                 "ToWarehouse": tienda_destino,
                 "Comments": comentario_base,
-                "StockTransferLines": stock_transfer_lines
+                "StockTransferLines": stock_transfer_lines,
             }
+            # Guardar número de OC SAP en campo específico (U_ODC) si está disponible
+            if oc_doc_num is not None:
+                stock_transfer["U_ODC"] = oc_doc_num
             # ⭐ Asignar Numbering Series de SAP si se proporcionó (ej: 10131)
             if serie is not None:
                 stock_transfer["Series"] = serie
@@ -249,6 +252,7 @@ class SAPStockTransferMapper:
             }
             if oc_doc_num is not None:
                 payload["Comments"] = f"Solicitud de traslado desde OC {oc_doc_num}"
+                payload["U_ODC"] = oc_doc_num
             # ⭐ Asignar Numbering Series de SAP si se proporcionó (ej: 10131)
             if serie is not None:
                 payload["Series"] = serie
