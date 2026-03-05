@@ -34,9 +34,9 @@ def calcular_totales_detalles(detalles: List[Dict[str, Any]]) -> Dict[str, float
         if v is not None:
             total_total += float(v)
     return {
-        "total_costo_unitario": round(total_costo, 2),
-        "total_subtotal": round(total_subtotal, 2),
-        "total_total": round(total_total, 2),
+        "total_costo_unitario": round(total_costo, 4),
+        "total_subtotal": round(total_subtotal, 4),
+        "total_total": round(total_total, 4),
     }
 from src.database.pedido_estados import (
     ESTADO_REDISTRIBUCION,
