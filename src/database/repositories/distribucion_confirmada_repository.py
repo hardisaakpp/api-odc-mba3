@@ -213,6 +213,13 @@ class DistribucionConfirmadaRepository:
                     "cantidad_confirmada_total": float(row[2]) if row[2] is not None else 0.0,
                 }
             
+            # Referencia del producto (codigo_interno) para ordenar igual que en el resto de la app
+            cursor.execute(
+                "SELECT pedido_detalle_id, ISNULL(codigo_interno, '') FROM pedido_detalle WHERE pedido_id = ?",
+                (pedido_id,),
+            )
+            codigo_por_detalle = {str(row[0]): (row[1] or "") for row in cursor.fetchall()}
+            
             # Calcular totales por producto (usar fuente de verdad para solicitada/confirmada)
             productos = []
             for pedido_detalle_id, producto_data in productos_dict.items():
@@ -233,6 +240,11 @@ class DistribucionConfirmadaRepository:
                     "cantidad_asignada_total": cantidad_asignada_total,
                     "distribuciones": distribuciones
                 })
+            
+            # Orden alfabético por Referencia del Producto; mismo criterio que en pedidos y Excel
+            productos.sort(
+                key=lambda p: (codigo_por_detalle.get(p["pedido_detalle_id"], ""), p["pedido_detalle_id"])
+            )
             
             return {
                 "pedido_id": pedido_id,

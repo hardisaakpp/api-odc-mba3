@@ -154,6 +154,11 @@ def register_borrador_endpoints(app: FastAPI):
                         )
                     ajustes_detalle_sincronizados.append(AjusteDetalle(**ajuste_dict))
 
+                # Orden alfabético por Referencia (codigo_producto); mismo criterio que en el resto de la app
+                ajustes_detalle_sincronizados.sort(
+                    key=lambda a: (a.codigo_producto or "", a.pedido_detalle_id or "")
+                )
+
                 return BorradorResponse(
                     ajustes_detalle=ajustes_detalle_sincronizados,
                     fecha_guardado=fecha_guardado
@@ -244,6 +249,10 @@ def register_borrador_endpoints(app: FastAPI):
                                     total_modificado_manual=bool(detalle.get("total_modificado_manual", False)),
                                 )
                             )
+                        # Orden alfabético por Referencia (codigo_producto)
+                        ajustes_detalle_confirmada.sort(
+                            key=lambda a: (a.codigo_producto or "", a.pedido_detalle_id or "")
+                        )
                         return BorradorResponse(
                             ajustes_detalle=ajustes_detalle_confirmada,
                             fecha_guardado=ahora_naive(),
@@ -311,6 +320,11 @@ def register_borrador_endpoints(app: FastAPI):
                     )
 
                     ajustes_detalle.append(ajuste)
+
+                # Orden alfabético por Referencia (codigo_producto); mismo criterio que en el resto de la app
+                ajustes_detalle.sort(
+                    key=lambda a: (a.codigo_producto or "", a.pedido_detalle_id or "")
+                )
 
                 return BorradorResponse(
                     ajustes_detalle=ajustes_detalle,

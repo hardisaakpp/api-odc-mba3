@@ -291,7 +291,7 @@ class PedidoUtils:
         Returns:
             Lista de diccionarios con los detalles del pedido
         """
-        # Intentar obtener detalles con todos los campos; orden = orden de plantilla (orden_linea)
+        # Orden alfabético por Referencia del Producto (codigo_interno); mismo orden en UI y Excel
         try:
             cursor.execute("""
                 SELECT 
@@ -304,12 +304,12 @@ class PedidoUtils:
                     ISNULL(pd.comentario_modificado_manual, 0) AS comentario_modificado_manual
                 FROM pedido_detalle pd
                 WHERE pd.pedido_id = ?
-                ORDER BY pd.orden_linea, pd.codigo_interno
+                ORDER BY pd.codigo_interno, pd.pedido_detalle_id
             """, (pedido_id,))
             tiene_comentario = True
             tiene_campos_modificados = True
         except Exception:
-            # Si orden_linea no existe o falla, intentar con created_at
+            # Si falla la query anterior (ej. columna inexistente), intentar sin campos opcionales
             try:
                 cursor.execute("""
                     SELECT 
@@ -322,7 +322,7 @@ class PedidoUtils:
                         ISNULL(pd.comentario_modificado_manual, 0) AS comentario_modificado_manual
                     FROM pedido_detalle pd
                     WHERE pd.pedido_id = ?
-                    ORDER BY pd.created_at
+                    ORDER BY pd.codigo_interno, pd.pedido_detalle_id
                 """, (pedido_id,))
                 tiene_comentario = True
                 tiene_campos_modificados = True
@@ -336,7 +336,7 @@ class PedidoUtils:
                             pd.subtotal, pd.total, pd.comentario
                         FROM pedido_detalle pd
                         WHERE pd.pedido_id = ?
-                        ORDER BY pd.created_at
+                        ORDER BY pd.codigo_interno, pd.pedido_detalle_id
                     """, (pedido_id,))
                     tiene_comentario = True
                     tiene_campos_modificados = False
@@ -349,7 +349,7 @@ class PedidoUtils:
                             pd.subtotal, pd.total
                         FROM pedido_detalle pd
                         WHERE pd.pedido_id = ?
-                        ORDER BY pd.created_at
+                        ORDER BY pd.codigo_interno, pd.pedido_detalle_id
                     """, (pedido_id,))
                     tiene_comentario = False
                     tiene_campos_modificados = False

@@ -195,7 +195,7 @@ class PedidoOriginalRepository:
 
             pedido_original_id = cabecera["pedido_original_id"]
 
-            # Obtener detalles originales en el mismo orden que la plantilla (orden_linea)
+            # Orden alfabético por Referencia del Producto (codigo_interno); mismo orden que en la UI
             cursor.execute(
                 """
                 SELECT
@@ -205,7 +205,7 @@ class PedidoOriginalRepository:
                     subtotal, total, comentario
                 FROM pedido_detalle_original
                 WHERE pedido_original_id = ?
-                ORDER BY orden_linea, codigo_interno
+                ORDER BY codigo_interno, pedido_detalle_original_id
                 """,
                 (pedido_original_id,),
             )
