@@ -240,8 +240,11 @@ class PedidoSAPValidator:
                     no_encontrados.append(codigo)
                     continue
                 
-                # Consultar SAP (usa cache si está disponible)
-                producto_info = sap_service.get_or_fetch_producto_info(codigo_clean)
+                # Consultar SAP: si usar_cache=False (ej. validación de plantilla), forzar consulta
+                # para obtener validFor y detectar ítems inactivos; si usar_cache=True, usar cache.
+                producto_info = sap_service.get_or_fetch_producto_info(
+                    codigo_clean, force_refresh=not usar_cache
+                )
                 
                 # Procesar resultado
                 resultado_codigo = self._procesar_resultado_producto(
@@ -930,6 +933,18 @@ class PedidoSAPValidator:
                         "error": "no_existe",
                         "severity": "ERROR",
                         "mensaje": f"El código '{codigo_clean}' no existe en SAP"
+                    }
+                }
+            elif error_type == "inactivo":
+                logger.warning(f"⚠️ Código '{codigo_clean}' existe en SAP pero está Inactivo → se mostrará con sugerencias en la UI")
+                return {
+                    "tipo": "no_encontrado",
+                    "detalle": {
+                        "existe": False,
+                        "info": None,
+                        "error": "inactivo",
+                        "severity": "ERROR",
+                        "mensaje": f"El código '{codigo_clean}' existe en SAP pero está Inactivo. Use un código activo (ver sugerencias)."
                     }
                 }
             elif error_type == "mismatch":

@@ -725,12 +725,16 @@ class PedidoService:
                     
                     # Validar códigos de producto INMEDIATAMENTE - interrumpir si hay errores
                     if codigos_productos_parsing:
-                        logger.info(f"🔍 Validando {len(codigos_productos_parsing)} productos contra SAP (con sugerencias)")
+                        codigos_sample = sorted(codigos_productos_parsing)[:20]
+                        logger.info(
+                            f"🔍 Validando {len(codigos_productos_parsing)} productos contra SAP (con sugerencias). "
+                            f"Códigos: {codigos_sample}{'...' if len(codigos_productos_parsing) > 20 else ''}"
+                        )
                         validator = PedidoValidator()
                         # ⭐ USAR MÉTODO CON SUGERENCIAS para incluir sugerencias en la respuesta
                         validacion_sap_productos = validator.validar_productos_existen_en_sap_con_sugerencias(
                             codigos_productos=codigos_productos_parsing,
-                            usar_cache=True,
+                            usar_cache=False,  # Siempre consultar SAP para obtener validFor (detectar inactivos como 5742.1)
                             sap_obligatorio=True,  # OBLIGATORIO: SAP es fuente de verdad
                             incluir_sugerencias=True,  # ⭐ Habilitar sugerencias
                             limite_sugerencias=20

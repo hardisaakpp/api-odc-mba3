@@ -117,6 +117,17 @@ class SAPService:
                     "_item_code_sap": None
                 }
             
+            # ✅ VALIDACIÓN: Ítems inactivos en SAP se consideran no válidos para carga/ITR (generan sugerencias)
+            valid_for = (sap_info.get("validFor") or sap_info.get("ValidFor") or "N").strip().upper()
+            if valid_for != "Y":
+                logger.warning(f"⚠️ SKU existe en SAP pero está Inactivo (validFor={valid_for}): {sku}")
+                return {
+                    "_error": True,
+                    "_error_type": "inactivo",
+                    "_sku": sku,
+                    "_item_code_sap": sap_info.get("ItemCode"),
+                }
+            
             # ✅ VALIDACIÓN: Verificar que el SKU de MBA3 coincida con el ItemCode de SAP
             item_code_sap = sap_info.get("ItemCode", "").strip()
             sku_normalized = sku.strip()

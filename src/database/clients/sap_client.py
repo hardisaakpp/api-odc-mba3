@@ -99,20 +99,21 @@ class SAPClient:
         # (aunque ya está validado, esto es una capa adicional de seguridad)
         item_code_escaped = item_code_normalized.replace("'", "''")
         
-        # Construir consulta OPENQUERY
-        # Nota: El servidor vinculado debe estar configurado en SQL Server
+        # Construir consulta OPENQUERY (incluye validFor para validar ítems activos en carga de plantilla)
         query = f"""
         SELECT 
             T0."ItemCode",
             T0."ItemName",
             T0."U_IXX_PACK",
-            T0."ItmsGrpNam"
+            T0."ItmsGrpNam",
+            T0."validFor"
         FROM OPENQUERY([{SAP_LINKED_SERVER}], '
             SELECT 
                 T0."ItemCode",
                 T0."ItemName",
                 T0."U_IXX_PACK",
-                T1."ItmsGrpNam"
+                T1."ItmsGrpNam",
+                T0."validFor"
             FROM "{SAP_DATABASE}"."OITM" T0
             LEFT JOIN "{SAP_DATABASE}"."OITB" T1 ON T0."ItmsGrpCod" = T1."ItmsGrpCod"
             WHERE T0."ItemCode" = ''{item_code_escaped}''
@@ -130,13 +131,15 @@ class SAPClient:
             result = cursor.fetchone()
             
             if result:
+                valid_for = (result[4] if len(result) > 4 and result[4] is not None else "N")
                 producto_info = {
                     "ItemCode": result[0] if result[0] else None,
                     "ItemName": result[1] if result[1] else None,
                     "U_IXX_PACK": result[2] if result[2] else None,
                     "ItmsGrpNam": result[3] if result[3] else None,
+                    "validFor": str(valid_for).strip().upper() if valid_for else "N",
                 }
-                logger.info(f"✅ Producto encontrado en SAP: {item_code_normalized} - Pack: {producto_info.get('U_IXX_PACK')}, Grupo: {producto_info.get('ItmsGrpNam')}")
+                logger.info(f"✅ Producto encontrado en SAP: {item_code_normalized} - Pack: {producto_info.get('U_IXX_PACK')}, Grupo: {producto_info.get('ItmsGrpNam')}, validFor: {producto_info.get('validFor')}")
                 return producto_info
             else:
                 logger.warning(f"⚠️ Producto no encontrado en SAP: {item_code_normalized}")
