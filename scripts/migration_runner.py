@@ -69,6 +69,7 @@ class MigrationRunner:
         
     def ensure_migration_table(self) -> None:
         """Asegurar que existe la tabla de control de migraciones."""
+        assert self.conn is not None, "Debe llamar connect_db() antes de ensure_migration_table()"
         assert self.cursor is not None, "Debe llamar connect_db() antes de ensure_migration_table()"
         logger.info("🔍 Verificando tabla schema_migrations...")
         

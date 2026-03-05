@@ -40,8 +40,7 @@ Write-Host "Instrucciones para iniciar los procesos:" -ForegroundColor Cyan
 Write-Host "=" * 70 -ForegroundColor Cyan
 Write-Host ""
 Write-Host "Terminal 1: FastAPI (proceso manual)" -ForegroundColor Green
-Write-Host "   cd C:\Users\cortiz\PycharmProjects\mba3-consultas" -ForegroundColor Gray
-Write-Host "   python src/api_server.py" -ForegroundColor Gray
+Write-Host "   .\start_api.ps1        (estable) o  .\start_api.ps1 -Dev  (desarrollo)" -ForegroundColor Gray
 Write-Host ""
 Write-Host "Terminal 2: Celery Worker (proceso automático)" -ForegroundColor Green
 Write-Host "   cd C:\Users\cortiz\PycharmProjects\mba3-consultas" -ForegroundColor Gray

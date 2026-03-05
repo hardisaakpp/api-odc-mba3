@@ -35,8 +35,23 @@ python scripts/migration_runner.py            # Ejecutar
 
 ### Iniciar Servidor
 
+**Opción recomendada (PowerShell):**
+
+```powershell
+# Modo estable: sin recarga automática, evita ECONNRESET en el frontend al usar proxy Vite
+.\start_api.ps1
+
+# Modo desarrollo: recarga al guardar archivos (puede provocar ECONNRESET breves en el front)
+.\start_api.ps1 -Dev
+```
+
+**Comandos manuales:**
+
 ```bash
-# Backend API
+# Backend API (estable, sin reinicios)
+uvicorn src.api_server:app --host 0.0.0.0 --port 8000
+
+# Backend API (desarrollo, con recarga al guardar)
 uvicorn src.api_server:app --reload --host 0.0.0.0 --port 8000
 
 # Celery (procesos automáticos) - opcional
@@ -45,6 +60,9 @@ uvicorn src.api_server:app --reload --host 0.0.0.0 --port 8000
 
 - **API Backend:** http://localhost:8000
 - **API Docs:** http://localhost:8000/docs
+- **Health check:** http://localhost:8000/health
+
+Si el frontend (Vite) muestra **ECONNRESET** o **ECONNREFUSED** en la consola, suele deberse a que el backend no está levantado o se reinició (por `--reload`). Usa modo estable (`.\start_api.ps1` sin `-Dev`) para trabajar con el front sin desconexiones; reinicia el script cuando cambies código del backend.
 
 ## 📋 Estructura del Proyecto
 
