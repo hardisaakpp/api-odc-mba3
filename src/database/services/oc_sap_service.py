@@ -593,6 +593,7 @@ class OCSAPService:
                         resultado_transferencias = stock_transfer_service.crear_solicitudes_transferencia_desde_pedido(
                             pedido_id=pedido_id,
                             oc_doc_num=doc_num,
+                            oc_id=oc_id,  # Para persistir y generar JSON
                             bodega_origen=bodega_oc,  # Usa codigo_bodega de la OC (prioridad sobre origen_traslado)
                             usuario_id=None,
                             serie=serie_itr  # ⭐ Numbering Series de SAP (ej: 10131)

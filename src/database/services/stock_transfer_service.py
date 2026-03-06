@@ -7,15 +7,18 @@ NO Stock Transfer Orders. Las Inventory Transfer Requests son solicitudes que NO
 solo crean una solicitud que debe ser procesada posteriormente.
 """
 
+import json
 import logging
 from typing import Dict, Any, List, Optional
 from collections import defaultdict
 
+from src.config import PROJECT_ROOT
 from ..connection import get_db_connection_context
 from ..repositories.pedido_repository import PedidoRepository
 from ..repositories.distribucion_confirmada_repository import DistribucionConfirmadaRepository
 from ..repositories.orden_compra_repository import OrdenCompraRepository
 from ..repositories.pedido_sap_procesamiento_repository import PedidoSAPProcesamientoRepository
+from ..repositories.solicitud_transferencia_repository import SolicitudTransferenciaRepository
 from ..clients.sap_service_layer_client import SAPServiceLayerClient
 from ..mappers.sap_stock_transfer_mapper import SAPStockTransferMapper
 from ..services.bodega_sap_service import BodegaSAPService
@@ -432,10 +435,57 @@ class StockTransferService:
                 f"✅ Stock suficiente validado: todos los {len(total_required)} producto(s) tienen disponibilidad en {source_warehouse}"
             )
     
+    def _persistir_y_guardar_json_solicitudes_transferencia(
+        self,
+        conn,
+        result: Dict[str, Any],
+        payloads_sap: Optional[List[Dict[str, Any]]],
+        oc_id: Optional[str],
+        pedido_id: str,
+        bodega_origen: Optional[str],
+        oc_doc_num: Optional[int] = None,
+    ) -> None:
+        """
+        Persiste el resultado de solicitudes de transferencia en BD y genera JSON en output/.
+        No falla el proceso principal si hay error.
+        """
+        try:
+            st_repo = SolicitudTransferenciaRepository(conn)
+            st_repo.insert(
+                pedido_id=pedido_id,
+                resultado=result,
+                payloads_sap=payloads_sap,
+                oc_id=oc_id,
+                oc_doc_num=oc_doc_num,
+                bodega_origen=bodega_origen,
+            )
+            logger.info(f"📥 Solicitudes de Transferencia persistidas en BD para pedido {pedido_id}")
+        except Exception as e:
+            logger.warning(f"⚠️ No se pudo persistir Solicitudes de Transferencia en BD: {e}")
+
+        try:
+            output_dir = PROJECT_ROOT / "output"
+            output_dir.mkdir(parents=True, exist_ok=True)
+            out_file = output_dir / f"str_{pedido_id}.json"
+            json_data = {
+                "pedido_id": pedido_id,
+                "oc_id": oc_id,
+                "oc_doc_num": oc_doc_num,
+                "bodega_origen": bodega_origen,
+                "resultado": result,
+                "payloads_sap": payloads_sap or [],
+            }
+            with open(out_file, "w", encoding="utf-8") as f:
+                json.dump(json_data, f, ensure_ascii=False, indent=2, default=str)
+            logger.info(f"📥 Solicitudes de Transferencia guardadas en {out_file}")
+        except Exception as e:
+            logger.warning(f"⚠️ No se pudo guardar JSON de Solicitudes de Transferencia: {e}")
+
     def crear_solicitudes_transferencia_desde_pedido(
         self,
         pedido_id: str,
         oc_doc_num: Optional[int] = None,
+        oc_id: Optional[str] = None,
         bodega_origen: Optional[str] = None,
         usuario_id: Optional[str] = None,
         serie: Optional[int] = None
@@ -788,7 +838,16 @@ class StockTransferService:
                     result["error"] = error_msg
                     result["success"] = False
                     result["error_type"] = "validacion_formato"  # Flag para identificar tipo de error
-                    # Retornar resultado con error claro
+                    # Persistir y generar JSON (auditoría de intento fallido)
+                    self._persistir_y_guardar_json_solicitudes_transferencia(
+                        conn=conn,
+                        result=result,
+                        payloads_sap=stock_transfers_json,
+                        oc_id=oc_id,
+                        pedido_id=pedido_id,
+                        bodega_origen=bodega_origen,
+                        oc_doc_num=oc_doc_num,
+                    )
                     return result
                 
                 # 7. Crear cada Inventory Transfer Request en SAP (POST /InventoryTransferRequests)
@@ -887,6 +946,16 @@ class StockTransferService:
                             f"(0/{result['total_tiendas']} exitosos)"
                         )
                 
+                # Persistir en BD y generar JSON
+                self._persistir_y_guardar_json_solicitudes_transferencia(
+                    conn=conn,
+                    result=result,
+                    payloads_sap=stock_transfers_json,
+                    oc_id=oc_id,
+                    pedido_id=pedido_id,
+                    bodega_origen=bodega_origen,
+                    oc_doc_num=oc_doc_num,
+                )
                 return result
                 
         except Exception as e:
