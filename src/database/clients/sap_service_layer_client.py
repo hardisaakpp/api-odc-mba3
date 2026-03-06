@@ -845,9 +845,8 @@ class SAPServiceLayerClient:
                 )
                 
                 # ⭐ AJUSTE: Calcular stock disponible descontando comprometido
-                # SAP puede devolver InStock/IsCommited como null → tratar como 0
-                in_stock_raw = float(warehouse_info.get("InStock") or 0)
-                is_committed = float(warehouse_info.get("IsCommited") or 0)
+                in_stock_raw = float(warehouse_info.get("InStock", 0))
+                is_committed = float(warehouse_info.get("IsCommited", 0))
                 in_stock = in_stock_raw - is_committed
                 
                 uom_code = warehouse_info.get("UomCode")  # Puede ser None
