@@ -177,6 +177,7 @@ class SAPStockTransferMapper:
                 "FromWarehouse": bodega_origen_upper,
                 "ToWarehouse": tienda_destino,
                 "Comments": comentario_base,
+                "PriceList": -2,
                 "StockTransferLines": stock_transfer_lines,
             }
             # Guardar número de OC SAP en campo específico (U_ODC) si está disponible
@@ -248,6 +249,7 @@ class SAPStockTransferMapper:
                 "DueDate": due_date,
                 "FromWarehouse": from_wh,
                 "ToWarehouse": to_wh,
+                "PriceList": -2,
                 "StockTransferLines": lines,
             }
             if oc_doc_num is not None:
