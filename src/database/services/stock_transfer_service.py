@@ -682,17 +682,22 @@ class StockTransferService:
                         )
                         continue
                     
-                    # Obtener item_code_sap y cantidad_sap desde procesamiento
+                    # Obtener item_code_sap y unidad_conversion desde procesamiento
                     item_code_sap = procesamiento.get("item_code_sap")
-                    cantidad_sap = procesamiento.get("cantidad_sap")
+                    unidad_conversion = procesamiento.get("unidad_conversion")
                     
-                    if not item_code_sap or cantidad_sap is None:
+                    if not item_code_sap:
                         logger.warning(
                             f"⚠️ Procesamiento incompleto para pedido_detalle_id: {pedido_detalle_id}"
                         )
                         continue
                     
-                    # Procesar distribuciones por TIENDA de este producto
+                    # ⭐ Conversión por tienda: cada cantidad_asignada se multiplica por unidad_conversion
+                    # (pack_conversion, ej. x6 → 2). NO se usa el total del producto ni cantidades de bodega,
+                    # así no se "redistribuye" desde bodega hacia tiendas.
+                    factor_conversion = float(unidad_conversion) if unidad_conversion is not None and float(unidad_conversion) > 0 else 1.0
+                    
+                    # Procesar distribuciones por TIENDA de este producto (excluir bodegas)
                     distribuciones = producto_dist.get("distribuciones", [])
                     # ⭐ CORRECCIÓN: Filtrar solo distribuciones de TIENDAS (es_bodega=False)
                     distribuciones_tiendas = [d for d in distribuciones if not d.get("es_bodega", False)]
@@ -704,13 +709,6 @@ class StockTransferService:
                     
                     if cantidad_total_distribuida_tiendas == 0:
                         continue
-                    
-                    # Calcular factor de conversión para distribuir cantidad_sap proporcionalmente
-                    cantidad_original_total = producto_dist.get("cantidad_total_solicitada", cantidad_total_distribuida_tiendas)
-                    # Asegurar tipos numéricos (evitar float/Decimal en misma operación)
-                    _cant_orig = float(cantidad_original_total) if cantidad_original_total is not None else 0.0
-                    _cant_sap = float(cantidad_sap) if cantidad_sap is not None else 0.0
-                    factor_conversion = _cant_sap / _cant_orig if _cant_orig > 0 else 1.0
                     
                     for dist in distribuciones_tiendas:
                         tienda_id = dist.get("tienda_id")
@@ -769,7 +767,7 @@ class StockTransferService:
                             )
                             continue
                         
-                        # Convertir cantidad_asignada a unidades SAP proporcionalmente
+                        # Convertir cantidad_asignada a unidades SAP (cantidad × unidad_conversion, sin usar bodega)
                         cantidad_sap_asignada = float(cantidad_asignada) * factor_conversion
                         
                         # ⭐ Obtener código exacto de SAP (WhsCode) para usar en la ST
