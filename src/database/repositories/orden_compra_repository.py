@@ -370,6 +370,7 @@ class OrdenCompraRepository:
                 "fecha_generacion": serialize_date(result[4]),
                 "estado": result[5],
                 "numero_oc_sap": result[6],
+                "doc_num": result[6],  # Número de documento SAP (mismo que numero_oc_sap, para frontend)
                 "doc_entry": result[7],
                 "referencia_despacho": result[8],
                 "codigo_bodega": result[9],
@@ -418,6 +419,7 @@ class OrdenCompraRepository:
                     "fecha_generacion": serialize_date(row[4]),
                     "estado": row[5],
                     "numero_oc_sap": row[6],
+                    "doc_num": row[6],  # Número de documento SAP (para columna Docnum en frontend)
                     "doc_entry": row[7],
                     "referencia_despacho": row[8],
                     "codigo_bodega": row[9],
@@ -471,6 +473,7 @@ class OrdenCompraRepository:
                     "fecha_generacion": serialize_date(row[4]),
                     "estado": row[5],
                     "numero_oc_sap": row[6],
+                    "doc_num": row[6],  # Número de documento SAP (para columna Docnum en frontend)
                     "doc_entry": row[7],
                     "referencia_despacho": row[8],
                     "codigo_bodega": row[9],
@@ -519,6 +522,7 @@ class OrdenCompraRepository:
                     "fecha_generacion": serialize_date(row[4]),
                     "estado": row[5],
                     "numero_oc_sap": row[6],
+                    "doc_num": row[6],  # Número de documento SAP (para columna Docnum en frontend)
                     "doc_entry": row[7],
                     "referencia_despacho": row[8],
                     "codigo_bodega": row[9],
@@ -569,6 +573,7 @@ class OrdenCompraRepository:
                 "fecha_generacion": serialize_date(result[4]),
                 "estado": result[5],
                 "numero_oc_sap": result[6],
+                "doc_num": result[6],  # Número de documento SAP (para modal y tabla en frontend)
                 "doc_entry": result[7],
                 "referencia_despacho": result[8],
                 "codigo_bodega": result[9],

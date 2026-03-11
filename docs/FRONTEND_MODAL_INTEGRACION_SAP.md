@@ -340,8 +340,82 @@ Para probar el modal, puedes usar estos escenarios:
 3. **Caso sin ST:** Enviar una ODC que no genere ST (origen = destino)
 4. **Caso con error en OC:** Simular error al enviar la OC a SAP
 
+## 📌 Modal "Enviar ODC a SAP" (Proceso completo desde pedido)
+
+Cuando el usuario hace clic en **"Enviar ODC a SAP"** desde la pantalla de redistribución, el frontend llama a:
+
+- **POST** `/api/pedidos/{numero_pedido}/proceso-completo-sap` (síncrono), o  
+- **POST** `/api/pedidos/{numero_pedido}/proceso-completo-sap-async` (asíncrono; el resultado se consulta con GET `/api/pedidos/proceso-sap/resultado/{process_id}`).
+
+### Varias solicitudes de transferencia (varios DocNum por pedido)
+
+Para mostrar **todas** las solicitudes de transferencia del pedido (varios DocNum, uno por tienda), el backend envía:
+
+- **`solicitudes_transferencia.itrs_por_tienda`**: array pensado para el modal, solo **DocNum** y **Tienda (código)**, como en el correo. Una fila por ITR.
+
+| Campo           | Origen                                               | Uso en el modal              |
+|-----------------|-------------------------------------------------------|------------------------------|
+| **doc_num**     | `response.solicitudes_transferencia.itrs_por_tienda[].doc_num`   | Número SAP de la ITR (ej. 70214643) |
+| **tienda_codigo** | `response.solicitudes_transferencia.itrs_por_tienda[].tienda_codigo` | Código de la tienda (ej. TRL-MRC)   |
+
+- **`solicitudes_transferencia.resultados`**: mismo detalle completo (incluye además tienda_nombre, success, error, etc.) por si el modal quiere estado o nombre.
+
+En el modal se recomienda una **tabla de dos columnas: DocNum | Tienda**, iterando `solicitudes_transferencia.itrs_por_tienda`. Así se muestran todos los DocNum de las ITR del pedido, no solo uno.
+
+Ejemplo de respuesta exitosa (varias tiendas):
+
+```json
+{
+  "status": "success",
+  "message": "Proceso completado exitosamente. ODC enviada a SAP con DocNum: 70214643",
+  "envio_sap": {
+    "oc_id": "...",
+    "doc_num": 70214643,
+    "doc_entry": 43366,
+    "proveedor": "P1790389219001",
+    "success": true
+  },
+  "solicitudes_transferencia": {
+    "total_tiendas": 2,
+    "transferencias_creadas": 2,
+    "resultados": [
+      {
+        "tienda_codigo": "TRL-MRC",
+        "tienda_nombre": "TRANSITORIA ROLAND MALL DEL RIO CUENCA",
+        "doc_num": 70214642,
+        "success": true
+      },
+      {
+        "tienda_codigo": "TOUT-CEN",
+        "tienda_nombre": "TRANSITORIA DESCUENTON CENTRO",
+        "doc_num": 70214643,
+        "success": true
+      }
+    ],
+    "itrs_por_tienda": [
+      { "doc_num": 70214642, "tienda_codigo": "TRL-MRC" },
+      { "doc_num": 70214643, "tienda_codigo": "TOUT-CEN" }
+    ]
+  }
+}
+```
+
+**Implementación sugerida en el modal:** tabla con cabeceras **DocNum** y **Tienda**, y una fila por cada elemento de `response.solicitudes_transferencia.itrs_por_tienda` (o de `resultados` mostrando solo esas dos columnas).
+
+### Dónde vienen las ITR en la respuesta
+
+El backend envía las solicitudes de transferencia en **dos sitios** para compatibilidad con el modal:
+
+| Origen | Uso |
+|--------|-----|
+| **`response.envio_sap.solicitudes_transferencia`** | Mismo objeto (resultados, itrs_por_tienda). Para que el front encuentre las ITR en el primer cheque. |
+| **`response.solicitudes_transferencia`** | Mismo contenido en la raíz de la respuesta. |
+
+Cualquiera de los dos sirve para rellenar la sección «Solicitudes de Transferencia (ITR)» y la tabla de 2 columnas (DocNum \| Tienda).
+
 ## 📚 Referencias
 
 - Endpoint: `POST /integrar-sap`
+- Proceso completo: `POST /api/pedidos/{numero_pedido}/proceso-completo-sap`
 - Documentación de endpoints: `docs/ENDPOINTS.md`
 - Flujo completo: `docs/FLUJO_COMPLETO.md`

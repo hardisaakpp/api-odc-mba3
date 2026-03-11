@@ -15,6 +15,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 
 from src.utils import get_source_from_headers
 from src.database.repositories.orden_compra_repository import OrdenCompraRepository
+from src.database.repositories.solicitud_transferencia_repository import SolicitudTransferenciaRepository
 from src.database.repositories.sap_integration_log_repository import SAPIntegrationLogRepository
 from src.database.connection import get_db_connection, get_db_connection_context
 from src.database.clients.sap_client import SAPClient
@@ -352,14 +353,17 @@ def register_ordenes_compra_endpoints(app: FastAPI):
                 conn = get_db_connection()
                 try:
                     oc_repo = OrdenCompraRepository(conn)
-                    
                     if estado_param:
-                        # Obtener OCs por estado
                         oc_list = oc_repo.get_by_estado(estado_param)
                     else:
-                        # Obtener todas las OCs sin filtro de estado
                         oc_list = oc_repo.get_all()
-                    
+                    # Preferir doc_num de Solicitud de Transferencia (ITR, ej. 70214643) para la UI
+                    if oc_list:
+                        st_repo = SolicitudTransferenciaRepository(conn)
+                        itr_doc = st_repo.get_doc_num_itr_por_oc_ids([o["oc_id"] for o in oc_list])
+                        for o in oc_list:
+                            if o["oc_id"] in itr_doc:
+                                o["doc_num"] = itr_doc[o["oc_id"]]
                     return oc_list
                 finally:
                     conn.close()

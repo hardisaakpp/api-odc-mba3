@@ -43,7 +43,7 @@ class SolicitudTransferenciaRepository:
             bodega_origen: Código de bodega origen (opcional)
 
         Returns:
-            solicitud_transferencia_id si se insertó correctamente, None si falló (no crítico)
+            solicitud_transferencia_id (UUID string) si se insertó correctamente, None si falló
         """
         try:
             cursor = self.conn.cursor()
@@ -72,7 +72,9 @@ class SolicitudTransferenciaRepository:
                     pedido_id, oc_id, oc_doc_num, bodega_origen,
                     total_tiendas, transferencias_creadas, transferencias_errores,
                     success, resultado_json, payloads_sap_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                )
+                OUTPUT INSERTED.solicitud_transferencia_id
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """
 
             cursor.execute(
@@ -90,9 +92,11 @@ class SolicitudTransferenciaRepository:
                     payloads_sap_json,
                 ),
             )
+            row = cursor.fetchone()
             self.conn.commit()
+            solicitud_id = str(row[0]) if row and row[0] else None
             cursor.close()
-            return "ok"
+            return solicitud_id
 
         except Exception as e:
             logger.error(f"Error al insertar solicitud_transferencia: {e}", exc_info=True)
@@ -101,3 +105,100 @@ class SolicitudTransferenciaRepository:
             except Exception:
                 pass
             return None
+
+    def insert_detalle(
+        self,
+        solicitud_transferencia_id: str,
+        resultados: List[Dict[str, Any]],
+    ) -> int:
+        """
+        Inserta una fila en solicitud_transferencia_detalle por cada tienda (resultado).
+        Persiste la misma información que se envía por correo: Tienda, Nombre, Estado, DocNum.
+
+        Args:
+            solicitud_transferencia_id: UUID del registro en solicitud_transferencia
+            resultados: Lista de dicts con tienda_codigo, tienda_nombre, success, doc_num, doc_entry, error
+
+        Returns:
+            Número de filas insertadas (0 si la tabla no existe o error)
+        """
+        if not resultados:
+            return 0
+        try:
+            cursor = self.conn.cursor()
+            insertados = 0
+            for r in resultados:
+                tienda_codigo = (r.get("tienda_codigo") or "N/A")[:20]
+                tienda_nombre = (r.get("tienda_nombre") or "")[:255] if r.get("tienda_nombre") else None
+                success = bool(r.get("success", False))
+                estado = "Creada" if success else "Error"
+                doc_num = r.get("doc_num")
+                doc_entry = r.get("doc_entry")
+                error_mensaje = (r.get("error") or "")[:500] if r.get("error") else None
+
+                try:
+                    cursor.execute(
+                        """
+                        INSERT INTO solicitud_transferencia_detalle (
+                            solicitud_transferencia_id, tienda_codigo, tienda_nombre,
+                            estado, doc_num, doc_entry, error_mensaje
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            str(solicitud_transferencia_id),
+                            tienda_codigo,
+                            tienda_nombre,
+                            estado,
+                            doc_num,
+                            doc_entry,
+                            error_mensaje,
+                        ),
+                    )
+                    insertados += 1
+                except Exception as e:
+                    logger.warning(f"No se pudo insertar detalle para {tienda_codigo}: {e}")
+            self.conn.commit()
+            cursor.close()
+            if insertados:
+                logger.info(f"Persistidos {insertados} registros en solicitud_transferencia_detalle")
+            return insertados
+        except Exception as e:
+            logger.warning(f"No se pudo insertar solicitud_transferencia_detalle (tabla puede no existir): {e}")
+            try:
+                self.conn.rollback()
+            except Exception:
+                pass
+            return 0
+
+    def get_doc_num_itr_por_oc_ids(self, oc_ids: List[str]) -> Dict[str, Any]:
+        """
+        Para cada oc_id devuelve el doc_num de la primera Solicitud de Transferencia (ITR)
+        guardada en solicitud_transferencia_detalle. Es el número que debe mostrarse en la UI (ej. 70214643).
+
+        Args:
+            oc_ids: Lista de UUIDs de órdenes de compra.
+
+        Returns:
+            Dict oc_id -> doc_num (int o None). Solo incluye oc_ids que tengan al menos un ITR con doc_num.
+        """
+        if not oc_ids:
+            return {}
+        out = {}
+        try:
+            cursor = self.conn.cursor()
+            placeholders = ",".join("?" * len(oc_ids))
+            query = f"""
+                SELECT st.oc_id, MIN(std.doc_num) AS doc_num
+                FROM solicitud_transferencia st
+                INNER JOIN solicitud_transferencia_detalle std
+                    ON std.solicitud_transferencia_id = st.solicitud_transferencia_id
+                WHERE st.oc_id IN ({placeholders}) AND std.doc_num IS NOT NULL
+                GROUP BY st.oc_id
+            """
+            cursor.execute(query, [str(oid) for oid in oc_ids])
+            for row in cursor.fetchall():
+                out[str(row[0])] = row[1]
+            cursor.close()
+        except Exception as e:
+            logger.warning(f"No se pudo obtener doc_num ITR por oc_id (tabla puede no existir): {e}")
+        return out

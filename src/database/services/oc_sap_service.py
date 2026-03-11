@@ -650,6 +650,7 @@ class OCSAPService:
                 try:
                     from src.utils.email_notifier import send_oc_ready_for_dispatch_notification
                     from ..repositories.pedido_repository import PedidoRepository
+                    from ..repositories.envio_odc_sap_repository import EnvioODCSAPRepository
                     
                     # Obtener número de pedido si está disponible
                     pedido_numero = None
@@ -676,6 +677,29 @@ class OCSAPService:
                         logger.info(f"📧 Notificación de OC lista para despacho enviada a El Rayo y MABEL TRADING (OC #{doc_num})")
                     else:
                         logger.warning(f"⚠️ No se pudo enviar notificación a El Rayo (no crítico)")
+                    
+                    # Persistir en BD el snapshot de lo notificado (información que se envía por correo)
+                    if pedido_id:
+                        try:
+                            envio_repo = EnvioODCSAPRepository(oc_repo.conn)
+                            total_st = (resultado_transferencias_notif or {}).get("total_tiendas", 0)
+                            creadas_st = (resultado_transferencias_notif or {}).get("transferencias_creadas", 0)
+                            st_id = (resultado_transferencias_notif or {}).get("solicitud_transferencia_id")
+                            envio_repo.insert(
+                                oc_id=oc_id,
+                                pedido_id=pedido_id,
+                                numero_oc_sap=str(doc_num) if doc_num else None,
+                                doc_entry=doc_entry,
+                                proveedor=oc_cabecera.get("proveedor"),
+                                referencia=oc_cabecera.get("referencia_despacho"),
+                                numero_pedido=pedido_numero,
+                                solicitud_transferencia_id=st_id,
+                                total_transferencias=total_st,
+                                transferencias_creadas=creadas_st,
+                            )
+                            logger.info("📥 Snapshot de envío ODC/SAP persistido en envio_odc_sap")
+                        except Exception as e_persist:
+                            logger.warning(f"⚠️ No se pudo persistir envio_odc_sap (no crítico): {e_persist}")
                 except Exception as e:
                     # NO fallar el proceso si la notificación falla
                     logger.warning(f"⚠️ Error al enviar notificación a El Rayo (no crítico): {e}")

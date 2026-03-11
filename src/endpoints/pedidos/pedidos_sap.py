@@ -4,15 +4,21 @@ Endpoint de procesamiento SAP.
 
 import logging
 import re
-from typing import Dict
+from typing import Dict, List
 from datetime import datetime
 from fastapi import FastAPI, Depends, HTTPException, Path, status
 
 from src.database.connection import get_db_connection_context
 from src.database.repositories.pedido_repository import PedidoRepository
 from src.database.repositories.pedido_sap_procesamiento_repository import PedidoSAPProcesamientoRepository
+from src.database.repositories.distribucion_confirmada_repository import DistribucionConfirmadaRepository
 from src.security.jwt_auth import verify_jwt_token, require_permission
-from src.models import ProcesamientoSAPResponse, ProductoSAPProcesamientoItem, EstadisticasProcesamientoSAP
+from src.models import (
+    ProcesamientoSAPResponse,
+    ProductoSAPProcesamientoItem,
+    EstadisticasProcesamientoSAP,
+    ConversionPorTiendaItem,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +69,36 @@ def register_sap_endpoints(app: FastAPI):
                 
                 numero_pedido = pedido_data["cabecera"].get("numero_pedido")
                 procesamientos = sap_proc_repo.get_procesamientos_por_pedido(pedido_id_real)
+                
+                # Obtener distribución confirmada para mostrar conversión por tienda/bodega (trazabilidad)
+                distribucion_conversion_por_producto: Dict[str, List[ConversionPorTiendaItem]] = {}
+                try:
+                    dist_repo = DistribucionConfirmadaRepository(conn)
+                    version_actual = dist_repo.get_version_actual(pedido_id_real)
+                    if version_actual > 0:
+                        distribucion_data = dist_repo.get_distribucion_completa(pedido_id_real, version_actual)
+                        proc_por_detalle = {p["pedido_detalle_id"]: p for p in procesamientos}
+                        for prod_dist in distribucion_data.get("productos", []):
+                            pedido_detalle_id = prod_dist["pedido_detalle_id"]
+                            proc = proc_por_detalle.get(pedido_detalle_id)
+                            unidad_conversion = float(proc["unidad_conversion"]) if proc and proc.get("unidad_conversion") and float(proc["unidad_conversion"]) > 0 else 1.0
+                            lineas: List[ConversionPorTiendaItem] = []
+                            for d in prod_dist.get("distribuciones", []):
+                                cantidad_asignada = float(d.get("cantidad_asignada", 0) or 0)
+                                if cantidad_asignada <= 0:
+                                    continue
+                                cantidad_sap = round(cantidad_asignada * unidad_conversion, 4)
+                                lineas.append(ConversionPorTiendaItem(
+                                    tienda_codigo=d.get("tienda_codigo") or "",
+                                    tienda_nombre=d.get("tienda_nombre"),
+                                    es_bodega=bool(d.get("es_bodega", False)),
+                                    cantidad_asignada=cantidad_asignada,
+                                    cantidad_sap=cantidad_sap,
+                                ))
+                            if lineas:
+                                distribucion_conversion_por_producto[pedido_detalle_id] = lineas
+                except Exception as e:
+                    logger.warning(f"⚠️ No se pudo cargar distribución para conversión por tienda: {e}")
                 
                 productos = []
                 total_productos = len(procesamientos)
@@ -122,7 +158,8 @@ def register_sap_endpoints(app: FastAPI):
                         item_code_sap_encontrado=proc.get("item_code_sap_encontrado"),
                         mensaje_error=proc.get("mensaje_error"),
                         fecha_procesamiento=fecha_proc,
-                        procesado_por=proc.get("procesado_por")
+                        procesado_por=proc.get("procesado_por"),
+                        distribucion_conversion=distribucion_conversion_por_producto.get(proc["pedido_detalle_id"]),
                     ))
                 
                 estadisticas = EstadisticasProcesamientoSAP(

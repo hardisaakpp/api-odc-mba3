@@ -1152,9 +1152,19 @@ class BorradorResponse(BaseModel):
     message: Optional[str] = Field(default=None, description="Mensaje informativo (ej: 'No hay borrador guardado')")
 
 
+class ConversionPorTiendaItem(BaseModel):
+    """Conversión por tienda/bodega: cantidad asignada y cantidad en unidades SAP (trazabilidad)."""
+
+    tienda_codigo: str = Field(..., description="Código de tienda o bodega (ej. TRL-BHO, RL-CD)")
+    tienda_nombre: Optional[str] = Field(None, description="Nombre de la tienda/bodega")
+    es_bodega: bool = Field(default=False, description="True si es bodega (RL-CD, OUT-CD, RG-CD)")
+    cantidad_asignada: float = Field(..., ge=0, description="Cantidad asignada en unidades originales")
+    cantidad_sap: float = Field(..., ge=0, description="Cantidad convertida a unidades SAP (cantidad_asignada × unidad_conversion)")
+
+
 class ProductoSAPProcesamientoItem(BaseModel):
     """Modelo para un producto procesado con SAP."""
-    
+
     procesamiento_detalle_id: str = Field(..., description="UUID del procesamiento")
     pedido_detalle_id: str = Field(..., description="UUID del detalle del pedido")
     codigo_interno: str = Field(..., description="Código interno del producto")
@@ -1164,8 +1174,8 @@ class ProductoSAPProcesamientoItem(BaseModel):
     unidad_conversion: Optional[float] = Field(None, description="Factor de conversión")
     unidad_original: Optional[str] = Field(None, description="Unidad del pedido (ej. DOCENA), desde pedido_detalle.pack")
     unidad_sap: Optional[str] = Field(None, description="Unidad SAP (ej. PACK, UN)")
-    cantidad_original: Optional[float] = Field(None, description="Cantidad en unidades originales")
-    cantidad_sap: Optional[float] = Field(None, description="Cantidad convertida a unidades SAP")
+    cantidad_original: Optional[float] = Field(None, description="Cantidad en unidades originales (total)")
+    cantidad_sap: Optional[float] = Field(None, description="Cantidad convertida a unidades SAP (total)")
     precio_unitario_original: Optional[float] = Field(None, description="Precio por unidad original")
     precio_unitario_sap: Optional[float] = Field(None, description="Precio por unidad SAP")
     total_linea_original: Optional[float] = Field(None, description="Total en unidades originales")
@@ -1176,6 +1186,10 @@ class ProductoSAPProcesamientoItem(BaseModel):
     mensaje_error: Optional[str] = Field(None, description="Mensaje de error si hubo problema")
     fecha_procesamiento: Optional[datetime] = Field(None, description="Fecha de procesamiento")
     procesado_por: Optional[str] = Field(None, description="Usuario que procesó")
+    distribucion_conversion: Optional[List[ConversionPorTiendaItem]] = Field(
+        default=None,
+        description="Conversión por cada tienda/bodega (cantidad_asignada → cantidad_sap) para trazabilidad"
+    )
 
 
 class EstadisticasProcesamientoSAP(BaseModel):
@@ -1376,14 +1390,26 @@ class ModificarPedidoCabeceraResponse(BaseModel):
 
 class ProcesoCompletoSAPDetalleODC(BaseModel):
     """Detalle de la ODC en el proceso completo."""
-    
-    oc_id: str = Field(..., description="UUID de la orden de compra")
+
+    oc_id: str = Field(..., description="UUID interno de la orden de compra (no usar como DocNum)")
     proveedor: Optional[str] = Field(None, description="CardCode del proveedor")
     success: bool = Field(..., description="Si el envío a SAP fue exitoso")
-    doc_entry: Optional[int] = Field(None, description="DocEntry de SAP (si éxito)")
-    doc_num: Optional[int] = Field(None, description="DocNum de SAP (si éxito)")
+    numero_oc_sap: Optional[str] = Field(
+        None,
+        description="Número OC SAP de la cabecera (orden_compra_cabecera.numero_oc_sap). Para mostrar como 'Num ODC' en el modal."
+    )
+    doc_entry: Optional[int] = Field(None, description="DocEntry de SAP (ID interno en SAP)")
+    doc_num: Optional[int] = Field(
+        None,
+        description="Número de documento que devuelve SAP (DocNum). Para mostrar como 'DocNum' en el modal."
+    )
     error: Optional[str] = Field(None, description="Mensaje de error (si falló)")
     error_code: Optional[str] = Field(None, description="Código de error de SAP")
+    # ITR en envio_sap para que el frontend encuentre las solicitudes en response.envio_sap.solicitudes_transferencia
+    solicitudes_transferencia: Optional[dict] = Field(
+        None,
+        description="Resumen y listado ITR (resultados, itrs_por_tienda). Mismo contenido que en la raíz."
+    )
 
 
 class ProcesoCompletoSAPResponse(BaseModel):
@@ -1411,6 +1437,15 @@ class ProcesoCompletoSAPResponse(BaseModel):
     
     # Paso 3: Enviar a SAP
     envio_sap: Optional[ProcesoCompletoSAPDetalleODC] = Field(None, description="Resultado del envío a SAP")
+    
+    # Solicitudes de Transferencia (por tienda): para mostrar en modal todas las ITR con doc_num y tienda
+    solicitudes_transferencia: Optional[dict] = Field(
+        None,
+        description=(
+            "Resumen y lista por tienda. Incluye resultados (completo) e itrs_por_tienda: "
+            "[{ doc_num, tienda_codigo }] para tabla en modal (como en el correo, solo DocNum y Tienda)."
+        )
+    )
     
     # Resumen
     resumen: Optional[ResumenConfirmacion] = Field(None, description="Resumen de cantidades y costos")
@@ -1441,8 +1476,21 @@ class ProcesoCompletoSAPResponse(BaseModel):
                     "oc_id": "660e8400-e29b-41d4-a716-446655440001",
                     "proveedor": "P1234567890001",
                     "success": True,
+                    "numero_oc_sap": "12345",
                     "doc_entry": 54321,
                     "doc_num": 12345
+                },
+                "solicitudes_transferencia": {
+                    "total_tiendas": 2,
+                    "transferencias_creadas": 2,
+                    "resultados": [
+                        {"tienda_codigo": "TRL-MRC", "tienda_nombre": "TRANSITORIA ROLAND MALL DEL RIO", "doc_num": 70214642, "success": True},
+                        {"tienda_codigo": "TOUT-CEN", "tienda_nombre": "TRANSITORIA DESCUENTON CENTRO", "doc_num": 70214643, "success": True}
+                    ],
+                    "itrs_por_tienda": [
+                        {"doc_num": 70214642, "tienda_codigo": "TRL-MRC"},
+                        {"doc_num": 70214643, "tienda_codigo": "TOUT-CEN"}
+                    ]
                 },
                 "resumen": {
                     "total_productos": 5,

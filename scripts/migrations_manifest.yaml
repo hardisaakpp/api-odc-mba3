@@ -367,3 +367,21 @@ migrations:
     file: "migrations/alter_pedido_sap_procesamiento_detalle_decimal_4.sql"
     description: "pedido_sap_procesamiento_detalle: total_linea_original y total_linea_sap a DECIMAL(18,4) (4 decimales)"
     category: "alter"
+
+  - version: "611.5"
+    name: "create_solicitud_transferencia"
+    file: "migrations/create_solicitud_transferencia.sql"
+    description: "Tabla solicitud_transferencia: batch de solicitudes de transferencia (ITR) enviadas a SAP por pedido/OC"
+    category: "base"
+
+  - version: "612"
+    name: "create_solicitud_transferencia_detalle"
+    file: "migrations/create_solicitud_transferencia_detalle.sql"
+    description: "Tabla solicitud_transferencia_detalle: Tienda, Nombre, Estado, DocNum por cada solicitud de transferencia (info que se envía por correo)"
+    category: "base"
+
+  - version: "613"
+    name: "create_envio_odc_sap"
+    file: "migrations/create_envio_odc_sap.sql"
+    description: "Tabla envio_odc_sap: snapshot de cada Enviar ODC a SAP (OC + solicitudes de transferencia + fecha)"
+    category: "base"

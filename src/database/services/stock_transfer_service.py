@@ -451,7 +451,7 @@ class StockTransferService:
         """
         try:
             st_repo = SolicitudTransferenciaRepository(conn)
-            st_repo.insert(
+            solicitud_id = st_repo.insert(
                 pedido_id=pedido_id,
                 resultado=result,
                 payloads_sap=payloads_sap,
@@ -459,6 +459,13 @@ class StockTransferService:
                 oc_doc_num=oc_doc_num,
                 bodega_origen=bodega_origen,
             )
+            if solicitud_id and result.get("resultados"):
+                st_repo.insert_detalle(
+                    solicitud_transferencia_id=solicitud_id,
+                    resultados=result["resultados"],
+                )
+            if solicitud_id:
+                result["solicitud_transferencia_id"] = solicitud_id
             logger.info(f"📥 Solicitudes de Transferencia persistidas en BD para pedido {pedido_id}")
         except Exception as e:
             logger.warning(f"⚠️ No se pudo persistir Solicitudes de Transferencia en BD: {e}")
@@ -508,14 +515,14 @@ class StockTransferService:
         
         Proceso:
         1. Obtiene la distribución confirmada del pedido
-        2. Obtiene los datos de procesamiento SAP (conversiones y códigos SAP)
+        2. Obtiene los datos de procesamiento SAP (item_code_sap, unidad_conversion por producto)
         3. Valida que todas las tiendas destino existan en SAP (previene errores de "No matching records found")
-        4. Filtra solo distribuciones de TIENDAS (es_bodega=False)
-        5. Excluye bodegas como destino (evita ST de bodega a bodega)
-        6. Valida que destino no sea la misma bodega origen
-        7. Valida que cada tienda pertenezca a la bodega origen (basado en prefijos: TRL-→RL-CD, TOUT-→OUT-CD, RG-→RG-CD)
-        8. Agrupa por tienda
-        9. Crea un Inventory Transfer Request por tienda en SAP (POST /InventoryTransferRequests)
+        4. Filtra solo distribuciones de TIENDAS (es_bodega=False); las bodegas no se redistribuyen
+        5. Convierte cantidades por tienda: cantidad_sap = cantidad_asignada × unidad_conversion (trazable, sin usar totales ni bodega)
+        6. Excluye bodegas como destino (evita ST de bodega a bodega)
+        7. Valida que destino no sea la misma bodega origen
+        8. Valida que cada tienda pertenezca a la bodega origen (basado en prefijos: TRL-→RL-CD, TOUT-→OUT-CD, RG-→RG-CD)
+        9. Agrupa por tienda y crea un Inventory Transfer Request por tienda en SAP (POST /InventoryTransferRequests)
         10. Registra los resultados
         
         Args:
@@ -692,10 +699,13 @@ class StockTransferService:
                         )
                         continue
                     
-                    # ⭐ Conversión por tienda: cada cantidad_asignada se multiplica por unidad_conversion
-                    # (pack_conversion, ej. x6 → 2). NO se usa el total del producto ni cantidades de bodega,
-                    # así no se "redistribuye" desde bodega hacia tiendas.
+                    # ⭐ Conversión por tienda (trazable): cantidad_sap = cantidad_asignada × unidad_conversion.
+                    # No se usa el total del producto ni bodegas; cada tienda se convierte de forma independiente.
                     factor_conversion = float(unidad_conversion) if unidad_conversion is not None and float(unidad_conversion) > 0 else 1.0
+                    logger.debug(
+                        f"   Conversión por tienda: {item_code_sap} | unidad_conversion={factor_conversion} "
+                        f"(cada cantidad_asignada × {factor_conversion} → cantidad_sap)"
+                    )
                     
                     # Procesar distribuciones por TIENDA de este producto (excluir bodegas)
                     distribuciones = producto_dist.get("distribuciones", [])
@@ -767,8 +777,11 @@ class StockTransferService:
                             )
                             continue
                         
-                        # Convertir cantidad_asignada a unidades SAP (cantidad × unidad_conversion, sin usar bodega)
+                        # Convertir por tienda: cantidad_sap = cantidad_asignada × unidad_conversion (trazable)
                         cantidad_sap_asignada = float(cantidad_asignada) * factor_conversion
+                        logger.debug(
+                            f"      {item_code_sap} → {tienda_codigo}: {cantidad_asignada} × {factor_conversion} = {cantidad_sap_asignada}"
+                        )
                         
                         # ⭐ Obtener código exacto de SAP (WhsCode) para usar en la ST
                         codigo_exacto_sap = mapeo_codigo_exacto_sap.get(tienda_codigo_upper, tienda_codigo_upper)

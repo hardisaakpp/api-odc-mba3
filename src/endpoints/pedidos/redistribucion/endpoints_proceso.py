@@ -251,18 +251,52 @@ def _ejecutar_proceso_completo_sync(
 
             success = resultado_sap_envio.get("success", False)
             doc_entry = resultado_sap_envio.get("doc_entry")
-            doc_num = resultado_sap_envio.get("doc_num")
+            doc_num_po = resultado_sap_envio.get("doc_num")  # DocNum de la PO en SAP
             error = resultado_sap_envio.get("error")
             error_code = resultado_sap_envio.get("error_code")
+
+            # DocNum a mostrar en UI: preferir el de la Solicitud de Transferencia (ITR), ej. 70214643
+            doc_num = doc_num_po
+            st = resultado_sap_envio.get("solicitudes_transferencia") or {}
+            resultados_st = st.get("resultados") or []
+            if resultados_st and resultados_st[0].get("doc_num") is not None:
+                doc_num = resultados_st[0]["doc_num"]
+
+            # Para el modal: lista solo doc_num + tienda_codigo (como en el correo), una fila por ITR
+            st_raw = resultado_sap_envio.get("solicitudes_transferencia") or {}
+            solicitudes_para_response = dict(st_raw) if st_raw else None
+            if solicitudes_para_response and solicitudes_para_response.get("resultados"):
+                solicitudes_para_response["itrs_por_tienda"] = [
+                    {
+                        "doc_num": r.get("doc_num"),
+                        "tienda_codigo": (r.get("tienda_codigo") or ""),
+                    }
+                    for r in solicitudes_para_response["resultados"]
+                ]
+
+            # Num ODC para el modal: valor de orden_compra_cabecera.numero_oc_sap (PO en SAP, ej. 22530)
+            # DocNum en el modal: número de documento ITR (ej. 70214734) — no confundir con numero_oc_sap
+            numero_oc_sap_cabecera = None
+            try:
+                oc_cabecera = oc_repo.get_existing_cabecera(oc_id)
+                if oc_cabecera and oc_cabecera.get("numero_oc_sap") is not None:
+                    numero_oc_sap_cabecera = str(oc_cabecera["numero_oc_sap"])
+            except Exception:
+                pass
+            # Fallback: si la cabecera no trae numero_oc_sap, usar el DocNum de la PO que devolvió SAP
+            if numero_oc_sap_cabecera is None and doc_num_po is not None:
+                numero_oc_sap_cabecera = str(doc_num_po)
 
             resultado_envio_sap = ProcesoCompletoSAPDetalleODC(
                 oc_id=oc_id,
                 proveedor=resultado_odc.get("proveedor"),
                 success=success,
+                numero_oc_sap=numero_oc_sap_cabecera,
                 doc_entry=doc_entry,
                 doc_num=doc_num,
                 error=error,
-                error_code=error_code
+                error_code=error_code,
+                solicitudes_transferencia=solicitudes_para_response,
             )
 
             if success:
@@ -286,6 +320,12 @@ def _ejecutar_proceso_completo_sync(
                 except Exception:
                     pass
 
+                num_itr = (solicitudes_para_response or {}).get("transferencias_creadas") or 0
+                if num_itr == 1:
+                    message_success = f"Proceso completado exitosamente. ODC enviada a SAP con DocNum: {doc_num}"
+                else:
+                    message_success = "Proceso completado exitosamente. ODC y solicitudes de transferencia enviadas a SAP"
+
                 return {
                     "_notify_sap": True,
                     "_notify_data": {
@@ -295,12 +335,13 @@ def _ejecutar_proceso_completo_sync(
                     },
                     "response": ProcesoCompletoSAPResponse(
                         status="success",
-                        message=f"Proceso completado exitosamente. ODC enviada a SAP con DocNum: {doc_num}",
+                        message=message_success,
                         pedido_id=pedido_id,
                         numero_pedido=numero_pedido,
                         redistribucion=resultado_redistribucion,
                         odc_generada=resultado_odc,
                         envio_sap=resultado_envio_sap,
+                        solicitudes_transferencia=solicitudes_para_response,
                         resumen=resumen,
                         fecha_proceso=ahora_naive(),
                         paso_fallido=None,
@@ -321,6 +362,7 @@ def _ejecutar_proceso_completo_sync(
                         redistribucion=resultado_redistribucion,
                         odc_generada=resultado_odc,
                         envio_sap=resultado_envio_sap,
+                        solicitudes_transferencia=solicitudes_para_response,
                         resumen=resumen,
                         fecha_proceso=ahora_naive(),
                         paso_fallido="envio_sap",

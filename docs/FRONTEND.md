@@ -2377,6 +2377,14 @@ interface ProcesamientoSAPResponse {
   fecha_procesamiento: string | null;
 }
 
+interface ConversionPorTiendaItem {
+  tienda_codigo: string;       // ej. TRL-BHO, RL-CD
+  tienda_nombre: string | null;
+  es_bodega: boolean;          // true si es bodega (RL-CD, OUT-CD, RG-CD)
+  cantidad_asignada: number;    // unidades originales
+  cantidad_sap: number;         // cantidad_asignada × unidad_conversion
+}
+
 interface ProductoSAPProcesamientoItem {
   procesamiento_detalle_id: string;
   pedido_detalle_id: string;
@@ -2399,6 +2407,7 @@ interface ProductoSAPProcesamientoItem {
   mensaje_error: string | null;  // ⭐ Mensaje de error si hubo problema
   fecha_procesamiento: string | null;  // ⭐ Fecha de procesamiento (ISO 8601)
   procesado_por: string | null;  // ⭐ Usuario que procesó
+  distribucion_conversion: ConversionPorTiendaItem[] | null;  // ⭐ Conversión por tienda/bodega (trazabilidad)
 }
 
 interface EstadisticasProcesamientoSAP {
@@ -2412,6 +2421,16 @@ interface EstadisticasProcesamientoSAP {
   total_precio_sap: number | null;
 }
 ```
+
+### Conversión por tienda/bodega (`distribucion_conversion`)
+
+Cada producto puede incluir `distribucion_conversion`: lista de conversiones por tienda y bodega para trazabilidad. Si existe, se recomienda mostrar por producto una tabla o filas con:
+
+- **Tienda/Bodega:** `tienda_codigo` y opcionalmente `tienda_nombre`; usar `es_bodega` para etiquetar (ej. "Bodega" vs "Tienda").
+- **Cantidad original:** `cantidad_asignada` (unidades del pedido).
+- **Cantidad SAP:** `cantidad_sap` (= cantidad_asignada × unidad_conversion).
+
+Así el usuario ve la conversión por cada destino en lugar de solo los totales. Si no hay distribución confirmada, `distribucion_conversion` viene `null`.
 
 ### Campo Nuevo: `descripcion_producto`
 
