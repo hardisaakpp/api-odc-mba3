@@ -1189,8 +1189,11 @@ class PedidoCabeceraRepository:
         solo_redistribucion_confirmada: bool = False
     ) -> Dict[str, Any]:
         """
-        Obtiene pedidos para la pantalla Revisar Redistribución:
-        Solo estados CONFIRMADO REDISTRIBUCION (10) y CONFIRMADO_ENVIADO (12).
+        Obtiene pedidos para la pantalla Revisar Redistribución.
+        
+        - Si `solo_redistribucion_confirmada` es True: solo incluye estado CONFIRMADO REDISTRIBUCION (10).
+        - En caso contrario: incluye todos los pedidos desde CONFIRMADO REDISTRIBUCION (10) en adelante,
+          excluyendo los estados CANCELADO (19) y CANCELADO POR EL RAYO (20).
         
         Esta función se usa en la interfaz /revisar-redistribucion que debe mostrar
         únicamente pedidos que ya pasaron por el proceso de redistribución.
@@ -1212,10 +1215,14 @@ class PedidoCabeceraRepository:
                     where_clause = "p.estado_id = ?"
                     params_list: List[Any] = [ESTADO_PEDIDO_CONFIRMADO]
                 else:
-                    # Filtrar solo estado: CONFIRMADO_ENVIADO (12)
-                    # Esta pantalla solo debe mostrar pedidos que ya fueron enviados
-                    where_clause = "p.estado_id = ?"
-                    params_list = [ESTADO_CONFIRMADO_ENVIADO]
+                    # Desde CONFIRMADO REDISTRIBUCION (10) en adelante,
+                    # excluyendo estados de cancelación (19, 20).
+                    where_clause = "p.estado_id >= ? AND p.estado_id NOT IN (?, ?)"
+                    params_list = [
+                        ESTADO_PEDIDO_CONFIRMADO,
+                        ESTADO_CANCELADO,
+                        ESTADO_CANCELADO_POR_EL_RAYO,
+                    ]
                 params: List[Any] = list(params_list)
                 count_query = f"SELECT COUNT(*) FROM pedido p WHERE {where_clause}"
                 cursor.execute(count_query, params)
@@ -1237,14 +1244,26 @@ class PedidoCabeceraRepository:
             else:
                 # Fallback para bases de datos sin columna estado_id (usando campo estado string)
                 if solo_redistribucion_confirmada:
-                    where_clause = "p.estado IN (?, ?)"
-                    params_list = ["PEDIDO_CONFIRMADO", "CONFIRMADO REDISTRIBUCION"]
+                    # Solo estados equivalentes a CONFIRMADO REDISTRIBUCION (10)
+                    where_clause = "p.estado IN (N'PEDIDO_CONFIRMADO', N'CONFIRMADO REDISTRIBUCION')"
+                    params_list: List[Any] = []
                 else:
-                    # Filtrar solo estado: CONFIRMADO_ENVIADO
-                    # Esta pantalla solo debe mostrar pedidos que ya fueron enviados
-                    where_clause = "p.estado = ?"
-                    params_list = ["CONFIRMADO_ENVIADO"]
-                params = list(params_list)
+                    # Estados desde CONFIRMADO REDISTRIBUCION (10) en adelante,
+                    # excluyendo cancelados. Usar strings legacy mapeados en LEGACY_STRING_TO_ID.
+                    where_clause = (
+                        "p.estado IN ("
+                        "N'PEDIDO_CONFIRMADO', "
+                        "N'CONFIRMADO REDISTRIBUCION', "
+                        "N'CONFIRMADO_ENVIADO', "
+                        "N'PENDIENTE_LOGISTICA', "
+                        "N'ERROR_DATOS_MAESTROS', "
+                        "N'DESPACHAR_Y_FACTURAR', "
+                        "N'DESPACHAR Y FACTURAR', "
+                        "N'FINALIZADO'"
+                        ")"
+                    )
+                    params_list = []
+                params: List[Any] = list(params_list)
                 count_query = f"SELECT COUNT(*) FROM pedido p WHERE {where_clause}"
                 cursor.execute(count_query, params)
                 result = cursor.fetchone()

@@ -60,6 +60,7 @@ def enriquecer_productos_con_pedido(
                     **producto_dist,
                     "codigo_interno": detalle_pedido.get("codigo_interno"),
                     "descripcion_sap": detalle_pedido.get("descripcion_sap"),
+                    "codigo_barras": detalle_pedido.get("codigo_barras"),
                 }
             )
         else:

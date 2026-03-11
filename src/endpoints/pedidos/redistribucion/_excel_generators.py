@@ -126,11 +126,12 @@ def generar_excel_distribucion(
     ws_resumen["A1"] = "RESUMEN DE PRODUCTOS - CANTIDADES"
     ws_resumen["A1"].font = title_font
     ws_resumen["A1"].fill = title_fill
-    ws_resumen.merge_cells("A1:E1")
+    ws_resumen.merge_cells("A1:F1")
 
     headers_resumen = [
         "Código Producto",
         "Descripción",
+        "CODIGO DE BARRAS",
         "Cantidad Solicitada",
         "Cantidad Confirmada",
         "Diferencia",
@@ -152,6 +153,7 @@ def generar_excel_distribucion(
     for producto in productos_enriquecidos:
         codigo_interno = producto.get("codigo_interno", "")
         descripcion = producto.get("descripcion_sap", "")
+        codigo_barras = producto.get("codigo_barras") or ""
         cantidad_solicitada = float(producto.get("cantidad_solicitada_total", 0) or 0)
         cantidad_confirmada = float(producto.get("cantidad_confirmada_total", 0) or 0)
         cantidad_asignada = float(producto.get("cantidad_asignada_total", 0) or 0)
@@ -163,23 +165,25 @@ def generar_excel_distribucion(
 
         ws_resumen.cell(row=row, column=1, value=codigo_interno)
         ws_resumen.cell(row=row, column=2, value=descripcion)
-        ws_resumen.cell(row=row, column=3, value=cantidad_solicitada)
-        ws_resumen.cell(row=row, column=4, value=cantidad_confirmada)
-        ws_resumen.cell(row=row, column=5, value=diferencia)
+        ws_resumen.cell(row=row, column=3, value=codigo_barras)
+        ws_resumen.cell(row=row, column=4, value=cantidad_solicitada)
+        ws_resumen.cell(row=row, column=5, value=cantidad_confirmada)
+        ws_resumen.cell(row=row, column=6, value=diferencia)
 
         row += 1
 
     row += 1
     ws_resumen.cell(row=row, column=1, value="TOTALES").font = Font(bold=True)
-    ws_resumen.cell(row=row, column=3, value=total_solicitada).font = Font(bold=True)
-    ws_resumen.cell(row=row, column=4, value=total_confirmada).font = Font(bold=True)
-    ws_resumen.cell(row=row, column=5, value=total_diferencia).font = Font(bold=True)
+    ws_resumen.cell(row=row, column=4, value=total_solicitada).font = Font(bold=True)
+    ws_resumen.cell(row=row, column=5, value=total_confirmada).font = Font(bold=True)
+    ws_resumen.cell(row=row, column=6, value=total_diferencia).font = Font(bold=True)
 
     ws_resumen.column_dimensions["A"].width = 20
     ws_resumen.column_dimensions["B"].width = 45
     ws_resumen.column_dimensions["C"].width = 18
     ws_resumen.column_dimensions["D"].width = 18
-    ws_resumen.column_dimensions["E"].width = 15
+    ws_resumen.column_dimensions["E"].width = 18
+    ws_resumen.column_dimensions["F"].width = 15
 
     if itr_por_tienda is None:
         itr_por_tienda = {}
@@ -188,11 +192,12 @@ def generar_excel_distribucion(
     ws_detalle["A1"] = "DISTRIBUCIÓN DETALLADA POR TIENDA"
     ws_detalle["A1"].font = title_font
     ws_detalle["A1"].fill = title_fill
-    ws_detalle.merge_cells("A1:H1")
+    ws_detalle.merge_cells("A1:I1")
 
     headers_detalle = [
         "Código Producto",
         "Descripción",
+        "CODIGO DE BARRAS",
         "Código Tienda",
         "Nombre Tienda",
         "Cantidad Asignada",
@@ -213,6 +218,7 @@ def generar_excel_distribucion(
     for producto in productos_enriquecidos:
         codigo_interno = producto.get("codigo_interno", "")
         descripcion = producto.get("descripcion_sap", "")
+        codigo_barras = producto.get("codigo_barras") or ""
         distribuciones = producto.get("distribuciones", [])
         # Costo unitario: misma fuente que vista normal/solo lectura (pedido_detalle.costo_doc_sin_iva)
         pedido_detalle_id = producto.get("pedido_detalle_id")
@@ -226,31 +232,34 @@ def generar_excel_distribucion(
             for dist in distribuciones:
                 ws_detalle.cell(row=row, column=1, value=codigo_interno)
                 ws_detalle.cell(row=row, column=2, value=descripcion)
+                ws_detalle.cell(row=row, column=3, value=codigo_barras)
                 tienda_codigo = dist.get("tienda_codigo", "")
-                ws_detalle.cell(row=row, column=3, value=tienda_codigo)
-                ws_detalle.cell(row=row, column=4, value=dist.get("tienda_nombre", ""))
-                ws_detalle.cell(row=row, column=5, value=dist.get("cantidad_asignada", 0))
-                ws_detalle.cell(row=row, column=6, value=costo_unitario)
-                ws_detalle.cell(row=row, column=7, value=dist.get("observaciones", ""))
+                ws_detalle.cell(row=row, column=4, value=tienda_codigo)
+                ws_detalle.cell(row=row, column=5, value=dist.get("tienda_nombre", ""))
+                ws_detalle.cell(row=row, column=6, value=dist.get("cantidad_asignada", 0))
+                ws_detalle.cell(row=row, column=7, value=costo_unitario)
+                ws_detalle.cell(row=row, column=8, value=dist.get("observaciones", ""))
                 # Número Solicitud Transferencia (DocNum del ITR en SAP)
                 doc_num_itr = itr_por_tienda.get(tienda_codigo)
-                ws_detalle.cell(row=row, column=8, value=doc_num_itr if doc_num_itr else "")
-                ws_detalle.cell(row=row, column=6).number_format = "#,##0.0000"
+                ws_detalle.cell(row=row, column=9, value=doc_num_itr if doc_num_itr else "")
+                ws_detalle.cell(row=row, column=7).number_format = "#,##0.0000"
                 row += 1
         else:
             ws_detalle.cell(row=row, column=1, value=codigo_interno)
             ws_detalle.cell(row=row, column=2, value=descripcion)
-            ws_detalle.cell(row=row, column=3, value="Sin distribución")
+            ws_detalle.cell(row=row, column=3, value=codigo_barras)
+            ws_detalle.cell(row=row, column=4, value="Sin distribución")
             row += 1
 
     ws_detalle.column_dimensions["A"].width = 20
     ws_detalle.column_dimensions["B"].width = 45
-    ws_detalle.column_dimensions["C"].width = 15
-    ws_detalle.column_dimensions["D"].width = 30
-    ws_detalle.column_dimensions["E"].width = 18
-    ws_detalle.column_dimensions["F"].width = 15
-    ws_detalle.column_dimensions["G"].width = 30
+    ws_detalle.column_dimensions["C"].width = 18
+    ws_detalle.column_dimensions["D"].width = 15
+    ws_detalle.column_dimensions["E"].width = 30
+    ws_detalle.column_dimensions["F"].width = 18
+    ws_detalle.column_dimensions["G"].width = 15
     ws_detalle.column_dimensions["H"].width = 30
+    ws_detalle.column_dimensions["I"].width = 30
 
     row = ws_cabecera.max_row + 2
     ws_cabecera[f"A{row}"] = "Descargado por:"
