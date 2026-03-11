@@ -194,9 +194,9 @@ def register_pedidos_estado_endpoints(app: FastAPI):
                         notification_type=NotificationType.INFO,
                         metadata={"pedido_id": pedido_id, "numero_pedido": numero_pedido, "accion": "despachar_y_facturar"},
                     )
-                    except Exception as notif_err:
-                        logger.warning(f"⚠️ Error al enviar notificación: {notif_err}")
-                
+                except Exception as notif_err:
+                    logger.warning(f"⚠️ Error al enviar notificación: {notif_err}")
+
                 # 📧 Email a MABEL TRADING (best-effort)
                 try:
                     from src.utils.email_notifier_pedido import send_despachar_y_facturar_notification
@@ -282,35 +282,35 @@ def register_pedidos_estado_endpoints(app: FastAPI):
                         notification_type=NotificationType.SUCCESS,
                         metadata={"pedido_id": pedido_id, "numero_pedido": numero_pedido, "accion": "finalizar"},
                     )
-                    except Exception as notif_err:
-                        logger.warning(f"⚠️ Error al enviar notificación: {notif_err}")
-                    
-                    # 📧 Email a EL RAYO (best-effort)
-                    try:
-                        from src.utils.email_notifier_pedido import send_finalizar_pedido_notification
+                except Exception as notif_err:
+                    logger.warning(f"⚠️ Error al enviar notificación: {notif_err}")
 
-                        usuario_mabel = user.get("username") or user.get("sub") or "unknown"
-                        email_enviado = send_finalizar_pedido_notification(
-                            pedido_id=pedido_id,
-                            numero_pedido=numero_pedido,
-                            usuario_mabel=usuario_mabel,
+                # 📧 Email a EL RAYO (best-effort)
+                try:
+                    from src.utils.email_notifier_pedido import send_finalizar_pedido_notification
+
+                    usuario_mabel = user.get("username") or user.get("sub") or "unknown"
+                    email_enviado = send_finalizar_pedido_notification(
+                        pedido_id=pedido_id,
+                        numero_pedido=numero_pedido,
+                        usuario_mabel=usuario_mabel,
+                    )
+                    if email_enviado:
+                        logger.info(
+                            f"📧 Email 'Pedido finalizado' enviado a OPERACIONES (EL RAYO) (Pedido: {numero_pedido})"
                         )
-                        if email_enviado:
-                            logger.info(
-                                f"📧 Email 'Pedido finalizado' enviado a OPERACIONES (EL RAYO) (Pedido: {numero_pedido})"
-                            )
-                        else:
-                            logger.warning(
-                                f"⚠️ No se pudo enviar email 'Pedido finalizado' a OPERACIONES (EL RAYO) (Pedido: {numero_pedido})"
-                            )
-                    except Exception as e:
+                    else:
                         logger.warning(
-                            f"⚠️ Error al enviar email 'Pedido finalizado' (no crítico): {e}",
-                            exc_info=True,
+                            f"⚠️ No se pudo enviar email 'Pedido finalizado' a OPERACIONES (EL RAYO) (Pedido: {numero_pedido})"
                         )
-                    
-                    from fastapi.responses import JSONResponse
-                    return JSONResponse(status_code=200, content=pedido)
+                except Exception as e:
+                    logger.warning(
+                        f"⚠️ Error al enviar email 'Pedido finalizado' (no crítico): {e}",
+                        exc_info=True,
+                    )
+
+                from fastapi.responses import JSONResponse
+                return JSONResponse(status_code=200, content=pedido)
         except HTTPException:
             raise
         except Exception as e:
