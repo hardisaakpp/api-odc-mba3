@@ -202,3 +202,47 @@ class SolicitudTransferenciaRepository:
         except Exception as e:
             logger.warning(f"No se pudo obtener doc_num ITR por oc_id (tabla puede no existir): {e}")
         return out
+
+    def get_detalle_by_solicitud_id(
+        self, solicitud_transferencia_id: str
+    ) -> List[Dict[str, Any]]:
+        """
+        Obtiene las filas de solicitud_transferencia_detalle para un batch de ST.
+        Sirve para reconstruir resultados e itrs_por_tienda del modal de integración SAP.
+
+        Args:
+            solicitud_transferencia_id: UUID del registro en solicitud_transferencia.
+
+        Returns:
+            Lista de dicts con tienda_codigo, tienda_nombre, doc_num, doc_entry, success, error.
+        """
+        if not solicitud_transferencia_id:
+            return []
+        out = []
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute(
+                """
+                SELECT tienda_codigo, tienda_nombre, estado, doc_num, doc_entry, error_mensaje
+                FROM solicitud_transferencia_detalle
+                WHERE solicitud_transferencia_id = ?
+                ORDER BY solicitud_transferencia_detalle_id
+                """,
+                (str(solicitud_transferencia_id),),
+            )
+            for row in cursor.fetchall():
+                estado = (row[2] or "").strip()
+                success = estado == "Creada"
+                out.append({
+                    "tienda_codigo": row[0] or "",
+                    "tienda_nombre": row[1],
+                    "estado": estado,
+                    "doc_num": row[3],
+                    "doc_entry": row[4],
+                    "success": success,
+                    "error": row[5] if not success else None,
+                })
+            cursor.close()
+        except Exception as e:
+            logger.warning(f"No se pudo obtener detalle ST por solicitud_id: {e}")
+        return out

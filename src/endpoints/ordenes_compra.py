@@ -16,6 +16,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from src.utils import get_source_from_headers
 from src.database.repositories.orden_compra_repository import OrdenCompraRepository
 from src.database.repositories.solicitud_transferencia_repository import SolicitudTransferenciaRepository
+from src.database.repositories.envio_odc_sap_repository import EnvioODCSAPRepository
 from src.database.repositories.sap_integration_log_repository import SAPIntegrationLogRepository
 from src.database.connection import get_db_connection, get_db_connection_context
 from src.database.clients.sap_client import SAPClient
@@ -1112,7 +1113,113 @@ def register_ordenes_compra_endpoints(app: FastAPI):
                 status_code=500,
                 detail=f"Error al obtener detalles de la orden de compra: {str(e)}"
             )
-    
+
+    @app.get("/ordenes-compra/{oc_id}/integracion-sap", tags=["Órdenes de Compra"])
+    async def get_orden_compra_integracion_sap(
+        request: Request,
+        oc_id: str = Path(..., description="UUID de la orden de compra"),
+        user: dict = Depends(verify_jwt_token),
+        _: None = Depends(require_any_permission(['odcsap.view', 'mabel.view']))
+    ):
+        """
+        Obtiene el detalle de integración SAP de una OC (envío a SAP + solicitudes de transferencia).
+        Misma estructura que la respuesta de proceso-completo-sap, para reutilizar en el modal
+        cuando se abre desde el botón "Num ODC" en la tabla.
+
+        **Path Parameters:**
+        - `oc_id` (string, requerido) - UUID de la orden de compra
+
+        **Respuesta:** envio_sap (con numero_oc_sap, doc_entry, doc_num, solicitudes_transferencia)
+        y solicitudes_transferencia (resultados, itrs_por_tienda) para mostrar la sección ITR completa.
+        """
+        source = get_source_from_headers(request)
+
+        def _fetch_integracion():
+            conn = get_db_connection()
+            try:
+                envio_repo = EnvioODCSAPRepository(conn)
+                st_repo = SolicitudTransferenciaRepository(conn)
+                oc_repo = OrdenCompraRepository(conn)
+
+                envio = envio_repo.get_by_oc_id(oc_id)
+                if not envio:
+                    return None
+
+                numero_oc_sap = envio.get("numero_oc_sap")
+                doc_entry = envio.get("doc_entry")
+                proveedor = envio.get("proveedor")
+                total_tiendas = envio.get("total_transferencias", 0)
+                transferencias_creadas = envio.get("transferencias_creadas", 0)
+                st_id = envio.get("solicitud_transferencia_id")
+
+                resultados = []
+                itrs_por_tienda = []
+                doc_num_first = None
+
+                if st_id:
+                    detalle_rows = st_repo.get_detalle_by_solicitud_id(st_id)
+                    for r in detalle_rows:
+                        resultados.append({
+                            "tienda_codigo": r.get("tienda_codigo", ""),
+                            "tienda_nombre": r.get("tienda_nombre"),
+                            "doc_num": r.get("doc_num"),
+                            "doc_entry": r.get("doc_entry"),
+                            "success": r.get("success", False),
+                            "error": r.get("error"),
+                        })
+                        if r.get("doc_num") is not None:
+                            itrs_por_tienda.append({
+                                "doc_num": r["doc_num"],
+                                "tienda_codigo": r.get("tienda_codigo", ""),
+                            })
+                            if doc_num_first is None:
+                                doc_num_first = r["doc_num"]
+
+                solicitudes_transferencia = {
+                    "total_tiendas": total_tiendas,
+                    "transferencias_creadas": transferencias_creadas,
+                    "resultados": resultados,
+                    "itrs_por_tienda": itrs_por_tienda,
+                }
+
+                envio_sap = {
+                    "oc_id": oc_id,
+                    "proveedor": proveedor,
+                    "success": True,
+                    "numero_oc_sap": numero_oc_sap,
+                    "doc_entry": doc_entry,
+                    "doc_num": doc_num_first,
+                    "solicitudes_transferencia": solicitudes_transferencia,
+                }
+
+                return {
+                    "envio_sap": envio_sap,
+                    "solicitudes_transferencia": solicitudes_transferencia,
+                }
+            finally:
+                conn.close()
+
+        try:
+            data = await asyncio.to_thread(_fetch_integracion)
+        except Exception as e:
+            logger.error(f"❌ Error al obtener integración SAP de OC {oc_id}: {e}", exc_info=True)
+            raise HTTPException(
+                status_code=500,
+                detail=f"Error al obtener detalle de integración SAP: {str(e)}"
+            )
+
+        if data is None:
+            raise HTTPException(
+                status_code=404,
+                detail="No se encontró registro de integración SAP para esta orden de compra. Solo existe para OCs ya enviadas a SAP."
+            )
+
+        return JSONResponse(
+            status_code=200,
+            content=data,
+            headers={"X-Source": source, "X-Endpoint": "GET-ORDEN-COMPRA-INTEGRACION-SAP"}
+        )
+
     @app.get("/ordenes-compra/{oc_id}/pdf", tags=["Órdenes de Compra"])
     async def get_orden_compra_pdf(
         request: Request,

@@ -3,7 +3,7 @@ Repositorio para persistir el snapshot de cada envío ODC a SAP (información qu
 """
 
 import logging
-from typing import Optional
+from typing import Optional, Dict, Any
 
 logger = logging.getLogger(__name__)
 
@@ -80,4 +80,49 @@ class EnvioODCSAPRepository:
                 self.conn.rollback()
             except Exception:
                 pass
+            return None
+
+    def get_by_oc_id(self, oc_id: str) -> Optional[Dict[str, Any]]:
+        """
+        Obtiene el registro de envio_odc_sap para una OC (el más reciente si hay varios).
+
+        Args:
+            oc_id: UUID de la orden de compra.
+
+        Returns:
+            Dict con oc_id, pedido_id, numero_oc_sap, doc_entry, proveedor, solicitud_transferencia_id,
+            total_transferencias, transferencias_creadas, etc. None si no existe.
+        """
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute(
+                """
+                SELECT TOP 1 envio_odc_sap_id, oc_id, pedido_id, numero_oc_sap, doc_entry,
+                       proveedor, referencia, numero_pedido, solicitud_transferencia_id,
+                       total_transferencias, transferencias_creadas
+                FROM envio_odc_sap
+                WHERE oc_id = ?
+                ORDER BY envio_odc_sap_id DESC
+                """,
+                (str(oc_id),),
+            )
+            row = cursor.fetchone()
+            cursor.close()
+            if not row:
+                return None
+            return {
+                "envio_odc_sap_id": str(row[0]) if row[0] else None,
+                "oc_id": str(row[1]) if row[1] else None,
+                "pedido_id": str(row[2]) if row[2] else None,
+                "numero_oc_sap": str(row[3]) if row[3] is not None else None,
+                "doc_entry": row[4],
+                "proveedor": row[5],
+                "referencia": row[6],
+                "numero_pedido": row[7],
+                "solicitud_transferencia_id": str(row[8]) if row[8] else None,
+                "total_transferencias": row[9] or 0,
+                "transferencias_creadas": row[10] or 0,
+            }
+        except Exception as e:
+            logger.warning(f"No se pudo obtener envio_odc_sap por oc_id: {e}")
             return None
