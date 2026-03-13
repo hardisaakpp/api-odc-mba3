@@ -201,6 +201,10 @@ def register_pedidos_listado_endpoints(app: FastAPI):
                         "fecha_entrega": row.get("fecha_entrega"),
                         "estado": row.get("estado"),
                         "proveedor_nombre": row.get("proveedor_nombre"),
+                        # Nombre del comprador (para columna COMPRADOR en frontend)
+                        "comprador_nombre": row.get("comprador_nombre"),
+                        # Alias genérico por compatibilidad con posibles UIs
+                        "comprador": row.get("comprador_nombre"),
                         "creado_por": row.get("creado_por"),
                         "creado_en": row.get("creado_en"),
                     },
