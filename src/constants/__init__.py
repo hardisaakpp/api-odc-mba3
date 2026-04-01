@@ -1,0 +1,1 @@
+# Constantes compartidas del proyecto.

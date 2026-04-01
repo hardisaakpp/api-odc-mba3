@@ -7,10 +7,33 @@ CHANGELOG:
 
 import logging
 import pyodbc
-from typing import Dict, Any, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 from datetime import datetime, date
 
+from src.constants.pedido_fields import MAX_PEDIDO_MENSAJE_LENGTH
+
 logger = logging.getLogger(__name__)
+
+_MENSAJE_TABLAS: Tuple[str, ...] = ("pedido", "pedido_original")
+
+
+def clamp_pedido_mensaje(value: Any, *, max_length: Optional[int] = None) -> Any:
+    """Trunca mensaje al máximo efectivo (columna SQL o techo de app). Evita error 2628."""
+    cap = max_length if max_length is not None else MAX_PEDIDO_MENSAJE_LENGTH
+    if cap <= 0:
+        cap = MAX_PEDIDO_MENSAJE_LENGTH
+    cap = min(cap, MAX_PEDIDO_MENSAJE_LENGTH)
+    if value is None:
+        return None
+    s = value if isinstance(value, str) else str(value)
+    if len(s) <= cap:
+        return s
+    logger.warning(
+        "pedido.mensaje truncado de %d a %d caracteres (límite efectivo)",
+        len(s),
+        cap,
+    )
+    return s[:cap]
 
 
 class PedidoUtils:
@@ -28,6 +51,30 @@ class PedidoUtils:
         self._tiene_estado_cache: Optional[bool] = None
         self._tiene_estado_id_cache: Optional[bool] = None
         self._tiene_es_bodega_cache: Optional[bool] = None
+        self._mensaje_col_max_cache: Dict[str, int] = {}
+
+    def get_mensaje_column_max_len(self, cursor: pyodbc.Cursor, table_name: str) -> int:
+        """CHARACTER_MAXIMUM_LENGTH de dbo.<tabla>.mensaje (-1 MAX → techo app)."""
+        if table_name not in _MENSAJE_TABLAS:
+            return MAX_PEDIDO_MENSAJE_LENGTH
+        if table_name in self._mensaje_col_max_cache:
+            return self._mensaje_col_max_cache[table_name]
+        cursor.execute(
+            """
+            SELECT CHARACTER_MAXIMUM_LENGTH
+            FROM INFORMATION_SCHEMA.COLUMNS
+            WHERE TABLE_SCHEMA = 'dbo' AND TABLE_NAME = ? AND COLUMN_NAME = 'mensaje'
+            """,
+            (table_name,),
+        )
+        row = cursor.fetchone()
+        raw = row[0] if row else None
+        if raw is None or raw == -1:
+            effective = MAX_PEDIDO_MENSAJE_LENGTH
+        else:
+            effective = min(int(raw), MAX_PEDIDO_MENSAJE_LENGTH)
+        self._mensaje_col_max_cache[table_name] = effective
+        return effective
 
     def tiene_columna_estado_id(self, cursor: pyodbc.Cursor) -> bool:
         """

@@ -14,6 +14,8 @@ import logging
 import pyodbc
 from typing import Dict, Any, List, Optional
 
+from src.database.repositories.pedido.pedido_utils import PedidoUtils, clamp_pedido_mensaje
+
 logger = logging.getLogger(__name__)
 
 
@@ -61,6 +63,9 @@ class PedidoOriginalRepository:
                 logger.info(f"ℹ️ Snapshot original ya existe para pedido {pedido_id}")
                 return str(row[0])
 
+            utils = PedidoUtils(self.conn)
+            max_mensaje_orig = utils.get_mensaje_column_max_len(cursor, "pedido_original")
+
             # --- Insertar cabecera original ---
             cursor.execute(
                 """
@@ -79,7 +84,10 @@ class PedidoOriginalRepository:
                     cabecera.get("fecha_pedido"),
                     cabecera.get("fecha_entrega"),
                     cabecera.get("forma_pago"),
-                    cabecera.get("mensaje"),
+                    clamp_pedido_mensaje(
+                        cabecera.get("mensaje"),
+                        max_length=max_mensaje_orig,
+                    ),
                     cabecera.get("proveedor_nombre"),
                     cabecera.get("comprador_nombre"),
                     cabecera.get("comprador_codigo"),

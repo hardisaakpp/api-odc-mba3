@@ -14,7 +14,7 @@ from datetime import date, datetime
 
 from src.utils.timezone import ahora_naive
 
-from .pedido_utils import PedidoUtils
+from .pedido_utils import PedidoUtils, clamp_pedido_mensaje
 
 from src.database.pedido_estados import (
     ESTADO_BORRADOR,
@@ -86,9 +86,15 @@ class PedidoCabeceraRepository:
             fecha_entrega = datos_cabecera_normalizado["fecha_entrega"]
             if fecha_entrega is not None and not isinstance(fecha_entrega, str):
                 datos_cabecera_normalizado["fecha_entrega"] = self.utils.normalizar_fecha(fecha_entrega)
-        
+
         cursor = self.conn.cursor()
-        
+        max_mensaje = self.utils.get_mensaje_column_max_len(cursor, "pedido")
+        if "mensaje" in datos_cabecera_normalizado:
+            datos_cabecera_normalizado["mensaje"] = clamp_pedido_mensaje(
+                datos_cabecera_normalizado.get("mensaje"),
+                max_length=max_mensaje,
+            )
+
         try:
             cursor.execute("SELECT NEWID()")
             uuid_result = cursor.fetchone()
@@ -785,7 +791,14 @@ class PedidoCabeceraRepository:
                 fp = merged["fecha_pedido"]
                 if isinstance(fp, date):
                     merged["fecha_pedido"] = fp.isoformat()
-            
+
+            if "mensaje" in merged:
+                max_m = self.utils.get_mensaje_column_max_len(cursor, "pedido")
+                merged["mensaje"] = clamp_pedido_mensaje(
+                    merged.get("mensaje"),
+                    max_length=max_m,
+                )
+
             # Campos de auditoría
             modificado_por = audit.get_modificado_por()
             modificado_fecha = ahora_naive()
