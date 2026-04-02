@@ -24,9 +24,6 @@ import uvicorn
 import sys
 from pathlib import Path
 
-from dotenv import load_dotenv
-load_dotenv("/opt/odc-sap/.env")
-
 # Agregar el directorio src al PYTHONPATH si no está
 # Esto permite ejecutar el script directamente con: python src/api_server.py
 src_dir = Path(__file__).parent
@@ -50,10 +47,13 @@ from src.config import (
     ENABLE_CORS_RESTRICTION,
     CORS_ALLOWED_ORIGINS,
     ENVIRONMENT,
+    ENV_FILE_USED,
     HIDE_SWAGGER_IN_PROD,
     ENABLE_SQL_SERVER_STORAGE
 )
 from src.security.rate_limit import setup_rate_limiting
+
+logger.info(f"🌿 Ambiente activo: {ENVIRONMENT} | env file: {ENV_FILE_USED}")
 
 # Crear aplicación FastAPI
 app = FastAPI(

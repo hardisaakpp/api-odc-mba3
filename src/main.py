@@ -17,22 +17,27 @@ Según documentación técnica de MBA3:
 import os
 import sys
 import argparse
-from dotenv import load_dotenv
-from pathlib import Path
 from src.mba3_client import MBA3Client
 from src.mba3_query_client import MBA3APIClient
+from src.config import (
+    MBA3_BASE_URL,
+    MBA3_SERVICE_CODE,
+    MBA3_SERVICE_PASSWORD,
+    MBA3_DIGEST_USERNAME,
+    MBA3_DIGEST_PASSWORD,
+    RESULTADO_API_FILE,
+    ENV_FILE_USED,
+)
 
-load_dotenv(dotenv_path=Path(__file__).resolve().parents[1] / ".env")
-
-BASE_URL = os.getenv("MBA3_BASE_URL")
-CODIGO = os.getenv("MBA3_CODIGO")
-PWD = os.getenv("MBA3_PWD")
-DIGEST_USERNAME = os.getenv("MBA3_DIGEST_USERNAME", CODIGO)  # Por defecto usa CODIGO
-DIGEST_PASSWORD = os.getenv("MBA3_DIGEST_PASSWORD", PWD)  # Por defecto usa PWD
+BASE_URL = MBA3_BASE_URL
+CODIGO = MBA3_SERVICE_CODE
+PWD = MBA3_SERVICE_PASSWORD
+DIGEST_USERNAME = MBA3_DIGEST_USERNAME
+DIGEST_PASSWORD = MBA3_DIGEST_PASSWORD
 QUERY = os.getenv("MBA3_QUERY", None)  # Consulta SQL opcional desde .env
 
 if not (BASE_URL and CODIGO and PWD):
-    raise SystemExit("Falta configurar BASE_URL, CODIGO o PWD en .env")
+    raise SystemExit(f"Falta configurar BASE_URL, CODIGO o PWD en {ENV_FILE_USED}")
 
 
 def do_login():
@@ -43,7 +48,7 @@ def do_login():
         JWT token como string, o None si hay error
     """
     if not BASE_URL or not CODIGO or not PWD:
-        raise SystemExit("Falta configurar BASE_URL, CODIGO o PWD en .env")
+        raise SystemExit(f"Falta configurar BASE_URL, CODIGO o PWD en {ENV_FILE_USED}")
     
     client = MBA3Client(BASE_URL)
     try:
@@ -79,7 +84,7 @@ def do_query(query: str | None = None):
         if not query:
             # Consulta por defecto de ejemplo
             query = "select CODIGO_FACTURA,ANULADA,NUMERO_PEDIDO_SISTEMA,NUMERO_ORDEN,NUMERO_FACTURA,CODIGO_DESPACHO,EMPRESA,CODIGO_CLIENTE,FECHA_FACTURA,TIPO_DOCUMENTO,ObjDatosFactura,ORDEN_COMPRA,ORDEN_COMPRA_CLIENTE,Remision_Facturada,NumIDFacturaRelacionada from CLNT_FACTURA_PRINCIPAL where NUMERO_PEDIDO_SISTEMA='176120'"
-            print("[INFO] Usando consulta por defecto. Configura MBA3_QUERY en .env para usar otra consulta.")
+            print(f"[INFO] Usando consulta por defecto. Configura MBA3_QUERY en {ENV_FILE_USED} para usar otra consulta.")
     
     # Verificar que query no sea None después de las asignaciones
     if not query:
@@ -87,7 +92,7 @@ def do_query(query: str | None = None):
     
     # Verificar que las variables de configuración no sean None
     if not BASE_URL or not CODIGO or not PWD:
-        raise SystemExit("Falta configurar BASE_URL, CODIGO o PWD en .env")
+        raise SystemExit(f"Falta configurar BASE_URL, CODIGO o PWD en {ENV_FILE_USED}")
     
     # Asegurar que DIGEST_USERNAME y DIGEST_PASSWORD no sean None
     digest_user = DIGEST_USERNAME if DIGEST_USERNAME else CODIGO
@@ -126,7 +131,6 @@ def do_query(query: str | None = None):
         print(result_json)
         
         # Guardar resultado en archivo JSON
-        from src.config import RESULTADO_API_FILE
         try:
             with open(RESULTADO_API_FILE, 'w', encoding='utf-8') as f:
                 json.dump(result, f, indent=2, ensure_ascii=False)

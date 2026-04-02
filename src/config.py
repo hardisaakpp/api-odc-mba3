@@ -23,14 +23,61 @@ QUERY_STORAGE_FILE = PROJECT_ROOT / "ultima_consulta.json"
 # Siempre en la raÃ­z del proyecto
 RESULTADO_API_FILE = PROJECT_ROOT / "resultado_api.json"
 
-# Cargar variables de entorno desde .env si existe
-env_path = Path(__file__).resolve().parent.parent / ".env"
-if env_path.exists():
-    load_dotenv(env_path)
-    # print(f"âœ… Variables de entorno cargadas desde: {env_path}")
-else:
-    # print(f"âš ï¸ Archivo .env no encontrado en: {env_path}")
-    pass
+def _normalize_environment(env_value: str) -> str:
+    """Normaliza aliases de ambiente a un set acotado."""
+    env = (env_value or "").strip().lower()
+    mapping = {
+        "dev": "development",
+        "develop": "development",
+        "development": "development",
+        "qa": "test",
+        "testing": "test",
+        "test": "test",
+        "prod": "production",
+        "production": "production",
+        "stage": "staging",
+        "staging": "staging",
+    }
+    return mapping.get(env, "development")
+
+
+def _resolve_env_file(project_root: Path) -> tuple[str, Path]:
+    """
+    Resuelve el ambiente y archivo de entorno a cargar.
+
+    Validación estricta (sin fallback a `.env`):
+
+    1) Si existe ENV_FILE -> ese archivo debe existir.
+    2) Si no -> debe existir `.env.develop` | `.env.test` | `.env.staging` | `.env.production`
+       según ENVIRONMENT (normalizado).
+    """
+    env_hint = os.getenv("ENVIRONMENT", "development")
+    normalized_env = _normalize_environment(env_hint)
+
+    explicit_env_file = os.getenv("ENV_FILE", "").strip()
+    if explicit_env_file:
+        explicit_path = Path(explicit_env_file).expanduser()
+        if not explicit_path.is_absolute():
+            explicit_path = project_root / explicit_path
+        if not explicit_path.is_file():
+            raise FileNotFoundError(
+                f"ENV_FILE apunta a un archivo inexistente: {explicit_path}"
+            )
+        return normalized_env, explicit_path
+
+    env_file_suffix = "develop" if normalized_env == "development" else normalized_env
+    env_file = project_root / f".env.{env_file_suffix}"
+    if not env_file.is_file():
+        raise FileNotFoundError(
+            f"Archivo de entorno obligatorio no encontrado: {env_file}\n"
+            f"Ambiente: {normalized_env} (ENVIRONMENT={env_hint!r}). "
+            "Crea ese archivo en la raíz del proyecto o define ENV_FILE con la ruta a tu .env."
+        )
+    return normalized_env, env_file
+
+
+APP_ENV, ENV_FILE_USED = _resolve_env_file(PROJECT_ROOT)
+load_dotenv(ENV_FILE_USED)
 
 # ============================================================================
 # ConfiguraciÃ³n de MBA3
@@ -170,7 +217,7 @@ ENABLE_CORS_RESTRICTION = os.getenv("ENABLE_CORS_RESTRICTION", "false").lower() 
 CORS_ALLOWED_ORIGINS = os.getenv("CORS_ALLOWED_ORIGINS", "*").split(",")  # Lista separada por comas
 
 # Ocultar Swagger en producciÃ³n
-ENVIRONMENT = os.getenv("ENVIRONMENT", "development")  # development, staging, production
+ENVIRONMENT = APP_ENV  # development, test, staging, production
 HIDE_SWAGGER_IN_PROD = os.getenv("HIDE_SWAGGER_IN_PROD", "true").lower() == "true"
 
 # ============================================================================
@@ -399,6 +446,6 @@ MBA3_QUERY_REMISIONES = (
 # ConfiguraciÃ³n de Staging de Productos
 # ============================================================================
 # Activar staging para productos (maestros MBA3 y SAP)
-USE_PRODUCT_STAGING = os.getenv("USE_PRODUCT_STAGING", "true").lower() == "true"# Permitir fallback a ERP si staging falla (solo en desarrollo)
-ENVIRONMENT = os.getenv("ENVIRONMENT", "production")  # 'development' | 'production'
+USE_PRODUCT_STAGING = os.getenv("USE_PRODUCT_STAGING", "true").lower() == "true"
+# Permitir fallback a ERP si staging falla (solo fuera de producción)
 ALLOW_ERP_FALLBACK = os.getenv("ALLOW_ERP_FALLBACK", "false").lower() == "true" and ENVIRONMENT != "production"

@@ -25,8 +25,8 @@ venv\Scripts\activate  # Windows
 pip install -r requirements.txt
 
 # 4. Configurar variables de entorno
-# Crear archivo .env con las credenciales necesarias
-# Ver docs/CONFIGURACION.md para detalles
+# Crear .env.develop / .env.test / .env.production según ambiente (obligatorios; ver CONFIGURACION.md)
+# Arrancar con ENVIRONMENT acorde o usar .\run-dev.ps1 / .\run-test.ps1 / .\run-prod.ps1
 
 # 5. Inicializar base de datos (primera vez)
 python scripts/migration_runner.py --dry-run  # Validar
