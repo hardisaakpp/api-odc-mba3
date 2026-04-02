@@ -1237,7 +1237,7 @@ class PedidoCabeceraRepository:
                     ESTADO_CANCELADO,
                     ESTADO_CANCELADO_POR_EL_RAYO,
                 ]
-                params: List[Any] = list(params_list)
+                params = list(params_list)
                 count_query = f"SELECT COUNT(*) FROM pedido p WHERE {where_clause}"
                 cursor.execute(count_query, params)
                 result = cursor.fetchone()
