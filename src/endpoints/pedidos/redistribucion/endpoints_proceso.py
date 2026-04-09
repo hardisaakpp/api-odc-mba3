@@ -297,6 +297,7 @@ def _ejecutar_proceso_completo_sync(
                 error=error,
                 error_code=error_code,
                 solicitudes_transferencia=solicitudes_para_response,
+                retry_recommended=resultado_sap_envio.get("retry_recommended"),
             )
 
             if success:

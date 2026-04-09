@@ -152,7 +152,7 @@ sqlcmd -S localhost -d mba3_consultas -Q "SELECT * FROM sys.tables WHERE name = 
 sqlcmd -S localhost -d mba3_consultas -Q "SELECT COUNT(*) FROM despacho_detalle"
 
 # Si el resultado es 0, primero ejecutar migración de despachos:
-curl -X GET "http://localhost:8000/migrar" -H "Authorization: Bearer $TOKEN"
+curl -X GET "http://localhost:8000/migrar/completo" -H "Authorization: Bearer $TOKEN"
 ```
 
 ---

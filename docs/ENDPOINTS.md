@@ -28,13 +28,17 @@ Consulta despachos desde MBA3 (solo lectura, no guarda en BD).
 
 ---
 
-### Migrar Despachos
+### Migrar Despachos (consulta + guardado)
 
-**GET `/migrar`**
+**GET `/migrar/completo`**
 
-Consulta desde MBA3 y guarda en `despacho_cabecera`/`despacho_detalle`.
+Consulta desde MBA3 (query predefinida con filtro de fechas) y guarda en `despacho_cabecera`/`despacho_detalle`. Es el paso típico del frontend para “migrar en un solo paso”.
 
-**Respuesta:**
+**POST `/migrar`**
+
+Persiste en base de datos un cuerpo JSON con los datos ya obtenidos (equivalente a “solo guardar”). Útil en flujos en dos pasos: primero `GET /consultar`, luego envío del payload a `POST /migrar`.
+
+**Respuesta (ejemplo alineado con migración completa):**
 ```json
 {
   "data": [...],
@@ -455,6 +459,28 @@ Este endpoint permite:
 
 ---
 
+## Gestión de pedidos (`/api/pedidos` y `POST /pedidos/importar-excel`)
+
+Los pedidos se exponen principalmente bajo **`/api/pedidos`** (JWT y permisos según operación). La lista exhaustiva y los esquemas están en **Swagger** (`/docs`).
+
+**Ejemplos de rutas (no exhaustivo):**
+
+| Método | Ruta | Descripción breve |
+|--------|------|-------------------|
+| POST | `/pedidos/importar-excel` | Importar desde Excel |
+| GET | `/api/pedidos` | Listado con filtros |
+| GET | `/api/pedidos/{id o número}` | Detalle (según handler) |
+| POST | `/api/pedidos` | Crear pedido |
+| PUT | `/api/pedidos/{pedido_id}` | Actualizar |
+| POST | `/api/pedidos/{pedido_id}/enviar` | Enviar flujo de envío |
+| GET/POST | `/api/pedidos/.../redistribucion/...` | Borradores y flujo de redistribución |
+| POST | `/api/pedidos/{numero_pedido}/proceso-completo-sap` | Proceso SAP completo (sync) |
+| GET | `/api/pedidos/proceso-sap/resultado/{process_id}` | Resultado de proceso async |
+
+**Documentación de apoyo:** estados y reglas de negocio en [ESTADOS_PEDIDO.md](ESTADOS_PEDIDO.md); permisos en [PERMISOS_Y_CAPABILITIES.md](PERMISOS_Y_CAPABILITIES.md); notificaciones en tiempo real en [NOTIFICACIONES_SSE.md](NOTIFICACIONES_SSE.md); refactor y módulos en [REFACTORIZACION_PEDIDOS_CRUD.md](REFACTORIZACION_PEDIDOS_CRUD.md).
+
+---
+
 ## 🔄 Homologaciones SKU
 
 ### Listar Homologaciones
@@ -661,10 +687,10 @@ Authorization: Bearer {JWT_TOKEN}
 
 ## 📋 Flujo Completo de Procesamiento
 
-El sistema está diseñado con **4 endpoints principales** que forman un flujo completo:
+El sistema está diseñado con **4 pasos principales** que forman un flujo completo:
 
 1. **GET `/consultar`** - Consultar datos desde MBA3 (solo lectura)
-2. **GET `/migrar`** - Consultar y guardar en base de datos
+2. **GET `/migrar/completo`** - Consultar MBA3 y guardar en base de datos (o **POST `/migrar`** si ya tienes el JSON de despachos)
 3. **GET `/procesar-oc`** - Copiar despachos a órdenes de compra
 4. **POST `/integrar-sap`** - Enviar ODCs a SAP Service Layer
 

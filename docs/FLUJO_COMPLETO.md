@@ -7,7 +7,7 @@ Este documento describe el flujo completo de procesamiento de despachos desde MB
 El sistema está diseñado con **4 endpoints principales** que forman un flujo secuencial:
 
 ```
-1. CONSULTAR → 2. MIGRAR → 3. PROCESAR → 4. INTEGRAR
+1. CONSULTAR → 2. MIGRAR COMPLETO (GET /migrar/completo o POST /migrar) → 3. PROCESAR → 4. INTEGRAR
 ```
 
 Cada endpoint tiene una responsabilidad específica y puede ejecutarse de forma independiente.
@@ -51,24 +51,26 @@ GET /consultar
 
 ---
 
-### 2. MIGRAR - `GET /migrar`
+### 2. MIGRAR - `GET /migrar/completo` (o `POST /migrar`)
 
-**Responsabilidad:** Consultar y guardar en base de datos
+**Responsabilidad:** Persistir despachos en SQL Server
 
-**Qué hace:**
-- Consulta despachos desde MBA3
+**Opción A — `GET /migrar/completo` (flujo habitual):**
+- Consulta despachos desde MBA3 con la query predefinida y filtro de fechas (`MIGRATE_DATE_FILTER_DAYS`)
 - Guarda en `despacho_cabecera`/`despacho_detalle`
-- Consulta información de productos en SAP (ItemCode, Pack, conversiones)
-- Calcula cantidades y precios en unidades SAP
+- Enriquecimiento con datos SAP (ItemCode, pack, conversiones) según la implementación actual del servicio
 - Retorna datos y metadata del guardado
+
+**Opción B — `POST /migrar`:**
+- Recibe en el cuerpo el JSON de facturas/despachos (por ejemplo tras `GET /consultar`) y los guarda sin volver a consultar MBA3
 
 **Cuándo usarlo:**
 - Para migrar datos desde MBA3 a SQL Server
-- Cuando necesitas guardar despachos para procesamiento posterior
+- Cuando necesitas guardar despachos para el paso **Procesar** (`/procesar-oc`)
 
 **Ejemplo:**
 ```bash
-GET /migrar
+GET /migrar/completo
 ```
 
 **Respuesta:**
@@ -133,7 +135,7 @@ GET /procesar-oc
 **Estados de ODC:**
 - `PENDIENTE`: Creada pero no enviada a SAP (estado inicial)
 
-**📖 Para detalles técnicos del mapeo de campos y estructura de tablas, ver [ORDEN_COMPRA_COPIA.md](ORDEN_COMPRA_COPIA.md)**
+**📖 Para tablas y relaciones:** [ESTRUCTURA_BD_PEDIDOS.md](ESTRUCTURA_BD_PEDIDOS.md) y [INTEGRACION_SAP.md](INTEGRACION_SAP.md) (envío a Service Layer).
 
 ---
 
@@ -232,7 +234,7 @@ POST /integrar-sap
 GET /consultar
 
 # Paso 2: Migrar (consulta + guarda)
-GET /migrar
+GET /migrar/completo
 
 # Paso 3: Procesar (copia a OC)
 GET /procesar-oc
@@ -245,7 +247,7 @@ POST /integrar-sap
 
 ```bash
 # Paso 1: Migrar (consulta + guarda)
-GET /migrar
+GET /migrar/completo
 
 # Paso 2: Procesar (copia a OC)
 GET /procesar-oc
@@ -343,5 +345,5 @@ ORDER BY updated_at DESC;
 - [Endpoints](ENDPOINTS.md) - Documentación completa de todos los endpoints
 - [Configuración](CONFIGURACION.md) - Variables de entorno y setup
 - [Integración SAP](INTEGRACION_SAP.md) - Configuración e integración con SAP
-- [Orden de Compra](ORDEN_COMPRA_COPIA.md) - Detalles técnicos del mapeo de campos (Paso 3)
+- [Estructura BD](ESTRUCTURA_BD_PEDIDOS.md) - Tablas y relaciones (incluye contexto de ODC)
 

@@ -19,6 +19,25 @@ from ..mappers.sap_oc_mapper import SAPOCMapper
 logger = logging.getLogger(__name__)
 
 
+def _mensaje_sugiere_reintento_sap(mensaje: str) -> bool:
+    """True si el texto describe un fallo típicamente transitorio hacia SAP SL (red, SL caído)."""
+    if not mensaje:
+        return False
+    m = mensaje.lower()
+    needles = (
+        "conexión",
+        "conexion",
+        "connection",
+        "timeout",
+        "remote",
+        "disconnected",
+        "sin respuesta",
+        "no se pudo establecer conexión",
+        "no se pudo establecer conexion",
+    )
+    return any(n in m for n in needles)
+
+
 class OCSAPService:
     """Servicio para enviar órdenes de compra a SAP Service Layer."""
     
@@ -280,6 +299,8 @@ class OCSAPService:
                 result["error_source"] = "SAP_VALIDATION"
                 result["prevalidacion_detalle"] = prevalidacion.get("detalle_validacion")
                 result["prevalidacion_resumen"] = prevalidacion.get("resumen")
+                if any(_mensaje_sugiere_reintento_sap(e) for e in errores_prevalidacion):
+                    result["retry_recommended"] = True
                 
                 logger.error(f"❌ {error_msg}")
                 try:
@@ -368,6 +389,7 @@ class OCSAPService:
                 result["error"] = error_msg
                 result["error_message"] = error_msg  # Alias para compatibilidad con frontend
                 result["error_source"] = "SAP_CONNECTION"
+                result["retry_recommended"] = True
                 logger.error(f"❌ {result['error']}")
                 try:
                     oc_repo.update_estado(
@@ -398,6 +420,8 @@ class OCSAPService:
                 result["error_code"] = error_code
                 result["sap_error_details"] = sap_error_details
                 result["error_source"] = "SAP"  # Indicar que el error viene de SAP
+                if _mensaje_sugiere_reintento_sap(error_msg):
+                    result["retry_recommended"] = True
                 
                 logger.error(f"❌ {result['error']}")
                 try:

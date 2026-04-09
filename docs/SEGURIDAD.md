@@ -108,16 +108,16 @@ async def get_despachos_count(
 ```python
 from security.jwt_auth import verify_jwt_token, require_permission
 
-@app.get("/migrar")
+@app.get("/migrar/completo")
 async def migrar_despachos(
     request: Request,
     user: dict = Depends(verify_jwt_token),  # ✅ Requiere JWT válido
-    _: None = Depends(require_permission('mba3_consultas.migrar'))  # ✅ Requiere permiso
+    _: None = Depends(require_permission('mabel.view'))  # ✅ Ejemplo alineado con el endpoint real
 ):
     """
     Endpoint que requiere:
     1. Token JWT válido
-    2. Permiso específico 'mba3_consultas.migrar'
+    2. Permiso específico (ej.: 'mabel.view' en migración completa)
     """
     return {"status": "success"}
 ```

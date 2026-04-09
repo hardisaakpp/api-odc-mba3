@@ -141,10 +141,12 @@ Invoke-RestMethod -Uri "http://localhost:8000/health" -Method Get
 Invoke-RestMethod -Uri "http://localhost:8000/consultar" -Method Get
 ```
 
-#### 3. Migrar Despachos (GET /migrar)
+#### 3. Migrar Despachos (GET /migrar/completo)
+
+Requiere JWT con permiso `mabel.view` (igual que en el navegador/Swagger).
 
 ```powershell
-Invoke-RestMethod -Uri "http://localhost:8000/migrar" -Method Get
+Invoke-RestMethod -Uri "http://localhost:8000/migrar/completo" -Method Get -Headers @{ Authorization = "Bearer TU_JWT" }
 ```
 
 #### 4. Procesar Orden de Compra (GET /procesar-oc)

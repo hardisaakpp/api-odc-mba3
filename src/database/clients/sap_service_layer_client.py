@@ -12,6 +12,7 @@ import logging
 import ssl
 import subprocess
 import json
+import time
 import requests
 from typing import List, Optional, Dict, Any, Tuple, Union
 from datetime import datetime, timedelta
@@ -26,7 +27,9 @@ from src.config import (
     SAP_SERVICE_LAYER_DATABASE,
     ENABLE_SAP_SERVICE_LAYER,
     SAP_SERVICE_LAYER_TIMEOUT,
-    SAP_SERVICE_LAYER_VERIFY_SSL
+    SAP_SERVICE_LAYER_VERIFY_SSL,
+    SAP_SERVICE_LAYER_TRANSIENT_RETRIES,
+    SAP_SERVICE_LAYER_RETRY_BACKOFF_SECONDS,
 )
 from src.exceptions import SAPDataMasterError
 
@@ -108,6 +111,8 @@ class SAPServiceLayerClient:
         self.session_expires: Optional[datetime] = None
         self.timeout = SAP_SERVICE_LAYER_TIMEOUT
         self.verify_ssl = SAP_SERVICE_LAYER_VERIFY_SSL
+        self.transient_retries = SAP_SERVICE_LAYER_TRANSIENT_RETRIES
+        self.retry_backoff_seconds = SAP_SERVICE_LAYER_RETRY_BACKOFF_SECONDS
         self.working_session: Optional[requests.Session] = None
         self.working_tls_version: Optional[str] = None
         
@@ -392,6 +397,141 @@ class SAPServiceLayerClient:
         if self._is_session_valid():
             return True
         return self.login()
+
+    @staticmethod
+    def _is_transient_request_exception(exc: BaseException) -> bool:
+        """Errores de red típicos cuando el Service Layer cierra la conexión o no responde a tiempo."""
+        if isinstance(
+            exc,
+            (
+                requests.exceptions.Timeout,
+                requests.exceptions.ConnectionError,
+                requests.exceptions.ChunkedEncodingError,
+            ),
+        ):
+            return True
+        return False
+
+    @staticmethod
+    def _is_transient_http_status(status_code: int) -> bool:
+        return status_code in (502, 503, 504)
+
+    def _get_request_with_transient_retries(
+        self,
+        url: str,
+        headers: Dict[str, str],
+        *,
+        operation_label: str = "SAP SL GET",
+    ) -> Optional[requests.Response]:
+        """
+        Ejecuta GET con reintentos ante fallos transitorios (segfaults en SL, proxies, etc.).
+        """
+        max_attempts = 1 + max(0, self.transient_retries)
+        for attempt in range(max_attempts):
+            try:
+                if self.working_session:
+                    response = self.working_session.get(
+                        url, headers=headers, timeout=self.timeout
+                    )
+                else:
+                    response, _ = self._try_request_with_fallback("GET", url, headers=headers)
+                    if response is None:
+                        if attempt < max_attempts - 1:
+                            wait = self.retry_backoff_seconds * (2**attempt)
+                            logger.warning(
+                                f"⚠️ {operation_label}: sin respuesta (intento {attempt + 1}/{max_attempts}), "
+                                f"reintento en {wait:.1f}s..."
+                            )
+                            time.sleep(wait)
+                            continue
+                        return None
+
+                if self._is_transient_http_status(response.status_code):
+                    if attempt < max_attempts - 1:
+                        wait = self.retry_backoff_seconds * (2**attempt)
+                        logger.warning(
+                            f"⚠️ {operation_label}: HTTP {response.status_code} "
+                            f"(intento {attempt + 1}/{max_attempts}), reintento en {wait:.1f}s..."
+                        )
+                        time.sleep(wait)
+                        continue
+                return response
+
+            except requests.exceptions.RequestException as e:
+                if self._is_transient_request_exception(e) and attempt < max_attempts - 1:
+                    wait = self.retry_backoff_seconds * (2**attempt)
+                    logger.warning(
+                        f"⚠️ {operation_label}: error transitorio ({e!s}) "
+                        f"(intento {attempt + 1}/{max_attempts}), reintento en {wait:.1f}s..."
+                    )
+                    time.sleep(wait)
+                    continue
+                logger.error(f"❌ {operation_label}: error de conexión (sin más reintentos): {e}")
+                return None
+
+        return None
+
+    def _post_json_with_transient_retries(
+        self,
+        url: str,
+        headers: Dict[str, str],
+        json_data: Dict[str, Any],
+        *,
+        operation_label: str = "SAP SL POST",
+    ) -> Optional[requests.Response]:
+        """POST JSON con reintentos ante fallos transitorios."""
+        max_attempts = 1 + max(0, self.transient_retries)
+        for attempt in range(max_attempts):
+            try:
+                if self.working_session:
+                    response = self.working_session.post(
+                        url,
+                        json=json_data,
+                        headers=headers,
+                        timeout=self.timeout,
+                    )
+                else:
+                    response, _ = self._try_request_with_fallback(
+                        "POST",
+                        url,
+                        json=json_data,
+                        headers=headers,
+                    )
+                    if response is None:
+                        if attempt < max_attempts - 1:
+                            wait = self.retry_backoff_seconds * (2**attempt)
+                            logger.warning(
+                                f"⚠️ {operation_label}: sin respuesta (intento {attempt + 1}/{max_attempts}), "
+                                f"reintento en {wait:.1f}s..."
+                            )
+                            time.sleep(wait)
+                            continue
+                        return None
+
+                if self._is_transient_http_status(response.status_code):
+                    if attempt < max_attempts - 1:
+                        wait = self.retry_backoff_seconds * (2**attempt)
+                        logger.warning(
+                            f"⚠️ {operation_label}: HTTP {response.status_code} "
+                            f"(intento {attempt + 1}/{max_attempts}), reintento en {wait:.1f}s..."
+                        )
+                        time.sleep(wait)
+                        continue
+                return response
+
+            except requests.exceptions.RequestException as e:
+                if self._is_transient_request_exception(e) and attempt < max_attempts - 1:
+                    wait = self.retry_backoff_seconds * (2**attempt)
+                    logger.warning(
+                        f"⚠️ {operation_label}: error transitorio ({e!s}) "
+                        f"(intento {attempt + 1}/{max_attempts}), reintento en {wait:.1f}s..."
+                    )
+                    time.sleep(wait)
+                    continue
+                logger.error(f"❌ {operation_label}: error de conexión (sin más reintentos): {e}")
+                return None
+
+        return None
     
     def create_purchase_order(self, purchase_order_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """
@@ -437,29 +577,18 @@ class SAPServiceLayerClient:
             logger.info(f"📤 POST {url} (Purchase Orders)")
             logger.debug(f"   Request: {json.dumps(purchase_order_data, ensure_ascii=False, default=str)[:2500]}")
             
-            # Usar sesión existente si está disponible, sino usar fallback
-            if self.working_session:
-                response = self.working_session.post(
-                    url,
-                    json=purchase_order_data,
-                    headers=headers,
-                    timeout=self.timeout
-                )
-            else:
-                # Usar sistema de fallback TLS
-                response, _ = self._try_request_with_fallback(
-                    "POST",
-                    url,
-                    json=purchase_order_data,
-                    headers=headers
-                )
-                
-                if response is None:
-                    logger.error("❌ No se pudo establecer conexión con SAP Service Layer")
-                    return {
-                        "success": False,
-                        "error": "No se pudo establecer conexión con SAP Service Layer"
-                    }
+            response = self._post_json_with_transient_retries(
+                url,
+                headers,
+                purchase_order_data,
+                operation_label="POST PurchaseOrders",
+            )
+            if response is None:
+                logger.error("❌ No se pudo establecer conexión con SAP Service Layer")
+                return {
+                    "success": False,
+                    "error": "No se pudo establecer conexión con SAP Service Layer",
+                }
             
             if response.status_code in [200, 201]:
                 result = response.json()
@@ -577,29 +706,18 @@ class SAPServiceLayerClient:
             logger.info(f"📤 POST {url} (Inventory Transfer Requests)")
             logger.debug(f"   Request: {json.dumps(stock_transfer_data, ensure_ascii=False, default=str)[:1500]}")
             
-            # Usar sesión existente si está disponible, sino usar fallback
-            if self.working_session:
-                response = self.working_session.post(
-                    url,
-                    json=stock_transfer_data,
-                    headers=headers,
-                    timeout=self.timeout
-                )
-            else:
-                # Usar sistema de fallback TLS
-                response, _ = self._try_request_with_fallback(
-                    "POST",
-                    url,
-                    json=stock_transfer_data,
-                    headers=headers
-                )
-                
-                if response is None:
-                    logger.error("❌ No se pudo establecer conexión con SAP Service Layer")
-                    return {
-                        "success": False,
-                        "error": "No se pudo establecer conexión con SAP Service Layer"
-                    }
+            response = self._post_json_with_transient_retries(
+                url,
+                headers,
+                stock_transfer_data,
+                operation_label="POST InventoryTransferRequests",
+            )
+            if response is None:
+                logger.error("❌ No se pudo establecer conexión con SAP Service Layer")
+                return {
+                    "success": False,
+                    "error": "No se pudo establecer conexión con SAP Service Layer",
+                }
             
             if response.status_code in [200, 201]:
                 result = response.json()
@@ -777,14 +895,14 @@ class SAPServiceLayerClient:
             
             logger.debug(f"🔍 Consultando stock de {item_code} en {warehouse_code}...")
             
-            # Usar el sistema de fallback TLS existente
-            if self.working_session:
-                response = self.working_session.get(url, headers=headers, timeout=self.timeout)
-            else:
-                response, _ = self._try_request_with_fallback("GET", url, headers=headers)
-                if response is None:
-                    logger.error("❌ No se pudo consultar stock en SAP")
-                    return None
+            response = self._get_request_with_transient_retries(
+                url,
+                headers,
+                operation_label=f"GET Items (stock) '{item_code}'",
+            )
+            if response is None:
+                logger.error("❌ No se pudo consultar stock en SAP")
+                return None
             
             if response.status_code == 200:
                 data = response.json()
@@ -913,9 +1031,6 @@ class SAPServiceLayerClient:
                 logger.error(f"❌ Error procesado: {error_msg}")
                 return None
                 
-        except requests.exceptions.RequestException as e:
-            logger.error(f"❌ Error de conexión al consultar stock: {e}")
-            return None
         except SAPDataMasterError:
             # Propagar errores de datos maestros para que el llamador pueda manejarlos
             raise
@@ -966,14 +1081,14 @@ class SAPServiceLayerClient:
             
             logger.debug(f"🔍 Consultando Business Partner: {card_code}...")
             
-            # Usar el sistema de fallback TLS existente
-            if self.working_session:
-                response = self.working_session.get(url, headers=headers, timeout=self.timeout)
-            else:
-                response, _ = self._try_request_with_fallback("GET", url, headers=headers)
-                if response is None:
-                    logger.error("❌ No se pudo consultar Business Partner en SAP")
-                    return None
+            response = self._get_request_with_transient_retries(
+                url,
+                headers,
+                operation_label=f"GET BusinessPartners('{card_code}')",
+            )
+            if response is None:
+                logger.error("❌ No se pudo consultar Business Partner en SAP")
+                return None
             
             if response.status_code == 200:
                 data = response.json()
@@ -1008,9 +1123,6 @@ class SAPServiceLayerClient:
                     "_error_message": error_msg
                 }
                 
-        except requests.exceptions.RequestException as e:
-            logger.error(f"❌ Error de conexión al consultar Business Partner: {e}")
-            return None
         except Exception as e:
             logger.error(f"❌ Error inesperado al consultar Business Partner {card_code}: {e}", exc_info=True)
             return None
@@ -1061,14 +1173,14 @@ class SAPServiceLayerClient:
             
             logger.debug(f"🔍 Consultando Item: {item_code}...")
             
-            # Usar el sistema de fallback TLS existente
-            if self.working_session:
-                response = self.working_session.get(url, headers=headers, timeout=self.timeout)
-            else:
-                response, _ = self._try_request_with_fallback("GET", url, headers=headers)
-                if response is None:
-                    logger.error("❌ No se pudo consultar Item en SAP")
-                    return None
+            response = self._get_request_with_transient_retries(
+                url,
+                headers,
+                operation_label=f"GET Items('{item_code}')",
+            )
+            if response is None:
+                logger.error("❌ No se pudo consultar Item en SAP")
+                return None
             
             if response.status_code == 200:
                 data = response.json()
@@ -1108,9 +1220,6 @@ class SAPServiceLayerClient:
                     "_error_message": error_msg
                 }
                 
-        except requests.exceptions.RequestException as e:
-            logger.error(f"❌ Error de conexión al consultar Item: {e}")
-            return None
         except Exception as e:
             logger.error(f"❌ Error inesperado al consultar Item {item_code}: {e}", exc_info=True)
             return None

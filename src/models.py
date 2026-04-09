@@ -1405,6 +1405,10 @@ class ProcesoCompletoSAPDetalleODC(BaseModel):
     )
     error: Optional[str] = Field(None, description="Mensaje de error (si falló)")
     error_code: Optional[str] = Field(None, description="Código de error de SAP")
+    retry_recommended: Optional[bool] = Field(
+        None,
+        description="True si el fallo fue probablemente transitorio (conexión/SL); el usuario puede reintentar envío.",
+    )
     # ITR en envio_sap para que el frontend encuentre las solicitudes en response.envio_sap.solicitudes_transferencia
     solicitudes_transferencia: Optional[dict] = Field(
         None,

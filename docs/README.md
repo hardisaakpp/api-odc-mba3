@@ -16,7 +16,7 @@
 
 ---
 
-## 📖 Documentación Esencial (8 archivos)
+## 📖 Documentación Esencial (10 archivos)
 
 ### 1. **[CONFIGURACION.md](CONFIGURACION.md)** ⚙️
 Configuración completa del proyecto
@@ -81,15 +81,22 @@ Pruebas y validación
 ### 10. **[HOMOLOGACIONES_SKU.md](HOMOLOGACIONES_SKU.md)** 🏷️
 Sistema de homologaciones
 - Gestión de correspondencias SKU
-- 4 endpoints REST
+- API bajo `/api/homologaciones-sku` (listado, alta, edición, bulk, sincronizar)
 - Ejemplos de uso
 
 ---
 
-## 📚 Documentación Complementaria (6 archivos)
+## 📚 Documentación Complementaria
 
 ### Flujos y Procesos
-- [FLUJO_COMPLETO.md](FLUJO_COMPLETO.md) - Flujo end-to-end de pedidos
+- [FLUJO_COMPLETO.md](FLUJO_COMPLETO.md) - Flujo MBA3 → SQL → OC → SAP
+- [TRANSACCIONES.md](TRANSACCIONES.md) - Uso de transacciones en servicios
+
+### Pedidos, permisos y UI
+- [ESTADOS_PEDIDO.md](ESTADOS_PEDIDO.md) - Estados y transiciones
+- [PERMISOS_Y_CAPABILITIES.md](PERMISOS_Y_CAPABILITIES.md) - Permisos y capabilities JWT
+- [NOTIFICACIONES_SSE.md](NOTIFICACIONES_SSE.md) - Notificaciones en tiempo real (SSE)
+- [REFACTORIZACION_PEDIDOS_CRUD.md](REFACTORIZACION_PEDIDOS_CRUD.md) - Organización de módulos de pedidos
 
 ### Formatos y Datos
 - [FORMATOS_Y_ESTRUCTURAS.md](FORMATOS_Y_ESTRUCTURAS.md) - Requests, Excel, mapeos
@@ -102,6 +109,11 @@ Sistema de homologaciones
 
 ### Frontend
 - [FRONTEND.md](FRONTEND.md) - Requerimientos y guías UI
+
+### Estándares y operación
+- [API_STANDARDS.md](API_STANDARDS.md), [CACHE.md](CACHE.md), [BUENAS_PRACTICAS_SQL.md](BUENAS_PRACTICAS_SQL.md)
+
+*Hay más guías en `docs/` (despliegue Excel, auditoría, SAP logs, etc.); el índice anterior cubre lo más consultado.*
 
 ---
 
@@ -126,8 +138,7 @@ docs/
 ├── PERSONALIZACION.md
 ├── FRONTEND.md
 ├── HISTORIAL.md                 📦 HISTÓRICO
-└── pruebas/
-    └── README.md
+└── … (más de 30 temas adicionales: Excel, SAP logs, migraciones resumidas, etc.)
 ```
 
 ---
@@ -150,6 +161,8 @@ docs/
 | ¿Qué features hay? | [IMPLEMENTACION_FEATURES.md](IMPLEMENTACION_FEATURES.md) |
 | ¿Cómo personalizo? | [PERSONALIZACION.md](PERSONALIZACION.md) |
 | ¿Guía para frontend? | [FRONTEND.md](FRONTEND.md) |
+| ¿Estados y permisos de pedidos? | [ESTADOS_PEDIDO.md](ESTADOS_PEDIDO.md), [PERMISOS_Y_CAPABILITIES.md](PERMISOS_Y_CAPABILITIES.md) |
+| ¿SSE / notificaciones? | [NOTIFICACIONES_SSE.md](NOTIFICACIONES_SSE.md) |
 
 ---
 
@@ -169,4 +182,5 @@ Para referencia sobre cambios previos e implementaciones completadas:
 ✓ Celery procesando automáticamente  
 ✓ Seguridad configurada  
 ✓ Tests ejecutados y validados  
-✓ **Documentación consolidada (21 archivos principales)**
+✓ **Documentación en `docs/`: ~40 archivos** (10 esenciales arriba + complementarias + histórico)  
+✓ **Última revisión índice:** abril 2026

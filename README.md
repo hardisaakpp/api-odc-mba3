@@ -159,20 +159,20 @@ La documentación completa está organizada en el directorio `docs/`.
 ## 🔌 Endpoints Principales
 
 ### Flujo de Procesamiento
-1. **GET `/consultar`** - Consultar despachos desde MBA3
-2. **GET `/migrar`** - Guardar despachos en SQL Server
-3. **GET `/procesar-oc`** - Crear órdenes de compra
-4. **POST `/integrar-sap`** - Enviar a SAP Service Layer
+1. **GET `/consultar`** - Consultar despachos desde MBA3 (solo lectura)
+2. **GET `/migrar/completo`** - Consultar MBA3 y guardar en SQL Server (`despacho_*`). Alternativa: **POST `/migrar`** para persistir un payload ya obtenido (ver OpenAPI `/docs`)
+3. **GET `/procesar-oc`** - Crear órdenes de compra desde despachos
+4. **POST `/integrar-sap`** - Enviar ODC pendientes a SAP Service Layer
 
 ### Gestión de Pedidos
-- **POST `/pedidos`** - Crear pedido desde Excel
-- **GET `/pedidos`** - Listar pedidos
-- **GET `/pedidos/{id}`** - Detalle de pedido
-- **POST `/pedidos/{id}/enviar-mba3`** - Enviar a MBA3
+La API de pedidos vive bajo el prefijo **`/api/pedidos`**. Resumen:
+- **POST `/pedidos/importar-excel`** - Importar pedido desde Excel
+- **GET `/api/pedidos`** - Listar pedidos (filtros en query)
+- **GET/POST/PATCH/DELETE** en **`/api/pedidos/...`** - CRUD, estados, exportación, redistribución, integración SAP, etc.
 
 ### Homologaciones
-- **GET `/homologaciones`** - Listar homologaciones SKU
-- **POST `/homologaciones/sincronizar`** - Sincronizar con MBA3/SAP
+- **GET `/api/homologaciones-sku`** - Listar homologaciones SKU (paginado)
+- **POST `/api/homologaciones-sku/sincronizar`** - Sincronizar desde despachos
 
 Ver [docs/ENDPOINTS.md](docs/ENDPOINTS.md) para documentación completa.
 
@@ -286,6 +286,6 @@ Este proyecto es privado y confidencial.
 
 ---
 
-**Versión:** 2.0  
-**Última actualización:** Enero 2026  
+**Versión API (OpenAPI):** 2.1.0  
+**Última actualización documentación:** abril 2026  
 **Documentación completa:** [docs/README.md](docs/README.md)
