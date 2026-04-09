@@ -5,11 +5,12 @@ Utilidades comunes para endpoints de pedidos.
 import logging
 from typing import Dict
 from fastapi import HTTPException, UploadFile
+from src.config import MAX_EXCEL_UPLOAD_SIZE_BYTES
 
 logger = logging.getLogger(__name__)
 
 # Constantes
-MAX_FILE_SIZE = 10 * 1024 * 1024  # 10 MB
+MAX_FILE_SIZE = MAX_EXCEL_UPLOAD_SIZE_BYTES
 ALLOWED_EXTENSIONS = {'.xlsx', '.xls'}
 ALLOWED_MIME_TYPES = {
     'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',  # .xlsx

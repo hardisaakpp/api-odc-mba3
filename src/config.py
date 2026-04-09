@@ -398,6 +398,14 @@ EMAIL_WARNING_FAILURES_THRESHOLD = int(os.getenv("EMAIL_WARNING_FAILURES_THRESHO
 # ============================================================================
 # Configuración de Storage de Archivos (MinIO/S3)
 # ============================================================================
+# Tamaño máximo de archivo Excel para uploads (en MB)
+try:
+    MAX_EXCEL_UPLOAD_SIZE_MB = int(os.getenv("MAX_EXCEL_UPLOAD_SIZE_MB", "10"))
+except ValueError:
+    MAX_EXCEL_UPLOAD_SIZE_MB = 10
+MAX_EXCEL_UPLOAD_SIZE_MB = max(1, MAX_EXCEL_UPLOAD_SIZE_MB)
+MAX_EXCEL_UPLOAD_SIZE_BYTES = MAX_EXCEL_UPLOAD_SIZE_MB * 1024 * 1024
+
 # Habilitar almacenamiento de archivos Excel originales para descarga posterior
 ENABLE_FILE_STORAGE = os.getenv("ENABLE_FILE_STORAGE", "false").lower() == "true"
 
