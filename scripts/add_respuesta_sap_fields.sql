@@ -4,9 +4,7 @@
 -- Este script agrega los campos necesarios para persistir la respuesta de SAP
 -- directamente en la tabla orden_compra_cabecera
 -- ============================================================================
-
-USE store_control;
-GO
+-- Ejecuta en la base de datos de la conexión (p. ej. SQL_SERVER_DATABASE).
 
 -- Agregar campo respuesta_sap (mensaje o respuesta de SAP)
 IF NOT EXISTS (

@@ -14,7 +14,11 @@ from src.database.repositories.pedido_repository import PedidoRepository
 from src.database.repositories.pedido_respuesta_repository import PedidoRespuestaRepository
 from src.database.repositories.common.serialization import make_json_serializable
 from src.security.jwt_auth import verify_jwt_token, require_any_permission
-from .pedidos_crud_helpers import enrich_pedido_with_ui_flags, calcular_totales_detalles
+from .pedidos_crud_helpers import (
+    enrich_pedido_with_ui_flags,
+    enrich_pedido_reintento_envio_odc_sap,
+    calcular_totales_detalles,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -96,6 +100,7 @@ def register_pedidos_detalle_endpoints(app: FastAPI):
 
                 # Descartar (Cargar Plantilla): solo Borrador o Nuevo Pedido. Cancelar Pedido (Redistribución): deshabilitar desde Confirmado redistribución (10) en adelante.
                 enrich_pedido_with_ui_flags(pedido)
+                enrich_pedido_reintento_envio_odc_sap(pedido, conn)
 
                 # Totales calculados en backend (no persistidos): suma de COSTO UNIT., SUBTOTAL y TOTAL por detalle
                 pedido["totales"] = calcular_totales_detalles(pedido.get("detalles", []))

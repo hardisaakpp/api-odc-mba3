@@ -33,6 +33,8 @@ Los estados del pedido se identifican por **`estado_id`** (número). El **nombre
 | 17 | DESPACHAR Y FACTURAR | 17 | Manual: desde Confirmado y Enviado (ODC enviada a SAP) |
 | 18 | FINALIZADO | 18 | Estado final del flujo; solo desde Despachar y Facturar |
 | 19 | CANCELADO | 19 | Pedido cancelado por MABEL TRADING desde Redistribución |
+| 20 | CANCELADO POR EL RAYO | 20 | Cancelado por EL RAYO desde Gestionar pedido |
+| 21 | ERROR ENVIO SAP REINTENTO | 21 | Fallo al enviar ODC a SAP (típ. conexión / transitorio); permite reintentar |
 
 El **id es semántico** (no depende del orden en BD). El **orden** es solo para visualización (listas, filtros).
 
@@ -68,6 +70,9 @@ Para migración y compatibilidad temporal:
 | DESPACHAR_Y_FACTURAR            | 17 |
 | FINALIZADO                      | 18 |
 | CANCELADO                       | 19 |
+| CANCELADO POR EL RAYO           | 20 |
+| ERROR ENVIO SAP REINTENTO       | 21 |
+| ERROR_ENVIO_SAP_REINTENTO       | 21 |
 | *(cualquier otro o NULL)*       | 1 (BORRADOR) |
 
 ---

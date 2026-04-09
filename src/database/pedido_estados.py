@@ -22,6 +22,8 @@ ESTADO_DESPACHAR_Y_FACTURAR = 17  # Manual: desde Confirmado y Enviado (ODC envi
 ESTADO_FINALIZADO = 18  # Estado final del flujo; solo desde Despachar y Facturar
 ESTADO_CANCELADO = 19  # Pedido cancelado por MABEL TRADING desde Redistribución
 ESTADO_CANCELADO_POR_EL_RAYO = 20  # Pedido cancelado por EL RAYO desde Gestionar Pedido
+# Fallo al enviar ODC a SAP (p. ej. prevalidación / conexión); se puede reintentar
+ESTADO_ERROR_ENVIO_SAP_REINTENTO = 21
 
 # Estado inicial al subir Excel o crear pedido (siempre id = 1)
 ESTADO_INICIAL = ESTADO_BORRADOR
@@ -64,12 +66,14 @@ ESTADOS_PERMITEN_REDISTRIBUCION = frozenset({
 ESTADOS_VALIDOS_PARA_ODC = frozenset({
     ESTADO_CONFIRMADO_PROVEEDOR,
     ESTADO_PEDIDO_CONFIRMADO,
+    ESTADO_ERROR_ENVIO_SAP_REINTENTO,
 })
 
 # Estados en los que el proveedor no puede modificar (bloqueados)
 ESTADOS_BLOQUEADOS_PROVEEDOR = frozenset({
     ESTADO_CONFIRMADO_PROVEEDOR,
     ESTADO_PEDIDO_CONFIRMADO,
+    ESTADO_ERROR_ENVIO_SAP_REINTENTO,
     ESTADO_CONFIRMADO_ENVIADO,
 })
 
@@ -90,6 +94,7 @@ ESTADO_IDS_VALIDOS = frozenset({
     ESTADO_FINALIZADO,
     ESTADO_CANCELADO,
     ESTADO_CANCELADO_POR_EL_RAYO,
+    ESTADO_ERROR_ENVIO_SAP_REINTENTO,
 })
 
 # --- Mapping legacy string → id (solo para migración / compat temporal) -------
@@ -118,6 +123,8 @@ LEGACY_STRING_TO_ID = {
     "CANCELADO": ESTADO_CANCELADO,
     "CANCELADO POR EL RAYO": ESTADO_CANCELADO_POR_EL_RAYO,
     "CANCELADO_POR_EL_RAYO": ESTADO_CANCELADO_POR_EL_RAYO,
+    "ERROR ENVIO SAP REINTENTO": ESTADO_ERROR_ENVIO_SAP_REINTENTO,
+    "ERROR_ENVIO_SAP_REINTENTO": ESTADO_ERROR_ENVIO_SAP_REINTENTO,
 }
 
 

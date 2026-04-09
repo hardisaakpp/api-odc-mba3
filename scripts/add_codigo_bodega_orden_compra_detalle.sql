@@ -5,9 +5,7 @@
 -- por línea de detalle, permitiendo que las ITR por bodega sean 100% dinámicas
 -- desde la plantilla Excel (RL-CD, OUT-CD, RG-CD)
 -- ============================================================================
-
-USE store_control;
-GO
+-- Ejecuta en la base de datos de la conexión (p. ej. SQL_SERVER_DATABASE).
 
 -- Agregar campo codigo_bodega (código de bodega por línea: RL-CD, OUT-CD, RG-CD)
 IF NOT EXISTS (

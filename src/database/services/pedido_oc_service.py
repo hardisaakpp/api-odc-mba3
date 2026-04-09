@@ -14,6 +14,7 @@ from src.utils.timezone import ahora_naive
 
 from src.config import PROJECT_ROOT
 from ..connection import get_db_connection_context
+from ..pedido_estados import ESTADOS_VALIDOS_PARA_ODC, estado_id_desde_legacy
 from ..repositories.pedido_repository import PedidoRepository
 from ..repositories.pedido_sap_procesamiento_repository import PedidoSAPProcesamientoRepository
 from ..repositories.orden_compra_repository import OrdenCompraRepository
@@ -232,13 +233,19 @@ class PedidoOCService:
                 raise ValueError(f"No se encontró cabecera del pedido {pedido_id}")
             
             # 1.1. Validar estado del pedido (debe estar en un estado válido para generar ODC)
-            estado_pedido = pedido_cabecera.get("estado")
-            estados_validos = ["CONFIRMADO_PROVEEDOR", "PEDIDO_CONFIRMADO", "CONFIRMADO REDISTRIBUCION"]
-            if estado_pedido not in estados_validos:
+            raw_eid = pedido_cabecera.get("estado_id")
+            try:
+                estado_id_pedido = int(raw_eid) if raw_eid is not None else None
+            except (TypeError, ValueError):
+                estado_id_pedido = None
+            if estado_id_pedido is None and pedido_cabecera.get("estado"):
+                estado_id_pedido = estado_id_desde_legacy(str(pedido_cabecera.get("estado")))
+            if estado_id_pedido is None or estado_id_pedido not in ESTADOS_VALIDOS_PARA_ODC:
+                estado_nom = pedido_cabecera.get("estado")
                 raise ValueError(
                     f"El pedido {pedido_id} no está en un estado válido para generar ODC. "
-                    f"Estado actual: {estado_pedido}. "
-                    f"Estados válidos: {', '.join(estados_validos)}"
+                    f"estado_id={estado_id_pedido}, estado={estado_nom}. "
+                    f"Ids válidos: {sorted(ESTADOS_VALIDOS_PARA_ODC)}"
                 )
             
             # 2. Verificar si ya existe una OC para este pedido (para upsert)

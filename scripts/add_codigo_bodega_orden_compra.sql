@@ -4,9 +4,7 @@
 -- Este script agrega el campo codigo_bodega para almacenar la bodega
 -- determinada desde las distribuciones del pedido o desde origen_traslado
 -- ============================================================================
-
-USE store_control;
-GO
+-- Ejecuta en la base de datos de la conexión (p. ej. SQL_SERVER_DATABASE).
 
 -- Agregar campo codigo_bodega (código de bodega usada en la ODC: RL-CD, OUT-CD, REG-CD)
 IF NOT EXISTS (

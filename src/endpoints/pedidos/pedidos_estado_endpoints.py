@@ -21,7 +21,11 @@ from src.database.pedido_estados import (
 )
 from src.security.jwt_auth import verify_jwt_token, require_any_permission
 from src.utils.audit_context import get_audit_context, ORIGEN_WEB
-from .pedidos_crud_helpers import enrich_pedido_with_ui_flags, get_estado_id_from_pedido
+from .pedidos_crud_helpers import (
+    enrich_pedido_with_ui_flags,
+    enrich_pedido_reintento_envio_odc_sap,
+    get_estado_id_from_pedido,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +62,7 @@ def register_pedidos_estado_endpoints(app: FastAPI):
                 if pedido is None:
                     raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail={"error": "not_found", "message": "No se encontró el pedido."})
                 enrich_pedido_with_ui_flags(pedido)
+                enrich_pedido_reintento_envio_odc_sap(pedido, conn)
                 
                 # 📢 Notificación SSE: mismo permiso (otros EL RAYO) + MABEL cuando EL RAYO abre el pedido
                 if estado_id == ESTADO_NUEVO_PEDIDO:
@@ -117,6 +122,7 @@ def register_pedidos_estado_endpoints(app: FastAPI):
                     raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail={"error": "not_found", "message": "No se encontró el pedido."})
                 numero_pedido = pedido.get("cabecera", {}).get("numero_pedido", "")
                 enrich_pedido_with_ui_flags(pedido)
+                enrich_pedido_reintento_envio_odc_sap(pedido, conn)
                 
                 # 📢 Notificación: otros EL RAYO + MABEL (excl. autor)
                 try:
@@ -181,6 +187,7 @@ def register_pedidos_estado_endpoints(app: FastAPI):
                     raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail={"error": "not_found", "message": "No se encontró el pedido."})
                 numero_pedido = pedido.get("cabecera", {}).get("numero_pedido", "")
                 enrich_pedido_with_ui_flags(pedido)
+                enrich_pedido_reintento_envio_odc_sap(pedido, conn)
                 
                 # 📢 Notificación a ambos roles (mismo permiso excl. autor)
                 try:
@@ -269,6 +276,7 @@ def register_pedidos_estado_endpoints(app: FastAPI):
                     raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail={"error": "not_found", "message": "No se encontró el pedido."})
                 numero_pedido = pedido.get("cabecera", {}).get("numero_pedido", "")
                 enrich_pedido_with_ui_flags(pedido)
+                enrich_pedido_reintento_envio_odc_sap(pedido, conn)
                 
                 # 📢 Notificación a ambos roles (mismo permiso excl. autor)
                 try:

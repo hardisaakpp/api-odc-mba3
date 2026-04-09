@@ -3,9 +3,7 @@
 -- pero algunos packs tienen valores como 12.0 (X1), por lo que necesitamos más precisión
 -- 
 -- Cambiamos a DECIMAL(10,4) para permitir valores hasta 999999.9999 con mayor precisión decimal
-
-USE store_control;
-GO
+-- Ejecuta en la base de datos de la conexión (p. ej. SQL_SERVER_DATABASE).
 
 -- Verificar si la columna existe y su tipo actual
 IF EXISTS (

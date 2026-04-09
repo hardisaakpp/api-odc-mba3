@@ -45,6 +45,8 @@ from src.database.pedido_estados import (
     ESTADOS_PUEDE_CANCELAR_POR_EL_RAYO,
     ESTADO_LIMITE_CANCELAR_PEDIDO,
     ESTADOS_PUEDE_CONFIRMAR_REDISTRIBUCION,
+    ESTADO_PEDIDO_CONFIRMADO,
+    ESTADO_ERROR_ENVIO_SAP_REINTENTO,
 )
 
 
@@ -102,3 +104,56 @@ def enrich_pedido_with_ui_flags(pedido: Dict[str, Any]) -> None:
     pedido["puede_descargar_csv"] = estado_id == ESTADO_REDISTRIBUCION
     pedido["puede_confirmar_redistribucion"] = estado_id in ESTADOS_PUEDE_CONFIRMAR_REDISTRIBUCION
     pedido["puede_finalizar"] = estado_id == ESTADO_DESPACHAR_Y_FACTURAR
+
+
+def pedido_permite_reintento_envio_odc_sap(
+    pedido: Dict[str, Any],
+    ordenes_compra: List[Dict[str, Any]],
+) -> bool:
+    """
+    Indica si conviene mostrar "Reintentar envío ODC a SAP" en Confirmado redistribución (10).
+
+    Casos:
+    - ODC en PENDIENTE (generada pero el envío no completó OK).
+    - ODC en ERROR por fallo típicamente transitorio (mensaje analizado como en OCSAPService)
+      o error_source SAP_CONNECTION.
+    """
+    from src.database.services.oc_sap_service import _mensaje_sugiere_reintento_sap
+
+    estado_id = get_estado_id_from_pedido(pedido)
+    if estado_id == ESTADO_ERROR_ENVIO_SAP_REINTENTO:
+        for oc in ordenes_compra or []:
+            est = (oc.get("estado") or "").strip().upper()
+            if est in ("PENDIENTE", "ERROR"):
+                return True
+        return False
+    if estado_id != ESTADO_PEDIDO_CONFIRMADO:
+        return False
+    for oc in ordenes_compra or []:
+        est = (oc.get("estado") or "").strip().upper()
+        if est == "PENDIENTE":
+            return True
+        if est == "ERROR":
+            msg = f"{oc.get('respuesta_sap') or ''} {oc.get('error_message') or ''}"
+            src = (oc.get("error_source") or "").strip().upper()
+            if src == "SAP_CONNECTION":
+                return True
+            if _mensaje_sugiere_reintento_sap(msg):
+                return True
+    return False
+
+
+def enrich_pedido_reintento_envio_odc_sap(pedido: Dict[str, Any], conn) -> None:
+    """
+    Agrega `puede_reintentar_envio_odc_sap` al dict del pedido (lectura de ODC en BD).
+    """
+    from src.database.repositories.orden_compra_repository import OrdenCompraRepository
+
+    cab = pedido.get("cabecera") or {}
+    pedido_id = cab.get("pedido_id")
+    if not pedido_id:
+        pedido["puede_reintentar_envio_odc_sap"] = False
+        return
+    repo = OrdenCompraRepository(conn)
+    ocs = repo.get_by_pedido_id(str(pedido_id))
+    pedido["puede_reintentar_envio_odc_sap"] = pedido_permite_reintento_envio_odc_sap(pedido, ocs)

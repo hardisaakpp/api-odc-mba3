@@ -385,3 +385,10 @@ migrations:
     file: "migrations/create_envio_odc_sap.sql"
     description: "Tabla envio_odc_sap: snapshot de cada Enviar ODC a SAP (OC + solicitudes de transferencia + fecha)"
     category: "base"
+
+  - version: "614"
+    name: "add_estado_error_envio_sap_reintento"
+    file: "migrations/add_estado_error_envio_sap_reintento.sql"
+    description: "pedido_estado id 21: ERROR ENVIO SAP REINTENTO (fallo recuperable al enviar ODC a SAP)"
+    category: "alter"
+    dependencies: ["005"]

@@ -20,7 +20,11 @@ from src.database.pedido_estados import (
 from src.security.jwt_auth import verify_jwt_token, require_permission, require_any_permission
 from src.logging_config import log_business_operation
 from src.utils.audit_context import get_audit_context, ORIGEN_WEB
-from .pedidos_crud_helpers import enrich_pedido_with_ui_flags, get_estado_id_from_pedido
+from .pedidos_crud_helpers import (
+    enrich_pedido_with_ui_flags,
+    enrich_pedido_reintento_envio_odc_sap,
+    get_estado_id_from_pedido,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -129,6 +133,7 @@ def register_pedidos_cancelar_endpoints(app: FastAPI):
                 
                 # Calcular flags de UI
                 enrich_pedido_with_ui_flags(pedido_actualizado)
+                enrich_pedido_reintento_envio_odc_sap(pedido_actualizado, conn)
                 
                 # Log funcional estandarizado (Buenas Practicas - Seccion 5)
                 log_business_operation(
