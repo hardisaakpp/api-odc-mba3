@@ -35,6 +35,24 @@ python scripts/migration_runner.py            # Ejecutar
 
 ### Iniciar Servidor
 
+**Arranque en desarrollo (flujo recomendado):**
+
+```powershell
+# 1) Activar entorno virtual local del proyecto
+& c:/Users/cortiz/PycharmProjects/mba3-consultas/.venv/Scripts/Activate.ps1
+
+# 2) Levantar API en desarrollo (define ENVIRONMENT=development y usa recarga)
+.\run-dev.ps1
+
+# 3) En otra terminal: worker Celery
+celery -A src.celery_app worker --loglevel=info --pool=solo
+
+# 4) En otra terminal: scheduler Celery Beat
+celery -A src.celery_app beat --loglevel=info
+```
+
+> Requisito para Celery: Redis ejecutándose.
+
 **Opción recomendada (PowerShell):**
 
 ```powershell
