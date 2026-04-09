@@ -420,6 +420,7 @@ class PedidoOCService:
                         warehouse_code,
                         usuario_id=oc_cabecera_db.get("creado_por"),
                         pedido_id=oc_cabecera_db.get("pedido_id") or pedido_id,
+                        fecha_entrega=pedido_cabecera.get("fecha_entrega"),
                     )
                     result["sap_request_json"] = sap_request_json
                     # DESACTIVADO: Descarga de ODC en JSON a output/

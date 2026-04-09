@@ -113,6 +113,30 @@ class OCSAPService:
         except Exception as e:
             logger.error(f"❌ Error al determinar bodega desde pedido: {e}", exc_info=True)
             return None
+
+    @staticmethod
+    def obtener_fecha_entrega_pedido(conn, pedido_id: Optional[str]) -> Optional[Any]:
+        """
+        Lee fecha_entrega desde pedido para mapear DocDueDate en SAP.
+        Retorna None si no hay pedido_id o falla la consulta.
+        """
+        if not pedido_id:
+            return None
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT fecha_entrega FROM pedido WHERE pedido_id = ?",
+                (pedido_id,),
+            )
+            row = cursor.fetchone()
+            return row[0] if row else None
+        except Exception as e:
+            logger.warning(
+                "⚠️ No se pudo leer fecha_entrega del pedido %s: %s",
+                pedido_id,
+                e,
+            )
+            return None
     
     def enviar_oc_a_sap(
         self,
@@ -277,12 +301,17 @@ class OCSAPService:
             
             # 4. Convertir a formato JSON de SAP
             try:
+                pid = oc_cabecera.get("pedido_id")
+                fecha_entrega_raw = (
+                    self.obtener_fecha_entrega_pedido(oc_repo.conn, pid) if pid else None
+                )
                 purchase_order_json = SAPOCMapper.to_sap_purchase_order(
                     oc_cabecera,
                     oc_detalles,
                     warehouse_code,
                     usuario_id=oc_cabecera.get("creado_por"),  # Usuario de la cabecera
-                    pedido_id=oc_cabecera.get("pedido_id")     # Pedido relacionado
+                    pedido_id=pid,
+                    fecha_entrega=fecha_entrega_raw,
                 )
                 # ⭐ Rehabilitado: exponer y persistir el JSON del request a SAP (diagnóstico)
                 result["sap_request_json"] = purchase_order_json

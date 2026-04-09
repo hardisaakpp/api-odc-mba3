@@ -4,7 +4,20 @@ Guía completa de configuración del sistema MBA3 Consultas.
 
 ## 📋 Variables de Entorno
 
-Crear archivo `.env` en la raíz del proyecto.
+### Archivos por ambiente (obligatorios)
+
+La aplicación **exige** un archivo de entorno según `ENVIRONMENT` (no usa fallback silencioso a `.env`):
+
+| ENVIRONMENT (normalizado) | Archivo requerido en la raíz del proyecto |
+|---------------------------|-------------------------------------------|
+| `development` / `develop` | `.env.develop` |
+| `test` | `.env.test` |
+| `staging` | `.env.staging` |
+| `production` | `.env.production` |
+
+Si falta el archivo correspondiente, el proceso **termina al iniciar** con un mensaje claro.
+
+**Override:** define `ENV_FILE` con la ruta (absoluta o relativa al root del repo) a un archivo `.env` concreto; ese archivo también debe existir.
 
 ### MBA3
 

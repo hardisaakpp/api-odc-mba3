@@ -25,8 +25,8 @@ venv\Scripts\activate  # Windows
 pip install -r requirements.txt
 
 # 4. Configurar variables de entorno
-# Crear archivo .env con las credenciales necesarias
-# Ver docs/CONFIGURACION.md para detalles
+# Crear .env.develop / .env.test / .env.production según ambiente (obligatorios; ver CONFIGURACION.md)
+# Arrancar con ENVIRONMENT acorde o usar .\run-dev.ps1 / .\run-test.ps1 / .\run-prod.ps1
 
 # 5. Inicializar base de datos (primera vez)
 python scripts/migration_runner.py --dry-run  # Validar
@@ -34,6 +34,24 @@ python scripts/migration_runner.py            # Ejecutar
 ```
 
 ### Iniciar Servidor
+
+**Arranque en desarrollo (flujo recomendado):**
+
+```powershell
+# 1) Activar entorno virtual local del proyecto
+& c:/Users/cortiz/PycharmProjects/mba3-consultas/.venv/Scripts/Activate.ps1
+
+# 2) Levantar API en desarrollo (define ENVIRONMENT=development y usa recarga)
+.\run-dev.ps1
+
+# 3) En otra terminal: worker Celery
+celery -A src.celery_app worker --loglevel=info --pool=solo
+
+# 4) En otra terminal: scheduler Celery Beat
+celery -A src.celery_app beat --loglevel=info
+```
+
+> Requisito para Celery: Redis ejecutándose.
 
 **Opción recomendada (PowerShell):**
 
