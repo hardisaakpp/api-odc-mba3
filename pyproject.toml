@@ -1,0 +1,27 @@
+# Configuración de Ruff (linter muy rápido). Por defecto equivale a pycodestyle (E) + Pyflakes (F).
+# El repositorio puede tener avisos históricos: usar rutas acotadas o --fix gradualmente.
+# Ver: https://docs.astral.sh/ruff/
+
+[tool.ruff]
+target-version = "py310"
+line-length = 120
+src = ["src", "tests"]
+
+exclude = [
+    ".git",
+    ".venv",
+    "venv",
+    "__pycache__",
+    ".pytest_cache",
+    ".mypy_cache",
+    "ruff_cache",
+]
+
+[tool.ruff.lint]
+# Sin "select" explícito, Ruff usa reglas por defecto (E4, E7, E9, F).
+# Descomentar para ir endureciendo poco a poco:
+# extend-select = ["I", "UP", "B"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"

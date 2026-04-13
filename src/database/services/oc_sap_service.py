@@ -6,12 +6,20 @@ Este servicio orquesta la construcción del JSON y el envío de ODC a SAP.
 
 import json
 import logging
-from datetime import datetime
 
 from src.utils.timezone import ahora_naive
 from typing import Optional, Dict, Any, List
 
-from src.config import PROJECT_ROOT
+from src.config import (
+    PROJECT_ROOT,
+    SAP_ITR_RETRY_MAX_ATTEMPTS,
+    SAP_ITR_RETRY_BASE_DELAY_SECONDS,
+    SAP_ITR_RETRY_MAX_JITTER_SECONDS,
+    SAP_ODC_RETRY_MAX_ATTEMPTS,
+    SAP_ODC_RETRY_BASE_DELAY_SECONDS,
+    SAP_ODC_RETRY_MAX_JITTER_SECONDS,
+)
+from .retry_utils import retry_operation, sap_service_layer_result_should_retry
 from ..repositories.orden_compra_repository import OrdenCompraRepository
 from ..clients.sap_service_layer_client import SAPServiceLayerClient
 from ..mappers.sap_oc_mapper import SAPOCMapper
@@ -41,9 +49,60 @@ def _mensaje_sugiere_reintento_sap(mensaje: str) -> bool:
 class OCSAPService:
     """Servicio para enviar órdenes de compra a SAP Service Layer."""
     
+    ODC_RETRY_MAX_ATTEMPTS = SAP_ODC_RETRY_MAX_ATTEMPTS
+    ODC_RETRY_BASE_DELAY_SECONDS = SAP_ODC_RETRY_BASE_DELAY_SECONDS
+    ODC_RETRY_MAX_JITTER_SECONDS = SAP_ODC_RETRY_MAX_JITTER_SECONDS
+    
+    ITR_RETRY_MAX_ATTEMPTS = SAP_ITR_RETRY_MAX_ATTEMPTS
+    ITR_RETRY_BASE_DELAY_SECONDS = SAP_ITR_RETRY_BASE_DELAY_SECONDS
+    ITR_RETRY_MAX_JITTER_SECONDS = SAP_ITR_RETRY_MAX_JITTER_SECONDS
+    
     def __init__(self):
         """Inicializa el servicio."""
         self.sap_client = SAPServiceLayerClient()
+    
+    def _enviar_oc_con_reintento(self, purchase_order_json: Dict[str, Any]) -> Dict[str, Any]:
+        """Envía la ODC a SAP con reintento y backoff exponencial."""
+        return retry_operation(
+            execute=lambda: self.sap_client.create_purchase_order(purchase_order_json),
+            is_success=lambda response: bool(
+                response and response.get("success") and response.get("doc_entry")
+            ),
+            extract_error=lambda response: (
+                response.get("error", "Error desconocido")
+                if response else "No se recibió respuesta de SAP Service Layer"
+            ),
+            max_attempts=self.ODC_RETRY_MAX_ATTEMPTS,
+            should_retry=sap_service_layer_result_should_retry,
+            base_delay_seconds=self.ODC_RETRY_BASE_DELAY_SECONDS,
+            max_jitter_seconds=self.ODC_RETRY_MAX_JITTER_SECONDS,
+            logger=logger,
+            operation_label="ODC",
+        )
+    
+    def _enviar_itr_con_reintento(
+        self,
+        payload: Dict[str, Any],
+        from_wh: str,
+        to_wh: str,
+    ) -> Dict[str, Any]:
+        """Envía ITR (flujo por bodega destino) con reintento automático."""
+        return retry_operation(
+            execute=lambda: self.sap_client.create_stock_transfer(payload),
+            is_success=lambda response: bool(
+                response and response.get("success") and response.get("doc_entry")
+            ),
+            extract_error=lambda response: (
+                response.get("error", "Sin respuesta de SAP")
+                if response else "Sin respuesta de SAP"
+            ),
+            max_attempts=self.ITR_RETRY_MAX_ATTEMPTS,
+            should_retry=sap_service_layer_result_should_retry,
+            base_delay_seconds=self.ITR_RETRY_BASE_DELAY_SECONDS,
+            max_jitter_seconds=self.ITR_RETRY_MAX_JITTER_SECONDS,
+            logger=logger,
+            operation_label=f"ITR ({from_wh} → {to_wh})",
+        )
     
     @staticmethod
     def determinar_bodega_desde_pedido(
@@ -382,7 +441,8 @@ class OCSAPService:
             
             # 5. Enviar a SAP Service Layer
             logger.info(f"🔄 Enviando ODC {oc_id} a SAP Service Layer...")
-            sap_response = self.sap_client.create_purchase_order(purchase_order_json)
+            envio_oc_result = self._enviar_oc_con_reintento(purchase_order_json)
+            sap_response = envio_oc_result.get("response")
             
             if not sap_response:
                 error_msg = "No se recibió respuesta de SAP Service Layer"
@@ -420,6 +480,7 @@ class OCSAPService:
                 result["error_code"] = error_code
                 result["sap_error_details"] = sap_error_details
                 result["error_source"] = "SAP"  # Indicar que el error viene de SAP
+                result["attempts"] = envio_oc_result.get("attempts")
                 if _mensaje_sugiere_reintento_sap(error_msg):
                     result["retry_recommended"] = True
                 
@@ -469,6 +530,7 @@ class OCSAPService:
                 result["sap_response"] = sap_response_data
                 result["error_source"] = None
                 result["message"] = mensaje_sap
+                result["attempts"] = envio_oc_result.get("attempts")
 
                 doc_date_str = f", DocDate={result['doc_date']}" if result.get("doc_date") else ""
                 logger.info(
@@ -538,7 +600,12 @@ class OCSAPService:
                         for idx, pl in enumerate(itr_payloads):
                             to_warehouse = pl.get("ToWarehouse", "UNKNOWN")
                             logger.debug(f"🔄 Enviando ITR {idx+1}/{len(itr_payloads)} a SAP: {from_wh} → {to_warehouse}...")
-                            resp = self.sap_client.create_stock_transfer(pl)
+                            envio_itr_result = self._enviar_itr_con_reintento(
+                                payload=pl,
+                                from_wh=from_wh,
+                                to_wh=to_warehouse,
+                            )
+                            resp = envio_itr_result.get("response")
                             
                             # ✅ SOLO considerar creado si hay DocEntry confirmado
                             if resp and resp.get("success") and resp.get("doc_entry"):
@@ -547,6 +614,7 @@ class OCSAPService:
                                     "ToWarehouse": to_warehouse,
                                     "doc_entry": resp.get("doc_entry"),
                                     "doc_num": resp.get("doc_num"),
+                                    "attempts": envio_itr_result.get("attempts"),
                                     "success": True,
                                 })
                                 logger.info(
@@ -555,14 +623,17 @@ class OCSAPService:
                                 )
                             else:
                                 itr_errors += 1
-                                error_msg = resp.get("error") if resp else "Sin respuesta de SAP"
+                                error_msg = envio_itr_result.get("error") or "Sin respuesta de SAP"
                                 itr_results.append({
                                     "ToWarehouse": to_warehouse,
                                     "success": False,
+                                    "attempts": envio_itr_result.get("attempts"),
                                     "error": error_msg,
                                 })
                                 logger.warning(
-                                    f"⚠️ Inventory Transfer Request NO creado: {from_wh} → {to_warehouse}: {error_msg}"
+                                    f"⚠️ Inventory Transfer Request NO creado tras "
+                                    f"{envio_itr_result.get('attempts', self.ITR_RETRY_MAX_ATTEMPTS)} intento(s): "
+                                    f"{from_wh} → {to_warehouse}: {error_msg}"
                                 )
                         result["inventory_transfer_requests"] = {
                             "created": itr_created,
@@ -623,7 +694,7 @@ class OCSAPService:
                     if email_enviado:
                         logger.info(f"📧 Email de ODC con PDF enviado al proveedor {oc_cabecera.get('proveedor')}")
                     else:
-                        logger.warning(f"⚠️ No se pudo enviar email de ODC al proveedor (no crítico)")
+                        logger.warning("⚠️ No se pudo enviar email de ODC al proveedor (no crítico)")
                 except Exception as e:
                     # NO fallar el proceso si el email falla
                     logger.warning(f"⚠️ Error al enviar email de ODC (no crítico): {e}")
@@ -640,7 +711,7 @@ class OCSAPService:
                         if bodega_oc:
                             logger.info(f"📍 Usando bodega de la OC para ST: {bodega_oc}")
                         else:
-                            logger.warning(f"⚠️ OC sin codigo_bodega, se usará origen_traslado del pedido")
+                            logger.warning("⚠️ OC sin codigo_bodega, se usará origen_traslado del pedido")
                         
                         stock_transfer_service = StockTransferService()
                         resultado_transferencias = stock_transfer_service.crear_solicitudes_transferencia_desde_pedido(
@@ -729,7 +800,7 @@ class OCSAPService:
                     if email_enviado:
                         logger.info(f"📧 Notificación de OC lista para despacho enviada a El Rayo y MABEL TRADING (OC #{doc_num})")
                     else:
-                        logger.warning(f"⚠️ No se pudo enviar notificación a El Rayo (no crítico)")
+                        logger.warning("⚠️ No se pudo enviar notificación a El Rayo (no crítico)")
                     
                     # Persistir en BD el snapshot de lo notificado (información que se envía por correo)
                     if pedido_id:
@@ -1103,7 +1174,7 @@ class OCSAPService:
             for oc_info in ocs_pendientes:
                 oc_id = oc_info.get("oc_id")
                 if oc_id is None:
-                    logger.warning(f"⚠️ ODC sin oc_id, omitiendo")
+                    logger.warning("⚠️ ODC sin oc_id, omitiendo")
                     errores += 1
                     resultados.append({
                         "oc_id": None,

@@ -6,6 +6,51 @@
 			"type": "shell",
 			"command": "echo Patching file...",
 			"isBackground": false
+		},
+		{
+			"label": "Lint: Ruff (src + tests)",
+			"type": "shell",
+			"command": "python -m ruff check src tests",
+			"options": {
+				"cwd": "${workspaceFolder}"
+			},
+			"group": "test",
+			"presentation": {
+				"reveal": "always",
+				"panel": "shared"
+			},
+			"problemMatcher": []
+		},
+		{
+			"label": "Lint: Pyright",
+			"type": "shell",
+			"command": "python -m pyright",
+			"options": {
+				"cwd": "${workspaceFolder}"
+			},
+			"group": "test",
+			"presentation": {
+				"reveal": "always",
+				"panel": "shared"
+			},
+			"problemMatcher": []
+		},
+		{
+			"label": "Lint: Ruff + Pyright (script)",
+			"type": "shell",
+			"command": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/lint.ps1",
+			"options": {
+				"cwd": "${workspaceFolder}"
+			},
+			"group": {
+				"kind": "test",
+				"isDefault": true
+			},
+			"presentation": {
+				"reveal": "always",
+				"panel": "shared"
+			},
+			"problemMatcher": []
 		}
 	]
 }

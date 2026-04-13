@@ -13,10 +13,15 @@ from typing import Dict, Any, List, Optional
 from collections import defaultdict
 
 from src.config import PROJECT_ROOT
+from src.config import (
+    SAP_ITR_RETRY_MAX_ATTEMPTS,
+    SAP_ITR_RETRY_BASE_DELAY_SECONDS,
+    SAP_ITR_RETRY_MAX_JITTER_SECONDS,
+)
+from .retry_utils import retry_operation, sap_service_layer_result_should_retry
 from ..connection import get_db_connection_context
 from ..repositories.pedido_repository import PedidoRepository
 from ..repositories.distribucion_confirmada_repository import DistribucionConfirmadaRepository
-from ..repositories.orden_compra_repository import OrdenCompraRepository
 from ..repositories.pedido_sap_procesamiento_repository import PedidoSAPProcesamientoRepository
 from ..repositories.solicitud_transferencia_repository import SolicitudTransferenciaRepository
 from ..clients.sap_service_layer_client import SAPServiceLayerClient
@@ -30,9 +35,42 @@ logger = logging.getLogger(__name__)
 class StockTransferService:
     """Servicio para crear Solicitudes de Transferencia en SAP."""
     
+    # Reintentos automáticos por ITR individual cuando falla Service Layer
+    RETRY_MAX_ATTEMPTS = SAP_ITR_RETRY_MAX_ATTEMPTS
+    RETRY_BASE_DELAY_SECONDS = SAP_ITR_RETRY_BASE_DELAY_SECONDS
+    RETRY_MAX_JITTER_SECONDS = SAP_ITR_RETRY_MAX_JITTER_SECONDS
+    
     def __init__(self):
         """Inicializa el servicio."""
         self.sap_client = SAPServiceLayerClient()
+    
+    def _enviar_itr_con_reintento(
+        self,
+        payload: Dict[str, Any],
+        bodega_origen: str,
+        tienda_codigo: str,
+    ) -> Dict[str, Any]:
+        """
+        Envía una ITR a SAP con reintento automático y backoff exponencial.
+        
+        Reintenta solo la ITR actual (no todo el batch) para soportar éxito parcial.
+        """
+        return retry_operation(
+            execute=lambda: self.sap_client.create_stock_transfer(payload),
+            is_success=lambda response: bool(
+                response and response.get("success") and response.get("doc_entry")
+            ),
+            extract_error=lambda response: (
+                response.get("error", "Sin respuesta de SAP")
+                if response else "Sin respuesta de SAP"
+            ),
+            max_attempts=self.RETRY_MAX_ATTEMPTS,
+            should_retry=sap_service_layer_result_should_retry,
+            base_delay_seconds=self.RETRY_BASE_DELAY_SECONDS,
+            max_jitter_seconds=self.RETRY_MAX_JITTER_SECONDS,
+            logger=logger,
+            operation_label=f"ITR ({bodega_origen} → {tienda_codigo})",
+        )
     
     def _validate_itr_minimal(
         self,
@@ -873,7 +911,12 @@ class StockTransferService:
                         f"🔄 Enviando ITR {idx+1}/{len(stock_transfers_json)} a SAP: "
                         f"{bodega_origen} → {tienda_codigo}..."
                     )
-                    sap_response = self.sap_client.create_stock_transfer(stock_transfer_json)
+                    envio_result = self._enviar_itr_con_reintento(
+                        payload=stock_transfer_json,
+                        bodega_origen=bodega_origen,
+                        tienda_codigo=tienda_codigo,
+                    )
+                    sap_response = envio_result.get("response")
                     
                     # Obtener nombre de la tienda desde el mapeo
                     tienda_codigo_upper = tienda_codigo.strip().upper() if tienda_codigo else ""
@@ -889,22 +932,26 @@ class StockTransferService:
                         "error": None
                     }
                     
-                    if sap_response and sap_response.get("success") and sap_response.get("doc_entry"):
+                    if envio_result.get("success") and isinstance(sap_response, dict):
                         # ✅ SOLO AQUÍ se considera que el ITR fue creado realmente en SAP
                         resultado_tienda["success"] = True
                         resultado_tienda["doc_entry"] = sap_response.get("doc_entry")
                         resultado_tienda["doc_num"] = sap_response.get("doc_num")
+                        resultado_tienda["attempts"] = envio_result.get("attempts")
                         result["transferencias_creadas"] += 1
                         logger.info(
                             f"✅ Inventory Transfer Request CREADO en SAP: {bodega_origen} → {tienda_codigo} "
                             f"(DocEntry={resultado_tienda['doc_entry']}, DocNum={resultado_tienda['doc_num']})"
                         )
                     else:
-                        error_msg = sap_response.get("error", "Error desconocido") if sap_response else "No se recibió respuesta de SAP"
+                        error_msg = envio_result.get("error") or "No se recibió respuesta de SAP"
                         resultado_tienda["error"] = error_msg
+                        resultado_tienda["attempts"] = envio_result.get("attempts")
                         result["transferencias_errores"] += 1
                         logger.warning(
-                            f"⚠️ Inventory Transfer Request NO creado: {bodega_origen} → {tienda_codigo}: {error_msg}"
+                            f"⚠️ Inventory Transfer Request NO creado tras "
+                            f"{envio_result.get('attempts', self.RETRY_MAX_ATTEMPTS)} intento(s): "
+                            f"{bodega_origen} → {tienda_codigo}: {error_msg}"
                         )
                     
                     result["resultados"].append(resultado_tienda)

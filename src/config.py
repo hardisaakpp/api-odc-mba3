@@ -2,9 +2,23 @@
 Configuracion y constantes para la API de consultas MBA3.
 """
 
+import logging
 import os
 from pathlib import Path
-from dotenv import load_dotenv
+from importlib import import_module
+
+_dotenv_module = None
+try:
+    _dotenv_module = import_module("dotenv")
+except ModuleNotFoundError:
+    _dotenv_module = None
+
+if _dotenv_module is not None:
+    load_dotenv = _dotenv_module.load_dotenv
+else:
+    # Permite correr sin python-dotenv (e.g. en entornos de análisis estático).
+    def load_dotenv(*args, **kwargs):
+        return False
 
 # Configuracion de li­mites
 MAX_QUERY_LENGTH = 5000  # Longitud maxima de consulta en caracteres
@@ -189,6 +203,17 @@ SAP_SERVICE_LAYER_VERIFY_SSL = os.getenv("SAP_SERVICE_LAYER_VERIFY_SSL", "true")
 # Si estÃ¡ vacÃ­o y no hay bodega en la OC, las ITR no se crearÃ¡n.
 SAP_ST_FROM_WAREHOUSE = os.getenv("SAP_ST_FROM_WAREHOUSE", "")
 
+# Reintentos automáticos para Inventory Transfer Requests (ITR) por tienda.
+# Se aplican cuando una ODC fue enviada pero algunas o todas las ITR fallan.
+SAP_ITR_RETRY_MAX_ATTEMPTS = max(1, int(os.getenv("SAP_ITR_RETRY_MAX_ATTEMPTS", "3")))
+SAP_ITR_RETRY_BASE_DELAY_SECONDS = max(0.1, float(os.getenv("SAP_ITR_RETRY_BASE_DELAY_SECONDS", "3.0")))
+SAP_ITR_RETRY_MAX_JITTER_SECONDS = max(0.0, float(os.getenv("SAP_ITR_RETRY_MAX_JITTER_SECONDS", "1.0")))
+
+# Reintentos automáticos para envío de ODC (Purchase Orders) a SAP Service Layer.
+SAP_ODC_RETRY_MAX_ATTEMPTS = max(1, int(os.getenv("SAP_ODC_RETRY_MAX_ATTEMPTS", "3")))
+SAP_ODC_RETRY_BASE_DELAY_SECONDS = max(0.1, float(os.getenv("SAP_ODC_RETRY_BASE_DELAY_SECONDS", "3.0")))
+SAP_ODC_RETRY_MAX_JITTER_SECONDS = max(0.0, float(os.getenv("SAP_ODC_RETRY_MAX_JITTER_SECONDS", "1.0")))
+
 # ============================================================================
 # ConfiguraciÃ³n de Seguridad (Opcional)
 # ============================================================================
@@ -234,7 +259,6 @@ HIDE_SWAGGER_IN_PROD = os.getenv("HIDE_SWAGGER_IN_PROD", "true").lower() == "tru
 # ============================================================================
 # Validaciones de Seguridad
 # ============================================================================
-import logging
 logger = logging.getLogger(__name__)
 
 # Validar configuraciones crÃ­ticas en producciÃ³n
