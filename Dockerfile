@@ -17,6 +17,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && ACCEPT_EULA=Y apt-get install -y msodbcsql17 \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
+# Solo dependencias de runtime (sin ruff/pyright/pre-commit; el lint vive en desarrollo y en CI).
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 

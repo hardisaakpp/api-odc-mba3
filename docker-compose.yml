@@ -1,57 +1,43 @@
-# MBA3 Consultas - Servidor de pruebas con Docker
-# Uso: docker compose up -d --build
-# Requiere .env en la misma carpeta (REDIS_URL se sobrescribe aquí para los contenedores).
+# MBA3 Consultas — Infraestructura local (Redis + MinIO)
+#
+# La API y Celery se ejecutan en el host (p. ej. .\run-dev.ps1 y worker en otra terminal).
+# Uso: docker compose up -d
+#
+# Puertos: Redis 6379, MinIO API 9100, consola MinIO 9101.
+# Alinear .env.develop: REDIS_URL=redis://localhost:6379/0, FILE_STORAGE_ENDPOINT=http://localhost:9100
 
 services:
   redis:
     image: redis:7-alpine
     ports:
       - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
     restart: unless-stopped
 
-  api:
-    build: .
+  minio:
+    image: minio/minio
+    command: server /data --console-address ":9001"
+    environment:
+      - MINIO_ROOT_USER=minioadmin
+      - MINIO_ROOT_PASSWORD=minioadmin
     ports:
-      - "8000:8000"
-    env_file: .env
-    environment:
-      - REDIS_URL=redis://redis:6379/0
-    depends_on:
-      - redis
+      - "9100:9000"
+      - "9101:9001"
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
     restart: unless-stopped
 
-  celery-worker:
-    build: .
-    command: celery -A src.celery_app worker --loglevel=info --pool=solo
-    env_file: .env
-    environment:
-      - REDIS_URL=redis://redis:6379/0
-    depends_on:
-      - redis
-      - api
-    restart: unless-stopped
-
-  # Descomentar para tareas programadas (Celery Beat)
-  # celery-beat:
-  #   build: .
-  #   command: celery -A src.celery_app beat --loglevel=info
-  #   env_file: .env
-  #   environment:
-  #     - REDIS_URL=redis://redis:6379/0
-  #   depends_on:
-  #     - redis
-  #   restart: unless-stopped
-
-  # Descomentar para monitoreo con Flower (puerto 5555)
-  # flower:
-  #   build: .
-  #   command: celery -A src.celery_app flower --port=5555
-  #   env_file: .env
-  #   environment:
-  #     - REDIS_URL=redis://redis:6379/0
-  #   ports:
-  #     - "5555:5555"
-  #   depends_on:
-  #     - redis
-  #     - celery-worker
-  #   restart: unless-stopped
+volumes:
+  redis_data:
+  minio_data:
