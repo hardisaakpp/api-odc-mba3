@@ -66,6 +66,7 @@ uvicorn src.api_server:app --host 0.0.0.0 --port 8000
 | Acción | Documento |
 |--------|-----------|
 | **Actualizar código del backend** (git pull + restart) | Este documento |
+| **Desplegar en servidor de pruebas (DESA)** | [DEPLOY_TEST.md](DEPLOY_TEST.md) |
 | **Desplegar migraciones de BD** | [DEPLOY_MIGRATIONS.md](DEPLOY_MIGRATIONS.md) y [scripts/PRODUCTION_DEPLOYMENT_CHECKLIST.md](../scripts/PRODUCTION_DEPLOYMENT_CHECKLIST.md) |
 | **Reiniciar API/Celery tras migraciones** | Incluye los mismos comandos de este documento |
 

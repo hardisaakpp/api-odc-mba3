@@ -9,6 +9,7 @@
 | Necesitas | Documento |
 |-----------|-----------|
 | Instalar y configurar el proyecto | [CONFIGURACION.md](CONFIGURACION.md) |
+| **Desplegar backend en servidor de pruebas (DESA)** | **[DEPLOY_TEST.md](DEPLOY_TEST.md)** 🧪 |
 | **Actualizar backend en producción (Linux)** | **[DEPLOY_PRODUCCION.md](DEPLOY_PRODUCCION.md)** 🐧 |
 | **Desplegar migraciones de BD** | **[DEPLOY_MIGRATIONS.md](DEPLOY_MIGRATIONS.md)** 🗄️ |
 | Activar procesos automáticos (Celery) | [CELERY_QUICKSTART.md](CELERY_QUICKSTART.md) |
@@ -16,7 +17,7 @@
 
 ---
 
-## 📖 Documentación Esencial (10 archivos)
+## 📖 Documentación Esencial (11 archivos)
 
 ### 1. **[CONFIGURACION.md](CONFIGURACION.md)** ⚙️
 Configuración completa del proyecto
@@ -44,33 +45,39 @@ Modelo de datos
 - Relaciones
 - Campos especiales
 
-### 5. **[DEPLOY_PRODUCCION.md](DEPLOY_PRODUCCION.md)** 🐧
+### 5. **[DEPLOY_TEST.md](DEPLOY_TEST.md)** 🧪
+Desplegar backend en servidor de pruebas (DESA)
+- Host `210.17.1.53` / `DESA-MABUIOSAPP`, usuario `admindesa`
+- `ENVIRONMENT=test`, archivo `.env.test`
+- Flujo git pull, pip, migraciones, reinicio (Windows o Linux según el host)
+
+### 6. **[DEPLOY_PRODUCCION.md](DEPLOY_PRODUCCION.md)** 🐧
 Actualizar backend en producción (Linux)
 - Ruta `/opt/odc-sap/`, servicio `odc-sap-api`
 - git pull, pip install, systemctl restart
 - Ejecución manual con uvicorn (pruebas)
 
-### 6. **[DEPLOY_MIGRATIONS.md](DEPLOY_MIGRATIONS.md)** 🚀
+### 7. **[DEPLOY_MIGRATIONS.md](DEPLOY_MIGRATIONS.md)** 🚀
 Sistema de migraciones para producción
 - Despliegue seguro de BD
 - Trazabilidad completa
 - Dry-run y rollback
 - Proceso paso a paso
 
-### 7. **[CELERY_QUICKSTART.md](CELERY_QUICKSTART.md)** ⚡
+### 8. **[CELERY_QUICKSTART.md](CELERY_QUICKSTART.md)** ⚡
 Procesos automáticos
 - Setup en 5 pasos
 - Ejecución
 - Monitoreo
 
-### 8. **[SEGURIDAD.md](SEGURIDAD.md)** 🔒
+### 9. **[SEGURIDAD.md](SEGURIDAD.md)** 🔒
 Configuración de seguridad
 - API Keys
 - Rate limiting
 - CORS
 - Autenticación JWT
 
-### 9. **[TESTING.md](TESTING.md)** 🧪
+### 10. **[TESTING.md](TESTING.md)** 🧪
 Pruebas y validación
 - Estructura de tests unitarios
 - Cómo ejecutar tests
@@ -78,7 +85,7 @@ Pruebas y validación
 - Comandos PowerShell para testing manual
 - Script automatizado en `scripts/test_endpoints.ps1`
 
-### 10. **[HOMOLOGACIONES_SKU.md](HOMOLOGACIONES_SKU.md)** 🏷️
+### 11. **[HOMOLOGACIONES_SKU.md](HOMOLOGACIONES_SKU.md)** 🏷️
 Sistema de homologaciones
 - Gestión de correspondencias SKU
 - API bajo `/api/homologaciones-sku` (listado, alta, edición, bulk, sincronizar)
@@ -126,6 +133,7 @@ docs/
 ├── ENDPOINTS.md                 ⭐ ESENCIAL
 ├── INTEGRACION_SAP.md           ⭐ ESENCIAL
 ├── ESTRUCTURA_BD_PEDIDOS.md     ⭐ ESENCIAL
+├── DEPLOY_TEST.md               ⭐ ESENCIAL (servidor DESA / pruebas)
 ├── DEPLOY_PRODUCCION.md         ⭐ ESENCIAL (actualizar backend Linux)
 ├── DEPLOY_MIGRATIONS.md         ⭐ ESENCIAL (migraciones BD)
 ├── CELERY_QUICKSTART.md         ⭐ ESENCIAL
@@ -148,6 +156,7 @@ docs/
 | Pregunta | Respuesta |
 |----------|-----------|
 | ¿Cómo instalo el proyecto? | [CONFIGURACION.md](CONFIGURACION.md) |
+| **¿Cómo despliego en el servidor de pruebas (DESA)?** | **[DEPLOY_TEST.md](DEPLOY_TEST.md)** 🧪 |
 | **¿Cómo actualizo el backend en producción (Linux)?** | **[DEPLOY_PRODUCCION.md](DEPLOY_PRODUCCION.md)** 🐧 |
 | **¿Cómo despliego migraciones?** | **[DEPLOY_MIGRATIONS.md](DEPLOY_MIGRATIONS.md)** 🚀 |
 | ¿Cuáles son los endpoints? | [ENDPOINTS.md](ENDPOINTS.md) |
@@ -182,5 +191,5 @@ Para referencia sobre cambios previos e implementaciones completadas:
 ✓ Celery procesando automáticamente  
 ✓ Seguridad configurada  
 ✓ Tests ejecutados y validados  
-✓ **Documentación en `docs/`: ~40 archivos** (10 esenciales arriba + complementarias + histórico)  
+✓ **Documentación en `docs/`: ~40 archivos** (11 esenciales arriba + complementarias + histórico)  
 ✓ **Última revisión índice:** abril 2026
