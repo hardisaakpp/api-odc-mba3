@@ -55,19 +55,21 @@ def _normalize_environment(env_value: str) -> str:
     return mapping.get(env, "development")
 
 
-def _resolve_env_file(project_root: Path) -> tuple[str, Path]:
+def _resolve_env_file_path(project_root: Path) -> Path:
     """
-    Resuelve el ambiente y archivo de entorno a cargar.
+    Determina qué archivo .env cargar (ruta absoluta o bajo project_root).
 
-    Validación estricta (sin fallback a `.env`):
+    Orden (sin fallback silencioso a un `.env` genérico sin nombre):
 
-    1) Si existe ENV_FILE -> ese archivo debe existir.
-    2) Si no -> debe existir `.env.develop` | `.env.test` | `.env.staging` | `.env.production`
-       según ENVIRONMENT (normalizado).
+    1) Si existe ``ENV_FILE`` -> ese archivo debe existir (típico en systemd:
+       ``Environment=ENV_FILE=/opt/odc-sap/.env``).
+    2) Si no -> ``.env.develop`` | ``.env.test`` | ``.env.staging`` | ``.env.production``
+       según ``ENVIRONMENT`` (normalizado; por defecto ``development`` → ``.env.develop``).
+
+    El valor lógico de ambiente (``APP_ENV``) se fija **después** de ``load_dotenv``,
+    para que ``ENVIRONMENT`` definido dentro del archivo cargado (o solo ahí) aplique
+    correctamente cuando se usa ``ENV_FILE``.
     """
-    env_hint = os.getenv("ENVIRONMENT", "development")
-    normalized_env = _normalize_environment(env_hint)
-
     explicit_env_file = os.getenv("ENV_FILE", "").strip()
     if explicit_env_file:
         explicit_path = Path(explicit_env_file).expanduser()
@@ -77,8 +79,10 @@ def _resolve_env_file(project_root: Path) -> tuple[str, Path]:
             raise FileNotFoundError(
                 f"ENV_FILE apunta a un archivo inexistente: {explicit_path}"
             )
-        return normalized_env, explicit_path
+        return explicit_path
 
+    env_hint = os.getenv("ENVIRONMENT", "development")
+    normalized_env = _normalize_environment(env_hint)
     env_file_suffix = "develop" if normalized_env == "development" else normalized_env
     env_file = project_root / f".env.{env_file_suffix}"
     if not env_file.is_file():
@@ -87,11 +91,12 @@ def _resolve_env_file(project_root: Path) -> tuple[str, Path]:
             f"Ambiente: {normalized_env} (ENVIRONMENT={env_hint!r}). "
             "Crea ese archivo en la raíz del proyecto o define ENV_FILE con la ruta a tu .env."
         )
-    return normalized_env, env_file
+    return env_file
 
 
-APP_ENV, ENV_FILE_USED = _resolve_env_file(PROJECT_ROOT)
+ENV_FILE_USED = _resolve_env_file_path(PROJECT_ROOT)
 load_dotenv(ENV_FILE_USED)
+APP_ENV = _normalize_environment(os.getenv("ENVIRONMENT", "development"))
 
 # ============================================================================
 # ConfiguraciÃ³n de MBA3

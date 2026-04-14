@@ -17,7 +17,20 @@ La aplicación **exige** un archivo de entorno según `ENVIRONMENT` (no usa fall
 
 Si falta el archivo correspondiente, el proceso **termina al iniciar** con un mensaje claro.
 
-**Override:** define `ENV_FILE` con la ruta (absoluta o relativa al root del repo) a un archivo `.env` concreto; ese archivo también debe existir.
+**Override:** define `ENV_FILE` con la ruta (absoluta o relativa al root del repo) a un archivo `.env` concreto; ese archivo también debe existir. Tiene prioridad sobre la tabla anterior.
+
+**Orden de carga:** primero se elige el fichero (`ENV_FILE` o `.env.{ambiente}`), luego se carga con `python-dotenv`, y **después** se lee `ENVIRONMENT` para el modo lógico de la app. Así, en servidor puedes usar un solo archivo (p. ej. `/opt/odc-sap/.env`) con `ENVIRONMENT=production` dentro, sin depender de `.env.develop`.
+
+### systemd (Linux): API, Celery worker y Celery beat
+
+En producción o test no uses `.env.develop` como única fuente en la unidad: apunta al fichero real del servidor y fija el ambiente explícitamente:
+
+```ini
+Environment=ENVIRONMENT=production
+Environment=ENV_FILE=/opt/odc-sap/.env
+```
+
+(Ajusta la ruta al directorio de despliegue.) Repite las mismas líneas en los servicios del worker y de beat para que Celery use la misma configuración que la API.
 
 ### MBA3
 
