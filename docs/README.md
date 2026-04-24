@@ -46,10 +46,11 @@ Modelo de datos
 - Campos especiales
 
 ### 5. **[DEPLOY_TEST.md](DEPLOY_TEST.md)** 🧪
-Desplegar backend en servidor de pruebas (DESA)
+Desplegar en servidor de pruebas (DESA)
 - Host `210.17.1.53` / `DESA-MABUIOSAPP`, usuario `admindesa`
-- `ENVIRONMENT=test`, archivo `.env.test`
-- Flujo git pull, pip, migraciones, reinicio (Windows o Linux según el host)
+- Linux: `/opt/odc-sap`, rama `test`, servicio `odc-sap-test`, Docker solo Redis/MinIO
+- Variables: `.env.test` o `ENV_FILE` según systemd (ver `systemctl cat`)
+- Frontend: repo y script aparte (documentado en la misma guía)
 
 ### 6. **[DEPLOY_PRODUCCION.md](DEPLOY_PRODUCCION.md)** 🐧
 Actualizar backend en producción (Linux)

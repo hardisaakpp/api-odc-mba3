@@ -137,7 +137,7 @@ La documentación completa está organizada en el directorio `docs/`.
 ### 📖 Guías de Inicio
 - **[Índice de Documentación](docs/README.md)** ⭐ - Punto de entrada principal
 - **[Configuración](docs/CONFIGURACION.md)** - Setup completo de variables de entorno
-- **[Desplegar backend en servidor de pruebas (DESA)](docs/DEPLOY_TEST.md)** 🧪 - SSH, `ENVIRONMENT=test`, `.env.test`
+- **[Desplegar en servidor de pruebas (DESA)](docs/DEPLOY_TEST.md)** 🧪 - Backend (rama `test`, systemd, Docker Redis/MinIO) y referencia al despliegue del frontend
 - **[Actualizar backend en producción (Linux)](docs/DEPLOY_PRODUCCION.md)** 🐧 - git pull, pip install, systemctl restart
 - **[Sistema de Migraciones](docs/DEPLOY_MIGRATIONS.md)** 🗄️ - Despliegue seguro de BD
 - **[Celery Quick Start](docs/CELERY_QUICKSTART.md)** 🚀 - Procesos automáticos en 5 pasos

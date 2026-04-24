@@ -1,121 +1,177 @@
-# Desplegar backend en servidor de pruebas (DESA)
+# Desplegar en servidor de pruebas (DESA)
 
-Guía para aplicar y verificar el backend en el **ambiente de test**. El comportamiento de variables de entorno es el mismo que en otros ambientes: con `ENVIRONMENT=test` la aplicación **exige** el archivo **`.env.test`** en la raíz del proyecto (ver [CONFIGURACION.md](CONFIGURACION.md)).
+Guía para **actualizar backend** (este repo, `mba3-consultas`) y **referencia al frontend** que consume la API en el ambiente de test.
+
+---
+
+## Resumen ejecutivo (checklist)
+
+1. SSH al servidor de test (usuario y host acordados con infraestructura).
+2. **Backend:** `cd` al directorio del repo → activar `venv` → `git pull` de la rama de test → `pip install -r requirements.txt`.
+3. **Migraciones SQL** solo si el release lo requiere (ver [DEPLOY_MIGRATIONS.md](DEPLOY_MIGRATIONS.md)).
+4. **Reiniciar** la unidad systemd de la API de test (en DESA Linux suele ser `odc-sap-test`, no `odc-sap-api`).
+5. **Infra Docker** (Redis/MinIO del repo): solo si toca actualizar o recrear contenedores; usar `docker compose up -d`.
+6. **Celery** (worker/beat): reiniciar si aplica y si cambió código o dependencias de tareas.
+7. **Frontend:** despliegue en **otro repositorio** y script propio del servidor (ver sección más abajo).
+8. Verificar: `systemctl status`, logs, `GET /health` (puerto real del servicio).
 
 ---
 
 ## Servidor de test
 
-| Dato | Valor |
-|------|--------|
+| Dato | Valor habitual |
+|------|----------------|
 | **IP** | `210.17.1.53` |
-| **Nombre de host** | `DESA-MABUIOSAPP` |
-| **Usuario SSH / acceso** | `admindesa` |
+| **Nombre de host** | `DESA-MABUIOSAPP` (en Linux el hostname puede verse en minúsculas, p. ej. `desa-mabuiosapp`) |
+| **Usuario SSH** | `admindesa` |
 
 ### Seguridad: credenciales
 
-- **No incluyas contraseñas ni secretos en archivos del repositorio** (ni en este documento).
-- Guarda la contraseña de `admindesa` en un **gestor de secretos** corporativo o solicítala al administrador.
-- Las cadenas de conexión a SQL Server, SAP, JWT, etc. van en **`.env.test`** en el servidor (ese archivo **no** debe committearse).
+- **No** incluyas contraseñas ni secretos en el repositorio.
+- Cadenas de conexión, JWT, MinIO, etc. viven en archivos de entorno en el servidor (no commiteados). Ver [CONFIGURACION.md](CONFIGURACION.md).
 
 ---
 
 ## Conectar al servidor
 
-Desde tu PC (PowerShell, terminal o cliente SSH):
-
 ```bash
 ssh admindesa@210.17.1.53
-```
-
-Si tu política usa el nombre de host:
-
-```bash
+# o, según DNS interno:
 ssh admindesa@DESA-MABUIOSAPP
 ```
 
-La primera vez confirma la huella del host si el cliente la muestra.
+---
+
+## Layout real en DESA (Linux) — backend
+
+En el servidor de pruebas el backend suele estar desplegado así:
+
+| Elemento | Valor típico |
+|----------|----------------|
+| **Ruta del repo** | `/opt/odc-sap/` |
+| **Entorno virtual** | `/opt/odc-sap/venv/` |
+| **Rama Git para test** | `test` (confirmar con `git branch` en el servidor) |
+| **Servicio API (systemd)** | `odc-sap-test` (el nombre `odc-sap-api` suele ser de **producción** u otro host; si `restart` falla con “unit not found”, ejecuta `systemctl list-units --type=service --no-legend` y busca unidades cuyo nombre contenga `odc`) |
+
+La API **no** tiene por qué ir dentro de Docker en este host: en muchos despliegos solo **Redis** y **MinIO** están en `docker-compose.yml` del repo; **uvicorn** corre vía **systemd**.
 
 ---
 
-## Qué debe existir en el servidor (una vez)
+## Variables de entorno en el servidor
 
-1. **Clon del repositorio** en una ruta acordada (por ejemplo bajo `D:\`, `C:\Apps\` o, si fuera Linux, `/opt/odc-sap/`). **Confirma la ruta real** al conectarte.
-2. **Python 3.9+** y entorno virtual (`venv`) en la carpeta del proyecto.
-3. **Archivo `.env.test`** en la raíz del repo, con `ENVIRONMENT=test` y el resto de variables según [CONFIGURACION.md](CONFIGURACION.md) (SQL de **desarrollo/pruebas**, Redis si usas Celery, etc.).
-4. **Redis** si utilizas workers Celery (misma idea que [CELERY_QUICKSTART.md](CELERY_QUICKSTART.md)).
-5. **ODBC Driver for SQL Server** instalado en la máquina donde corre Python (en Windows: instalador Microsoft; en Linux: paquete `msodbcsql17` o el que use el proyecto).
+La aplicación elige el archivo `.env` según `ENVIRONMENT` o `ENV_FILE`. Resumen en [CONFIGURACION.md](CONFIGURACION.md):
+
+- Con `ENVIRONMENT=test` se espera **`.env.test`** en la raíz del proyecto, **salvo** que la unidad systemd defina `ENV_FILE` apuntando a otro archivo (por ejemplo un único `.env` en `/opt/odc-sap/.env`).
+
+**Qué editar antes de reiniciar:** no asumas; revisa la unidad:
+
+```bash
+systemctl cat odc-sap-test
+```
+
+Busca `Environment=`, `EnvironmentFile=` y el `ExecStart`. Ahí verás qué archivo carga el proceso y con qué `ENVIRONMENT`.
 
 ---
 
-## Despliegue rutinario (actualizar código)
+## Despliegue rutinario del backend (Linux)
 
-Tras conectar por SSH, usa la sección que corresponda al **sistema operativo** del servidor.
+Ejecutar como usuario con permiso `sudo` para `systemctl` (p. ej. `admindesa`):
 
-### Opción A — Windows Server (PowerShell)
+```bash
+cd /opt/odc-sap
+source venv/bin/activate
 
-Ajusta `RUTA_PROYECTO` a la carpeta real del repo en DESA.
+# Rama de integración en test (ajustar si el equipo usa otra)
+git pull origin test
+
+pip install -r requirements.txt
+```
+
+### Migraciones de base de datos
+
+Solo si el cambio incluye scripts o instrucciones de BD:
+
+```bash
+python scripts/migration_runner.py --dry-run --verbose
+python scripts/migration_runner.py
+```
+
+Más detalle: [DEPLOY_MIGRATIONS.md](DEPLOY_MIGRATIONS.md).
+
+### Reinicio de la API
+
+```bash
+sudo systemctl restart odc-sap-test
+sudo systemctl status odc-sap-test --no-pager
+```
+
+Logs recientes:
+
+```bash
+journalctl -u odc-sap-test -n 100 --no-pager
+```
+
+### Redis y MinIO (`docker-compose.yml` del repo)
+
+Este compose **solo** define servicios de apoyo (Redis, MinIO), alineados con variables como `REDIS_URL` y `FILE_STORAGE_ENDPOINT` en tu `.env` de test.
+
+- **Uso recomendado** (segundo plano, no bloquea la sesión SSH):
+
+  ```bash
+  cd /opt/odc-sap
+  docker compose up -d
+  ```
+
+- Evita dejar una sesión con `docker compose up` **sin** `-d` a menos que quieras ver logs en primer plano; al cerrar con **Ctrl+C** puedes detener los contenedores.
+- Tras **recrear** Redis, si hay workers Celery, conviene **reiniciar** también sus unidades systemd (si existen) para evitar conexiones colgadas.
+
+---
+
+## Verificación del backend
+
+1. Puerto: el que defina `ExecStart` o el reverse proxy (no siempre es `8000` en el host).
+
+   ```bash
+   # Ejemplo si la API escucha en 8000 en localhost:
+   curl -sS http://127.0.0.1:8000/health
+   ```
+
+2. Confirmar commit desplegado:
+
+   ```bash
+   cd /opt/odc-sap && git log -1 --oneline
+   ```
+
+---
+
+## Frontend (no es este repositorio)
+
+La UI que llama a esta API suele vivir en **otro repo** (por ejemplo `scnexus-front`) y desplegarse con un **script del servidor**, no con `git pull` dentro de `/opt/odc-sap`.
+
+Patrón observado en DESA:
+
+- Script en el home del usuario de despliegue, p. ej. `~/deploys/nexus_frontend.sh`.
+- Ese script hace `git pull` de la rama acordada del frontend (p. ej. `develop`), `npm install` y levanta el proceso en background; los logs pueden estar en un archivo tipo `~/deploys/dev.log`.
+
+**Importante:** rutas y nombres del script pueden variar; confirma con el equipo o revisa el contenido del `.sh` en el servidor.
+
+---
+
+## Despliegue rutinario (Windows Server)
+
+Si el backend de test corriera en Windows (menos frecuente en el layout actual):
 
 ```powershell
 cd RUTA_PROYECTO
 .\venv\Scripts\Activate.ps1
 $env:ENVIRONMENT = "test"
 
-git pull origin main
+git pull origin test
 
 pip install -r requirements.txt
 ```
 
-**Migraciones de base de datos** (si hay scripts nuevos; siempre validar antes en test):
-
-```powershell
-python scripts/migration_runner.py --dry-run --verbose
-python scripts/migration_runner.py
-```
-
-**Reinicio del servicio de la API:** depende de cómo esté instalado en DESA (NSSM, tarea programada, `sc`, etc.). Reinicia el servicio o proceso que ejecute `uvicorn` y apunte a este proyecto con `ENVIRONMENT=test`. Si aún no hay servicio y solo pruebas en consola:
-
-```powershell
-python -m uvicorn src.api_server:app --host 0.0.0.0 --port 8000
-```
-
-No uses `--reload` en un servidor compartido.
-
-**Celery** (si aplica en test): reinicia también el worker y, si existe, Celery Beat con los mismos comandos que en [README.md](../README.md) y [CELERY_QUICKSTART.md](CELERY_QUICKSTART.md), con el entorno activado y `ENVIRONMENT=test`.
-
-### Opción B — Linux (bash)
-
-Si el host de test es Linux y el layout coincide con producción:
-
-```bash
-cd /ruta/del/proyecto
-source venv/bin/activate
-export ENVIRONMENT=test
-
-git pull origin main
-pip install -r requirements.txt
-
-python scripts/migration_runner.py --dry-run --verbose
-python scripts/migration_runner.py
-
-sudo systemctl restart NOMBRE_SERVICIO_API_TEST
-```
-
-Sustituye `NOMBRE_SERVICIO_API_TEST` por el nombre real del unit de systemd en DESA (puede diferir de `odc-sap-api` de producción).
-
----
-
-## Verificación
-
-En el propio servidor:
-
-```bash
-curl http://localhost:8000/health
-```
-
-Desde otra máquina (si el firewall y la red lo permiten), usa la IP `210.17.1.53` y el puerto expuesto (habitualmente **8000**).
-
-Si la API va detrás de un reverse proxy o otro puerto, usa la URL que defina el equipo.
+Migraciones y reinicio del servicio (NSSM, tarea programada, etc.) según cómo esté instalado. No uses `--reload` en servidor compartido.
 
 ---
 
@@ -123,19 +179,18 @@ Si la API va detrás de un reverse proxy o otro puerto, usa la URL que defina el
 
 | Acción | Documento |
 |--------|------------|
-| Variables por ambiente (`.env.test`) | [CONFIGURACION.md](CONFIGURACION.md) |
-| Actualizar backend en **producción** (Linux) | [DEPLOY_PRODUCCION.md](DEPLOY_PRODUCCION.md) |
-| Migraciones de BD | [DEPLOY_MIGRATIONS.md](DEPLOY_MIGRATIONS.md) |
-| Checklist detallado de migraciones | [scripts/PRODUCTION_DEPLOYMENT_CHECKLIST.md](../scripts/PRODUCTION_DEPLOYMENT_CHECKLIST.md) (adaptar al SQL de **test**) |
+| Variables por ambiente / `ENV_FILE` | [CONFIGURACION.md](CONFIGURACION.md) |
+| Producción Linux | [DEPLOY_PRODUCCION.md](DEPLOY_PRODUCCION.md) |
+| Migraciones | [DEPLOY_MIGRATIONS.md](DEPLOY_MIGRATIONS.md) |
 | Celery / Redis | [CELERY_QUICKSTART.md](CELERY_QUICKSTART.md) |
 
 ---
 
-## Resumen rápido
+## Errores frecuentes
 
-1. `ssh admindesa@210.17.1.53`
-2. Ir al directorio del proyecto, activar `venv`, `ENVIRONMENT=test`
-3. `git pull` → `pip install -r requirements.txt`
-4. Migraciones si corresponde (`migration_runner.py`, primero `--dry-run`)
-5. Reiniciar API (y Celery si aplica)
-6. Comprobar `GET /health`
+| Síntoma | Qué revisar |
+|---------|-------------|
+| `Unit odc-sap-api.service not found` | En test suele ser **`odc-sap-test`**. Lista servicios y busca `odc`: `systemctl list-units --type=service --no-legend`. |
+| API arranca pero no lee tus cambios en `.env` | `systemctl cat odc-sap-test` — puede estar usando **`ENV_FILE`** distinto de `.env.test`. |
+| Frontend sin cambios | El front se actualiza con el **script/repo del frontend**, no solo con pull del backend. |
+| Celery falla tras recrear Redis | Reiniciar worker (y beat si aplica) tras `docker compose up`. |
