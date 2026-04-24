@@ -8,7 +8,6 @@ solo crean una solicitud que debe ser procesada posteriormente.
 
 import logging
 from typing import Dict, Any, List, Optional
-from datetime import datetime
 
 from src.utils.timezone import ahora_naive
 
@@ -88,19 +87,8 @@ class SAPStockTransferMapper:
             }
         ]
         """
-        # Formatear fecha
-        fecha = pedido_data.get("fecha_pedido") or pedido_data.get("creado_en")
-        if isinstance(fecha, str):
-            try:
-                if 'T' in fecha or ' ' in fecha:
-                    fecha_obj = datetime.fromisoformat(fecha.replace('Z', '+00:00'))
-                    fecha = fecha_obj.strftime("%Y-%m-%d")
-            except:
-                pass
-        elif fecha is not None and hasattr(fecha, 'strftime'):
-            fecha = fecha.strftime("%Y-%m-%d")
-        elif fecha is None:
-            fecha = ahora_naive().strftime("%Y-%m-%d")
+        # Para Inventory Transfer Requests usar siempre la fecha actual de ejecución.
+        fecha = ahora_naive().strftime("%Y-%m-%d")
         
         numero_pedido = pedido_data.get("numero_pedido", "N/A")
         comentario_base = f"Transferencia desde OC {oc_doc_num}" if oc_doc_num else "Transferencia desde pedido"
@@ -170,10 +158,8 @@ class SAPStockTransferMapper:
             
             # Construir JSON completo del Inventory Transfer Request
             # ⚠️ IMPORTANTE: Formato correcto para InventoryTransferRequests (POST /InventoryTransferRequests)
-            # ⚠️ NOTA: InventoryTransferRequests usa DueDate (no DocDueDate), que es correcto para este endpoint
             stock_transfer = {
                 "DocDate": fecha,
-                "DueDate": fecha,  # ⚠️ Correcto para Inventory Transfer Requests (POST /InventoryTransferRequests)
                 "FromWarehouse": bodega_origen_upper,
                 "ToWarehouse": tienda_destino,
                 "Comments": comentario_base,
@@ -207,15 +193,13 @@ class SAPStockTransferMapper:
     ) -> List[Dict[str, Any]]:
         """
         Agrupa detalles de OC por codigo_bodega y genera 1 Inventory Transfer Request por bodega destino.
-        Contrato Postman: POST /InventoryTransferRequests con DocDate, DueDate, FromWarehouse, ToWarehouse,
+        Contrato Postman: POST /InventoryTransferRequests con DocDate, FromWarehouse, ToWarehouse,
         Comments, StockTransferLines: [{ItemCode, Quantity}].
         """
         from collections import defaultdict
 
-        if not doc_date:
-            doc_date = ahora_naive().strftime("%Y-%m-%d")
-        if not due_date:
-            due_date = doc_date
+        # Para Inventory Transfer Requests usar siempre fecha actual de ejecución.
+        doc_date = ahora_naive().strftime("%Y-%m-%d")
 
         por_bodega: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
         for d in oc_detalles:
@@ -246,7 +230,6 @@ class SAPStockTransferMapper:
             lines = [{"ItemCode": k, "Quantity": v} for k, v in agg.items()]
             payload = {
                 "DocDate": doc_date,
-                "DueDate": due_date,
                 "FromWarehouse": from_wh,
                 "ToWarehouse": to_wh,
                 "PriceList": -2,
