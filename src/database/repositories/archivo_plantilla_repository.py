@@ -7,7 +7,6 @@ en el storage centralizado (MinIO/S3).
 
 import logging
 from typing import Optional, Dict, Any, List
-from datetime import datetime
 
 from src.utils.timezone import ahora_naive
 
@@ -230,11 +229,19 @@ class ArchivoPlantillaRepository:
             cursor.execute("""
                 UPDATE archivo_plantilla
                 SET 
-                    descargas = descargas + 1,
+                    descargas = COALESCE(descargas, 0) + 1,
                     ultima_descarga = ?,
                     ultimo_descargador = ?
-                WHERE archivo_id = ?
+                WHERE archivo_id = ? AND activo = 1
             """, (ahora_naive(), descargado_por, archivo_id))
+
+            if cursor.rowcount == 0:
+                logger.warning(
+                    "⚠️ No se registró descarga: archivo_id=%s no existe o está inactivo",
+                    archivo_id
+                )
+                self.conn.rollback()
+                return False
             
             self.conn.commit()
             

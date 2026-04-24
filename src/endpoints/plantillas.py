@@ -12,7 +12,6 @@ import base64
 import json
 import asyncio
 from typing import Dict, Optional
-from datetime import datetime
 
 from src.utils.timezone import ahora_naive
 from fastapi import FastAPI, UploadFile, File, Depends, HTTPException, Query, Form, Path, Request
@@ -245,7 +244,6 @@ def register_plantillas_endpoints(app: FastAPI):
             # ================================================================
             # NUEVO: Guardar archivo original en storage (MinIO/S3)
             # ================================================================
-            archivo_guardado = False
             if ENABLE_FILE_STORAGE and resultado.get("pedido_id"):
                 try:
                     from src.services.file_storage_service import get_file_storage, FileStorageError
@@ -271,7 +269,6 @@ def register_plantillas_endpoints(app: FastAPI):
                             subido_por=user_id
                         )
                     
-                    archivo_guardado = True
                     response_data["archivo_original"] = {
                         "guardado": True,
                         "storage_path": storage_path,
@@ -387,7 +384,7 @@ def register_plantillas_endpoints(app: FastAPI):
             run_async = False
         if run_async:
             try:
-                from src.services.file_storage_service import get_file_storage, FileStorageError
+                from src.services.file_storage_service import get_file_storage
                 estado_service = ProcesoEstadoService()
                 process_id = estado_service.crear_proceso_plantilla(user_id=user_id)
                 storage = get_file_storage()
@@ -482,7 +479,7 @@ def register_plantillas_endpoints(app: FastAPI):
                 )
             if ENABLE_FILE_STORAGE and resultado.get("pedido_id"):
                 try:
-                    from src.services.file_storage_service import get_file_storage, FileStorageError
+                    from src.services.file_storage_service import get_file_storage
                     storage = get_file_storage()
                     storage_path = storage.guardar_archivo(
                         contenido=content,
@@ -806,11 +803,11 @@ def register_plantillas_endpoints(app: FastAPI):
     # ========================================================================
     # NUEVO ENDPOINT: Descargar archivo Excel original
     # ========================================================================
-    @app.get("/api/plantillas/{pedido_id}/descargar-original", tags=["Plantillas"])
-    async def descargar_plantilla_original(
-        pedido_id: str = Path(..., description="ID del pedido (GUID)"),
-        user: Dict = Depends(verify_jwt_token),
-        _: None = Depends(require_any_permission(['mabel.view', 'odcsap.view']))
+    async def _descargar_plantilla(
+        *,
+        user: Dict,
+        pedido_id: Optional[str] = None,
+        archivo_id: Optional[int] = None
     ):
         """
         Descarga el archivo Excel original que fue subido para un pedido.
@@ -840,18 +837,73 @@ def register_plantillas_endpoints(app: FastAPI):
                 )
             
             user_id = get_user_id(user)
-            
+
+            if not pedido_id and archivo_id is None:
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "error": "bad_request",
+                        "message": "Debes enviar pedido_id o archivo_id para descargar."
+                    }
+                )
+
             # Buscar referencia del archivo en BD
             with get_db_connection_context() as conn:
                 archivo_repo = ArchivoPlantillaRepository(conn)
-                archivo_info = archivo_repo.obtener_por_pedido_id(pedido_id)
+                archivo_info = None
+                if archivo_id is not None:
+                    cursor = conn.cursor()
+                    cursor.execute("""
+                        SELECT
+                            archivo_id,
+                            pedido_id,
+                            nombre_original,
+                            storage_path,
+                            content_type,
+                            tamaño_bytes,
+                            subido_por,
+                            fecha_subida,
+                            activo,
+                            descargas,
+                            ultima_descarga,
+                            ultimo_descargador
+                        FROM archivo_plantilla
+                        WHERE archivo_id = ? AND activo = 1
+                    """, (archivo_id,))
+                    row = cursor.fetchone()
+                    if row:
+                        archivo_info = {
+                            "archivo_id": row[0],
+                            "pedido_id": row[1],
+                            "nombre_original": row[2],
+                            "storage_path": row[3],
+                            "content_type": row[4],
+                            "tamaño_bytes": row[5],
+                            "subido_por": row[6],
+                            "fecha_subida": row[7].isoformat() if row[7] else None,
+                            "activo": row[8],
+                            "descargas": row[9],
+                            "ultima_descarga": row[10].isoformat() if row[10] else None,
+                            "ultimo_descargador": row[11],
+                        }
+                else:
+                    if pedido_id is None:
+                        raise HTTPException(
+                            status_code=400,
+                            detail={
+                                "error": "bad_request",
+                                "message": "Debes enviar pedido_id o archivo_id para descargar."
+                            }
+                        )
+                    archivo_info = archivo_repo.obtener_por_pedido_id(pedido_id)
                 
                 if not archivo_info:
+                    identificador = f"archivo_id={archivo_id}" if archivo_id is not None else f"pedido_id={pedido_id}"
                     raise HTTPException(
                         status_code=404,
                         detail={
                             "error": "not_found",
-                            "message": f"No se encontró archivo original para el pedido {pedido_id}"
+                            "message": f"No se encontró archivo original para {identificador}"
                         }
                     )
             
@@ -880,7 +932,7 @@ def register_plantillas_endpoints(app: FastAPI):
                 )
             
             logger.info(
-                f"✅ Archivo descargado: pedido_id={pedido_id}, "
+                f"✅ Archivo descargado: pedido_id={archivo_info['pedido_id']}, "
                 f"archivo={archivo_info['nombre_original']}, usuario={user_id}"
             )
             
@@ -895,7 +947,7 @@ def register_plantillas_endpoints(app: FastAPI):
                     "Content-Disposition": f'attachment; filename="{nombre_descarga}"',
                     "Content-Length": str(len(contenido)),
                     "X-Archivo-Id": str(archivo_info["archivo_id"]),
-                    "X-Pedido-Id": str(pedido_id),
+                    "X-Pedido-Id": str(archivo_info["pedido_id"]),
                     "X-Subido-Por": archivo_info["subido_por"],
                     "X-Fecha-Subida": archivo_info["fecha_subida"] or ""
                 }
@@ -909,6 +961,28 @@ def register_plantillas_endpoints(app: FastAPI):
                 status_code=500,
                 detail=f"Error interno al descargar el archivo: {str(e)}"
             )
+
+    @app.get("/api/plantillas/{pedido_id}/descargar-original", tags=["Plantillas"])
+    async def descargar_plantilla_original(
+        pedido_id: str = Path(..., description="ID del pedido (GUID)"),
+        user: Dict = Depends(verify_jwt_token),
+        _: None = Depends(require_any_permission(['mabel.view', 'odcsap.view']))
+    ):
+        return await _descargar_plantilla(
+            user=user,
+            pedido_id=pedido_id
+        )
+
+    @app.get("/api/plantillas/archivos/{archivo_id}/descargar-original", tags=["Plantillas"])
+    async def descargar_plantilla_original_por_archivo(
+        archivo_id: int = Path(..., description="ID del archivo original"),
+        user: Dict = Depends(verify_jwt_token),
+        _: None = Depends(require_any_permission(['mabel.view', 'odcsap.view']))
+    ):
+        return await _descargar_plantilla(
+            user=user,
+            archivo_id=archivo_id
+        )
     
     # ========================================================================
     # NUEVO ENDPOINT: Verificar si existe archivo original
@@ -1033,8 +1107,6 @@ def register_plantillas_endpoints(app: FastAPI):
             JSON con lista de pedidos que coinciden con la búsqueda
         """
         try:
-            user_id = get_user_id(user)
-            
             with get_db_connection_context() as conn:
                 repo = PedidoRepository(conn)
                 
@@ -1185,7 +1257,7 @@ def register_plantillas_endpoints(app: FastAPI):
                         "activo": archivo["activo"],
                         "descargas": archivo["descargas"],
                         "ultima_descarga": archivo["ultima_descarga"],
-                        "url_descarga": f"/api/plantillas/{archivo['pedido_id']}/descargar-original"
+                        "url_descarga": f"/api/plantillas/archivos/{archivo['archivo_id']}/descargar-original"
                     })
                 
                 logger.info(
