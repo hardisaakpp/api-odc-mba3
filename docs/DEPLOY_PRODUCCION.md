@@ -47,6 +47,64 @@ curl http://localhost:8000/health
 
 ---
 
+## 📡 Monitoreo operativo (equivalente a DEV)
+
+En desarrollo se suele monitorear 3 procesos: API (`run-dev.ps1`), `worker` y `beat`.
+En producción, el equivalente corre como servicios `systemd`:
+
+- **API:** `odc-sap-api.service`
+- **Celery Worker:** `celery-worker.service`
+- **Celery Beat:** `celery-beat.service`
+
+### Ver estado de los 3 servicios
+
+```bash
+sudo systemctl status odc-sap-api.service celery-worker.service celery-beat.service
+```
+
+### Seguir logs en vivo (abrir 3 terminales)
+
+```bash
+# Terminal 1: API
+sudo journalctl -u odc-sap-api.service -f
+```
+
+```bash
+# Terminal 2: Worker
+sudo journalctl -u celery-worker.service -f
+```
+
+```bash
+# Terminal 3: Beat
+sudo journalctl -u celery-beat.service -f
+```
+
+### Ver últimos logs (snapshot)
+
+```bash
+sudo journalctl -u odc-sap-api.service -n 120 --no-pager
+sudo journalctl -u celery-worker.service -n 120 --no-pager
+sudo journalctl -u celery-beat.service -n 120 --no-pager
+```
+
+### Ver solo errores recientes
+
+```bash
+sudo journalctl -u odc-sap-api.service -p err --since "2 hours ago"
+sudo journalctl -u celery-worker.service -p err --since "2 hours ago"
+sudo journalctl -u celery-beat.service -p err --since "2 hours ago"
+```
+
+### Reinicio controlado del flujo completo
+
+```bash
+sudo systemctl restart odc-sap-api.service
+sudo systemctl restart celery-worker.service
+sudo systemctl restart celery-beat.service
+```
+
+---
+
 ## 🖥️ Ejecutar la API manualmente (solo para pruebas/debug)
 
 Si necesitas levantar la API a mano (por ejemplo para ver logs en consola o depurar):
