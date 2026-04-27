@@ -6,7 +6,6 @@ import logging
 import smtplib
 import csv
 import io
-import os
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from email.mime.base import MIMEBase
@@ -21,12 +20,7 @@ from src.config import (
     EMAIL_SMTP_USER,
     EMAIL_SMTP_PASSWORD,
     EMAIL_FROM,
-    EMAIL_FROM_NAME,
-    EMAIL_TO,
     ENABLE_EMAIL_NOTIFICATIONS,
-    EMAIL_WARNING_TIME_LIMIT_PERCENT,
-    EMAIL_WARNING_HIGH_VOLUME_THRESHOLD,
-    EMAIL_WARNING_FAILURES_THRESHOLD,
     EMAIL_SMTP_TIMEOUT,
 )
 from src.utils.notificacion_destinatarios import get_destinatarios_por_tipo
@@ -648,19 +642,15 @@ def send_capacity_warning_notification(
         if warning_type == 'time_limit':
             titulo = "⚠️ Advertencia: Tiempo de Ejecución Alto"
             mensaje_principal = f"La migración está usando {details.get('porcentaje_usado', 0)}% del tiempo límite."
-            color = "#ff9800"  # Naranja
         elif warning_type == 'high_volume':
             titulo = "📊 Advertencia: Volumen Alto de Registros"
             mensaje_principal = f"Se detectaron {details.get('num_facturas', 0)} facturas (umbral: {details.get('umbral', 0)})."
-            color = "#2196F3"  # Azul
         elif warning_type == 'high_failures':
             titulo = "🔴 Advertencia: Múltiples Fallos Detectados"
             mensaje_principal = f"Se detectaron {details.get('num_fallos', 0)} fallos en las últimas 24 horas."
-            color = "#f44336"  # Rojo
         else:
             titulo = "⚠️ Advertencia del Sistema"
             mensaje_principal = "Se detectó una condición de advertencia."
-            color = "#ff9800"
         
         from src.utils.email_template import build_email, info_section, warning_section, paragraph, create_email_message
         
@@ -773,13 +763,12 @@ def send_oc_to_supplier(
             return False
         
         # Extraer información de la ODC
-        oc_id = oc_cabecera.get("oc_id", "N/A")
         proveedor = oc_cabecera.get("proveedor", "N/A")
         numero_oc_sap = doc_num or oc_cabecera.get("numero_oc_sap", "N/A")
         referencia = oc_cabecera.get("referencia_despacho", "N/A")
         
         from src.utils.email_template import (
-            build_email, info_section, table_section, summary_section,
+            build_email, info_section, table_section,
             paragraph, create_email_message,
         )
         
@@ -972,14 +961,11 @@ def send_oc_ready_for_dispatch_notification(
             return False
         
         # Extraer información de la OC
-        oc_id = oc_cabecera.get("oc_id", "N/A")
         proveedor = oc_cabecera.get("proveedor", "N/A")
         numero_oc_sap = doc_num or oc_cabecera.get("numero_oc_sap", "N/A")
         referencia = oc_cabecera.get("referencia_despacho", "N/A")
         
         # Información de Solicitudes de Transferencia
-        transferencias_info = ""
-        transferencias_tabla = ""
         transferencias_detalle_texto = ""
         total_transferencias = 0
         transferencias_exitosas = 0
@@ -1001,19 +987,7 @@ def send_oc_ready_for_dispatch_notification(
                     doc_num_transf = resultado.get("doc_num", "N/A")
                     error = resultado.get("error")
                     
-                    estado = "Creada" if success else "Error"
                     doc_info = f"DocNum: {doc_num_transf}" if success else f"Error: {error or 'Desconocido'}"
-                    
-                    # HTML
-                    estado_html = "✅ Creada" if success else "❌ Error"
-                    transferencias_tabla += f"""
-                    <tr>
-                        <td>{tienda_codigo}</td>
-                        <td>{tienda_nombre}</td>
-                        <td>{estado_html}</td>
-                        <td>{doc_info}</td>
-                    </tr>
-                    """
                     
                     # Texto plano
                     estado_txt = "Creada" if success else "Error"
@@ -1274,6 +1248,112 @@ Mensaje automatico del sistema de integracion SAP - Mabel Trading
         
     except Exception as e:
         logger.error(f"❌ Error al enviar notificación de OC lista para despacho: {e}", exc_info=True)
+        return False
+
+
+def send_oc_st_error_notification_tecnicos(
+    oc_cabecera: Dict[str, Any],
+    doc_num: Optional[int] = None,
+    doc_entry: Optional[int] = None,
+    solicitudes_transferencia: Optional[Dict[str, Any]] = None,
+    pedido_numero: Optional[str] = None,
+    fecha_ejecucion: Optional[datetime] = None
+) -> bool:
+    """
+    Envía notificación al USUARIO TÉCNICO cuando hay errores en OC/Solicitudes de Transferencia.
+
+    DESTINATARIO: TECNICOS
+    """
+    if not ENABLE_EMAIL_NOTIFICATIONS:
+        logger.debug("⏭️ Notificaciones por email deshabilitadas")
+        return False
+
+    if not fecha_ejecucion:
+        fecha_ejecucion = ahora_naive()
+
+    try:
+        recipients: list[str] = get_destinatarios_por_tipo("TECNICOS")
+        if not recipients:
+            logger.warning("⚠️ No hay destinatarios TÉCNICOS configurados para error de ODC/ST")
+            return False
+
+        proveedor = oc_cabecera.get("proveedor", "N/A")
+        numero_oc_sap = doc_num or oc_cabecera.get("numero_oc_sap", "N/A")
+        referencia = oc_cabecera.get("referencia_despacho", "N/A")
+
+        total_transferencias = 0
+        transferencias_exitosas = 0
+        transferencias_fallidas = 0
+        errores = []
+
+        if solicitudes_transferencia:
+            total_transferencias = solicitudes_transferencia.get("total_tiendas", 0)
+            transferencias_exitosas = solicitudes_transferencia.get("transferencias_creadas", 0)
+            transferencias_fallidas = solicitudes_transferencia.get("transferencias_errores", 0)
+            if solicitudes_transferencia.get("error"):
+                errores.append(str(solicitudes_transferencia.get("error")))
+            for r in solicitudes_transferencia.get("resultados", []):
+                if not r.get("success") and r.get("error"):
+                    tienda = r.get("tienda_codigo", "N/A")
+                    errores.append(f"{tienda}: {r.get('error')}")
+
+        from src.utils.email_template import build_email, info_section, warning_section, paragraph, create_email_message
+
+        error_html = "<br>".join(errores[:15]) if errores else "Sin detalle adicional"
+        body_html = build_email(
+            title="Error en OC y Solicitudes de Transferencia",
+            subtitle=f"Revisión técnica requerida - ODC #{numero_oc_sap}",
+            sections=[
+                paragraph("Se detectó un error durante la generación/procesamiento de la Orden de Compra y/o Solicitudes de Transferencia en SAP."),
+                info_section("Información de la ODC", [
+                    ("Número OC SAP", numero_oc_sap),
+                    ("DocEntry", doc_entry or "N/A"),
+                    ("Proveedor", proveedor),
+                    ("Referencia", referencia),
+                    ("Pedido", pedido_numero or "N/A"),
+                    ("Solicitudes de Transferencia", f"{transferencias_exitosas}/{total_transferencias} creadas"),
+                    ("Transferencias con Error", transferencias_fallidas),
+                ], accent="red", highlight_first=True),
+                warning_section("Detalle del Error", f"<p style='margin:0;color:#5d4037;font-size:14px;line-height:1.6;'>{error_html}</p>"),
+            ],
+            accent="red",
+            timestamp=fecha_ejecucion,
+        )
+
+        body_text = (
+            f"Error en OC y Solicitudes de Transferencia\n"
+            f"{'=' * 50}\n\n"
+            f"ODC SAP: {numero_oc_sap}\n"
+            f"DocEntry: {doc_entry or 'N/A'}\n"
+            f"Proveedor: {proveedor}\n"
+            f"Referencia: {referencia}\n"
+            f"Pedido: {pedido_numero or 'N/A'}\n"
+            f"Solicitudes creadas: {transferencias_exitosas}/{total_transferencias}\n"
+            f"Transferencias con error: {transferencias_fallidas}\n\n"
+            f"Detalle:\n- " + ("\n- ".join(errores[:15]) if errores else "Sin detalle adicional") + "\n\n"
+            f"Fecha y Hora: {fecha_ejecucion.strftime('%Y-%m-%d %H:%M:%S')}\n"
+            f"Mensaje automático del sistema de integración SAP - Mabel Trading\n"
+        )
+
+        msg = create_email_message(
+            subject=f"Error en OC y Solicitudes de Transferencia - ODC #{numero_oc_sap}",
+            recipients=recipients,
+            body_html=body_html,
+            body_text=body_text,
+        )
+
+        with smtplib.SMTP(EMAIL_SMTP_SERVER, EMAIL_SMTP_PORT, timeout=EMAIL_SMTP_TIMEOUT) as server:
+            if EMAIL_SMTP_PORT == 587:
+                server.starttls()
+            if EMAIL_SMTP_PASSWORD:
+                server.login(EMAIL_SMTP_USER, EMAIL_SMTP_PASSWORD)
+            server.send_message(msg, to_addrs=recipients)
+
+        logger.info(f"✅ Notificación de error ODC/ST enviada a técnicos: {', '.join(recipients)}")
+        return True
+
+    except Exception as e:
+        logger.error(f"❌ Error al enviar notificación de error ODC/ST a técnicos: {e}", exc_info=True)
         return False
 
 

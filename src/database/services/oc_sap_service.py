@@ -663,41 +663,9 @@ class OCSAPService:
                 # FASE 6: Notificación y cierre
                 # ============================================================
                 
-                # 7. Enviar correo al proveedor con PDF adjunto (no bloquea si falla)
-                try:
-                    from src.utils.email_notifier import send_oc_to_supplier
-                    from src.config import EMAIL_PROVEEDOR_PRUEBAS
-                    
-                    # Durante fase de pruebas, usar email configurado
-                    # TODO: En producción, obtener desde tabla cliente usando CardCode
-                    proveedor_email = EMAIL_PROVEEDOR_PRUEBAS
-                    
-                    # Enriquecer datos para el PDF adjunto
-                    pedido_info = None
-                    pedido_id_email = oc_cabecera.get("pedido_id")
-                    if pedido_id_email:
-                        try:
-                            pedido_info = self._obtener_pedido_info_para_pdf(
-                                oc_repo.conn, pedido_id_email, oc_detalles
-                            )
-                        except Exception as e_enrich:
-                            logger.warning(f"⚠️ No se pudo enriquecer datos para PDF (no crítico): {e_enrich}")
-                    
-                    email_enviado = send_oc_to_supplier(
-                        oc_cabecera=oc_cabecera,
-                        oc_detalles=oc_detalles,
-                        doc_num=doc_num,
-                        doc_entry=doc_entry,
-                        proveedor_email=proveedor_email,
-                        pedido_info=pedido_info,
-                    )
-                    if email_enviado:
-                        logger.info(f"📧 Email de ODC con PDF enviado al proveedor {oc_cabecera.get('proveedor')}")
-                    else:
-                        logger.warning("⚠️ No se pudo enviar email de ODC al proveedor (no crítico)")
-                except Exception as e:
-                    # NO fallar el proceso si el email falla
-                    logger.warning(f"⚠️ Error al enviar email de ODC (no crítico): {e}")
+                # 7. Correo al proveedor deshabilitado en este flujo.
+                # Requerimiento actual: evitar correo "Orden de Compra Generada".
+                logger.info("ℹ️ Envío de correo de ODC al proveedor omitido por configuración funcional")
                 
                 # 8. Crear Solicitudes de Transferencia (HU-04: Requerimiento de alta prioridad)
                 pedido_id = oc_cabecera.get("pedido_id")
@@ -770,9 +738,9 @@ class OCSAPService:
                         logger.warning(f"⚠️ Error al crear Solicitudes de Transferencia (no crítico): {e}")
                         result["solicitudes_transferencia_error"] = str(e)
                 
-                # 8.1. Notificar a El Rayo para proceder con despacho y facturación (HU-04)
+                # 8.1. Notificar SOLO cuando haya error en OC/ST al grupo técnico
                 try:
-                    from src.utils.email_notifier import send_oc_ready_for_dispatch_notification
+                    from src.utils.email_notifier import send_oc_st_error_notification_tecnicos
                     from ..repositories.pedido_repository import PedidoRepository
                     from ..repositories.envio_odc_sap_repository import EnvioODCSAPRepository
                     
@@ -790,17 +758,28 @@ class OCSAPService:
                     # Obtener resultado de transferencias para incluir en la notificación
                     resultado_transferencias_notif = result.get("solicitudes_transferencia")
                     
-                    email_enviado = send_oc_ready_for_dispatch_notification(
-                        oc_cabecera=oc_cabecera,
-                        doc_num=doc_num,
-                        doc_entry=doc_entry,
-                        solicitudes_transferencia=resultado_transferencias_notif,
-                        pedido_numero=pedido_numero
-                    )
-                    if email_enviado:
-                        logger.info(f"📧 Notificación de OC lista para despacho enviada a El Rayo y MABEL TRADING (OC #{doc_num})")
+                    hay_error_st = False
+                    if result.get("solicitudes_transferencia_error"):
+                        hay_error_st = True
+                    elif isinstance(resultado_transferencias_notif, dict):
+                        transferencias_errores = int(resultado_transferencias_notif.get("transferencias_errores", 0) or 0)
+                        st_success = bool(resultado_transferencias_notif.get("success"))
+                        hay_error_st = transferencias_errores > 0 or not st_success
+
+                    if hay_error_st:
+                        email_enviado = send_oc_st_error_notification_tecnicos(
+                            oc_cabecera=oc_cabecera,
+                            doc_num=doc_num,
+                            doc_entry=doc_entry,
+                            solicitudes_transferencia=resultado_transferencias_notif,
+                            pedido_numero=pedido_numero,
+                        )
+                        if email_enviado:
+                            logger.info(f"📧 Notificación de error ODC/ST enviada a técnicos (OC #{doc_num})")
+                        else:
+                            logger.warning("⚠️ No se pudo enviar notificación de error ODC/ST a técnicos (no crítico)")
                     else:
-                        logger.warning("⚠️ No se pudo enviar notificación a El Rayo (no crítico)")
+                        logger.info(f"ℹ️ ODC/ST sin errores; no se envía notificación a técnicos (OC #{doc_num})")
                     
                     # Persistir en BD el snapshot de lo notificado (información que se envía por correo)
                     if pedido_id:
@@ -826,7 +805,7 @@ class OCSAPService:
                             logger.warning(f"⚠️ No se pudo persistir envio_odc_sap (no crítico): {e_persist}")
                 except Exception as e:
                     # NO fallar el proceso si la notificación falla
-                    logger.warning(f"⚠️ Error al enviar notificación a El Rayo (no crítico): {e}")
+                    logger.warning(f"⚠️ Error al enviar notificación de error ODC/ST a técnicos (no crítico): {e}")
                 
                 # 9. Evaluar y actualizar estado del pedido según resultado de OC y ST
                 if pedido_id:
