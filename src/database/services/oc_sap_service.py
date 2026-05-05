@@ -42,6 +42,10 @@ def _mensaje_sugiere_reintento_sap(mensaje: str) -> bool:
         "sin respuesta",
         "no se pudo establecer conexión",
         "no se pudo establecer conexion",
+        # Regla operativa: permitir reenvío manual en errores de presupuesto de RL.
+        "presupuesto excedido rl",
+        "código sap: -1116",
+        "codigo sap: -1116",
     )
     return any(n in m for n in needles)
 

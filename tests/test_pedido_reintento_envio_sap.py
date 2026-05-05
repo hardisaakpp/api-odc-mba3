@@ -34,6 +34,36 @@ def test_reintento_false_error_maestro_sin_keywords_red():
     assert not pedido_permite_reintento_envio_odc_sap(_pedido(10), [oc])
 
 
+def test_reintento_true_error_presupuesto_excedido_rl():
+    oc = {
+        "estado": "ERROR",
+        "error_source": "SAP_VALIDATION",
+        "respuesta_sap": "(1) Presupuesto excedido RL → Línea: 0 | Item: 5019.911.NG | Monto: 31.94 (Código SAP: -1116)",
+    }
+    assert pedido_permite_reintento_envio_odc_sap(_pedido(10), [oc])
+
+
+def test_reintento_true_por_error_code_sap_1116_sin_mensaje():
+    oc = {
+        "estado": "ERROR",
+        "error_source": "SAP",
+        "error_code": "-1116",
+        "respuesta_sap": "",
+        "error_message": "",
+    }
+    assert pedido_permite_reintento_envio_odc_sap(_pedido(10), [oc])
+
+
+def test_reintento_false_por_error_code_sap_no_listado():
+    oc = {
+        "estado": "ERROR",
+        "error_source": "SAP",
+        "error_code": "-4013",
+        "respuesta_sap": "Periodo contable cerrado",
+    }
+    assert not pedido_permite_reintento_envio_odc_sap(_pedido(10), [oc])
+
+
 def test_reintento_true_sap_connection():
     oc = {
         "estado": "ERROR",

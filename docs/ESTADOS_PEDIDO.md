@@ -140,3 +140,25 @@ Referencia única en **`src/database/pedido_estados.py`**:
 - `estado_id_desde_legacy(estado_string)` para compatibilidad durante la transición.
 
 No usar strings hardcodeados en lógica; usar siempre `estado_id` y estas constantes.
+
+---
+
+## Reintento de envío ODC a SAP (UI)
+
+La visibilidad del botón **"Reintentar envío ODC a SAP"** se calcula en backend (`pedido_permite_reintento_envio_odc_sap`) con esta prioridad:
+
+1. **Estado del pedido**
+   - Permitido en `CONFIRMADO REDISTRIBUCION` (`estado_id = 10`) y `ERROR ENVIO SAP REINTENTO` (`estado_id = 21`).
+2. **Estado de ODC**
+   - Si alguna ODC está en `PENDIENTE` => habilitar.
+   - Si alguna ODC está en `ERROR` => evaluar reglas de reintento.
+3. **Reglas para ODC en ERROR** (orden de evaluación)
+   - **Por código SAP (`error_code`)**: allowlist explícita de negocio.
+     - Actualmente: `-1116` (caso recurrente: *Presupuesto excedido RL*).
+   - **Por origen**: `error_source = SAP_CONNECTION`.
+   - **Fallback por texto**: heurística por mensaje (conectividad/timeout y casos operativos soportados).
+
+### Casos recurrentes habilitados actualmente
+
+- Caídas / timeouts / problemas de conexión con Service Layer.
+- `Código SAP: -1116` (Presupuesto excedido RL).

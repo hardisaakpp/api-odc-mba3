@@ -7,6 +7,17 @@ y mejorar la mantenibilidad del código de endpoints CRUD de pedidos.
 
 from typing import Optional, Dict, Any, List
 
+from src.database.pedido_estados import (
+    ESTADO_REDISTRIBUCION,
+    ESTADO_DESPACHAR_Y_FACTURAR,
+    ESTADOS_PUEDE_DESCARTAR,
+    ESTADOS_PUEDE_CANCELAR_POR_EL_RAYO,
+    ESTADO_LIMITE_CANCELAR_PEDIDO,
+    ESTADOS_PUEDE_CONFIRMAR_REDISTRIBUCION,
+    ESTADO_PEDIDO_CONFIRMADO,
+    ESTADO_ERROR_ENVIO_SAP_REINTENTO,
+)
+
 
 def calcular_totales_detalles(detalles: List[Dict[str, Any]]) -> Dict[str, float]:
     """
@@ -38,16 +49,6 @@ def calcular_totales_detalles(detalles: List[Dict[str, Any]]) -> Dict[str, float
         "total_subtotal": round(total_subtotal, 4),
         "total_total": round(total_total, 4),
     }
-from src.database.pedido_estados import (
-    ESTADO_REDISTRIBUCION,
-    ESTADO_DESPACHAR_Y_FACTURAR,
-    ESTADOS_PUEDE_DESCARTAR,
-    ESTADOS_PUEDE_CANCELAR_POR_EL_RAYO,
-    ESTADO_LIMITE_CANCELAR_PEDIDO,
-    ESTADOS_PUEDE_CONFIRMAR_REDISTRIBUCION,
-    ESTADO_PEDIDO_CONFIRMADO,
-    ESTADO_ERROR_ENVIO_SAP_REINTENTO,
-)
 
 
 def get_estado_id_from_pedido(pedido: Dict[str, Any]) -> Optional[int]:
@@ -115,10 +116,17 @@ def pedido_permite_reintento_envio_odc_sap(
 
     Casos:
     - ODC en PENDIENTE (generada pero el envío no completó OK).
-    - ODC en ERROR por fallo típicamente transitorio (mensaje analizado como en OCSAPService)
-      o error_source SAP_CONNECTION.
+    - ODC en ERROR por fallo típicamente reintentable:
+      - código SAP explícito (p. ej. -1116),
+      - o error_source SAP_CONNECTION,
+      - o fallback por matching de texto (heurística de OCSAPService).
     """
     from src.database.services.oc_sap_service import _mensaje_sugiere_reintento_sap
+    from src.database.services.retry_utils import _parse_sap_b1_error_code
+
+    # Códigos SAP para habilitar reenvío manual en UI (regla de negocio).
+    # Mantener lista acotada a casos validados operativamente.
+    sap_codes_reintento_manual = {-1116}
 
     estado_id = get_estado_id_from_pedido(pedido)
     if estado_id == ESTADO_ERROR_ENVIO_SAP_REINTENTO:
@@ -136,6 +144,9 @@ def pedido_permite_reintento_envio_odc_sap(
         if est == "ERROR":
             msg = f"{oc.get('respuesta_sap') or ''} {oc.get('error_message') or ''}"
             src = (oc.get("error_source") or "").strip().upper()
+            sap_code = _parse_sap_b1_error_code(oc.get("error_code"))
+            if sap_code in sap_codes_reintento_manual:
+                return True
             if src == "SAP_CONNECTION":
                 return True
             if _mensaje_sugiere_reintento_sap(msg):
