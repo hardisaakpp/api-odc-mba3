@@ -1,6 +1,6 @@
 """Tests para puede_reintentar_envio_odc_sap (helpers de pedido)."""
 
-from src.database.pedido_estados import ESTADO_ERROR_ENVIO_SAP_REINTENTO
+from src.database.pedido_estados import ESTADO_ERROR_ENVIO_SAP_REINTENTO, ESTADO_REDISTRIBUCION
 from src.endpoints.pedidos.pedidos_crud_helpers import pedido_permite_reintento_envio_odc_sap
 
 
@@ -8,8 +8,11 @@ def _pedido(estado_id: int):
     return {"cabecera": {"estado_id": estado_id}}
 
 
-def test_reintento_false_si_no_confirmado_redistribucion():
-    assert not pedido_permite_reintento_envio_odc_sap(_pedido(4), [{"estado": "ERROR", "respuesta_sap": "conexión"}])
+def test_reintento_true_en_confirmado_por_el_rayo_si_oc_pendiente_o_error():
+    assert pedido_permite_reintento_envio_odc_sap(
+        _pedido(ESTADO_REDISTRIBUCION),
+        [{"estado": "ERROR", "respuesta_sap": "conexión"}],
+    )
 
 
 def test_reintento_true_oc_pendiente_estado_10():
