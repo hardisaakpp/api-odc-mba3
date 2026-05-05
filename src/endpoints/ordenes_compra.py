@@ -6,7 +6,7 @@ import io
 import logging
 import threading
 import asyncio
-from datetime import datetime, timedelta
+from datetime import datetime
 
 from src.utils.timezone import ahora_naive
 from typing import Optional, List, Dict, Any, cast
@@ -89,6 +89,27 @@ def invalidate_ordenes_compra_cache():
     with _oc_cache_lock:
         _ordenes_compra_cache.clear()
         logger.info("🗑️ Cache invalidado para /ordenes-compra")
+
+
+def _enrich_oc_actions(oc: Dict[str, Any], st_resumen: Optional[Dict[str, Any]] = None) -> None:
+    """
+    Enriquecer acciones de UI por estado de la ODC.
+
+    Regla de negocio:
+    - PENDIENTE / ERROR: mostrar botón "Reintentar ODC" en lugar de "Descargar PDF".
+    - ENVIADA + ST fallidas: mostrar botón "Reintentar ST".
+    - Resto de estados: mantener botón "Descargar PDF".
+    """
+    estado = str(oc.get("estado") or "").strip().upper()
+    mostrar_reintentar = estado in {"PENDIENTE", "ERROR"}
+    transferencias_errores = int((st_resumen or {}).get("transferencias_errores", 0) or 0)
+    mostrar_reintentar_st = estado == "ENVIADA" and transferencias_errores > 0
+    oc["mostrar_reintentar"] = mostrar_reintentar
+    oc["mostrar_descargar_pdf"] = not mostrar_reintentar
+    oc["mostrar_reintentar_st"] = mostrar_reintentar_st
+    oc["st_total_tiendas"] = int((st_resumen or {}).get("total_tiendas", 0) or 0)
+    oc["st_transferencias_creadas"] = int((st_resumen or {}).get("transferencias_creadas", 0) or 0)
+    oc["st_transferencias_errores"] = transferencias_errores
 
 
 def register_ordenes_compra_endpoints(app: FastAPI):
@@ -362,9 +383,11 @@ def register_ordenes_compra_endpoints(app: FastAPI):
                     if oc_list:
                         st_repo = SolicitudTransferenciaRepository(conn)
                         itr_doc = st_repo.get_doc_num_itr_por_oc_ids([o["oc_id"] for o in oc_list])
+                        st_resumen_by_oc = st_repo.get_latest_resumen_by_oc_ids([o["oc_id"] for o in oc_list])
                         for o in oc_list:
                             if o["oc_id"] in itr_doc:
                                 o["doc_num"] = itr_doc[o["oc_id"]]
+                            _enrich_oc_actions(o, st_resumen=st_resumen_by_oc.get(o["oc_id"]))
                     return oc_list
                 finally:
                     conn.close()
@@ -964,7 +987,7 @@ def register_ordenes_compra_endpoints(app: FastAPI):
                 mensaje += f", {errores} errores"
             
             logger.info("=" * 70)
-            logger.info(f"✅ DELETE /ordenes-compra completado:")
+            logger.info("✅ DELETE /ordenes-compra completado:")
             logger.info(f"   Total solicitadas: {len(oc_ids_list)}")
             logger.info(f"   Eliminadas: {eliminadas}")
             logger.info(f"   No encontradas: {no_encontradas}")
@@ -1139,7 +1162,6 @@ def register_ordenes_compra_endpoints(app: FastAPI):
             try:
                 envio_repo = EnvioODCSAPRepository(conn)
                 st_repo = SolicitudTransferenciaRepository(conn)
-                oc_repo = OrdenCompraRepository(conn)
 
                 envio = envio_repo.get_by_oc_id(oc_id)
                 if not envio:
@@ -1323,6 +1345,115 @@ def register_ordenes_compra_endpoints(app: FastAPI):
             raise HTTPException(
                 status_code=500,
                 detail=f"Error al generar PDF de la orden de compra: {str(e)}"
+            )
+
+    @app.post("/ordenes-compra/{oc_id}/reintentar-st", tags=["Órdenes de Compra"])
+    async def reintentar_solicitudes_transferencia(
+        request: Request,
+        oc_id: str = Path(..., description="UUID de la orden de compra"),
+        user: dict = Depends(verify_jwt_token),
+        _: None = Depends(require_any_permission(['odcsap.view', 'mabel.view']))
+    ):
+        """
+        Reintenta únicamente Solicitudes de Transferencia (ITR) fallidas para una ODC ya enviada.
+
+        Reglas:
+        - No reenvía ODC.
+        - Solo procesa tiendas fallidas del último batch ST de la OC.
+        """
+        source = get_source_from_headers(request)
+        username = user.get("username", "unknown") if user else "unknown"
+
+        try:
+            def _retry_st_only():
+                with get_db_connection_context() as conn:
+                    oc_repo = OrdenCompraRepository(conn)
+                    st_repo = SolicitudTransferenciaRepository(conn)
+
+                    oc_cabecera = oc_repo.get_existing_cabecera(oc_id)
+                    if not oc_cabecera:
+                        return {"status_code": 404, "body": {"status": "error", "message": "Orden de compra no encontrada"}}
+
+                    estado = str(oc_cabecera.get("estado") or "").strip().upper()
+                    if estado != "ENVIADA":
+                        return {
+                            "status_code": 400,
+                            "body": {
+                                "status": "error",
+                                "message": f"Solo se puede reintentar ST cuando la ODC está ENVIADA (estado actual: {estado or 'N/A'})",
+                            },
+                        }
+
+                    tiendas_fallidas = st_repo.get_latest_failed_tienda_codigos_by_oc_id(oc_id)
+                    if not tiendas_fallidas:
+                        return {
+                            "status_code": 200,
+                            "body": {
+                                "status": "success",
+                                "message": "No hay Solicitudes de Transferencia fallidas para reintentar.",
+                                "oc_id": oc_id,
+                                "reintentadas": 0,
+                            },
+                        }
+
+                    pedido_id = oc_cabecera.get("pedido_id")
+                    if not pedido_id:
+                        return {
+                            "status_code": 400,
+                            "body": {
+                                "status": "error",
+                                "message": "La ODC no tiene pedido_id asociado para reconstruir ST.",
+                            },
+                        }
+
+                    bodega_origen = oc_cabecera.get("codigo_bodega")
+                    oc_doc_num_raw = oc_cabecera.get("numero_oc_sap")
+                    oc_doc_num = None
+                    if oc_doc_num_raw is not None:
+                        try:
+                            oc_doc_num = int(oc_doc_num_raw)
+                        except (TypeError, ValueError):
+                            oc_doc_num = None
+
+                    from src.database.services.stock_transfer_service import StockTransferService
+                    st_service = StockTransferService()
+                    resultado = st_service.crear_solicitudes_transferencia_desde_pedido(
+                        pedido_id=str(pedido_id),
+                        oc_doc_num=oc_doc_num,
+                        oc_id=oc_id,
+                        bodega_origen=bodega_origen,
+                        usuario_id=username,
+                        tiendas_destino_filtro=tiendas_fallidas,
+                    )
+
+                    # Refrescar caché de tabla proceso
+                    try:
+                        invalidate_ordenes_compra_cache()
+                    except Exception:
+                        pass
+
+                    return {
+                        "status_code": 200,
+                        "body": {
+                            "status": "success" if resultado.get("success") else "partial",
+                            "message": "Reintento ST ejecutado.",
+                            "oc_id": oc_id,
+                            "tiendas_fallidas_reintentadas": tiendas_fallidas,
+                            "resultado_st": resultado,
+                        },
+                    }
+
+            out = await asyncio.to_thread(_retry_st_only)
+            return JSONResponse(
+                status_code=int(out.get("status_code", 200)),
+                content=out.get("body", {}),
+                headers={"X-Source": source, "X-Endpoint": "POST-ORDEN-COMPRA-REINTENTAR-ST"},
+            )
+        except Exception as e:
+            logger.error(f"❌ Error al reintentar ST de OC {oc_id}: {e}", exc_info=True)
+            raise HTTPException(
+                status_code=500,
+                detail=f"Error al reintentar Solicitudes de Transferencia: {str(e)}"
             )
     
     @app.put("/ordenes-compra/{oc_id}/detalle/{oc_detalle_id}/sku", tags=["Órdenes de Compra"])

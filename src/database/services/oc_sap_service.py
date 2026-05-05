@@ -266,6 +266,7 @@ class OCSAPService:
                 result["error"] = error_msg
                 result["error_message"] = error_msg  # Alias para compatibilidad con frontend
                 result["error_source"] = "BACKEND"
+                result["retry_recommended"] = True
                 logger.error(f"❌ {result['error']}")
                 return result
             
@@ -276,6 +277,7 @@ class OCSAPService:
                 result["error"] = error_msg
                 result["error_message"] = error_msg  # Alias para compatibilidad con frontend
                 result["error_source"] = "BACKEND"
+                result["retry_recommended"] = True
                 logger.warning(f"⚠️ {result['error']}")
                 return result
             
@@ -286,6 +288,7 @@ class OCSAPService:
                 result["error"] = error_msg
                 result["error_message"] = error_msg  # Alias para compatibilidad con frontend
                 result["error_source"] = "BACKEND"  # Indicar que el error viene del backend
+                result["retry_recommended"] = True
                 logger.error(f"❌ {result['error']}")
                 try:
                     oc_repo.update_estado(
@@ -329,6 +332,7 @@ class OCSAPService:
                 result["error"] = error_msg
                 result["error_message"] = error_msg
                 result["error_source"] = "BACKEND"
+                result["retry_recommended"] = True
                 logger.error(f"❌ {error_msg}")
                 try:
                     oc_repo.update_estado(
@@ -362,8 +366,7 @@ class OCSAPService:
                 result["error_source"] = "SAP_VALIDATION"
                 result["prevalidacion_detalle"] = prevalidacion.get("detalle_validacion")
                 result["prevalidacion_resumen"] = prevalidacion.get("resumen")
-                if any(_mensaje_sugiere_reintento_sap(e) for e in errores_prevalidacion):
-                    result["retry_recommended"] = True
+                result["retry_recommended"] = True
                 
                 logger.error(f"❌ {error_msg}")
                 try:
@@ -413,6 +416,7 @@ class OCSAPService:
                 result["error"] = error_msg
                 result["error_message"] = error_msg  # Alias para compatibilidad con frontend
                 result["error_source"] = "BACKEND"
+                result["retry_recommended"] = True
                 logger.error(f"❌ Error al construir JSON: {result['error']}")
                 try:
                     oc_repo.update_estado(
@@ -430,6 +434,7 @@ class OCSAPService:
                 result["error"] = error_msg
                 result["error_message"] = error_msg  # Alias para compatibilidad con frontend
                 result["error_source"] = "BACKEND"
+                result["retry_recommended"] = True
                 logger.error(f"❌ Error inesperado: {result['error']}", exc_info=True)
                 try:
                     oc_repo.update_estado(
@@ -485,8 +490,7 @@ class OCSAPService:
                 result["sap_error_details"] = sap_error_details
                 result["error_source"] = "SAP"  # Indicar que el error viene de SAP
                 result["attempts"] = envio_oc_result.get("attempts")
-                if _mensaje_sugiere_reintento_sap(error_msg):
-                    result["retry_recommended"] = True
+                result["retry_recommended"] = True
                 
                 logger.error(f"❌ {result['error']}")
                 try:
@@ -869,6 +873,7 @@ class OCSAPService:
             result["error"] = error_msg
             result["error_message"] = error_msg  # Alias para compatibilidad con frontend
             result["error_source"] = "BACKEND"
+            result["retry_recommended"] = True
             logger.error(f"❌ Error al enviar ODC a SAP: {e}", exc_info=True)
             try:
                 oc_repo.update_estado(

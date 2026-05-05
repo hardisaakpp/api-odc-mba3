@@ -26,7 +26,6 @@ from src.database.pedido_estados import (
     ESTADO_CONFIRMADO_ENVIADO,
     ESTADO_ERROR_ENVIO_SAP_REINTENTO,
 )
-from src.database.services.oc_sap_service import _mensaje_sugiere_reintento_sap
 from src.database.repositories.distribucion_confirmada_repository import DistribucionConfirmadaRepository
 from src.database.repositories.pedido_repository import PedidoRepository
 from src.database.services.proceso_estado_service import ProcesoEstadoService
@@ -302,7 +301,8 @@ def _ejecutar_proceso_completo_sync(
                 error=error,
                 error_code=error_code,
                 solicitudes_transferencia=solicitudes_para_response,
-                retry_recommended=resultado_sap_envio.get("retry_recommended"),
+                # Reintento manual centralizado en la vista de Proceso.
+                retry_recommended=False,
             )
 
             if success:
@@ -357,14 +357,13 @@ def _ejecutar_proceso_completo_sync(
             else:
                 logger.error(f"❌ PASO 3/3 fallido: Error al enviar ODC a SAP: {error}")
 
-                # Estado explícito cuando el fallo sugiere reintento (conexión / SL / prevalidación transitoria)
-                if resultado_sap_envio.get("retry_recommended"):
-                    try:
-                        repo_pedido.update_estado(
-                            pedido_id, ESTADO_ERROR_ENVIO_SAP_REINTENTO, audit_context=audit
-                        )
-                    except Exception:
-                        logger.debug("No se pudo actualizar pedido a ERROR ENVIO SAP REINTENTO", exc_info=True)
+                # Todo fallo de envío ODC habilita reintento manual en UI.
+                try:
+                    repo_pedido.update_estado(
+                        pedido_id, ESTADO_ERROR_ENVIO_SAP_REINTENTO, audit_context=audit
+                    )
+                except Exception:
+                    logger.debug("No se pudo actualizar pedido a ERROR ENVIO SAP REINTENTO", exc_info=True)
 
                 return {
                     "_notify_sap": False,
@@ -389,10 +388,9 @@ def _ejecutar_proceso_completo_sync(
             logger.error(f"❌ Error en PASO 3 (Enviar a SAP): {e}", exc_info=True)
 
             try:
-                if _mensaje_sugiere_reintento_sap(str(e)):
-                    repo_pedido.update_estado(
-                        pedido_id, ESTADO_ERROR_ENVIO_SAP_REINTENTO, audit_context=audit
-                    )
+                repo_pedido.update_estado(
+                    pedido_id, ESTADO_ERROR_ENVIO_SAP_REINTENTO, audit_context=audit
+                )
             except Exception:
                 logger.debug("No se pudo actualizar pedido a ERROR ENVIO SAP REINTENTO (excepción paso 3)", exc_info=True)
 

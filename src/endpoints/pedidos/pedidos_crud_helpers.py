@@ -14,8 +14,6 @@ from src.database.pedido_estados import (
     ESTADOS_PUEDE_CANCELAR_POR_EL_RAYO,
     ESTADO_LIMITE_CANCELAR_PEDIDO,
     ESTADOS_PUEDE_CONFIRMAR_REDISTRIBUCION,
-    ESTADO_PEDIDO_CONFIRMADO,
-    ESTADO_ERROR_ENVIO_SAP_REINTENTO,
 )
 
 
@@ -112,45 +110,10 @@ def pedido_permite_reintento_envio_odc_sap(
     ordenes_compra: List[Dict[str, Any]],
 ) -> bool:
     """
-    Indica si conviene mostrar "Reintentar envío ODC a SAP" en Confirmado redistribución (10).
-
-    Casos:
-    - ODC en PENDIENTE (generada pero el envío no completó OK).
-    - ODC en ERROR por fallo típicamente reintentable:
-      - código SAP explícito (p. ej. -1116),
-      - o error_source SAP_CONNECTION,
-      - o fallback por matching de texto (heurística de OCSAPService).
+    Regla funcional vigente:
+    - El reintento de envío ODC se gestiona únicamente en la vista de Proceso.
+    - En el flujo de pedidos/redistribución este flag siempre se mantiene deshabilitado.
     """
-    from src.database.services.oc_sap_service import _mensaje_sugiere_reintento_sap
-    from src.database.services.retry_utils import _parse_sap_b1_error_code
-
-    # Códigos SAP para habilitar reenvío manual en UI (regla de negocio).
-    # Mantener lista acotada a casos validados operativamente.
-    sap_codes_reintento_manual = {-1116}
-
-    estado_id = get_estado_id_from_pedido(pedido)
-    if estado_id == ESTADO_ERROR_ENVIO_SAP_REINTENTO:
-        for oc in ordenes_compra or []:
-            est = (oc.get("estado") or "").strip().upper()
-            if est in ("PENDIENTE", "ERROR"):
-                return True
-        return False
-    if estado_id != ESTADO_PEDIDO_CONFIRMADO:
-        return False
-    for oc in ordenes_compra or []:
-        est = (oc.get("estado") or "").strip().upper()
-        if est == "PENDIENTE":
-            return True
-        if est == "ERROR":
-            msg = f"{oc.get('respuesta_sap') or ''} {oc.get('error_message') or ''}"
-            src = (oc.get("error_source") or "").strip().upper()
-            sap_code = _parse_sap_b1_error_code(oc.get("error_code"))
-            if sap_code in sap_codes_reintento_manual:
-                return True
-            if src == "SAP_CONNECTION":
-                return True
-            if _mensaje_sugiere_reintento_sap(msg):
-                return True
     return False
 
 

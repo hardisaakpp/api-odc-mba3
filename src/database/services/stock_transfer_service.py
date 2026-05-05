@@ -533,7 +533,8 @@ class StockTransferService:
         oc_id: Optional[str] = None,
         bodega_origen: Optional[str] = None,
         usuario_id: Optional[str] = None,
-        serie: Optional[int] = None
+        serie: Optional[int] = None,
+        tiendas_destino_filtro: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         """
         Crea Solicitudes de Transferencia (Inventory Transfer Requests) en SAP desde la distribución confirmada de un pedido.
@@ -569,6 +570,8 @@ class StockTransferService:
             bodega_origen: Código de bodega origen (si None, usa origen_traslado del pedido)
                           ⭐ Recomendado: pasar codigo_bodega de la OC para consistencia
             usuario_id: ID del usuario que genera las transferencias
+            tiendas_destino_filtro: Lista opcional de códigos de tienda destino a procesar.
+                                  Si se envía, solo se intentan esas tiendas (útil para reintento parcial).
         
         Returns:
             Diccionario con el resultado:
@@ -855,6 +858,32 @@ class StockTransferService:
                     raise ValueError(
                         "No hay distribución válida por tienda para crear transferencias. "
                         "Las Solicitudes de Transferencia se crean desde bodega origen hacia tiendas, no hacia bodegas."
+                    )
+
+                # Reintento parcial opcional: procesar solo tiendas destino indicadas.
+                if tiendas_destino_filtro:
+                    codigos_objetivo = {
+                        str(c).strip().upper()
+                        for c in tiendas_destino_filtro
+                        if str(c).strip()
+                    }
+                    distribucion_filtrada: Dict[str, List[Dict[str, Any]]] = {}
+                    for tienda_id, productos in distribucion_por_tienda.items():
+                        tienda_codigo_raw = ""
+                        if productos:
+                            tienda_codigo_raw = str(productos[0].get("tienda_codigo") or "")
+                        tienda_codigo_norm = tienda_codigo_raw.strip().upper()
+                        if tienda_codigo_norm in codigos_objetivo:
+                            distribucion_filtrada[tienda_id] = productos
+
+                    if not distribucion_filtrada:
+                        raise ValueError(
+                            "No se encontraron tiendas objetivo para reintento ST en la distribución confirmada actual."
+                        )
+
+                    distribucion_por_tienda = distribucion_filtrada
+                    logger.info(
+                        f"🔁 Reintento parcial ST activado: {len(distribucion_por_tienda)} tienda(s) objetivo"
                     )
                 
                 result["total_tiendas"] = len(distribucion_por_tienda)

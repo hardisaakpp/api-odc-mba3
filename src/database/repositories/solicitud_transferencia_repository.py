@@ -246,3 +246,107 @@ class SolicitudTransferenciaRepository:
         except Exception as e:
             logger.warning(f"No se pudo obtener detalle ST por solicitud_id: {e}")
         return out
+
+    def get_latest_resumen_by_oc_ids(self, oc_ids: List[str]) -> Dict[str, Dict[str, Any]]:
+        """
+        Obtiene el resumen del último batch de ST por cada oc_id.
+
+        Returns:
+            Dict oc_id -> {
+                "solicitud_transferencia_id": str,
+                "total_tiendas": int,
+                "transferencias_creadas": int,
+                "transferencias_errores": int,
+                "success": bool,
+            }
+        """
+        if not oc_ids:
+            return {}
+        out: Dict[str, Dict[str, Any]] = {}
+        try:
+            cursor = self.conn.cursor()
+            placeholders = ",".join("?" * len(oc_ids))
+            query = f"""
+                WITH latest AS (
+                    SELECT
+                        solicitud_transferencia_id,
+                        oc_id,
+                        total_tiendas,
+                        transferencias_creadas,
+                        transferencias_errores,
+                        success,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY oc_id
+                            ORDER BY creado_fecha DESC, solicitud_transferencia_id DESC
+                        ) AS rn
+                    FROM solicitud_transferencia
+                    WHERE oc_id IN ({placeholders})
+                )
+                SELECT
+                    solicitud_transferencia_id,
+                    oc_id,
+                    total_tiendas,
+                    transferencias_creadas,
+                    transferencias_errores,
+                    success
+                FROM latest
+                WHERE rn = 1
+            """
+            cursor.execute(query, [str(oid) for oid in oc_ids])
+            for row in cursor.fetchall():
+                oc_id = str(row[1]) if row[1] else None
+                if not oc_id:
+                    continue
+                out[oc_id] = {
+                    "solicitud_transferencia_id": str(row[0]) if row[0] else None,
+                    "total_tiendas": int(row[2] or 0),
+                    "transferencias_creadas": int(row[3] or 0),
+                    "transferencias_errores": int(row[4] or 0),
+                    "success": bool(row[5]),
+                }
+            cursor.close()
+        except Exception as e:
+            logger.warning(f"No se pudo obtener resumen ST por oc_ids: {e}")
+        return out
+
+    def get_latest_failed_tienda_codigos_by_oc_id(self, oc_id: str) -> List[str]:
+        """
+        Obtiene códigos de tienda fallidos (estado Error) del último batch ST para un oc_id.
+        """
+        if not oc_id:
+            return []
+        out: List[str] = []
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute(
+                """
+                SELECT TOP 1 solicitud_transferencia_id
+                FROM solicitud_transferencia
+                WHERE oc_id = ?
+                ORDER BY creado_fecha DESC, solicitud_transferencia_id DESC
+                """,
+                (str(oc_id),),
+            )
+            row = cursor.fetchone()
+            solicitud_id = str(row[0]) if row and row[0] else None
+            if not solicitud_id:
+                cursor.close()
+                return []
+            cursor.execute(
+                """
+                SELECT DISTINCT tienda_codigo
+                FROM solicitud_transferencia_detalle
+                WHERE solicitud_transferencia_id = ?
+                  AND estado = 'Error'
+                  AND tienda_codigo IS NOT NULL
+                """,
+                (solicitud_id,),
+            )
+            for r in cursor.fetchall():
+                codigo = (r[0] or "").strip()
+                if codigo:
+                    out.append(codigo)
+            cursor.close()
+        except Exception as e:
+            logger.warning(f"No se pudo obtener tiendas fallidas ST por oc_id: {e}")
+        return out
