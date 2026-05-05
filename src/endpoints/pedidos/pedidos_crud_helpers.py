@@ -14,6 +14,8 @@ from src.database.pedido_estados import (
     ESTADOS_PUEDE_CANCELAR_POR_EL_RAYO,
     ESTADO_LIMITE_CANCELAR_PEDIDO,
     ESTADOS_PUEDE_CONFIRMAR_REDISTRIBUCION,
+    ESTADO_PEDIDO_CONFIRMADO,
+    ESTADO_ERROR_ENVIO_SAP_REINTENTO,
 )
 
 
@@ -110,10 +112,25 @@ def pedido_permite_reintento_envio_odc_sap(
     ordenes_compra: List[Dict[str, Any]],
 ) -> bool:
     """
-    Regla funcional vigente:
-    - El reintento de envío ODC se gestiona únicamente en la vista de Proceso.
-    - En el flujo de pedidos/redistribución este flag siempre se mantiene deshabilitado.
+    Indica si conviene mostrar "Reintentar envío ODC a SAP" en Confirmado redistribución (10).
+
+    Regla de negocio:
+    - Mostrar reintento para cualquier ODC en PENDIENTE o ERROR.
+    - No mostrar reintento cuando la ODC ya fue enviada correctamente.
     """
+    estado_id = get_estado_id_from_pedido(pedido)
+    if estado_id == ESTADO_ERROR_ENVIO_SAP_REINTENTO:
+        for oc in ordenes_compra or []:
+            est = (oc.get("estado") or "").strip().upper()
+            if est in ("PENDIENTE", "ERROR"):
+                return True
+        return False
+    if estado_id != ESTADO_PEDIDO_CONFIRMADO:
+        return False
+    for oc in ordenes_compra or []:
+        est = (oc.get("estado") or "").strip().upper()
+        if est in ("PENDIENTE", "ERROR"):
+            return True
     return False
 
 
