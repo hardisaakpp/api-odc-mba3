@@ -127,6 +127,10 @@ def pedido_permite_reintento_envio_odc_sap(
         return False
     if estado_id != ESTADO_PEDIDO_CONFIRMADO:
         return False
+    # En Confirmado redistribución (10), si aún no existe ODC,
+    # se debe habilitar el botón de "Enviar ODC a SAP" (primer envío).
+    if not ordenes_compra:
+        return True
     for oc in ordenes_compra or []:
         est = (oc.get("estado") or "").strip().upper()
         if est in ("PENDIENTE", "ERROR"):
