@@ -350,3 +350,158 @@ class SolicitudTransferenciaRepository:
         except Exception as e:
             logger.warning(f"No se pudo obtener tiendas fallidas ST por oc_id: {e}")
         return out
+
+    @staticmethod
+    def _norm_tienda(codigo: Optional[str]) -> str:
+        return (codigo or "").strip().upper()
+
+    def _get_latest_solicitud_transferencia_id(self, oc_id: str) -> Optional[str]:
+        if not oc_id:
+            return None
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute(
+                """
+                SELECT TOP 1 solicitud_transferencia_id
+                FROM solicitud_transferencia
+                WHERE oc_id = ?
+                ORDER BY creado_fecha DESC, solicitud_transferencia_id DESC
+                """,
+                (str(oc_id),),
+            )
+            row = cursor.fetchone()
+            cursor.close()
+            return str(row[0]) if row and row[0] else None
+        except Exception as e:
+            logger.warning(f"No se pudo obtener último solicitud_transferencia por oc_id: {e}")
+            return None
+
+    def get_tiendas_itr_ok_norms_por_oc_id(self, oc_id: str) -> set:
+        """
+        Tiendas (normalizadas) que ya tienen ITR creado en SAP para esta OC,
+        en cualquier batch (Creada + doc_entry).
+        """
+        if not oc_id:
+            return set()
+        norms: set = set()
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute(
+                """
+                SELECT DISTINCT d.tienda_codigo
+                FROM solicitud_transferencia_detalle d
+                INNER JOIN solicitud_transferencia st
+                    ON st.solicitud_transferencia_id = d.solicitud_transferencia_id
+                WHERE st.oc_id = ?
+                  AND d.estado = 'Creada'
+                  AND d.doc_entry IS NOT NULL
+                  AND d.tienda_codigo IS NOT NULL
+                  AND LTRIM(RTRIM(d.tienda_codigo)) <> ''
+                """,
+                (str(oc_id),),
+            )
+            for row in cursor.fetchall():
+                n = self._norm_tienda(row[0])
+                if n:
+                    norms.add(n)
+            cursor.close()
+        except Exception as e:
+            logger.warning(f"No se pudo listar ITR OK por oc_id: {e}")
+        return norms
+
+    def get_tiendas_pendientes_reintento_st(self, oc_id: str) -> List[str]:
+        """
+        Tiendas del último batch aún en Error, excluyendo las que ya tienen ITR OK
+        en cualquier intento previo (idempotencia / anti-duplicado).
+        """
+        if not oc_id:
+            return []
+        solicitud_id = self._get_latest_solicitud_transferencia_id(oc_id)
+        if not solicitud_id:
+            return []
+        ok_norms = self.get_tiendas_itr_ok_norms_por_oc_id(oc_id)
+        candidatas: List[str] = []
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute(
+                """
+                SELECT DISTINCT tienda_codigo
+                FROM solicitud_transferencia_detalle
+                WHERE solicitud_transferencia_id = ?
+                  AND estado = 'Error'
+                  AND tienda_codigo IS NOT NULL
+                  AND LTRIM(RTRIM(tienda_codigo)) <> ''
+                """,
+                (solicitud_id,),
+            )
+            for row in cursor.fetchall():
+                raw = (row[0] or "").strip()
+                if not raw:
+                    continue
+                if self._norm_tienda(raw) in ok_norms:
+                    continue
+                candidatas.append(raw)
+            cursor.close()
+        except Exception as e:
+            logger.warning(f"No se pudo calcular tiendas pendientes ST: {e}")
+            return []
+        return candidatas
+
+    def get_tiendas_fallidas_desde_resultado_json_fallback(self, oc_id: str) -> List[str]:
+        """
+        Si no hay filas en solicitud_transferencia_detalle,
+        intenta extraer tiendas con error desde resultado_json del último batch.
+        """
+        if not oc_id:
+            return []
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute(
+                """
+                SELECT TOP 1 resultado_json
+                FROM solicitud_transferencia
+                WHERE oc_id = ?
+                ORDER BY creado_fecha DESC, solicitud_transferencia_id DESC
+                """,
+                (str(oc_id),),
+            )
+            row = cursor.fetchone()
+            cursor.close()
+            if not row or not row[0]:
+                return []
+            data = json.loads(row[0])
+            if not isinstance(data, dict):
+                return []
+            resultados = data.get("resultados") or []
+            ok_norms = self.get_tiendas_itr_ok_norms_por_oc_id(oc_id)
+            out: List[str] = []
+            for r in resultados:
+                if not isinstance(r, dict):
+                    continue
+                if r.get("success"):
+                    continue
+                cod = (r.get("tienda_codigo") or "").strip()
+                if not cod:
+                    continue
+                if self._norm_tienda(cod) in ok_norms:
+                    continue
+                out.append(cod)
+            return list(dict.fromkeys(out))
+        except Exception as e:
+            logger.warning(f"Fallback resultado_json ST no disponible: {e}")
+            return []
+
+    def get_st_pendiente_reintento_count(self, oc_id: str) -> int:
+        """Cuenta tiendas que aún requieren reintento ITR (detalle o fallback JSON)."""
+        pend = self.get_tiendas_pendientes_reintento_st(oc_id)
+        if pend:
+            return len(pend)
+        return len(self.get_tiendas_fallidas_desde_resultado_json_fallback(oc_id))
+
+    def count_st_pendientes_reintento_por_oc_ids(self, oc_ids: List[str]) -> Dict[str, int]:
+        """
+        Para la tabla proceso: cuenta por oc_id cuántas tiendas siguen pendientes de reintento ITR.
+        """
+        if not oc_ids:
+            return {}
+        return {str(oid): self.get_st_pendiente_reintento_count(str(oid)) for oid in oc_ids}

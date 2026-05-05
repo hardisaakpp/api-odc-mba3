@@ -107,34 +107,68 @@ def enrich_pedido_with_ui_flags(pedido: Dict[str, Any]) -> None:
     pedido["puede_finalizar"] = estado_id == ESTADO_DESPACHAR_Y_FACTURAR
 
 
+def _oc_permite_reintento_envio_por_detalle_error(oc: Dict[str, Any]) -> bool:
+    """Errores SAP/conexión reintentables; maestro puro u otros códigos no listados → False."""
+    from src.database.services.oc_sap_service import _mensaje_sugiere_reintento_sap
+    from src.database.services.retry_utils import _parse_sap_b1_error_code
+
+    sap_codes_reintento_manual = {-1116}
+    msg = f"{oc.get('respuesta_sap') or ''} {oc.get('error_message') or ''}"
+    src = (oc.get("error_source") or "").strip().upper()
+    sap_code = _parse_sap_b1_error_code(oc.get("error_code"))
+    if sap_code in sap_codes_reintento_manual:
+        return True
+    if src == "SAP_CONNECTION":
+        return True
+    if _mensaje_sugiere_reintento_sap(msg):
+        return True
+    return False
+
+
 def pedido_permite_reintento_envio_odc_sap(
     pedido: Dict[str, Any],
     ordenes_compra: List[Dict[str, Any]],
 ) -> bool:
     """
-    Indica si conviene mostrar "Reintentar envío ODC a SAP" en Confirmado redistribución (10).
+    Indica si el flag `puede_reintentar_envio_odc_sap` debe ser True.
 
-    Regla de negocio:
-    - Mostrar reintento para cualquier ODC en PENDIENTE o ERROR.
-    - No mostrar reintento cuando la ODC ya fue enviada correctamente.
+    Reglas por estado del pedido:
+
+    - Estado 4 (`ESTADO_REDISTRIBUCION` = "CONFIRMADO POR EL RAYO"):
+      vista de redistribución. El botón es solo "Enviar ODC a SAP" (proceso completo).
+      Aquí NO hay reintento — esa funcionalidad vive en /proceso. Por eso siempre True;
+      el front decide habilitación con `puede_confirmar_redistribucion`.
+
+    - Estado 10 (`ESTADO_PEDIDO_CONFIRMADO` = "CONFIRMADO REDISTRIBUCION"):
+      sin ODC → primer envío; PENDIENTE → sí; ERROR → solo si el detalle sugiere
+      reintento (conexión, código -1116, etc.). Errores de maestro no reintentables.
+
+    - Estado 21 (`ESTADO_ERROR_ENVIO_SAP_REINTENTO`):
+      cualquier ODC PENDIENTE o ERROR puede reintentarse.
     """
     estado_id = get_estado_id_from_pedido(pedido)
+
+    if estado_id == ESTADO_REDISTRIBUCION:
+        return True
+
+    if estado_id == ESTADO_PEDIDO_CONFIRMADO:
+        if not ordenes_compra:
+            return True
+        for oc in ordenes_compra or []:
+            est = (oc.get("estado") or "").strip().upper()
+            if est == "PENDIENTE":
+                return True
+            if est == "ERROR" and _oc_permite_reintento_envio_por_detalle_error(oc):
+                return True
+        return False
+
     if estado_id == ESTADO_ERROR_ENVIO_SAP_REINTENTO:
         for oc in ordenes_compra or []:
             est = (oc.get("estado") or "").strip().upper()
             if est in ("PENDIENTE", "ERROR"):
                 return True
         return False
-    if estado_id not in (ESTADO_REDISTRIBUCION, ESTADO_PEDIDO_CONFIRMADO):
-        return False
-    # En Confirmado redistribución (10), si aún no existe ODC,
-    # se debe habilitar el botón de "Enviar ODC a SAP" (primer envío).
-    if not ordenes_compra:
-        return True
-    for oc in ordenes_compra or []:
-        est = (oc.get("estado") or "").strip().upper()
-        if est in ("PENDIENTE", "ERROR"):
-            return True
+
     return False
 
 

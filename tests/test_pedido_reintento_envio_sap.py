@@ -9,10 +9,39 @@ def _pedido(estado_id: int):
 
 
 def test_reintento_true_en_confirmado_por_el_rayo_si_oc_pendiente_o_error():
+    """Compatibilidad: estado 4 ya devolvía True con OC en error (mantenemos contrato)."""
     assert pedido_permite_reintento_envio_odc_sap(
         _pedido(ESTADO_REDISTRIBUCION),
         [{"estado": "ERROR", "respuesta_sap": "conexión"}],
     )
+
+
+def test_reintento_true_estado_4_sin_oc_es_primer_envio():
+    """En redistribución (estado 4) sin ODC creada todavía, el botón "Enviar ODC a SAP"
+    debe estar habilitado. La habilitación final la decide el frontend con
+    `puede_confirmar_redistribucion` (grilla cuadrada).
+    """
+    assert pedido_permite_reintento_envio_odc_sap(_pedido(ESTADO_REDISTRIBUCION), [])
+
+
+def test_reintento_true_estado_4_con_oc_pendiente():
+    """Estado 4 con OC PENDIENTE → sigue siendo True (sin importar el detalle)."""
+    assert pedido_permite_reintento_envio_odc_sap(
+        _pedido(ESTADO_REDISTRIBUCION),
+        [{"estado": "PENDIENTE"}],
+    )
+
+
+def test_reintento_true_estado_4_con_error_de_maestro():
+    """En estado 4 no aplicamos la heurística de detalle de error (eso es solo en /proceso,
+    estados 10 y 21). El front igualmente bloquea por `puede_confirmar_redistribucion`.
+    """
+    oc = {
+        "estado": "ERROR",
+        "error_source": "SAP_VALIDATION",
+        "respuesta_sap": "Prevalidación SAP falló: artículo inexistente X",
+    }
+    assert pedido_permite_reintento_envio_odc_sap(_pedido(ESTADO_REDISTRIBUCION), [oc])
 
 
 def test_reintento_true_oc_pendiente_estado_10():

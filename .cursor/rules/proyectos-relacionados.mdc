@@ -1,0 +1,40 @@
+---
+description: Rutas de proyectos relacionados (frontend) y estado de alineación con este backend
+alwaysApply: true
+---
+
+# Proyectos relacionados
+
+## Frontend (scnexus-front)
+
+Ruta absoluta en este equipo:
+
+```
+C:\Users\cortiz\OneDrive - MABEL TRADING S.A\Documents\GitHub\scnexus-front
+```
+
+Vue 3 + TypeScript + Vite. Módulo principal: `src/modules/mba3-consultas/`.
+
+Archivos clave para comparar contra este backend:
+- `src/modules/mba3-consultas/services/domains/ordenesCompra.ts` — cliente HTTP `/ordenes-compra`
+- `src/modules/mba3-consultas/services/mba3ConsultasApi.ts` — fachada del servicio
+- `src/modules/mba3-consultas/components/OrdenCompraTable.vue` — acciones por fila (ODC)
+- `src/modules/mba3-consultas/components/RedistribucionTiendas.vue` — botón "Enviar ODC a SAP"
+- `src/modules/mba3-consultas/views/CargarPlantillaView.vue` y `MabelTradingRedistribucionView.vue` — flujos de envío/reintento ODC
+- `src/modules/mba3-consultas/types.ts` — tipos `OrdenCompra` y `Pedido`
+- `openapi.json` (raíz) — schema importado del backend
+
+## Estado de alineación backend ↔ frontend
+
+ODC (orden de compra → SAP):
+- Backend: `_enrich_oc_actions` expone `mostrar_reintentar`, `mostrar_descargar_pdf`; `enrich_pedido_reintento_envio_odc_sap` expone `puede_reintentar_envio_odc_sap`.
+- Frontend: `OrdenCompraTable.shouldShowRetryAction/PdfAction` y `RedistribucionTiendas` ya leen estos flags. ALINEADO.
+
+ITR / ST (solicitudes de transferencia post-ODC):
+- Backend: `POST /ordenes-compra/{oc_id}/reintentar-st` + flags `mostrar_reintentar_st`, `st_pendientes_reintento`, `st_total_tiendas`, `st_transferencias_creadas`, `st_transferencias_errores`.
+- Frontend: NO consume aún estos flags ni llama al endpoint. PENDIENTE de cablear UI (botón "Reintentar ST" en `OrdenCompraTable.vue` y método en `ordenesCompraService`). El `openapi.json` del front debe regenerarse para incluir el nuevo endpoint.
+
+## Convenciones
+
+- Antes de cambiar contratos en `src/endpoints/ordenes_compra.py`, revisar `services/domains/ordenesCompra.ts` y `types.ts` del frontend.
+- Mantener nombres exactos de flags backend en la respuesta JSON; el frontend los consume tal cual (snake_case).
