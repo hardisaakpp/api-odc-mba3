@@ -240,11 +240,12 @@ cd /opt/odc-sap/
 source venv/bin/activate
 # Si actualizaste código: git pull origin main && pip install -r requirements.txt
 sudo systemctl restart odc-sap-api
-# Si usas Celery: sudo systemctl restart <servicio-celery>
+# Producción típica (mismos nombres que en docs/DEPLOY_PRODUCCION.md):
+# sudo systemctl restart odc-sap-api celery-worker celery-beat
 ```
 
 - [ ] Reiniciar API (`sudo systemctl restart odc-sap-api`)
-- [ ] Reiniciar Celery (si fue detenido)
+- [ ] Reiniciar Celery (`sudo systemctl restart celery-worker celery-beat`) si aplica o si cambió `.env` compartido
 - [ ] Reiniciar servicios dependientes
 - [ ] Quitar modo mantenimiento (si aplica)
 

@@ -266,7 +266,7 @@ python scripts/migration_runner.py --verbose
    ```
 
 4. **Reiniciar servicios**
-   - Reiniciar API (si aplica): ver comandos en [DEPLOY_PRODUCCION.md](DEPLOY_PRODUCCION.md) (`sudo systemctl restart odc-sap-api`)
+   - Reiniciar API (si aplica): ver [DEPLOY_PRODUCCION.md](DEPLOY_PRODUCCION.md) — en producción típica: `sudo systemctl restart odc-sap-api`; si aplica Celery con el mismo código/entorno: `sudo systemctl restart celery-worker celery-beat` (nombres exactos en esa guía).
    - Verificar logs de aplicación
    - Probar funcionalidad crítica
 

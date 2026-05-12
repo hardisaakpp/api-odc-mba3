@@ -7,10 +7,33 @@ Guía para aplicar cambios del backend en el servidor de producción (Linux). El
 ## 📍 Entorno de Producción
 
 - **Ruta del proyecto:** `/opt/odc-sap/`
-- **Servicio systemd:** `odc-sap-api` (usar siempre este nombre en `systemctl status/restart`, no `odc-sap`)
 - **Puerto API:** 8000
+- **Servicios systemd (producción):** tres unidades — `odc-sap-api`, `celery-worker`, `celery-beat` (detalle y nombres prohibidos en la tabla siguiente).
 
 La aplicación resuelve el fichero de entorno según `src/config.py`: en servidor se recomienda **`ENV_FILE=/opt/odc-sap/.env`** y **`ENVIRONMENT=production`** en la unidad systemd (ver [CONFIGURACION.md](CONFIGURACION.md)). Sin `ENV_FILE`, se usaría `.env.production` en la raíz del proyecto.
+
+### Nombres exactos de las unidades systemd (no inventar otros)
+
+En el servidor de producción donde vive el backend (p. ej. `srv-mabuiosapi` con `/opt/odc-sap`), las unidades **reales** suelen ser:
+
+| Rol | Unidad (con o sin `.service`) | Descripción típica en `systemctl` |
+|-----|-------------------------------|-----------------------------------|
+| API FastAPI | **`odc-sap-api`** | ODC-SAP API (FastAPI) |
+| Cola de tareas | **`celery-worker`** | Celery Worker - odc-sap |
+| Programador | **`celery-beat`** | Celery Beat - odc-sap |
+
+**No existen** unidades con nombres genéricos como `mba3-api` o `celery`. Si `systemctl restart …` devuelve *Unit not found*, el nombre es incorrecto.
+
+**Comprobar** qué unidades hay registradas en **tu** máquina:
+
+```bash
+systemctl list-units --type=service --all --no-legend | grep -iE 'celery|odc'
+systemctl list-unit-files | grep -iE 'celery|odc'
+```
+
+Salida esperada (ejemplo): `odc-sap-api.service`, `celery-worker.service`, `celery-beat.service` — todas *enabled* y *active*.
+
+**Tras cambiar el `.env`** (MinIO/S3, `REDIS_URL`, claves, etc.), hay que reiniciar **API y Celery** para que vuelvan a leer variables: como mínimo `odc-sap-api` y `celery-worker`; incluye también `celery-beat` si quieres un criterio único “reinicio completo”. Los mismos comandos están en la subsección **Reinicio controlado del flujo completo** (más abajo).
 
 ---
 
@@ -31,8 +54,11 @@ git pull origin main
 # 4. Instalar o actualizar dependencias (por si cambió requirements.txt)
 pip install -r requirements.txt
 
-# 5. Reiniciar el servicio de la API para aplicar los cambios
+# 5. Reiniciar servicios
+#    Solo código / dependencias (sin cambios en .env leídos por workers):
 sudo systemctl restart odc-sap-api
+#    Si además cambió .env (FILE_STORAGE_*, REDIS_URL, etc.) o quieres alinear workers:
+# sudo systemctl restart odc-sap-api celery-worker celery-beat
 ```
 
 **Verificación rápida:**
@@ -128,4 +154,4 @@ uvicorn src.api_server:app --host 0.0.0.0 --port 8000
 | **Desplegar migraciones de BD** | [DEPLOY_MIGRATIONS.md](DEPLOY_MIGRATIONS.md) y [scripts/PRODUCTION_DEPLOYMENT_CHECKLIST.md](../scripts/PRODUCTION_DEPLOYMENT_CHECKLIST.md) |
 | **Reiniciar API/Celery tras migraciones** | Incluye los mismos comandos de este documento |
 
-Si después de una migración de base de datos debes reiniciar la API, usa los pasos de la sección **Actualizar Cambios** (al menos `sudo systemctl restart odc-sap-api`).
+Si después de una migración de base de datos debes reiniciar procesos, usa la sección **Actualizar Cambios**; como mínimo `sudo systemctl restart odc-sap-api`. Si los workers Celery deben ver el mismo estado de entorno o de código, reinicia también `celery-worker` (y opcionalmente `celery-beat`), igual que en **Reinicio controlado del flujo completo** al final de este documento.

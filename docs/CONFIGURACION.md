@@ -30,7 +30,7 @@ Environment=ENVIRONMENT=production
 Environment=ENV_FILE=/opt/odc-sap/.env
 ```
 
-(Ajusta la ruta al directorio de despliegue.) Repite las mismas líneas en los servicios del worker y de beat para que Celery use la misma configuración que la API.
+(Ajusta la ruta al directorio de despliegue.) Repite las mismas líneas en los servicios del worker y de beat para que Celery use la misma configuración que la API. **Tras editar ese `.env`**, reinicia la API y los procesos Celery para que recarguen variables; los nombres típicos de unidades `systemd` en producción son `odc-sap-api`, `celery-worker` y `celery-beat` (no existen `mba3-api` ni `celery` sueltos). Detalle y comandos: [DEPLOY_PRODUCCION.md](DEPLOY_PRODUCCION.md).
 
 ### MBA3
 
