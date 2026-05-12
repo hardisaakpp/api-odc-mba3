@@ -1,13 +1,16 @@
-# Arranca API + Celery worker + Celery beat en una sola ventana de Windows Terminal (3 pestañas).
+# Arranca API + Celery worker + Celery beat (y opcionalmente frontend en otra ventana).
+# Por defecto: 3 ventanas de PowerShell sueltas (no depende de Windows Terminal).
 # El frontend (Vite) no se incluye por defecto: suele fallar en ventanas hijas; arráncalo aparte con npm run dev.
 #
 # Uso (desde la raíz del repo):
-#   .\start-all-dev.ps1                          # WT, 3 pestañas (recomendado)
-#   .\start-all-dev.ps1 -SeparateWindows         # 3 ventanas de PowerShell sueltas (comportamiento antiguo sin WT)
-#   .\start-all-dev.ps1 -WithFrontend            # WT con 4ª pestaña para npm (opcional, puede cerrarse si falla)
-#   .\start-all-dev.ps1 -WithFrontend -SeparateWindows   # 4 ventanas sueltas
+#   .\start-all-dev.ps1                          # 3 ventanas PowerShell (api, worker, beat)
+#   .\start-all-dev.ps1 -WindowsTerminal         # Una ventana WT con pestañas (requiere wt.exe sano)
+#   .\start-all-dev.ps1 -SeparateWindows         # Igual que el default (explícito; útil en scripts)
+#   .\start-all-dev.ps1 -WithFrontend            # + pestaña o ventana frontend (opcional)
+#   .\start-all-dev.ps1 -WithFrontend -WindowsTerminal
 #
-# Compatibilidad: -WindowsTerminal sigue aceptado (redundante; el modo por defecto ya es WT).
+# Si MBA3_START_SEPARATE_WINDOWS=1 (usuario): nunca se usa WT aunque pases -WindowsTerminal (útil si WT está roto).
+#
 # -SkipFrontend sigue aceptado (equivale al default; fuerza no front aunque uses -WithFrontend).
 #
 # Ruta del frontend (-WithFrontend): SCNEXUS_FRONT_ROOT, -FrontendRoot, o valor por defecto Mabel.
@@ -41,9 +44,24 @@ if ($PSBoundParameters.ContainsKey("SkipFrontend") -and $SkipFrontend) {
 }
 $SkipFrontend = -not $includeFrontend
 
-if ($PSBoundParameters.ContainsKey("WindowsTerminal")) {
-    if ($WindowsTerminal -and $SeparateWindows) {
-        Write-Warning "-WindowsTerminal no aplica junto con -SeparateWindows (se usan ventanas sueltas)."
+if ($WindowsTerminal -and $SeparateWindows) {
+    Write-Warning "-WindowsTerminal no aplica junto con -SeparateWindows (se usan ventanas sueltas)."
+}
+
+# Por defecto: ventanas sueltas. -WindowsTerminal pide pestañas en WT. -SeparateWindows es explícito (mismo default).
+$effectiveSeparateWindows = $true
+if ($SeparateWindows) {
+    $effectiveSeparateWindows = $true
+}
+elseif ($WindowsTerminal) {
+    $effectiveSeparateWindows = $false
+}
+
+$envSeparate = $env:MBA3_START_SEPARATE_WINDOWS
+if (-not [string]::IsNullOrWhiteSpace($envSeparate) -and $envSeparate.Trim() -in @('1', 'true', 'yes')) {
+    $effectiveSeparateWindows = $true
+    if ($WindowsTerminal) {
+        Write-Host "MBA3_START_SEPARATE_WINDOWS: se ignoran pestañas de Windows Terminal." -ForegroundColor DarkYellow
     }
 }
 
@@ -138,7 +156,7 @@ function Add-WtTabToArgumentList {
 function Start-Mba3WindowsTerminal {
     $wtExe = Get-WtExecutable
     if (-not $wtExe) {
-        Write-Error "No se encontró wt.exe (Windows Terminal). Instálalo o usa -SeparateWindows."
+        Write-Error "No se encontró wt.exe (Windows Terminal). Instálalo desde Microsoft Store o ejecuta sin -WindowsTerminal (por defecto: ventanas sueltas)."
     }
     $wtArgumentList = [System.Collections.Generic.List[string]]::new()
     $wtArgumentList.Add("-w")
@@ -156,10 +174,9 @@ function Start-Mba3WindowsTerminal {
     Start-Process -FilePath $wtExe -ArgumentList $wtArgumentList.ToArray()
 }
 
-# Por defecto: pestañas en WT. -SeparateWindows fuerza consolas sueltas. -WindowsTerminal (legado) no cambia el default.
-$useWindowsTerminal = -not $SeparateWindows
+$useWindowsTerminal = -not $effectiveSeparateWindows
 if ($useWindowsTerminal -and -not (Get-WtExecutable)) {
-    Write-Warning "No se encontró Windows Terminal (wt.exe). Abriendo ventanas de PowerShell sueltas. Instala WT desde Microsoft Store para usar pestañas."
+    Write-Warning "No se encontró Windows Terminal (wt.exe). Abriendo ventanas de PowerShell sueltas. Instala o repara WT desde Microsoft Store; luego puedes usar .\start-all-dev.ps1 -WindowsTerminal para pestañas."
     $useWindowsTerminal = $false
 }
 
@@ -183,6 +200,6 @@ if ($useWindowsTerminal) {
 }
 else {
     Write-Host "Listo. Ventanas sueltas de PowerShell (cierra cada una para detener ese proceso). Redis/Docker aparte." -ForegroundColor Gray
-    Write-Host "Para pestañas en un solo programa: instala Windows Terminal y ejecuta sin -SeparateWindows." -ForegroundColor DarkGray
+    Write-Host "Para pestañas en un solo programa: .\start-all-dev.ps1 -WindowsTerminal (requiere Windows Terminal operativo)." -ForegroundColor DarkGray
 }
 Write-Host ""
