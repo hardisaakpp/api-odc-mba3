@@ -4,15 +4,18 @@ Extraído de pedido_validator.py para mejorar separación de responsabilidades.
 """
 
 import logging
-import re
-import asyncio
+import socket
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from typing import Dict, Any, List, Optional
+from urllib.parse import urlparse
+
+from src.exceptions import MBA3ConnectionError
 
 logger = logging.getLogger(__name__)
 
 # Timeout para consultas MBA3 durante validación de plantilla (evitar bloqueo si MBA3 no está disponible)
 MBA3_LOOKUP_TIMEOUT_SECONDS = 10
+MBA3_REACHABILITY_TIMEOUT_SECONDS = 1.5
 
 
 class PedidoSAPValidator:
@@ -26,7 +29,9 @@ class PedidoSAPValidator:
     
     def __init__(self):
         """Inicializa el validador SAP."""
-        pass
+        self._mba3_lookup_disabled = False
+        self._mba3_lookup_disable_reason: Optional[str] = None
+        self._mba3_reachability_checked = False
     
     def validar_productos_existen_en_sap(
         self,
@@ -59,7 +64,6 @@ class PedidoSAPValidator:
             }
         """
         from ..services.sap_service import SAPService
-        from src.config import ENABLE_SAP_QUERIES
         
         if not codigos_productos:
             return {
@@ -345,6 +349,14 @@ class PedidoSAPValidator:
             from src.services.mba3_service import MBA3Service
             import re
             
+            if self._mba3_lookup_disabled:
+                logger.debug(
+                    "Saltando búsqueda MBA3 para %s porque MBA3 fue marcado como no disponible: %s",
+                    codigo,
+                    self._mba3_lookup_disable_reason or "sin detalle",
+                )
+                return None
+            
             # Validar formato del código
             if not codigo or not codigo.strip():
                 return None
@@ -353,6 +365,9 @@ class PedidoSAPValidator:
             # Permitir mismos caracteres que SAP (incl. / y _) para consistencia
             if not re.match(r'^[A-Za-z0-9.\-_/ ]{1,50}$', codigo_clean):
                 logger.warning(f"⚠️ Código con formato inválido para MBA3: {codigo_clean}")
+                return None
+            
+            if not self._mba3_lookup_available():
                 return None
             
             # Escapar comillas simples
@@ -371,17 +386,27 @@ class PedidoSAPValidator:
                 mba3_service = MBA3Service()
                 return mba3_service.execute_query(query)
 
-            with ThreadPoolExecutor(max_workers=1) as executor:
-                future = executor.submit(_run_mba3_query)
-                try:
-                    result = future.result(timeout=MBA3_LOOKUP_TIMEOUT_SECONDS)
-                except FuturesTimeoutError:
-                    logger.warning(
-                        "⚠️ Timeout al buscar código %s en MBA3 (%ds). MBA3 puede no estar disponible.",
-                        codigo_clean,
-                        MBA3_LOOKUP_TIMEOUT_SECONDS,
-                    )
-                    return None
+            executor = ThreadPoolExecutor(max_workers=1)
+            future = executor.submit(_run_mba3_query)
+            timed_out = False
+            try:
+                result = future.result(timeout=MBA3_LOOKUP_TIMEOUT_SECONDS)
+            except FuturesTimeoutError:
+                timed_out = True
+                future.cancel()
+                self._disable_mba3_lookup(
+                    f"timeout de {MBA3_LOOKUP_TIMEOUT_SECONDS}s consultando {codigo_clean}"
+                )
+                logger.warning(
+                    "⚠️ Timeout al buscar código %s en MBA3 (%ds). MBA3 puede no estar disponible.",
+                    codigo_clean,
+                    MBA3_LOOKUP_TIMEOUT_SECONDS,
+                )
+                return None
+            finally:
+                # Con wait=False el timeout realmente libera el flujo de validación.
+                # El request bloqueado terminará solo cuando requests agote su timeout interno.
+                executor.shutdown(wait=not timed_out, cancel_futures=True)
 
             # Normalizar resultado
             if isinstance(result, list):
@@ -416,9 +441,53 @@ class PedidoSAPValidator:
                 "inactive": producto.get("INACTIVE") or producto.get("inactive") or producto.get("Inactive") or False
             }
             
+        except MBA3ConnectionError as e:
+            self._disable_mba3_lookup(str(e).splitlines()[0])
+            logger.warning(f"⚠️ Error de conexión al buscar código {codigo} en MBA3: {e}")
+            return None
         except Exception as e:
             logger.warning(f"⚠️ Error al buscar código {codigo} en MBA3: {e}")
             return None
+
+    def _mba3_lookup_available(self) -> bool:
+        """Verifica una sola vez si MBA3 acepta conexiones antes de hacer búsquedas de sugerencias."""
+        if self._mba3_lookup_disabled:
+            return False
+        if self._mba3_reachability_checked:
+            return True
+
+        try:
+            from src.config import MBA3_BASE_URL
+
+            parsed_url = urlparse(MBA3_BASE_URL)
+            host = parsed_url.hostname
+            if not host:
+                self._disable_mba3_lookup("MBA3_BASE_URL no tiene host configurado")
+                return False
+
+            port = parsed_url.port or (443 if parsed_url.scheme == "https" else 80)
+            with socket.create_connection((host, port), timeout=MBA3_REACHABILITY_TIMEOUT_SECONDS):
+                pass
+
+            self._mba3_reachability_checked = True
+            return True
+        except OSError as e:
+            self._disable_mba3_lookup(f"MBA3 no responde en {host}:{port} ({e})")
+            return False
+        except Exception as e:
+            self._disable_mba3_lookup(f"no se pudo verificar disponibilidad de MBA3 ({e})")
+            return False
+
+    def _disable_mba3_lookup(self, reason: str) -> None:
+        if self._mba3_lookup_disabled:
+            return
+        self._mba3_lookup_disabled = True
+        self._mba3_lookup_disable_reason = reason
+        logger.warning(
+            "⚠️ MBA3 no disponible para sugerencias de productos; "
+            "se omitirán búsquedas MBA3 en esta validación. Motivo: %s",
+            reason,
+        )
     
     def _generar_sugerencias_sap(
         self,
@@ -539,9 +608,6 @@ class PedidoSAPValidator:
                 "detalle": Dict[str, Dict[str, Any]]
             }
         """
-        from ..clients.sap_client import SAPClient
-        from src.config import ENABLE_SAP_QUERIES
-        
         if not codigos_bodegas:
             return {
                 "validas": [],
@@ -679,9 +745,6 @@ class PedidoSAPValidator:
                 "detalle": Dict[str, Dict[str, Any]]
             }
         """
-        from ..clients.sap_client import SAPClient
-        from src.config import ENABLE_SAP_QUERIES
-        
         if not codigos_tiendas:
             return {
                 "validas": [],
