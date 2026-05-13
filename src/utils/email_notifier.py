@@ -997,7 +997,7 @@ def send_oc_ready_for_dispatch_notification(
         
         # Crear mensaje con multipart/alternative para que el cliente prefiera HTML
         msg = MIMEMultipart('alternative')
-        msg['From'] = EMAIL_FROM
+        msg['From'] = EMAIL_SMTP_USER or EMAIL_FROM
         msg['To'] = ", ".join(recipients)
         msg['Subject'] = f"OC y Solicitudes de Transferencia - Listo para Despacho #{numero_oc_sap}"
         

@@ -27,7 +27,7 @@ from datetime import datetime
 from src.utils.timezone import ahora_naive
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
-from typing import List, Tuple, Optional, Any, Dict
+from typing import List, Tuple, Optional, Any
 
 from src.config import (
     EMAIL_SMTP_SERVER,
@@ -288,7 +288,7 @@ def create_email_message(
     Si hay attachments, usa mixed + alternative anidado.
     Si no hay, usa alternative directo.
     """
-    _from = from_addr or EMAIL_FROM
+    _from = from_addr or EMAIL_SMTP_USER or EMAIL_FROM
     _from_display = f"{from_name or EMAIL_FROM_NAME} <{_from}>"
 
     if attachments:
