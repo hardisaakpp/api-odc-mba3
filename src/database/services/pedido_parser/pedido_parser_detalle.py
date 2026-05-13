@@ -8,6 +8,7 @@ CHANGELOG:
 import logging
 import pandas as pd
 import io
+import re
 from typing import Dict, Any, List, Optional
 
 from .pedido_parser_utils import PedidoParserUtils, normalize_column_name, normalize_codigo_columna
@@ -68,11 +69,11 @@ class PedidoParserDetalle:
             
             if header_row_idx is None:
                 header_row_idx = 0
-                logger.warning(f"⚠️ No se encontró fila de header, usando fila 0 como header")
+                logger.warning("⚠️ No se encontró fila de header, usando fila 0 como header")
             
             codigos_row_idx = header_row_idx + 1
             if codigos_row_idx >= len(df_detalle_raw):
-                logger.warning(f"⚠️ No se encontró segunda fila de header (códigos), usando solo primera fila")
+                logger.warning("⚠️ No se encontró segunda fila de header (códigos), usando solo primera fila")
                 codigos_row_idx = None
             
             df_detalle = pd.read_excel(
@@ -159,7 +160,7 @@ class PedidoParserDetalle:
                     primer_codigo_str = str(primer_codigo).strip() if primer_codigo is not None and not pd.isna(primer_codigo) else ""
                     if not primer_codigo_str or len(primer_codigo_str) < 2:
                         df_detalle = df_detalle.iloc[1:].reset_index(drop=True)
-                        logger.info(f"✅ Fila de códigos eliminada del DataFrame de datos")
+                        logger.info("✅ Fila de códigos eliminada del DataFrame de datos")
             
             resultado["resumen"]["filasLeidas"] = len(df_detalle)
             
@@ -294,7 +295,6 @@ class PedidoParserDetalle:
             pack_val = row.get(columnas_producto['pack'])
             info_producto["pack"] = str(pack_val).strip() if pack_val is not None and not pd.isna(pack_val) else None
         
-        campos_numericos = ['costo sin iva', 'descuento', 'pvp', 'subtotal', 'total']
         mapeo_campos = {
             'costo sin iva': 'costo_doc_sin_iva',
             'descuento': 'descuento_1',
@@ -339,20 +339,33 @@ class PedidoParserDetalle:
         
         inicio_tiendas_idx = self.utils.INDICE_INICIO_TIENDAS
         
-        ultima_columna_idx = len(df_detalle.columns) - 1
-        for col_idx in range(len(df_detalle.columns) - 1, inicio_tiendas_idx - 1, -1):
-            col_name = df_detalle.columns[col_idx]
-            if col_idx < len(df_detalle.columns):
-                col_has_data = False
-                for row_idx in range(min(10, len(df_detalle))):
-                    val = df_detalle.iloc[row_idx, col_idx]
-                    if val is not None and not pd.isna(val) and str(val).strip() != "":
-                        col_has_data = True
+        columnas_con_codigo_tienda = []
+        for col_idx in range(inicio_tiendas_idx, len(df_detalle.columns)):
+            if col_idx in indices_columnas_producto or col_idx in indices_columnas_bodegas:
+                continue
+
+            codigo_columna = codigos_columnas.get(col_idx)
+            nombre_columna = nombres_columnas_fila1.get(col_idx, df_detalle.columns[col_idx])
+            if self._es_codigo_columna_tienda(codigo_columna) or self._es_codigo_columna_tienda(nombre_columna):
+                columnas_con_codigo_tienda.append(col_idx)
+
+        if columnas_con_codigo_tienda:
+            ultima_columna_idx = max(columnas_con_codigo_tienda)
+        else:
+            # Fallback para plantillas antiguas sin fila de códigos: usar datos, como antes.
+            ultima_columna_idx = len(df_detalle.columns) - 1
+            for col_idx in range(len(df_detalle.columns) - 1, inicio_tiendas_idx - 1, -1):
+                if col_idx < len(df_detalle.columns):
+                    col_has_data = False
+                    for row_idx in range(min(10, len(df_detalle))):
+                        val = df_detalle.iloc[row_idx, col_idx]
+                        if val is not None and not pd.isna(val) and str(val).strip() != "":
+                            col_has_data = True
+                            break
+                    if col_has_data:
+                        ultima_columna_idx = col_idx
                         break
-                if col_has_data:
-                    ultima_columna_idx = col_idx
-                    break
-        
+
         logger.info(f"📊 Rango de columnas: Producto (0-8), Bodegas (9-11), Tiendas ({inicio_tiendas_idx}-{ultima_columna_idx})")
         
         for col_idx, col_name in enumerate(df_detalle.columns):
@@ -369,27 +382,58 @@ class PedidoParserDetalle:
                 else:
                     nombre_columna = str(col_name).strip()
                 
-                if col_idx in codigos_columnas:
-                    codigo_tienda = codigos_columnas[col_idx]
-                    if self.utils.es_codigo_valido(codigo_tienda):
-                        columnas_tiendas[codigo_tienda] = {
-                            "col_idx": col_idx,
-                            "col_name": nombre_columna
-                        }
-                    else:
-                        col_upper = nombre_columna.upper().strip()
-                        columnas_tiendas[col_upper] = {
-                            "col_idx": col_idx,
-                            "col_name": nombre_columna
-                        }
-                else:
-                    col_upper = nombre_columna.upper().strip()
+                codigo_tienda = codigos_columnas.get(col_idx)
+                if self._es_codigo_columna_tienda(codigo_tienda):
+                    codigo_final = normalize_codigo_columna(codigo_tienda).upper().strip()
+                    columnas_tiendas[codigo_final] = {
+                        "col_idx": col_idx,
+                        "col_name": nombre_columna
+                    }
+                elif self._es_codigo_columna_tienda(nombre_columna):
+                    col_upper = normalize_codigo_columna(nombre_columna).upper().strip()
                     columnas_tiendas[col_upper] = {
                         "col_idx": col_idx,
                         "col_name": nombre_columna
                     }
+                else:
+                    logger.debug(
+                        "Omitiendo columna %s como tienda: código='%s', nombre='%s'",
+                        col_idx,
+                        codigo_tienda,
+                        nombre_columna,
+                    )
+        
+        if columnas_tiendas:
+            codigos_detectados = list(columnas_tiendas.keys())
+            logger.info(
+                "✅ Tiendas detectadas por encabezado/código: %s%s",
+                codigos_detectados[:20],
+                "..." if len(codigos_detectados) > 20 else "",
+            )
         
         return columnas_tiendas
+
+    def _es_codigo_columna_tienda(self, valor: Any) -> bool:
+        """Determina si un valor de encabezado parece un código de tienda procesable."""
+        if valor is None or pd.isna(valor):
+            return False
+
+        codigo = normalize_codigo_columna(valor).upper().strip()
+        if not codigo:
+            return False
+
+        if codigo in self.utils.BODEGAS_ESPERADAS or codigo in self.utils.VARIANTES_BODEGAS:
+            return False
+
+        encabezados_no_tienda = ("COL", "UNNAMED", "TOTAL", "SUBTOTAL", "DIFERENCIA", "OBSERVACION")
+        if codigo.startswith(encabezados_no_tienda):
+            return False
+
+        return (
+            codigo.startswith(("TRL-", "TOUT-", "RG-"))
+            or codigo.lower().startswith(self.utils.PREFIJO_TIENDA_ANTIGUO)
+            or bool(re.match(self.utils.PATRON_CODIGO_TIENDA, codigo))
+        )
 
     def procesar_filas_detalle(
         self,
@@ -425,6 +469,8 @@ class PedidoParserDetalle:
                 continue
             
             info_producto = self.extraer_info_producto(row, columnas_producto, codigo_producto)
+            total_esperado = info_producto.get("total")
+            total_distribuido = 0.0
             
             for bodega_codigo, col_bodega_name in columnas_bodegas.items():
                 cantidad_raw = row.get(col_bodega_name)
@@ -444,6 +490,7 @@ class PedidoParserDetalle:
                                 "es_bodega": True,
                                 "info_producto": info_producto
                             })
+                            total_distribuido += cantidad
                             logger.debug(f"   Fila {row_num}: {codigo_producto} → {bodega_codigo_final} x{cantidad} (bodega)")
                     except (ValueError, TypeError):
                         logger.warning(f"⚠️ Fila {row_num}: Cantidad inválida en bodega {bodega_codigo}: {cantidad_raw}")
@@ -477,8 +524,23 @@ class PedidoParserDetalle:
                                         "es_bodega": False,
                                         "info_producto": info_producto
                                     })
+                                    total_distribuido += cantidad
                                     logger.debug(f"   Fila {row_num}: {codigo_producto} → {codigo_tienda_final} ({nombre_tienda}) x{cantidad} (tienda)")
                             except (ValueError, TypeError):
                                 logger.warning(f"⚠️ Fila {row_num}: Cantidad inválida en tienda {codigo_tienda}: {cantidad_raw}")
+            
+            if total_esperado is not None and abs(float(total_esperado) - total_distribuido) > 0.0001:
+                mensaje = (
+                    f"Total del producto ({float(total_esperado):.4f}) no coincide con la suma "
+                    f"de bodegas/tiendas parseadas ({total_distribuido:.4f}). "
+                    "Puede existir una columna de tienda omitida o una cantidad inválida."
+                )
+                logger.warning(f"⚠️ Fila {row_num}: {codigo_producto} - {mensaje}")
+                resultado["errores"].append({
+                    "fila": row_num,
+                    "campo": "TOTAL",
+                    "tipo": "WARNING",
+                    "mensaje": mensaje
+                })
             
             resultado["resumen"]["filasValidas"] += 1
