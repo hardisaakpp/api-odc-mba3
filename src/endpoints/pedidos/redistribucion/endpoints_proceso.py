@@ -281,6 +281,7 @@ def _ejecutar_proceso_completo_sync(
             # Num ODC para el modal: valor de orden_compra_cabecera.numero_oc_sap (PO en SAP, ej. 22530)
             # DocNum en el modal: número de documento ITR (ej. 70214734) — no confundir con numero_oc_sap
             numero_oc_sap_cabecera = None
+            oc_cabecera = None
             try:
                 oc_cabecera = oc_repo.get_existing_cabecera(oc_id)
                 if oc_cabecera and oc_cabecera.get("numero_oc_sap") is not None:
@@ -324,6 +325,34 @@ def _ejecutar_proceso_completo_sync(
                     )
                 except Exception:
                     pass
+
+                # Notificar a Operaciones y MABEL TRADING que la ODC/ST ya están listas.
+                # El envío de correo no debe bloquear el cierre exitoso del proceso SAP.
+                try:
+                    from src.utils.email_notifier import send_oc_ready_for_dispatch_notification
+
+                    email_despacho_enviado = send_oc_ready_for_dispatch_notification(
+                        oc_cabecera=oc_cabecera or {},
+                        doc_num=doc_num_po,
+                        doc_entry=doc_entry,
+                        solicitudes_transferencia=solicitudes_para_response,
+                        pedido_numero=numero_pedido,
+                    )
+                    if email_despacho_enviado:
+                        logger.info(
+                            "📧 Notificación de ODC/ST lista para despacho enviada "
+                            f"(Pedido: {numero_pedido}, OC: {numero_oc_sap_cabecera or doc_num_po})"
+                        )
+                    else:
+                        logger.warning(
+                            "⚠️ No se pudo enviar notificación de ODC/ST lista para despacho "
+                            f"(Pedido: {numero_pedido}, OC: {numero_oc_sap_cabecera or doc_num_po})"
+                        )
+                except Exception as email_error:
+                    logger.warning(
+                        "⚠️ Error al enviar notificación de ODC/ST lista para despacho "
+                        f"(no crítico): {email_error}"
+                    )
 
                 num_itr = (solicitudes_para_response or {}).get("transferencias_creadas") or 0
                 if num_itr == 1:
