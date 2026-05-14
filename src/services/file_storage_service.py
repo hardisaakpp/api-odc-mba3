@@ -25,12 +25,10 @@ Uso:
 """
 
 import logging
-import io
 from datetime import datetime
 
 from src.utils.timezone import ahora_naive
 from typing import Optional, Tuple, Dict, Any
-from pathlib import PurePosixPath
 
 from src.config import (
     ENABLE_FILE_STORAGE,
@@ -88,12 +86,14 @@ class FileStorageService:
         try:
             import boto3
             from botocore.config import Config
-            from botocore.exceptions import ClientError
             
             # Configuración para MinIO (path style)
             config = Config(
                 signature_version='s3v4',
-                s3={'addressing_style': 'path'}
+                s3={'addressing_style': 'path'},
+                connect_timeout=5,
+                read_timeout=30,
+                retries={'max_attempts': 2, 'mode': 'standard'}
             )
             
             self._client = boto3.client(

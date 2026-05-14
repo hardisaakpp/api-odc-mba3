@@ -384,6 +384,12 @@ EMAIL_SMTP_SERVER = os.getenv("EMAIL_SMTP_SERVER", "mabeltrading-com-ec.mail.pro
 EMAIL_SMTP_PORT = int(os.getenv("EMAIL_SMTP_PORT", "25"))  # Puerto 25 para relay interno (sin TLS)
 EMAIL_SMTP_USER = os.getenv("EMAIL_SMTP_USER", "")
 EMAIL_SMTP_PASSWORD = os.getenv("EMAIL_SMTP_PASSWORD", "")  # VacÃ­o para relay interno sin autenticaciÃ³n
+# Perfil primario autenticado. Si hay usuario/password, se intenta primero este SMTP.
+EMAIL_SMTP_AUTH_SERVER = os.getenv("EMAIL_SMTP_AUTH_SERVER", "smtp.office365.com")
+EMAIL_SMTP_AUTH_PORT = int(os.getenv("EMAIL_SMTP_AUTH_PORT", "587"))
+# Perfil secundario: relay interno sin autenticaciÃ³n.
+EMAIL_SMTP_RELAY_SERVER = os.getenv("EMAIL_SMTP_RELAY_SERVER", EMAIL_SMTP_SERVER)
+EMAIL_SMTP_RELAY_PORT = int(os.getenv("EMAIL_SMTP_RELAY_PORT", str(EMAIL_SMTP_PORT)))
 # Timeout en segundos para conexiones SMTP (evita que la app quede colgada si el servidor no responde)
 EMAIL_SMTP_TIMEOUT = float(os.getenv("EMAIL_SMTP_TIMEOUT", "5.0"))
 

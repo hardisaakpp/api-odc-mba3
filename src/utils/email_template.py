@@ -21,7 +21,6 @@ Uso:
 """
 
 import logging
-import smtplib
 from datetime import datetime
 
 from src.utils.timezone import ahora_naive
@@ -30,14 +29,11 @@ from email.mime.multipart import MIMEMultipart
 from typing import List, Tuple, Optional, Any
 
 from src.config import (
-    EMAIL_SMTP_SERVER,
-    EMAIL_SMTP_PORT,
     EMAIL_SMTP_USER,
-    EMAIL_SMTP_PASSWORD,
     EMAIL_FROM,
     EMAIL_FROM_NAME,
-    EMAIL_SMTP_TIMEOUT,
 )
+from src.utils.smtp_sender import send_smtp_message
 
 logger = logging.getLogger(__name__)
 
@@ -313,13 +309,7 @@ def create_email_message(
 def send_email(msg: MIMEMultipart, recipients: List[str]) -> bool:
     """Envia el mensaje via SMTP."""
     try:
-        with smtplib.SMTP(EMAIL_SMTP_SERVER, EMAIL_SMTP_PORT, timeout=EMAIL_SMTP_TIMEOUT) as server:
-            if EMAIL_SMTP_PORT == 587:
-                server.starttls()
-            if EMAIL_SMTP_PASSWORD:
-                server.login(EMAIL_SMTP_USER, EMAIL_SMTP_PASSWORD)
-            server.send_message(msg, to_addrs=recipients)
-        return True
+        return send_smtp_message(msg, recipients)
     except Exception as e:
         logger.error(f"Error SMTP al enviar email: {e}", exc_info=True)
         return False

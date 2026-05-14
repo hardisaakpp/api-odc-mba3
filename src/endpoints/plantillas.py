@@ -343,9 +343,9 @@ def register_plantillas_endpoints(app: FastAPI):
         Responde de inmediato con process_id; el resultado se consulta con
         GET /api/plantillas/resultado/{process_id} o GET /api/plantillas/stream/{process_id}.
 
-        Si Redis/Celery o el almacenamiento temporal no están disponibles, se procesa
-        automáticamente en primer plano y se devuelve 200 con el resultado ("fallback": "sync").
-        Con force_sync=true se ejecuta siempre en primer plano (200 + resultado, misma forma que sync).
+        Si Redis/Celery, el worker o el almacenamiento temporal no están disponibles,
+        ejecuta el procesamiento en primer plano como fallback sync. Con force_sync=true
+        se ejecuta siempre en primer plano (200 + resultado, misma forma que sync).
         """
         if modo_tiendas == "sincronizar_maestro" and not confirmar_sincronizacion:
             raise HTTPException(
@@ -375,13 +375,25 @@ def register_plantillas_endpoints(app: FastAPI):
             except json.JSONDecodeError as e:
                 raise HTTPException(status_code=400, detail=f"Formato JSON inválido en correcciones_codigos: {str(e)}")
 
-        run_async = ENABLE_FILE_STORAGE and not force_sync
-        # Si no hay workers Celery disponibles, usar flujo síncrono automáticamente (prioridad: async, fallback: sync)
+        run_async = not force_sync
         if run_async and not _celery_workers_available():
             logger.info(
-                "No hay workers Celery disponibles. Ejecutando carga de plantilla en primer plano (fallback sync)."
+                "No hay workers Celery disponibles. Procesando plantilla en primer plano (fallback sync)."
             )
             run_async = False
+
+        if not ENABLE_FILE_STORAGE and run_async:
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "error": "storage_required",
+                    "message": (
+                        "La carga en segundo plano requiere ENABLE_FILE_STORAGE=true. "
+                        "Activa el storage temporal o usa force_sync=true de forma explícita."
+                    )
+                }
+            )
+
         if run_async:
             try:
                 from src.services.file_storage_service import get_file_storage
@@ -417,15 +429,18 @@ def register_plantillas_endpoints(app: FastAPI):
                 )
             except Exception as e:
                 logger.warning(
-                    "Procesamiento en segundo plano no disponible (%s). Ejecutando en primer plano (fallback sync).",
+                    "No se pudo iniciar procesamiento de plantilla en segundo plano (%s). "
+                    "Procesando en primer plano (fallback sync).",
                     e,
+                    exc_info=True,
                 )
                 run_async = False
 
         if not run_async:
             from src.database.services.pedido_service import PedidoService
             service = PedidoService()
-            resultado = service.validar_y_procesar_archivo_excel(
+            resultado = await asyncio.to_thread(
+                service.validar_y_procesar_archivo_excel,
                 file_content=content,
                 filename=file.filename or "sin_nombre.xlsx",
                 usuario_id=user_id,

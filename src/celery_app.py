@@ -64,16 +64,25 @@ celery_app.conf.update(
             'auto-migrate-periodic': {
                 'task': 'src.tasks.celery_auto_migrate.execute_auto_migration',
                 'schedule': float(AUTO_MIGRATE_INTERVAL_MINUTES * 60),
-                'options': {'expires': 60.0},
+                'options': {'expires': 60.0, 'queue': 'maintenance'},
             }
         } if ENABLE_AUTO_MIGRATE else {}),
         'sync-productos-maestro': {
             'task': 'src.tasks.celery_sync_productos.sync_productos_maestro',
             'schedule': crontab(hour=SYNC_PRODUCTOS_HOUR, minute=SYNC_PRODUCTOS_MINUTE),  # type: ignore[arg-type] # Diario a las 3:00 AM - crontab acepta enteros aunque los stubs indiquen str
             'options': {
+                'queue': 'maintenance',
                 'expires': 300.0,  # Expira si no se ejecuta en 5 minutos
             }
         },
+    },
+
+    # Mantener cargas interactivas en la cola por defecto y mover tareas
+    # programadas/largas a maintenance para que no bloqueen plantillas.
+    task_default_queue='celery',
+    task_routes={
+        'src.tasks.celery_auto_migrate.execute_auto_migration': {'queue': 'maintenance'},
+        'src.tasks.celery_sync_productos.sync_productos_maestro': {'queue': 'maintenance'},
     },
     
     # CRÍTICO: Configuración de workers para prevenir acumulación de recursos

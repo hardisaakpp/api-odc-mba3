@@ -3,7 +3,6 @@ Módulo para enviar notificaciones por correo electrónico usando Outlook.
 """
 
 import logging
-import smtplib
 import csv
 import io
 from email.mime.text import MIMEText
@@ -15,15 +14,12 @@ from datetime import datetime
 from src.utils.timezone import ahora_naive
 from typing import List, Optional, Dict, Any
 from src.config import (
-    EMAIL_SMTP_SERVER,
-    EMAIL_SMTP_PORT,
     EMAIL_SMTP_USER,
-    EMAIL_SMTP_PASSWORD,
     EMAIL_FROM,
     ENABLE_EMAIL_NOTIFICATIONS,
-    EMAIL_SMTP_TIMEOUT,
 )
 from src.utils.notificacion_destinatarios import get_destinatarios_por_tipo
+from src.utils.smtp_sender import send_smtp_message
 
 logger = logging.getLogger(__name__)
 
@@ -107,16 +103,7 @@ Mensaje automatico del sistema - Mabel Trading
         )
         
         # Enviar email
-        with smtplib.SMTP(EMAIL_SMTP_SERVER, EMAIL_SMTP_PORT, timeout=EMAIL_SMTP_TIMEOUT) as server:
-            # Solo usar TLS si el puerto es 587 (no para puerto 25 - relay interno)
-            if EMAIL_SMTP_PORT == 587:
-                server.starttls()
-            
-            # Solo autenticar si hay password configurada (no para relay interno)
-            if EMAIL_SMTP_PASSWORD:
-                server.login(EMAIL_SMTP_USER, EMAIL_SMTP_PASSWORD)
-            
-            server.send_message(msg, to_addrs=recipients)
+        send_smtp_message(msg, recipients)
         
         logger.info(f"✅ Email de notificación enviado a {', '.join(recipients)}")
         return True
@@ -192,16 +179,7 @@ Por favor, revisa los logs del sistema para mas informacion.
             body_text=body_text,
         )
         
-        with smtplib.SMTP(EMAIL_SMTP_SERVER, EMAIL_SMTP_PORT, timeout=EMAIL_SMTP_TIMEOUT) as server:
-            # Solo usar TLS si el puerto es 587 (no para puerto 25 - relay interno)
-            if EMAIL_SMTP_PORT == 587:
-                server.starttls()
-            
-            # Solo autenticar si hay password configurada (no para relay interno)
-            if EMAIL_SMTP_PASSWORD:
-                server.login(EMAIL_SMTP_USER, EMAIL_SMTP_PASSWORD)
-            
-            server.send_message(msg, to_addrs=recipients)
+        send_smtp_message(msg, recipients)
         
         logger.info(f"✅ Email de error enviado a {', '.join(recipients)}")
         return True
@@ -577,16 +555,7 @@ def send_homologacion_notification(
         )
         
         # Enviar email
-        with smtplib.SMTP(EMAIL_SMTP_SERVER, EMAIL_SMTP_PORT, timeout=EMAIL_SMTP_TIMEOUT) as server:
-            # Solo usar TLS si el puerto es 587 (no para puerto 25 - relay interno)
-            if EMAIL_SMTP_PORT == 587:
-                server.starttls()
-            
-            # Solo autenticar si hay password configurada (no para relay interno)
-            if EMAIL_SMTP_PASSWORD:
-                server.login(EMAIL_SMTP_USER, EMAIL_SMTP_PASSWORD)
-            
-            server.send_message(msg, to_addrs=recipients)
+        send_smtp_message(msg, recipients)
         
         logger.info(f"✅ Email de homologación enviado a {', '.join(recipients)}")
         logger.info(f"   Productos no homologados reportados: {len(productos_a_notificar)}")
@@ -694,12 +663,7 @@ Accion Recomendada: Revisar los logs del sistema.
             body_text=body_text,
         )
         
-        with smtplib.SMTP(EMAIL_SMTP_SERVER, EMAIL_SMTP_PORT, timeout=EMAIL_SMTP_TIMEOUT) as server:
-            if EMAIL_SMTP_PORT == 587:
-                server.starttls()
-            if EMAIL_SMTP_PASSWORD:
-                server.login(EMAIL_SMTP_USER, EMAIL_SMTP_PASSWORD)
-            server.send_message(msg, to_addrs=recipients)
+        send_smtp_message(msg, recipients)
         
         logger.info(f"✅ Email de advertencia de capacidad enviado a {', '.join(recipients)}")
         return True
@@ -890,16 +854,7 @@ Detalle:
         )
         
         # Enviar email
-        with smtplib.SMTP(EMAIL_SMTP_SERVER, EMAIL_SMTP_PORT, timeout=EMAIL_SMTP_TIMEOUT) as server:
-            # Solo usar TLS si el puerto es 587 (no para puerto 25 - relay interno)
-            if EMAIL_SMTP_PORT == 587:
-                server.starttls()
-            
-            # Solo autenticar si hay password configurada (no para relay interno)
-            if EMAIL_SMTP_PASSWORD:
-                server.login(EMAIL_SMTP_USER, EMAIL_SMTP_PASSWORD)
-            
-            server.send_message(msg, to_addrs=recipients)
+        send_smtp_message(msg, recipients)
         
         pdf_status = "con PDF adjunto" if pdf_attachment else "sin PDF adjunto"
         logger.info(f"✅ Email de ODC enviado a {', '.join(recipients)} (ODC #{numero_oc_sap}) [{pdf_status}]")
@@ -1232,16 +1187,7 @@ Mensaje automatico del sistema de integracion SAP - Mabel Trading
         msg.attach(MIMEText(body_html, 'html', 'utf-8'))
         
         # Enviar email
-        with smtplib.SMTP(EMAIL_SMTP_SERVER, EMAIL_SMTP_PORT, timeout=EMAIL_SMTP_TIMEOUT) as server:
-            # Solo usar TLS si el puerto es 587 (no para puerto 25 - relay interno)
-            if EMAIL_SMTP_PORT == 587:
-                server.starttls()
-            
-            # Solo autenticar si hay password configurada (no para relay interno)
-            if EMAIL_SMTP_PASSWORD:
-                server.login(EMAIL_SMTP_USER, EMAIL_SMTP_PASSWORD)
-            
-            server.send_message(msg, to_addrs=recipients)
+        send_smtp_message(msg, recipients)
         
         logger.info(f"✅ Notificación de OC lista para despacho enviada a {', '.join(recipients)} (OC #{numero_oc_sap})")
         return True
@@ -1342,12 +1288,7 @@ def send_oc_st_error_notification_tecnicos(
             body_text=body_text,
         )
 
-        with smtplib.SMTP(EMAIL_SMTP_SERVER, EMAIL_SMTP_PORT, timeout=EMAIL_SMTP_TIMEOUT) as server:
-            if EMAIL_SMTP_PORT == 587:
-                server.starttls()
-            if EMAIL_SMTP_PASSWORD:
-                server.login(EMAIL_SMTP_USER, EMAIL_SMTP_PASSWORD)
-            server.send_message(msg, to_addrs=recipients)
+        send_smtp_message(msg, recipients)
 
         logger.info(f"✅ Notificación de error ODC/ST enviada a técnicos: {', '.join(recipients)}")
         return True
@@ -1444,16 +1385,7 @@ Fecha y Hora: {fecha_ejecucion.strftime('%Y-%m-%d %H:%M:%S')}
         )
         
         # Enviar email
-        with smtplib.SMTP(EMAIL_SMTP_SERVER, EMAIL_SMTP_PORT, timeout=EMAIL_SMTP_TIMEOUT) as server:
-            # Solo usar TLS si el puerto es 587 (no para puerto 25 - relay interno)
-            if EMAIL_SMTP_PORT == 587:
-                server.starttls()
-            
-            # Solo autenticar si hay password configurada (no para relay interno)
-            if EMAIL_SMTP_PASSWORD:
-                server.login(EMAIL_SMTP_USER, EMAIL_SMTP_PASSWORD)
-            
-            server.send_message(msg, to_addrs=recipients)
+        send_smtp_message(msg, recipients)
         
         logger.info(f"✅ Notificación de plantilla procesada enviada a {', '.join(recipients)} (Pedido: {numero_pedido or pedido_id or 'N/A'})")
         return True
@@ -1537,12 +1469,7 @@ El pedido permanece en el sistema con estado CANCELADO y no sera procesado.
             body_text=body_text,
         )
 
-        with smtplib.SMTP(EMAIL_SMTP_SERVER, EMAIL_SMTP_PORT, timeout=EMAIL_SMTP_TIMEOUT) as server:
-            if EMAIL_SMTP_PORT == 587:
-                server.starttls()
-            if EMAIL_SMTP_PASSWORD:
-                server.login(EMAIL_SMTP_USER, EMAIL_SMTP_PASSWORD)
-            server.send_message(msg, to_addrs=recipients)
+        send_smtp_message(msg, recipients)
 
         logger.info(f"✅ Notificación de pedido cancelado enviada a {', '.join(recipients)} (Pedido: {numero_pedido or pedido_id})")
         return True
@@ -1624,12 +1551,7 @@ El pedido ya no esta disponible en el sistema.
             body_text=body_text,
         )
 
-        with smtplib.SMTP(EMAIL_SMTP_SERVER, EMAIL_SMTP_PORT, timeout=EMAIL_SMTP_TIMEOUT) as server:
-            if EMAIL_SMTP_PORT == 587:
-                server.starttls()
-            if EMAIL_SMTP_PASSWORD:
-                server.login(EMAIL_SMTP_USER, EMAIL_SMTP_PASSWORD)
-            server.send_message(msg, to_addrs=recipients)
+        send_smtp_message(msg, recipients)
 
         logger.info(f"✅ Notificación de pedido descartado enviada a {', '.join(recipients)} (Pedido: {numero_pedido or pedido_id})")
         return True
@@ -1744,16 +1666,7 @@ Fecha y Hora: {fecha_ejecucion.strftime('%Y-%m-%d %H:%M:%S')}
         )
         
         # Enviar email
-        with smtplib.SMTP(EMAIL_SMTP_SERVER, EMAIL_SMTP_PORT, timeout=EMAIL_SMTP_TIMEOUT) as server:
-            # Solo usar TLS si el puerto es 587 (no para puerto 25 - relay interno)
-            if EMAIL_SMTP_PORT == 587:
-                server.starttls()
-            
-            # Solo autenticar si hay password configurada (no para relay interno)
-            if EMAIL_SMTP_PASSWORD:
-                server.login(EMAIL_SMTP_USER, EMAIL_SMTP_PASSWORD)
-            
-            server.send_message(msg, to_addrs=recipients)
+        send_smtp_message(msg, recipients)
         
         logger.info(f"✅ Notificación de redistribución confirmada enviada a {', '.join(recipients)} (Pedido: {numero_pedido})")
         return True
@@ -1838,12 +1751,7 @@ Nota: Operacion irreversible. Para crear el pedido nuevamente, cargarlo desde ce
             body_text=body_text,
         )
 
-        with smtplib.SMTP(EMAIL_SMTP_SERVER, EMAIL_SMTP_PORT, timeout=EMAIL_SMTP_TIMEOUT) as server:
-            if EMAIL_SMTP_PORT == 587:
-                server.starttls()
-            if EMAIL_SMTP_PASSWORD:
-                server.login(EMAIL_SMTP_USER, EMAIL_SMTP_PASSWORD)
-            server.send_message(msg, to_addrs=recipients)
+        send_smtp_message(msg, recipients)
 
         logger.info(f"✅ Notificación de pedido eliminado enviada a MABEL TRADING {', '.join(recipients)} (Pedido: {numero_pedido or pedido_id})")
         return True

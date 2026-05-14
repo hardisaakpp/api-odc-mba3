@@ -3,25 +3,16 @@ Función adicional para enviar notificaciones de confirmación de pedidos.
 """
 
 import logging
-import smtplib
 import os
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
 from datetime import datetime
 
 from src.utils.timezone import ahora_naive
 from typing import Optional, Dict, Any
 from src.config import (
-    EMAIL_SMTP_SERVER,
-    EMAIL_SMTP_PORT,
-    EMAIL_SMTP_USER,
-    EMAIL_SMTP_PASSWORD,
-    EMAIL_FROM,
-    EMAIL_FROM_NAME,
     ENABLE_EMAIL_NOTIFICATIONS,
-    EMAIL_SMTP_TIMEOUT,
 )
 from src.utils.notificacion_destinatarios import get_destinatarios_por_tipo
+from src.utils.smtp_sender import send_smtp_message
 
 logger = logging.getLogger(__name__)
 
@@ -158,16 +149,7 @@ Fecha y Hora: {fecha_ejecucion.strftime('%Y-%m-%d %H:%M:%S')}
         )
         
         # Enviar email
-        with smtplib.SMTP(EMAIL_SMTP_SERVER, EMAIL_SMTP_PORT, timeout=EMAIL_SMTP_TIMEOUT) as server:
-            # Solo usar TLS si el puerto es 587 (no para puerto 25 - relay interno)
-            if EMAIL_SMTP_PORT == 587:
-                server.starttls()
-            
-            # Solo autenticar si hay password configurada (no para relay interno)
-            if EMAIL_SMTP_PASSWORD:
-                server.login(EMAIL_SMTP_USER, EMAIL_SMTP_PASSWORD)
-            
-            server.send_message(msg, to_addrs=recipients)
+        send_smtp_message(msg, recipients)
         
         logger.info(f"✅ Email de confirmación de pedido enviado a {', '.join(recipients)} (Pedido: {numero_pedido})")
         return True
@@ -281,16 +263,7 @@ Fecha y Hora: {fecha_ejecucion.strftime('%Y-%m-%d %H:%M:%S')}
         )
         
         # Enviar email
-        with smtplib.SMTP(EMAIL_SMTP_SERVER, EMAIL_SMTP_PORT, timeout=EMAIL_SMTP_TIMEOUT) as server:
-            # Solo usar TLS si el puerto es 587 (no para puerto 25 - relay interno)
-            if EMAIL_SMTP_PORT == 587:
-                server.starttls()
-            
-            # Solo autenticar si hay password configurada (no para relay interno)
-            if EMAIL_SMTP_PASSWORD:
-                server.login(EMAIL_SMTP_USER, EMAIL_SMTP_PASSWORD)
-            
-            server.send_message(msg, to_addrs=recipients)
+        send_smtp_message(msg, recipients)
         
         logger.info(f"✅ Email de confirmación de El Rayo enviado a {', '.join(recipients)} (Pedido: {numero_pedido})")
         return True
@@ -347,7 +320,6 @@ def send_despachar_y_facturar_notification(
             return False
 
         base_url = os.getenv("FRONTEND_URL", "http://localhost:3000")
-        numero_pedido_encoded = numero_pedido.replace(" ", "%20")
         url_pedido = f"{base_url}/mba3-consultas/pedidos/{pedido_id}"
 
         from src.utils.email_template import (
@@ -399,12 +371,7 @@ Fecha y Hora: {fecha_ejecucion.strftime('%Y-%m-%d %H:%M:%S')}
             body_text=body_text,
         )
 
-        with smtplib.SMTP(EMAIL_SMTP_SERVER, EMAIL_SMTP_PORT, timeout=EMAIL_SMTP_TIMEOUT) as server:
-            if EMAIL_SMTP_PORT == 587:
-                server.starttls()
-            if EMAIL_SMTP_PASSWORD:
-                server.login(EMAIL_SMTP_USER, EMAIL_SMTP_PASSWORD)
-            server.send_message(msg, to_addrs=recipients)
+        send_smtp_message(msg, recipients)
 
         logger.info(f"✅ Email Despachar y Facturar enviado a {', '.join(recipients)} (Pedido: {numero_pedido})")
         return True
@@ -512,12 +479,7 @@ Fecha y Hora: {fecha_ejecucion.strftime('%Y-%m-%d %H:%M:%S')}
             body_text=body_text,
         )
 
-        with smtplib.SMTP(EMAIL_SMTP_SERVER, EMAIL_SMTP_PORT, timeout=EMAIL_SMTP_TIMEOUT) as server:
-            if EMAIL_SMTP_PORT == 587:
-                server.starttls()
-            if EMAIL_SMTP_PASSWORD:
-                server.login(EMAIL_SMTP_USER, EMAIL_SMTP_PASSWORD)
-            server.send_message(msg, to_addrs=recipients)
+        send_smtp_message(msg, recipients)
 
         logger.info(f"✅ Email Pedido finalizado enviado a EL RAYO {', '.join(recipients)} (Pedido: {numero_pedido})")
         return True
