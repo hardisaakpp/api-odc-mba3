@@ -246,6 +246,18 @@ class ProcesoEstadoService:
             "version": estado.get("version", 0) + 1
         })
         self._guardar_estado(process_id, estado)
+
+        if process_id.startswith("proceso-sap-") and isinstance(resultado, dict):
+            proc_status = resultado.get("status")
+            if proc_status == "partial":
+                err = resultado.get("error_detalle") or resultado.get("error")
+                logger.error(
+                    "⚠️ Proceso SAP %s completado con status=partial pedido=%s paso=%s: %s",
+                    process_id,
+                    estado.get("numero_pedido") or resultado.get("numero_pedido"),
+                    resultado.get("paso_fallido"),
+                    err,
+                )
         
         # Solo para cruce: guardar puntero al último completado (sugerencias)
         if process_id.startswith("cruce-"):
@@ -259,7 +271,10 @@ class ProcesoEstadoService:
             except Exception as e:
                 logger.warning(f"⚠️ Error guardando puntero último completado: {e}")
         
-        logger.info(f"✅ Proceso completado: {process_id}")
+        if process_id.startswith("proceso-sap-") and isinstance(resultado, dict) and resultado.get("status") == "partial":
+            logger.warning(f"⚠️ Proceso SAP finalizado con fallo de envío: {process_id}")
+        else:
+            logger.info(f"✅ Proceso completado: {process_id}")
     
     def marcar_error(
         self,

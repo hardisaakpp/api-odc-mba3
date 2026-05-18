@@ -382,7 +382,7 @@ class SAPServiceLayerClient:
                 try:
                     error_body = response.json()
                     error_msg = error_body.get("error", {}).get("message", {}).get("value", error_msg)
-                except:
+                except Exception:
                     error_msg = f"{error_msg} - {response.text}"
                 
                 logger.error(f"❌ {error_msg}")
@@ -1087,7 +1087,10 @@ class SAPServiceLayerClient:
                 operation_label=f"GET BusinessPartners('{card_code}')",
             )
             if response is None:
-                logger.error("❌ No se pudo consultar Business Partner en SAP")
+                logger.error(
+                    "❌ No se pudo consultar Business Partner en SAP (sin respuesta tras reintentos): %s",
+                    card_code,
+                )
                 return None
             
             if response.status_code == 200:
@@ -1179,7 +1182,10 @@ class SAPServiceLayerClient:
                 operation_label=f"GET Items('{item_code}')",
             )
             if response is None:
-                logger.error("❌ No se pudo consultar Item en SAP")
+                logger.error(
+                    "❌ No se pudo consultar Item en SAP (sin respuesta tras reintentos): %s",
+                    item_code,
+                )
                 return None
             
             if response.status_code == 200:

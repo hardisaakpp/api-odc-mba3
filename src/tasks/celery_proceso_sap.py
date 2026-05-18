@@ -12,9 +12,59 @@ from fastapi import HTTPException
 
 from src.celery_app import celery_app
 from src.database.services.proceso_estado_service import ProcesoEstadoService
+from src.logging_config import log_business_operation
 from src.utils.audit_context import AuditContext, ORIGEN_CELERY
 
 logger = logging.getLogger(__name__)
+
+
+def _log_resultado_proceso_sap(
+    process_id: str,
+    numero_pedido: str,
+    user_id: str,
+    resultado: Dict[str, Any],
+) -> None:
+    """Registra en logs (y business.log) el cierre del proceso SAP async."""
+    status = resultado.get("status")
+    paso_fallido = resultado.get("paso_fallido")
+    error_detalle = resultado.get("error_detalle") or resultado.get("error")
+    envio = resultado.get("envio_sap") or {}
+    if isinstance(envio, dict):
+        envio_error = envio.get("error") or envio.get("error_message")
+        if envio_error and not error_detalle:
+            error_detalle = envio_error
+
+    ctx = (
+        f"process_id={process_id} pedido={numero_pedido} usuario={user_id} "
+        f"status={status} paso_fallido={paso_fallido}"
+    )
+
+    if status == "success":
+        logger.info(f"✅ Proceso SAP Celery OK: {ctx}")
+        return
+
+    if status == "partial":
+        logger.error(
+            f"⚠️ Proceso SAP Celery parcial (fallo envío/prevalidación SAP): {ctx} "
+            f"detalle={error_detalle}"
+        )
+        log_business_operation(
+            operation="proceso_sap_envio_fallido",
+            id_usuario=user_id,
+            id_transaccion=process_id,
+            success=False,
+            detalles={
+                "numero_pedido": numero_pedido,
+                "status": status,
+                "paso_fallido": paso_fallido,
+                "error_detalle": error_detalle,
+                "oc_id": envio.get("oc_id") if isinstance(envio, dict) else None,
+                "error_source": envio.get("error_source") if isinstance(envio, dict) else None,
+            },
+        )
+        return
+
+    logger.error(f"❌ Proceso SAP Celery con status inesperado: {ctx} detalle={error_detalle}")
 
 
 def _response_to_dict(response: Any) -> Dict[str, Any]:
@@ -91,12 +141,25 @@ def ejecutar_proceso_completo_sap(
 
         resultado_serialized = _response_to_dict(response)
         estado_service.completar_proceso(process_id, resultado_serialized)
-        logger.info(f"✅ Proceso SAP Celery completado: {process_id} (status: {resultado_serialized.get('status')})")
+        _log_resultado_proceso_sap(
+            process_id, numero_pedido, user_id, resultado_serialized
+        )
 
     except HTTPException as e:
-        logger.error(f"❌ Error HTTP en proceso SAP {process_id}: {e}", exc_info=True)
         detail = e.detail if isinstance(e.detail, dict) else {"message": str(e.detail)}
         msg = detail.get("message", str(detail))
+        logger.error(
+            f"❌ Proceso SAP Celery HTTP {process_id} pedido={numero_pedido}: {msg} "
+            f"detail={detail}",
+            exc_info=True,
+        )
+        log_business_operation(
+            operation="proceso_sap_validacion_fallida",
+            id_usuario=user_id,
+            id_transaccion=process_id,
+            success=False,
+            detalles={"numero_pedido": numero_pedido, "message": msg, **detail},
+        )
         estado_service.marcar_error(process_id, msg, error_data=detail)
         raise
     except Exception as e:

@@ -383,7 +383,12 @@ def _ejecutar_proceso_completo_sync(
                     )
                 }
             else:
-                logger.error(f"❌ PASO 3/3 fallido: Error al enviar ODC a SAP: {error}")
+                logger.error(
+                    "❌ PASO 3/3 fallido pedido=%s oc_id=%s: %s",
+                    numero_pedido,
+                    oc_id,
+                    error,
+                )
 
                 # Todo fallo de envío ODC habilita reintento manual en UI.
                 try:
@@ -663,6 +668,21 @@ def register_proceso_completo_endpoints(app: FastAPI):
             # Incluir process_status y progress para que el frontend cierre el modal y muestre 100%
             resultado["process_status"] = "completed"
             resultado["progress"] = 100
+            proc_status = resultado.get("status")
+            if proc_status == "partial":
+                envio = resultado.get("envio_sap") or {}
+                err = (
+                    resultado.get("error_detalle")
+                    or resultado.get("error")
+                    or (envio.get("error") if isinstance(envio, dict) else None)
+                )
+                logger.error(
+                    "⚠️ GET proceso-sap/resultado %s: proceso parcial pedido=%s paso=%s error=%s",
+                    process_id,
+                    estado.get("numero_pedido") or resultado.get("numero_pedido"),
+                    resultado.get("paso_fallido"),
+                    err,
+                )
             return resultado
         if estado["status"] == "error":
             content = {
@@ -674,6 +694,13 @@ def register_proceso_completo_endpoints(app: FastAPI):
             if error_data:
                 content["paso_fallido"] = error_data.get("paso_fallido")
                 content["error_detalle"] = error_data.get("error_detalle")
+            logger.error(
+                "❌ GET proceso-sap/resultado %s: pedido=%s error=%s error_data=%s",
+                process_id,
+                estado.get("numero_pedido"),
+                content.get("error"),
+                error_data,
+            )
             return JSONResponse(status_code=400, content=content)
         return {
             "status": estado["status"],

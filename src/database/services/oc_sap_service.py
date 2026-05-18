@@ -360,6 +360,8 @@ class OCSAPService:
                 # Construir mensaje de error detallado
                 errores_prevalidacion = prevalidacion.get("errors", [])
                 error_msg = f"Prevalidación SAP falló: {'; '.join(errores_prevalidacion)}"
+                proveedor_oc = (oc_cabecera.get("proveedor") or "").strip()
+                pedido_id_oc = oc_cabecera.get("pedido_id")
                 
                 result["error"] = error_msg
                 result["error_message"] = error_msg
@@ -368,7 +370,14 @@ class OCSAPService:
                 result["prevalidacion_resumen"] = prevalidacion.get("resumen")
                 result["retry_recommended"] = True
                 
-                logger.error(f"❌ {error_msg}")
+                logger.error(
+                    "❌ %s | oc_id=%s pedido_id=%s proveedor=%s errores=%s",
+                    error_msg,
+                    oc_id,
+                    pedido_id_oc,
+                    proveedor_oc,
+                    errores_prevalidacion,
+                )
                 try:
                     oc_repo.update_estado(
                         oc_id,
@@ -1091,9 +1100,13 @@ class OCSAPService:
         total_lineas = articulos_validados + articulos_con_error
         
         if errors:
-            logger.warning(
-                f"⚠️ Prevalidación Service Layer: {len(errors)} error(es) encontrado(s). "
-                f"Artículos: {articulos_validados}/{total_lineas} válidos"
+            logger.error(
+                "❌ Prevalidación Service Layer: %s error(es). "
+                "Artículos válidos=%s/%s. Detalle=%s",
+                len(errors),
+                articulos_validados,
+                total_lineas,
+                errors,
             )
         else:
             logger.info(

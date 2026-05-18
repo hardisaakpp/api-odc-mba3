@@ -123,6 +123,9 @@ def init_worker(**kwargs):
     Útil para inicializar recursos específicos del worker.
     """
     import os
+    # Mismo formato/archivos que FastAPI (api.log, errors.log) para diagnóstico en producción.
+    from src.logging_config import setup_logging
+    setup_logging()
     logger.info("=" * 70)
     logger.info("🔧 Iniciando worker Celery")
     logger.info(f"   PID: {os.getpid()}")
