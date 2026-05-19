@@ -1,14 +1,63 @@
-# MBA3 Consultas — Infraestructura local (Redis + MinIO)
+# MBA3 Consultas — Infraestructura local y stack opcional en Docker
 #
-# La API y Celery se ejecutan en el host (p. ej. .\run-dev.ps1 y worker en otra terminal).
-# Uso: docker compose up -d
+# Por defecto (sin perfil): solo Redis + MinIO — mismo comportamiento que antes.
+#   docker compose up -d
 #
-# Puertos: Redis 6379, MinIO API 9100, consola MinIO 9101.
-# Alinear .env.develop: REDIS_URL=redis://localhost:6379/0, FILE_STORAGE_ENDPOINT=http://localhost:9100
+# Stack completo API + Celery (misma imagen que Dockerfile), perfil "app":
+#   docker compose --profile app up -d --build
+#   .\scripts\docker-app-up.ps1
+#
+# Requisitos para el perfil app:
+#   - Archivo .env.develop en la raíz del repo (obligatorio también en host).
+#   - SQL Server / SAP / MBA3: suelen apuntar a servicios fuera de Docker; si SQL
+#     corre en el host Windows, define SQL_SERVER_SERVER=host.docker.internal (u
+#     host real) en .env o vía variables de entorno del sistema antes de compose.
+#
+# Puertos: Redis 6379, MinIO API 9100, consola MinIO 9101, API 8000.
+# Dentro de la red Docker, la API y Celery usan redis://redis:6379/0 y
+# http://minio:9000 (sobrescritos por environment; python-dotenv no pisa vars ya fijadas).
+#
+# Red compartida con scnexus-front (otro docker-compose): mba3-nexus_edge
+# La API y Redis se anclan ahí para que la red exista también sin perfil "app".
+# Desde el contenedor del front: http://mba3-api:8000 . Desde el navegador del usuario:
+# http://localhost:8000 (mapeo de puerto). Ver docs/DOCKER_COMPOSE.md.
+
+name: mba3-consultas
+
+networks:
+  nexus-edge:
+    name: mba3-nexus_edge
+    driver: bridge
+
+x-app-common: &app-common
+  build:
+    context: .
+    dockerfile: Dockerfile
+  profiles:
+    - app
+  restart: unless-stopped
+  environment:
+    ENVIRONMENT: development
+    REDIS_URL: redis://redis:6379/0
+    FILE_STORAGE_ENDPOINT: http://minio:9000
+  env_file:
+    - .env.develop
+  volumes:
+    - ./.env.develop:/app/.env.develop:ro
+  extra_hosts:
+    - "host.docker.internal:host-gateway"
+  depends_on:
+    redis:
+      condition: service_healthy
+    minio:
+      condition: service_healthy
 
 services:
   redis:
     image: redis:7-alpine
+    networks:
+      - default
+      - nexus-edge
     ports:
       - "6379:6379"
     volumes:
@@ -38,6 +87,54 @@ services:
       retries: 5
     restart: unless-stopped
 
+  api:
+    <<: *app-common
+    container_name: mba3-api
+    networks:
+      - default
+      - nexus-edge
+    ports:
+      - "8000:8000"
+    command:
+      [
+        "uvicorn",
+        "src.api_server:app",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "8000",
+      ]
+
+  celery-worker:
+    <<: *app-common
+    container_name: mba3-celery-worker
+    command:
+      [
+        "celery",
+        "-A",
+        "src.celery_app",
+        "worker",
+        "--loglevel=info",
+        "--pool=prefork",
+      ]
+
+  celery-beat:
+    <<: *app-common
+    container_name: mba3-celery-beat
+    volumes:
+      - ./.env.develop:/app/.env.develop:ro
+      - celerybeat_data:/var/lib/celery
+    command:
+      [
+        "celery",
+        "-A",
+        "src.celery_app",
+        "beat",
+        "--loglevel=info",
+        "--schedule=/var/lib/celery/celerybeat-schedule",
+      ]
+
 volumes:
   redis_data:
   minio_data:
+  celerybeat_data:

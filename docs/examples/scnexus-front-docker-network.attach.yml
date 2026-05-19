@@ -1,0 +1,28 @@
+# -----------------------------------------------------------------------------
+# Fragmento para el docker-compose del FRONTEND (scnexus-front).
+# Copia las secciones bajo tu servicio web y la clave `networks` al nivel raíz.
+#
+# La red `mba3-nexus_edge` la crea el backend (mba3-consultas) al hacer
+#   docker compose up -d
+# porque el servicio `redis` está anclado a esa red. Si aún no existe:
+#   docker network create mba3-nexus_edge
+#
+# Resolución DNS del API desde otro contenedor: host fijo `mba3-api`, puerto 8000.
+# -----------------------------------------------------------------------------
+
+networks:
+  mba3-nexus_edge:
+    external: true
+    name: mba3-nexus_edge
+
+services:
+  # Sustituye "frontend" por el nombre real de tu servicio (app, web, nginx, etc.).
+  frontend:
+    networks:
+      - default
+      - mba3-nexus_edge
+    # Si el SPA hace fetch desde el NAVEGADOR del usuario, la URL del API debe ser
+    # alcanzable desde el PC (no use "mba3-api" en el bundle): p. ej.
+    #   VITE_* o env: http://localhost:8000
+    # Si solo el contenedor del front (nginx, SSR, healthcheck) llama al API:
+    #   http://mba3-api:8000
