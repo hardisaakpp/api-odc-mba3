@@ -3,9 +3,10 @@
 # Por defecto (sin perfil): solo Redis + MinIO — mismo comportamiento que antes.
 #   docker compose up -d
 #
-# Stack completo API + Celery (misma imagen que Dockerfile), perfil "app":
+# Stack completo API + Celery (recomendado para desarrollo), perfil "app":
 #   docker compose --profile app up -d --build
-#   .\scripts\docker-app-up.ps1
+#   .\scripts\docker-app-up.ps1 -Build
+# Tras cambios en código Python: rebuild (-Build). Ver docs/DOCKER_COMPOSE.md.
 #
 # Requisitos para el perfil app:
 #   - Archivo .env.develop en la raíz del repo (obligatorio también en host).

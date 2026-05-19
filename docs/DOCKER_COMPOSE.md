@@ -1,13 +1,36 @@
-# Docker Compose (Redis, MinIO y stack opcional API + Celery)
+# Docker Compose (Redis, MinIO y stack de aplicación)
 
-Este repositorio define dos modos de uso con el mismo `docker-compose.yml`:
+Este repositorio define dos modos con el mismo `docker-compose.yml`:
 
 | Modo | Comando | Qué levanta |
 |------|-----------|-------------|
 | **Solo infra** (por defecto) | `docker compose up -d` | Redis (6379) y MinIO (API 9100, consola 9101). La API y Celery siguen en el host (p. ej. `.\start-all-dev.ps1`). |
-| **Stack aplicación** (perfil `app`) | `docker compose --profile app up -d --build` o `.\scripts\docker-app-up.ps1` | Redis, MinIO, **API** (puerto 8000), **Celery worker** y **Celery beat**. |
+| **Stack aplicación** (perfil `app`) — **recomendado para desarrollo** | `docker compose --profile app up -d --build` o `.\scripts\docker-app-up.ps1` | Redis, MinIO, **API** (puerto 8000), **Celery worker** y **Celery beat**. |
 
-El perfil `app` no sustituye el modo “solo infra”: quien solo necesita Redis/MinIO para desarrollo en Windows no tiene que activar el perfil.
+Con el perfil **`app`** corre **toda la aplicación backend de este repo** (mismos endpoints y tareas Celery que en host). No hay funcionalidad reservada al modo host; solo cambia dónde se ejecutan los procesos.
+
+## Flujo de desarrollo con stack `app`
+
+1. Crear o actualizar **`.env.develop`** (ver [CONFIGURACION.md](CONFIGURACION.md)).
+2. `.\scripts\docker-app-up.ps1 -Build` (rebuild tras cambios en código Python).
+3. `.\scripts\docker-verify.ps1` — smoke test de contenedores y dependencias.
+4. Frontend **scnexus-front**: `npm run dev` con proxy/API en **`http://localhost:8000`** (el navegador no usa el hostname `mba3-api`).
+5. Pruebas de negocio (plantilla async, proceso SAP, ODC, cruce) con JWT como en DESA.
+
+**Ciclo tras implementar una feature:** editar código → `-Build` → verificar con `docker-verify` y el flujo en el front → commit.
+
+**Qué no incluye el compose** (deben ser alcanzables desde la red del contenedor):
+
+| Fuera del stack | Configuración típica |
+|-----------------|----------------------|
+| SQL Server | `SQL_SERVER_SERVER` en `.env.develop` (no `localhost` si la BD está en el host Windows: `host.docker.internal` o IP) |
+| SAP Service Layer, MBA3 | URLs/credenciales en `.env.develop` |
+| SCNexus Core (JWT) | `CORE_API_URL` |
+| Frontend Vue | Repo `scnexus-front`, `npm run dev` en el host (o su propio compose + red `mba3-nexus_edge`) |
+
+Migraciones, `pytest` y lint suelen ejecutarse en el **host** con el venv del proyecto (`python scripts/migration_runner.py`, etc.), aunque uses el stack `app` para la API.
+
+El modo “solo infra” sigue disponible si solo necesitas Redis/MinIO y prefieres API/Celery en Windows (`--pool=solo`).
 
 ## Requisitos
 

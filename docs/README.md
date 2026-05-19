@@ -9,6 +9,7 @@
 | Necesitas | Documento |
 |-----------|-----------|
 | Instalar y configurar el proyecto | [CONFIGURACION.md](CONFIGURACION.md) |
+| **Desarrollo local con Docker (API + Celery + Redis + MinIO)** | **[DOCKER_COMPOSE.md](DOCKER_COMPOSE.md)** 🐳 |
 | **Desplegar backend en servidor de pruebas (DESA)** | **[DEPLOY_TEST.md](DEPLOY_TEST.md)** 🧪 |
 | **Actualizar backend en producción (Linux)** | **[DEPLOY_PRODUCCION.md](DEPLOY_PRODUCCION.md)** 🐧 |
 | **Desplegar migraciones de BD** | **[DEPLOY_MIGRATIONS.md](DEPLOY_MIGRATIONS.md)** 🗄️ |
@@ -25,6 +26,12 @@ Configuración completa del proyecto
 - SQL Server (principal y SAP)
 - SAP HANA y Service Layer
 - Solución de problemas
+
+### 1b. **[DOCKER_COMPOSE.md](DOCKER_COMPOSE.md)** 🐳
+Desarrollo con perfil `app` (stack recomendado)
+- API, Celery worker/beat, Redis y MinIO en contenedor
+- Variables `REDIS_URL` / MinIO dentro de la red Docker
+- Enlace con scnexus-front y verificación (`docker-verify.ps1`)
 
 ### 2. **[ENDPOINTS.md](ENDPOINTS.md)** 🔌
 API REST completa
@@ -119,6 +126,7 @@ Sistema de homologaciones
 - [FRONTEND.md](FRONTEND.md) - Requerimientos y guías UI
 
 ### Estándares y operación
+- [DOCKER_COMPOSE.md](DOCKER_COMPOSE.md) — desarrollo local con perfil `app`
 - [API_STANDARDS.md](API_STANDARDS.md), [CACHE.md](CACHE.md), [BUENAS_PRACTICAS_SQL.md](BUENAS_PRACTICAS_SQL.md)
 
 *Hay más guías en `docs/` (despliegue Excel, auditoría, SAP logs, etc.); el índice anterior cubre lo más consultado.*

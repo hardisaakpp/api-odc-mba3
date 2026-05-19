@@ -14,33 +14,50 @@ Todo se conecta a **`redis://localhost:6379/0`** (o la URL que pongas en `REDIS_
 
 ---
 
-## ✅ Paso 1: Redis
+## ✅ Paso 1: Redis (y resto del backend)
 
-En Windows no viene Redis instalado. **Recomendación: usar Docker** (no hace falta `redis-server` ni Chocolatey en el sistema).
+En Windows no viene Redis instalado. **Recomendación para desarrollo: stack Docker con perfil `app`** — levanta Redis, MinIO, API, worker y beat de una vez. Ver [DOCKER_COMPOSE.md](DOCKER_COMPOSE.md) y:
 
-**Opción A – Docker (recomendada):**
+```powershell
+.\scripts\docker-app-up.ps1 -Build
+.\scripts\docker-verify.ps1
+```
+
+Dentro del contenedor Celery usa `REDIS_URL=redis://redis:6379/0` (Compose lo define; no hace falta cambiar `.env.develop` para Redis si solo usas el stack `app`).
+
+**Opción A – Solo Redis con Docker Compose de este repo (API/Celery en host):**
+```powershell
+docker compose up -d
+```
+Redis en `localhost:6379`. Luego `.\start-all-dev.ps1` o Celery manual en el venv.
+
+**Opción B – Contenedor Redis suelto (legacy):**
 ```powershell
 docker run -d --name redis -p 6379:6379 redis
 ```
 Redis queda en segundo plano en `localhost:6379`. Para parar: `docker stop redis`. Para arrancar de nuevo: `docker start redis`.
 
-**Comprobar que funciona:**
+**Comprobar Redis:**
 ```powershell
+# Stack compose de este repo (servicio redis)
+docker compose exec redis redis-cli ping
+
+# Contenedor suelto llamado "redis"
 docker exec -it redis redis-cli ping
 ```
-Debe responder: `PONG`.
+Debe responder: `PONG`. Con el stack `app`, `.\scripts\docker-verify.ps1` también valida Redis y Celery.
 
-Si obtienes **"port is already allocated"**, ya tienes un Redis en el 6379 (por ejemplo el contenedor **redis**). Comprueba con `docker ps -a` y úsalo; verifica con `docker exec -it redis redis-cli ping`. Si creaste otro contenedor que no pudo arrancar, elimínalo con `docker rm <nombre_contenedor>`.
+Si obtienes **"port is already allocated"**, ya tienes un Redis en el 6379. Comprueba con `docker ps -a` y usa el contenedor existente.
 
 Si tenías el paquete antiguo de Chocolatey (`redis-64`) y ya usas Docker, puedes desinstalarlo: `choco uninstall redis-64`.
 
-**Opción B – Chocolatey (Redis nativo en Windows):**
+**Opción C – Chocolatey (Redis nativo en Windows):**
 ```powershell
 choco install redis-64
 # Ejecutar por ruta completa si no está en PATH, ej: & "C:\ProgramData\chocolatey\lib\redis-64\tools\redis-server.exe"
 ```
 
-**Opción C – Memurai:**  
+**Opción D – Memurai:**  
 [memurai.com](https://www.memurai.com/) — Redis compatible para Windows.
 
 ## ✅ Paso 2: Instalar dependencias de Python
@@ -70,7 +87,9 @@ REDIS_URL=redis://localhost:6379/0
 
 ## ✅ Paso 4: Ejecutar los procesos
 
-### Opción A: Usando el script de PowerShell
+Si usaste el **stack `app`** en el Paso 1, **omite este paso**: API, worker y beat ya están en Docker (`mba3-api`, `mba3-celery-worker`, `mba3-celery-beat`). Pasa al Paso 5 (`http://localhost:8000/health`).
+
+### Opción A: Usando el script de PowerShell (host)
 
 ```powershell
 cd C:\Users\cortiz\PycharmProjects\mba3-consultas

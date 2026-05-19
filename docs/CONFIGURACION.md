@@ -21,6 +21,15 @@ Si falta el archivo correspondiente, el proceso **termina al iniciar** con un me
 
 **Orden de carga:** primero se elige el fichero (`ENV_FILE` o `.env.{ambiente}`), luego se carga con `python-dotenv`, y **después** se lee `ENVIRONMENT` para el modo lógico de la app. Así, en servidor puedes usar un solo archivo (p. ej. `/opt/odc-sap/.env`) con `ENVIRONMENT=production` dentro, sin depender de `.env.develop`.
 
+### Desarrollo con Docker (perfil `app`)
+
+Con `.\scripts\docker-app-up.ps1` el archivo **`.env.develop`** se monta en el contenedor. Compose sobrescribe solo:
+
+- `REDIS_URL=redis://redis:6379/0`
+- `FILE_STORAGE_ENDPOINT=http://minio:9000`
+
+El resto (SQL, SAP, MBA3, JWT) sale de tu `.env.develop`. Si SQL Server corre en tu **máquina Windows** y en el `.env` tienes `SQL_SERVER_SERVER=localhost`, **desde el contenedor fallará**: usa `host.docker.internal` (con puerto, p. ej. `host.docker.internal,1433`) o el hostname/IP del servidor. Detalle: [DOCKER_COMPOSE.md](DOCKER_COMPOSE.md).
+
 ### systemd (Linux): API, Celery worker y Celery beat
 
 En producción o test no uses `.env.develop` como única fuente en la unidad: apunta al fichero real del servidor y fija el ambiente explícitamente:

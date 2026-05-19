@@ -1,7 +1,10 @@
 # Arranca API + Celery worker + Celery beat (y opcionalmente frontend en otra ventana).
 # Por defecto: 3 ventanas de PowerShell sueltas (no depende de Windows Terminal).
 # El frontend (Vite) no se incluye por defecto: suele fallar en ventanas hijas; arráncalo aparte con npm run dev.
-# Stack API+Celery+Redis+MinIO en Docker: docs/DOCKER_COMPOSE.md y .\scripts\docker-app-up.ps1
+# Desarrollo recomendado: stack completo en Docker (perfil app):
+#   .\scripts\docker-app-up.ps1 -Build
+#   .\scripts\docker-verify.ps1
+# Ver docs/DOCKER_COMPOSE.md. Este script es la alternativa host (venv + ventanas).
 #
 # Uso (desde la raíz del repo):
 #   .\start-all-dev.ps1                          # 3 ventanas PowerShell (api, worker, beat)

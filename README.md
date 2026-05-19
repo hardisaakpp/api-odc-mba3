@@ -5,9 +5,10 @@ Sistema para consultar y gestionar pedidos, despachos y órdenes de compra desde
 ## 🚀 Inicio Rápido
 
 ### Requisitos Previos
-- Python 3.9+
+- **Docker Desktop** (recomendado para desarrollo: stack completo con perfil `app`)
+- Python 3.9+ (migraciones, tests, lint y alternativa host sin Docker)
 - SQL Server
-- Redis (para procesos automáticos con Celery)
+- Redis (incluido en Docker; en host solo si no usas el stack `app`)
 - Acceso a MBA3 API y SAP (opcional)
 
 ### Instalación
@@ -35,54 +36,55 @@ python scripts/migration_runner.py            # Ejecutar
 
 ### Iniciar Servidor
 
-**Arranque en desarrollo (flujo recomendado):**
+**Desarrollo recomendado — stack Docker (perfil `app`):**
+
+Levanta Redis, MinIO, API, Celery worker y Celery beat en contenedores (misma aplicación que en producción, sin depender del `.venv` para esos procesos).
 
 ```powershell
-# 1) Activar entorno virtual local del proyecto
-& c:/Users/cortiz/PycharmProjects/mba3-consultas/.venv/Scripts/Activate.ps1
+# Primera vez o tras cambiar código Python del backend
+.\scripts\docker-app-up.ps1 -Build
 
-# 2) Levantar API en desarrollo (define ENVIRONMENT=development y usa recarga)
-.\run-dev.ps1
+# Comprobar contenedores, /health, Redis, MinIO y Celery
+.\scripts\docker-verify.ps1
 
-# 3) En otra terminal: worker Celery
-celery -A src.celery_app worker --loglevel=info --pool=solo
-
-# 4) En otra terminal: scheduler Celery Beat
-celery -A src.celery_app beat --loglevel=info
+# Frontend (repo scnexus-front): npm run dev → proxy a http://localhost:8000
 ```
 
-> Requisito para Celery: Redis ejecutándose.
+Documentación completa: [docs/DOCKER_COMPOSE.md](docs/DOCKER_COMPOSE.md). Tras editar código Python: `.\scripts\docker-app-up.ps1 -Build` (la imagen copia el código en build; no hay hot-reload en contenedor). **No** levantes además la API en el host: el puerto **8000** quedaría en conflicto.
 
-**Stack en Docker (opcional):** Redis + MinIO + API + Celery worker + beat con el perfil `app`. Útil para validar el flujo completo en contenedor. Ver [docs/DOCKER_COMPOSE.md](docs/DOCKER_COMPOSE.md) y `.\scripts\docker-app-up.ps1`.
+SQL Server, SAP, MBA3 y el Core siguen **fuera** de Docker; configúralos en `.env.develop` (desde el contenedor, evita `SQL_SERVER_SERVER=localhost` si la BD está en tu PC — usa `host.docker.internal` o el host real).
 
-**Opción recomendada (PowerShell):**
+---
+
+**Alternativa — procesos en el host (venv):**
+
+Útil si necesitas `uvicorn --reload` al guardar archivos o depurar con el IDE sin rebuild.
 
 ```powershell
-# Modo estable: sin recarga automática, evita ECONNRESET en el frontend al usar proxy Vite
-.\start_api.ps1
+# Infra mínima en Docker (Redis + MinIO)
+docker compose up -d
 
-# Modo desarrollo: recarga al guardar archivos (puede provocar ECONNRESET breves en el front)
-.\start_api.ps1 -Dev
+# API + Celery en ventanas separadas
+.\start-all-dev.ps1
+# o manualmente: .\run-dev.ps1 + celery worker (--pool=solo) + celery beat
 ```
 
-**Comandos manuales:**
-
-```bash
-# Backend API (estable, sin reinicios)
-uvicorn src.api_server:app --host 0.0.0.0 --port 8000
-
-# Backend API (desarrollo, con recarga al guardar)
-uvicorn src.api_server:app --reload --host 0.0.0.0 --port 8000
-
-# Celery (procesos automáticos) - opcional
-# Ver docs/CELERY_QUICKSTART.md
+```powershell
+# Solo API estable (sin Celery en el mismo script)
+.\start_api.ps1          # sin recarga — menos ECONNRESET con Vite
+.\start_api.ps1 -Dev     # con --reload
 ```
+
+Ver también [docs/CELERY_QUICKSTART.md](docs/CELERY_QUICKSTART.md).
+
+---
 
 - **API Backend:** http://localhost:8000
 - **API Docs:** http://localhost:8000/docs
 - **Health check:** http://localhost:8000/health
+- **MinIO consola (stack Docker):** http://localhost:9101
 
-Si el frontend (Vite) muestra **ECONNRESET** o **ECONNREFUSED** en la consola, suele deberse a que el backend no está levantado o se reinició (por `--reload`). Usa modo estable (`.\start_api.ps1` sin `-Dev`) para trabajar con el front sin desconexiones; reinicia el script cuando cambies código del backend.
+Si el frontend (Vite) muestra **ECONNRESET** o **ECONNREFUSED**, comprueba que el stack `app` o la API en host estén arriba en el puerto 8000. Con `uvicorn --reload` en host, reinicios breves pueden cortar peticiones; con el stack Docker el proceso API es estable hasta que reconstruyas la imagen.
 
 ## 📋 Estructura del Proyecto
 
@@ -138,6 +140,7 @@ La documentación completa está organizada en el directorio `docs/`.
 
 ### 📖 Guías de Inicio
 - **[Índice de Documentación](docs/README.md)** ⭐ - Punto de entrada principal
+- **[Docker Compose (stack `app`)](docs/DOCKER_COMPOSE.md)** 🐳 - Desarrollo con API + Celery + Redis + MinIO en contenedor
 - **[Configuración](docs/CONFIGURACION.md)** - Setup completo de variables de entorno
 - **[Desplegar en servidor de pruebas (DESA)](docs/DEPLOY_TEST.md)** 🧪 - Backend (rama `test`, systemd, Docker Redis/MinIO) y referencia al despliegue del frontend
 - **[Actualizar backend en producción (Linux)](docs/DEPLOY_PRODUCCION.md)** 🐧 - git pull, pip install, systemctl restart
@@ -290,5 +293,5 @@ Este proyecto es privado y confidencial.
 ---
 
 **Versión API (OpenAPI):** 2.1.0  
-**Última actualización documentación:** abril 2026  
+**Última actualización documentación:** mayo 2026  
 **Documentación completa:** [docs/README.md](docs/README.md)

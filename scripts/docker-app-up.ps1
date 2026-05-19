@@ -1,5 +1,7 @@
-# Levanta Redis, MinIO, API FastAPI, Celery worker y Celery beat (perfil "app").
+# Levanta el stack de desarrollo recomendado (perfil "app"):
+# Redis, MinIO, API FastAPI, Celery worker y Celery beat.
 # Requiere: Docker Desktop (o Docker Engine), archivo .env.develop en la raíz del repo.
+# Tras cambiar código Python: usar -Build. Ver docs/DOCKER_COMPOSE.md.
 #
 # Uso (desde la raíz del repo):
 #   .\scripts\docker-app-up.ps1
