@@ -141,6 +141,7 @@ La documentación completa está organizada en el directorio `docs/`.
 ### 📖 Guías de Inicio
 - **[Índice de Documentación](docs/README.md)** ⭐ - Punto de entrada principal
 - **[Docker Compose (stack `app`)](docs/DOCKER_COMPOSE.md)** 🐳 - Desarrollo con API + Celery + Redis + MinIO en contenedor
+- **[Alineación jobs async (front ↔ API)](docs/ALINEACION_FRONT_ASYNC.md)** - Contrato polling/SSE y checklist E2E
 - **[Configuración](docs/CONFIGURACION.md)** - Setup completo de variables de entorno
 - **[Desplegar en servidor de pruebas (DESA)](docs/DEPLOY_TEST.md)** 🧪 - Backend (rama `test`, systemd, Docker Redis/MinIO) y referencia al despliegue del frontend
 - **[Actualizar backend en producción (Linux)](docs/DEPLOY_PRODUCCION.md)** 🐧 - git pull, pip install, systemctl restart

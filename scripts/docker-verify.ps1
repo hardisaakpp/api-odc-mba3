@@ -26,7 +26,7 @@ function Write-Check {
     $icon = if ($Ok) { "[OK]" } else { "[FAIL]" }
     $color = if ($Ok) { "Green" } else { "Red" }
     $line = "$icon $Name"
-    if ($Detail) { $line += " — $Detail" }
+    if ($Detail) { $line += " - $Detail" }
     Write-Host $line -ForegroundColor $color
 }
 

@@ -10,6 +10,7 @@
 |-----------|-----------|
 | Instalar y configurar el proyecto | [CONFIGURACION.md](CONFIGURACION.md) |
 | **Desarrollo local con Docker (API + Celery + Redis + MinIO)** | **[DOCKER_COMPOSE.md](DOCKER_COMPOSE.md)** 🐳 |
+| **Alineación jobs async (front ↔ API)** | **[ALINEACION_FRONT_ASYNC.md](ALINEACION_FRONT_ASYNC.md)** |
 | **Desplegar backend en servidor de pruebas (DESA)** | **[DEPLOY_TEST.md](DEPLOY_TEST.md)** 🧪 |
 | **Actualizar backend en producción (Linux)** | **[DEPLOY_PRODUCCION.md](DEPLOY_PRODUCCION.md)** 🐧 |
 | **Desplegar migraciones de BD** | **[DEPLOY_MIGRATIONS.md](DEPLOY_MIGRATIONS.md)** 🗄️ |

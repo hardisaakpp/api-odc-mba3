@@ -32,14 +32,14 @@ ODC (orden de compra → SAP):
 
 ITR / ST (solicitudes de transferencia post-ODC):
 - Backend: `POST /ordenes-compra/{oc_id}/reintentar-st` + flags `mostrar_reintentar_st`, `st_pendientes_reintento`, `st_total_tiendas`, `st_transferencias_creadas`, `st_transferencias_errores`.
-- Frontend: NO consume aún estos flags ni llama al endpoint. PENDIENTE de cablear UI (botón "Reintentar ST" en `OrdenCompraTable.vue` y método en `ordenesCompraService`). El `openapi.json` del front debe regenerarse para incluir el nuevo endpoint.
+- Frontend: `OrdenCompraTable` (botón reintentar ST), `ordenesCompra.ts` / `mba3ConsultasApi.ts`. ALINEADO (transient → warning + refresh lista). Ver matriz en `docs/ALINEACION_FRONT_ASYNC.md`.
 
 ## Desarrollo local (backend)
 
 - **Recomendado:** stack Docker perfil `app` — `.\scripts\docker-app-up.ps1 -Build`, verificar con `.\scripts\docker-verify.ps1`. API en `http://localhost:8000`. Tras cambios Python: rebuild (`-Build`).
 - **Frontend:** `npm run dev` en scnexus-front; el navegador usa `localhost:8000`, no `mba3-api`.
 - **Alternativa host:** `.\start-all-dev.ps1` o `docker compose up -d` + venv (no mezclar API host y contenedor en puerto 8000).
-- Detalle: `docs/DOCKER_COMPOSE.md`.
+- Detalle: `docs/DOCKER_COMPOSE.md`, contrato async: `docs/ALINEACION_FRONT_ASYNC.md` (front: `scnexus-front/docs/ALINEACION_FRONT_ASYNC.md`).
 
 ## Convenciones
 
