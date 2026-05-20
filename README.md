@@ -61,12 +61,12 @@ SQL Server, SAP, MBA3 y el Core siguen **fuera** de Docker; configúralos en `.e
 Útil si necesitas `uvicorn --reload` al guardar archivos o depurar con el IDE sin rebuild.
 
 ```powershell
-# Infra mínima en Docker (Redis + MinIO)
-docker compose up -d
+# Stack completo en Docker (recomendado): Redis + MinIO + API + Celery
+.\scripts\docker-app-up.ps1 -Build
+.\scripts\docker-verify.ps1
 
-# API + Celery en ventanas separadas
-.\start-all-dev.ps1
-# o manualmente: .\run-dev.ps1 + celery worker (--pool=solo) + celery beat
+# Producción Linux (srv-mabuiosapi, MinIO en 192.168.2.211): ver docs/DEPLOY_DOCKER_PRODUCCION.md
+# ./scripts/docker-app-up-prod.sh --build
 ```
 
 ```powershell

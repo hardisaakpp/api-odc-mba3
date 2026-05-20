@@ -36,7 +36,12 @@ ITR / ST (solicitudes de transferencia post-ODC):
 
 ## Desarrollo local (backend)
 
-- **Recomendado:** stack Docker perfil `app` — `.\scripts\docker-app-up.ps1 -Build`, verificar con `.\scripts\docker-verify.ps1`. API en `http://localhost:8000`. Tras cambios Python: rebuild (`-Build`).
+- **Recomendado:** stack Docker perfiles `app` + `bundled-minio` — `.\scripts\docker-app-up.ps1 -Build`, verificar con `.\scripts\docker-verify.ps1`. API en `http://localhost:8000`. Tras cambios Python: rebuild (`-Build`).
+
+## Producción (srv-mabuiosapi / 192.168.2.153)
+
+- **Docker:** `docker-compose.prod.yml` + `./scripts/docker-app-up-prod.sh` — ver `docs/DEPLOY_DOCKER_PRODUCCION.md`.
+- **MinIO:** solo en **srv-mabuiosbdo** (`192.168.2.211:9100`, contenedor `minio-storage`). No levantar MinIO en el host API.
 - **Frontend:** `npm run dev` en scnexus-front; el navegador usa `localhost:8000`, no `mba3-api`.
 - **Alternativa host:** `.\start-all-dev.ps1` o `docker compose up -d` + venv (no mezclar API host y contenedor en puerto 8000).
 - Detalle: `docs/DOCKER_COMPOSE.md`, contrato async: `docs/ALINEACION_FRONT_ASYNC.md` (front: `scnexus-front/docs/ALINEACION_FRONT_ASYNC.md`).

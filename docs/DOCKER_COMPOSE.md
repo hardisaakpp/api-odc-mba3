@@ -1,11 +1,13 @@
 # Docker Compose (Redis, MinIO y stack de aplicación)
 
-Este repositorio define dos modos con el mismo `docker-compose.yml`:
+Este repositorio define varios modos con `docker-compose.yml` (+ overlay de producción si aplica):
 
 | Modo | Comando | Qué levanta |
 |------|-----------|-------------|
-| **Solo infra** (por defecto) | `docker compose up -d` | Redis (6379) y MinIO (API 9100, consola 9101). La API y Celery siguen en el host (p. ej. `.\start-all-dev.ps1`). |
-| **Stack aplicación** (perfil `app`) — **recomendado para desarrollo** | `docker compose --profile app up -d --build` o `.\scripts\docker-app-up.ps1` | Redis, MinIO, **API** (puerto 8000), **Celery worker** y **Celery beat**. |
+| **Solo Redis** (por defecto) | `docker compose up -d` | Redis (6379). |
+| **Redis + MinIO local** (desarrollo) | `docker compose --profile bundled-minio up -d` | Redis + MinIO (9100/9101). |
+| **Stack desarrollo** (perfil `app` + MinIO embebido) | `.\scripts\docker-app-up.ps1` o `docker compose --profile app --profile bundled-minio up -d --build` | Redis, MinIO, API, Celery worker y beat. |
+| **Stack producción** (`srv-mabuiosapi`) | `docker compose -f docker-compose.yml -f docker-compose.prod.yml --profile app up -d --build` o `./scripts/docker-app-up-prod.sh` | Redis, API, Celery; **MinIO en 192.168.2.211**. Ver [DEPLOY_DOCKER_PRODUCCION.md](DEPLOY_DOCKER_PRODUCCION.md). |
 
 Con el perfil **`app`** corre **toda la aplicación backend de este repo** (mismos endpoints y tareas Celery que en host). No hay funcionalidad reservada al modo host; solo cambia dónde se ejecutan los procesos.
 
@@ -62,10 +64,13 @@ Comprueba los 5 contenedores, `/health`, Redis/MinIO/SQL desde `mba3-api`, tarea
 ## Comandos útiles
 
 ```powershell
-# Infra mínima (igual que antes)
+# Solo Redis
 docker compose up -d
 
-# Stack completo (primera vez o tras cambios en código Python)
+# Redis + MinIO local (desarrollo)
+docker compose --profile bundled-minio up -d
+
+# Stack completo desarrollo (primera vez o tras cambios en código Python)
 .\scripts\docker-app-up.ps1 -Build
 
 # Solo levantar sin rebuild

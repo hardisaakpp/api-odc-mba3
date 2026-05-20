@@ -12,7 +12,8 @@
 | **Desarrollo local con Docker (API + Celery + Redis + MinIO)** | **[DOCKER_COMPOSE.md](DOCKER_COMPOSE.md)** 🐳 |
 | **Alineación jobs async (front ↔ API)** | **[ALINEACION_FRONT_ASYNC.md](ALINEACION_FRONT_ASYNC.md)** |
 | **Desplegar backend en servidor de pruebas (DESA)** | **[DEPLOY_TEST.md](DEPLOY_TEST.md)** 🧪 |
-| **Actualizar backend en producción (Linux)** | **[DEPLOY_PRODUCCION.md](DEPLOY_PRODUCCION.md)** 🐧 |
+| **Producción con Docker (srv-mabuiosapi, MinIO en 192.168.2.211)** | **[DEPLOY_DOCKER_PRODUCCION.md](DEPLOY_DOCKER_PRODUCCION.md)** 🐳 |
+| **Actualizar backend en producción (systemd, legado)** | **[DEPLOY_PRODUCCION.md](DEPLOY_PRODUCCION.md)** 🐧 |
 | **Desplegar migraciones de BD** | **[DEPLOY_MIGRATIONS.md](DEPLOY_MIGRATIONS.md)** 🗄️ |
 | Activar procesos automáticos (Celery) | [CELERY_QUICKSTART.md](CELERY_QUICKSTART.md) |
 | Usar el sistema de homologaciones SKU | [HOMOLOGACIONES_SKU.md](HOMOLOGACIONES_SKU.md) |
@@ -60,11 +61,16 @@ Desplegar en servidor de pruebas (DESA)
 - Variables: `.env.test` o `ENV_FILE` según systemd (ver `systemctl cat`)
 - Frontend: repo y script aparte (documentado en la misma guía)
 
-### 6. **[DEPLOY_PRODUCCION.md](DEPLOY_PRODUCCION.md)** 🐧
-Actualizar backend en producción (Linux)
-- Ruta `/opt/odc-sap/`, servicio `odc-sap-api`
+### 6. **[DEPLOY_DOCKER_PRODUCCION.md](DEPLOY_DOCKER_PRODUCCION.md)** 🐳
+Producción con Docker en `srv-mabuiosapi` (192.168.2.153)
+- Stack: Redis + API + Celery en contenedor
+- MinIO externo en `srv-mabuiosbdo` (192.168.2.211:9100)
+- Overlay `docker-compose.prod.yml`, script `docker-app-up-prod.sh`
+
+### 6b. **[DEPLOY_PRODUCCION.md](DEPLOY_PRODUCCION.md)** 🐧
+Actualizar backend en producción con systemd (legado)
+- Ruta `/opt/odc-sap/`, servicios `odc-sap-api`, `celery-worker`, `celery-beat`
 - git pull, pip install, systemctl restart
-- Ejecución manual con uvicorn (pruebas)
 
 ### 7. **[DEPLOY_MIGRATIONS.md](DEPLOY_MIGRATIONS.md)** 🚀
 Sistema de migraciones para producción

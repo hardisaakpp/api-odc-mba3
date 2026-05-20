@@ -1,6 +1,10 @@
 # Actualizar Backend en Producción (Linux)
 
-Guía para aplicar cambios del backend en el servidor de producción (Linux). El servidor usa **systemd** para ejecutar la API.
+Guía para aplicar cambios del backend en el servidor de producción (Linux).
+
+> **Despliegue Docker (recomendado en srv-mabuiosapi):** API + Celery + Redis en contenedores; MinIO en **192.168.2.211** (`srv-mabuiosbdo`). Ver **[DEPLOY_DOCKER_PRODUCCION.md](DEPLOY_DOCKER_PRODUCCION.md)**.
+>
+> Esta página describe el flujo **systemd + venv** (legado), útil si aún no migraste o para rollback.
 
 ---
 
