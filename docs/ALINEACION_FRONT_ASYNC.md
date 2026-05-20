@@ -59,7 +59,7 @@ Comprueba contenedores, `/health`, Redis/MinIO/SQL desde `mba3-api`, tareas Cele
 
 ## Checklist E2E manual (con JWT)
 
-**Automatizado (ítems 1 y 6, poll mock):** en `scnexus-front`, `npm run test:e2e:mba3`. OpenAPI: `npm run sync:openapi` (API en `:8000`).  
+**Automatizado (ítems 1 y 5, poll mock):** en `scnexus-front`, `npm run test:e2e:mba3` (`mba3-plantilla-async.spec.ts`, `mba3-async.spec.ts`). OpenAPI: `npm run sync:openapi` (API en `:8000`).  
 **Live smoke:** `.env.test` + `E2E_LIVE=1` → `npm run test:e2e:mba3:live`.
 
 Requisitos: perfil `app` arriba, front `npm run dev`, proxy a `http://localhost:8000`, usuario con permiso `mabel.view`.
@@ -71,7 +71,8 @@ Requisitos: perfil `app` arriba, front `npm run dev`, proxy a `http://localhost:
 | 3 | Integrar ODC | Proceso completo → enviar una ODC | `ENVIADA` en tabla | Toast amarillo + refresh lista |
 | 4 | Reintento ST | OC `ENVIADA` con ST pendiente | Botón reintentar → refresh flags | Transient 120s → warning |
 | 5 | Cruce | Homologaciones → Cruce MBA3/SAP | Modal progreso → lista actualizada | Sin fallback sync en timeout de poll |
-| 6 | Celery off | Parar `mba3-celery-worker`, plantilla | Fallback sync o error claro (`storage_required` si MinIO off) | Documentar en incidente |
+| 6 | Celery off | Parar `mba3-celery-worker`, plantilla | Fallback sync o error claro (`storage_required` si MinIO off) | Documentar en incidente; **no** automatizado |
+| 7 | Migrar / ODC | Proceso completo → migrar o generar ODC | Lista/despachos actualizados | Transient → warning + refresh (ver matriz front) |
 
 Marcar cada fila en PR o release notes cuando se valide en DESA.
 

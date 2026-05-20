@@ -1024,68 +1024,58 @@ const handleUpload = async () => {
 
 ### 0.5.12.2 Upload asíncrono (Celery): actualizar la interfaz al terminar
 
+> **Contrato canónico (polling, SSE, SAP, cruce):** [ALINEACION_FRONT_ASYNC.md](ALINEACION_FRONT_ASYNC.md). En scnexus-front: `useFileUpload`, `pollAsyncJob`, `followAsyncJobSseOrPoll`.
+
 **Problema:** Si la carga de plantilla se hace con **Celery** (`POST /api/plantillas/upload-async`), el backend responde **202** con `process_id` y el resultado no está listo hasta que la tarea termina. Si el frontend no consulta el resultado ni actualiza la UI al terminar, **la información no se carga automáticamente** en `http://localhost:3000/mba3-consultas/cargar-plantilla`.
 
 **Solución obligatoria en el frontend:**
 
-1. Tras recibir **202** de `POST /api/plantillas/upload-async`, guardar `process_id`.
-2. **Consultar el resultado** hasta que termine:
-   - **Opción A (polling):** llamar `GET /api/plantillas/resultado/{process_id}` cada 1–2 s hasta que la respuesta tenga `status === 'completed'` o `status === 'error'`.
-   - **Opción B (recomendada):** abrir **SSE** `GET /api/plantillas/stream/{process_id}` y reaccionar al evento donde `status === 'completed'` o `status === 'error'`.
-3. **Cuando `status === 'completed`:**
-   - Con **polling:** el cuerpo de `GET /api/plantillas/resultado/{process_id}` es directamente el resultado (incluye `numero_pedido`, `correcciones_aplicadas`, etc.).
-   - Con **SSE:** el evento trae `resultado` con esos mismos campos.
-   - A partir de ese resultado:
-     - **Refrescar la lista de pedidos:** `GET /api/plantillas/pedidos` (para que el nuevo pedido aparezca en el contenedor "Pedidos").
-     - **Navegar** a `/mba3-consultas/cargar-plantilla/{encodeURIComponent(numero_pedido)}` (con `replace: true`).
-     - **Cargar los datos del pedido** en esa vista (p. ej. `GET /api/plantillas/ultimo` o `GET /api/pedidos/{id}` o el endpoint que use la página) para pintar la tabla.
-   - Opcional: guardar `correcciones_aplicadas` en store o `sessionStorage` por `numero_pedido` para el resaltado de códigos corregidos (ver 0.5.12 / flujo async).
-4. **Cuando `status === 'error':** mostrar el mensaje de error y, si viene `validacion_sap` / `error_data`, la UI de corrección de códigos si aplica.
+1. Tras recibir **202** de `POST /api/plantillas/upload-async`, guardar `process_id` (o usar fallback sync si `fallback: sync` / sin `process_id`).
+2. **Consultar el resultado** hasta que deje de estar en curso:
+   - **Opción A (polling):** `GET /api/plantillas/resultado/{process_id}` cada **2 s** mientras `status === 'processing'` (u otro estado no terminal en Redis).
+   - **Opción B (recomendada):** **SSE** `GET /api/plantillas/stream/{process_id}`; al evento terminal, confirmar con un `GET resultado` final.
+3. **Terminal OK (polling):** el cuerpo de `GET resultado` **no** incluye `status: "completed"`; es el **mismo JSON que el upload síncrono** (`status: "success"`, `numero_pedido`, `correcciones_aplicadas`, …). Solo `status === 'processing'` implica job en curso.
+4. **Terminal error:** respuesta **400** con `{ status: "error", message, validacion_sap?, … }`.
+5. Tras éxito: refrescar lista de pedidos, navegar a `cargar-plantilla/{numero_pedido}`, cargar detalle del pedido y persistir `correcciones_aplicadas` antes del redirect (ver 0.5.12.3).
 
-**Ejemplo (polling) después de recibir 202:**
+**Ejemplo (polling) — criterio de fin correcto:**
 
 ```tsx
-// Tras response.status === 202 y data.process_id
 const processId = data.process_id;
 
-const pollResult = async (): Promise<{ status: string; numero_pedido?: string; [k: string]: unknown }> => {
+const pollResult = async () => {
   const res = await fetch(`/api/plantillas/resultado/${processId}`, {
-    headers: { 'Authorization': `Bearer ${token}` }
+    headers: { Authorization: `Bearer ${token}` },
   });
-  const body = await res.json();
-  // Cuando status === 'completed', el cuerpo ES el resultado (numero_pedido, correcciones_aplicadas, etc.)
-  if (body.status === 'completed') return body;
-  if (body.status === 'error') return body;
-  return body; // procesando, etc.
+  if (res.status === 400) return { terminal: 'error' as const, body: await res.json() };
+  return { terminal: 'ok' as const, body: await res.json() };
 };
 
 let result;
 while (true) {
-  result = await pollResult();
-  if (result.status === 'completed' || result.status === 'error') break;
-  await new Promise(r => setTimeout(r, 1500));
+  const { terminal, body } = await pollResult();
+  if (terminal === 'error') {
+    showErrorNotification(body.message ?? body.error);
+    return;
+  }
+  if (body.status !== 'processing') {
+    result = body; // cuerpo de negocio (p. ej. success + numero_pedido)
+    break;
+  }
+  await new Promise((r) => setTimeout(r, 2000));
 }
 
-if (result.status === 'error') {
-  showErrorNotification(result.message || result.error || 'Error al procesar plantilla');
-  setUploading(false);
-  return;
-}
-
-// Éxito: actualizar interfaz
 const numeroPedido = result.numero_pedido;
-await refetchListaPedidos(); // GET /api/plantillas/pedidos
+await refetchListaPedidos();
 navigate(`/mba3-consultas/cargar-plantilla/${encodeURIComponent(numeroPedido)}`, { replace: true });
-await cargarDatosPedido(numeroPedido); // cargar detalle en esta vista
-setUploading(false);
-showSuccessNotification('Plantilla cargada exitosamente');
 ```
 
-**Checklist para que la información se cargue automáticamente al terminar Celery:**
+**Checklist:**
 
-- [ ] Si se usa `upload-async`, no tratar la respuesta 202 como éxito con datos listos.
-- [ ] Implementar polling a `GET /api/plantillas/resultado/{process_id}` o SSE `GET /api/plantillas/stream/{process_id}` hasta `completed`/`error`.
-- [ ] Al recibir `completed`: refrescar lista de pedidos, navegar a `cargar-plantilla/{numero_pedido}` y cargar los datos del pedido en esa interfaz.
+- [ ] No tratar el **202** inicial como pedido ya creado.
+- [ ] Poll/SSE hasta que `GET resultado` deje de devolver `processing`.
+- [ ] Tratar el cuerpo terminal como upload síncrono (`success` / `validation_error`), no buscar `status === 'completed'`.
+- [ ] Timeout/red: toast amarillo + refetch; no marcar error local si Celery puede seguir ([ALINEACION_FRONT_ASYNC.md](ALINEACION_FRONT_ASYNC.md)).
 
 ---
 
@@ -1119,7 +1109,7 @@ El endpoint `POST /api/plantillas/upload` devuelve:
 
 - **`correcciones_aplicadas`**: Lista de objetos `{ codigo_original, codigo_corregido }` cuando el usuario eligió una sugerencia de código y envió el formulario con "Aplicar correcciones y continuar". Usar esta lista para **resaltar la celda del código de producto corregido** (p. ej. con un color distintivo como fondo verde claro o borde) en la tabla/grilla del detalle del pedido: localizar la fila cuyo código de producto coincide con `codigo_corregido` (o la que antes mostraba `codigo_original`) y aplicar una clase CSS (ej. `celda-codigo-corregido`) a esa celda.
 
-**Forma del payload con upload asíncrono (Celery):** Si se usa **GET** `/api/plantillas/resultado/{process_id}` cuando `status === 'completed'`, el **cuerpo de la respuesta es directamente el resultado** (no hay clave `resultado` ni `result`). Por tanto `correcciones_aplicadas` está en el objeto raíz: `response.data.correcciones_aplicadas`. Si se usa **SSE** (`/api/plantillas/stream/{process_id}`), el evento tiene el resultado anidado: `event.resultado.correcciones_aplicadas`. Para el resaltado, usar `codigo_corregido` (con trim) en el Set y comparar con `detalle.codigo_interno` (también con trim).
+**Forma del payload con upload asíncrono (Celery):** Cuando el job terminó, **GET** `/api/plantillas/resultado/{process_id}` devuelve el **mismo cuerpo que el upload síncrono** (sin wrapper `completed` en Redis). Por tanto `correcciones_aplicadas` está en la raíz: `response.data.correcciones_aplicadas`. Mientras corre, la respuesta es `{ status: "processing", progress, message, … }`. Con **SSE** (`/api/plantillas/stream/{process_id}`), el evento terminal trae `resultado` anidado: `event.resultado.correcciones_aplicadas`. Para el resaltado, usar `codigo_corregido` (con trim) en el Set y comparar con `detalle.codigo_interno` (también con trim).
 
 #### Por qué se pierde el resaltado con upload asíncrono y cómo recuperarlo
 
@@ -1128,7 +1118,7 @@ Con **upload síncrono** (`POST /api/plantillas/upload`), la respuesta llega en 
 Con **upload asíncrono** (Celery), el flujo es distinto:
 
 1. Se sube el archivo → el backend devuelve `process_id` y la UI hace polling a **GET** `/api/plantillas/resultado/{process_id}` o escucha **SSE** `/api/plantillas/stream/{process_id}`.
-2. Cuando `status === 'completed'`, la respuesta (GET) o el evento (SSE) traen el **mismo** objeto que en sync: `status`, `numero_pedido`, `correcciones_aplicadas`, etc.
+2. Cuando el job termina, la respuesta (GET, cuerpo de negocio) o el evento (SSE, `resultado`) traen el **mismo** objeto que en sync: `status`, `numero_pedido`, `correcciones_aplicadas`, etc.
 3. Normalmente después se hace **redirect** a `/mba3-consultas/cargar-plantilla/{numero_pedido}` (o a pedidos).
 4. La **nueva** página carga el pedido con **GET** `/api/plantillas/ultimo` o **GET** `/api/pedidos/{id}`. Esos endpoints devuelven el pedido (cabecera, detalle con `codigo_interno` ya corregido), pero **no** devuelven `correcciones_aplicadas`. Esa lista solo existe en la respuesta del upload (GET resultado o SSE).
 5. Por tanto, en la vista de cargar-plantilla/pedido el Set de “códigos a resaltar” está vacío y el resaltado no se aplica.

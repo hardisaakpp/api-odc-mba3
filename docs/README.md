@@ -150,6 +150,7 @@ docs/
 ├── SEGURIDAD.md                 ⭐ ESENCIAL
 ├── TESTING.md                   ⭐ ESENCIAL
 ├── HOMOLOGACIONES_SKU.md        ⭐ ESENCIAL
+├── ALINEACION_FRONT_ASYNC.md    ⭐ ESENCIAL (contrato jobs async front ↔ API)
 ├── FLUJO_COMPLETO.md
 ├── FORMATOS_Y_ESTRUCTURAS.md
 ├── IMPLEMENTACION_FEATURES.md
@@ -173,6 +174,7 @@ docs/
 | ¿Cómo integro con SAP? | [INTEGRACION_SAP.md](INTEGRACION_SAP.md) |
 | ¿Cómo activo Celery? | [CELERY_QUICKSTART.md](CELERY_QUICKSTART.md) |
 | ¿Cómo uso homologaciones? | [HOMOLOGACIONES_SKU.md](HOMOLOGACIONES_SKU.md) |
+| ¿Contrato async / polling / SSE con el front? | [ALINEACION_FRONT_ASYNC.md](ALINEACION_FRONT_ASYNC.md) |
 | ¿Cuál es el modelo de datos? | [ESTRUCTURA_BD_PEDIDOS.md](ESTRUCTURA_BD_PEDIDOS.md) |
 | ¿Cómo ejecuto tests? | [TESTING.md](TESTING.md) |
 | ¿Cómo configuro seguridad? | [SEGURIDAD.md](SEGURIDAD.md) |
@@ -202,4 +204,4 @@ Para referencia sobre cambios previos e implementaciones completadas:
 ✓ Seguridad configurada  
 ✓ Tests ejecutados y validados  
 ✓ **Documentación en `docs/`: ~40 archivos** (11 esenciales arriba + complementarias + histórico)  
-✓ **Última revisión índice:** abril 2026
+✓ **Última revisión índice:** mayo 2026

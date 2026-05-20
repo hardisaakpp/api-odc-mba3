@@ -15,7 +15,7 @@ Con el perfil **`app`** corre **toda la aplicación backend de este repo** (mism
 2. `.\scripts\docker-app-up.ps1 -Build` (rebuild tras cambios en código Python).
 3. `.\scripts\docker-verify.ps1` — smoke test de contenedores y dependencias.
 4. Frontend **scnexus-front**: `npm run dev` con proxy/API en **`http://localhost:8000`** (el navegador no usa el hostname `mba3-api`).
-5. Pruebas de negocio (plantilla async, proceso SAP, ODC, cruce) con JWT como en DESA.
+5. Pruebas de negocio (plantilla async, proceso SAP, ODC, cruce) con JWT como en DESA — checklist: [ALINEACION_FRONT_ASYNC.md](ALINEACION_FRONT_ASYNC.md).
 
 **Ciclo tras implementar una feature:** editar código → `-Build` → verificar con `docker-verify` y el flujo en el front → commit.
 
