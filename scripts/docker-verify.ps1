@@ -6,7 +6,8 @@
 #   .\scripts\docker-verify.ps1 -ShowLogErrors   # últimas líneas con ERROR en logs
 
 param(
-    [switch]$ShowLogErrors
+    [switch]$ShowLogErrors,
+    [switch]$Production
 )
 
 $ErrorActionPreference = "Continue"
@@ -17,9 +18,16 @@ $requiredContainers = @(
     "mba3-api",
     "mba3-celery-worker",
     "mba3-celery-beat",
-    "mba3-consultas-redis-1",
-    "mba3-consultas-minio-1"
+    "mba3-consultas-redis-1"
 )
+if (-not $Production) {
+    $requiredContainers += "mba3-consultas-minio-1"
+}
+$expectedFileStorageEndpoint = if ($Production) {
+    "http://192.168.2.211:9100"
+} else {
+    "http://minio:9000"
+}
 
 function Write-Check {
     param([string]$Name, [bool]$Ok, [string]$Detail = "")
@@ -60,8 +68,8 @@ $apiChecks = @(
         Script = "from src.config import REDIS_URL; import sys; sys.exit(0 if REDIS_URL == 'redis://redis:6379/0' else 1)"
     },
     @{
-        Name = "Config FILE_STORAGE_ENDPOINT (http://minio:9000)"
-        Script = "from src.config import FILE_STORAGE_ENDPOINT; import sys; sys.exit(0 if FILE_STORAGE_ENDPOINT == 'http://minio:9000' else 1)"
+        Name = "Config FILE_STORAGE_ENDPOINT ($expectedFileStorageEndpoint)"
+        Script = "from src.config import FILE_STORAGE_ENDPOINT; import sys; sys.exit(0 if FILE_STORAGE_ENDPOINT == '$expectedFileStorageEndpoint' else 1)"
     },
     @{
         Name = "Redis ping (ProcesoEstadoService)"

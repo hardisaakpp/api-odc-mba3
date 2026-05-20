@@ -16,7 +16,7 @@ if (-not (Test-Path -LiteralPath (Join-Path $Root "docker-compose.yml"))) {
 }
 Set-Location -LiteralPath $Root
 
-$args = @("compose", "--profile", "app", "down")
+$args = @("compose", "--profile", "app", "--profile", "bundled-minio", "down")
 if ($Volumes) {
     $args += "-v"
 }

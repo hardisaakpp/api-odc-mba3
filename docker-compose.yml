@@ -1,22 +1,26 @@
 # MBA3 Consultas — Infraestructura local y stack opcional en Docker
 #
-# Por defecto (sin perfil): solo Redis + MinIO — mismo comportamiento que antes.
+# Por defecto (sin perfil): solo Redis.
 #   docker compose up -d
 #
-# Stack completo API + Celery (recomendado para desarrollo), perfil "app":
-#   docker compose --profile app up -d --build
+# MinIO embebido (solo desarrollo local), perfil "bundled-minio":
+#   docker compose --profile bundled-minio up -d
+#
+# Stack completo API + Celery (desarrollo), perfiles "app" + "bundled-minio":
+#   docker compose --profile app --profile bundled-minio up -d --build
 #   .\scripts\docker-app-up.ps1 -Build
-# Tras cambios en código Python: rebuild (-Build). Ver docs/DOCKER_COMPOSE.md.
 #
-# Requisitos para el perfil app:
-#   - Archivo .env.develop en la raíz del repo (obligatorio también en host).
-#   - SQL Server / SAP / MBA3: suelen apuntar a servicios fuera de Docker; si SQL
-#     corre en el host Windows, define SQL_SERVER_SERVER=host.docker.internal (u
-#     host real) en .env o vía variables de entorno del sistema antes de compose.
+# Producción (srv-mabuiosapi, MinIO externo 192.168.2.211): sin bundled-minio.
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml --profile app up -d --build
+#   ./scripts/docker-app-up-prod.sh -Build
+#   Ver docs/DEPLOY_DOCKER_PRODUCCION.md
 #
-# Puertos: Redis 6379, MinIO API 9100, consola MinIO 9101, API 8000.
-# Dentro de la red Docker, la API y Celery usan redis://redis:6379/0 y
-# http://minio:9000 (sobrescritos por environment; python-dotenv no pisa vars ya fijadas).
+# Requisitos para el perfil app (desarrollo):
+#   - Archivo .env.develop en la raíz del repo.
+#   - SQL Server / SAP / MBA3 alcanzables desde el contenedor (host.docker.internal o IP).
+#
+# Puertos host: Redis 6379, MinIO embebido 9100/9101 (solo bundled-minio), API 8000.
+# En dev, API/Celery usan redis://redis:6379/0 y http://minio:9000 dentro de la red Docker.
 #
 # Red compartida con scnexus-front (otro docker-compose): mba3-nexus_edge
 # La API y Redis se anclan ahí para que la red exista también sin perfil "app".
@@ -50,8 +54,6 @@ x-app-common: &app-common
   depends_on:
     redis:
       condition: service_healthy
-    minio:
-      condition: service_healthy
 
 services:
   redis:
@@ -71,6 +73,8 @@ services:
     restart: unless-stopped
 
   minio:
+    profiles:
+      - bundled-minio
     image: minio/minio
     command: server /data --console-address ":9001"
     environment:

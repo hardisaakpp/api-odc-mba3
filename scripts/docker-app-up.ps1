@@ -26,7 +26,7 @@ if (-not (Test-Path -LiteralPath $envFile)) {
     Write-Error "No existe .env.develop en: $envFile`nCrea el archivo según docs/CONFIGURACION.md antes de usar el stack Docker."
 }
 
-$args = @("compose", "--profile", "app", "up", "-d")
+$args = @("compose", "--profile", "app", "--profile", "bundled-minio", "up", "-d")
 if ($Build) {
     $args += "--build"
 }

@@ -1,0 +1,32 @@
+# Overlay de producción — srv-mabuiosapi (/opt/odc-sap)
+#
+# MinIO NO corre en este host. Almacenamiento en srv-mabuiosbdo (192.168.2.211:9100).
+# Variables de negocio en /opt/odc-sap/.env (ENV_FILE=/app/.env).
+#
+# Uso (tras parar systemd y redis-server nativo; ver docs/DEPLOY_DOCKER_PRODUCCION.md):
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml --profile app up -d --build
+#   ./scripts/docker-app-up-prod.sh -Build
+
+x-app-prod: &app-prod
+  environment:
+    ENVIRONMENT: production
+    ENV_FILE: /app/.env
+    REDIS_URL: redis://redis:6379/0
+    FILE_STORAGE_ENDPOINT: http://192.168.2.211:9100
+  env_file:
+    - .env
+  volumes:
+    - ./.env:/app/.env:ro
+
+services:
+  api:
+    <<: *app-prod
+
+  celery-worker:
+    <<: *app-prod
+
+  celery-beat:
+    <<: *app-prod
+    volumes:
+      - ./.env:/app/.env:ro
+      - celerybeat_data:/var/lib/celery
