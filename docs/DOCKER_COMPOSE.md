@@ -89,7 +89,7 @@ docker logs -f mba3-celery-worker
 
 ## Detalles técnicos
 
-- **Imagen**: se construye con el `Dockerfile` de la raíz (Python 3.11 + ODBC 17). El código se copia en build; `.env.*` no se incluye en la imagen (`.dockerignore`), solo se monta en runtime.
+- **Imagen**: se construye con el `Dockerfile` de la raíz (Python 3.11 + **ODBC Driver 18**). El código se copia en build; `.env.*` no se incluye en la imagen (`.dockerignore`), solo se monta en runtime. En `.env` usa `SQL_SERVER_DRIVER={ODBC Driver 18 for SQL Server}` (Driver 17 no está instalado en la imagen).
 - **Celery worker**: en contenedor Linux se usa `--pool=prefork`. En Windows nativo el repo usa `--pool=solo` (ver `scripts/dev-terminal.ps1`).
 - **Celery beat**: el archivo de programación se guarda en el volumen `celerybeat_data` (`--schedule=/var/lib/celery/celerybeat-schedule`) para que sobreviva a reinicios del contenedor.
 - **Puerto 8000**: si ya tienes la API en el host con `uvicorn`, habrá conflicto; detén una de las dos instancias.

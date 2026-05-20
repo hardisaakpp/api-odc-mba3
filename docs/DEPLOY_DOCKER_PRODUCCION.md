@@ -69,6 +69,15 @@ El resto (SQL Server, SAP, MBA3, JWT, `FILE_STORAGE_ACCESS_KEY`, `FILE_STORAGE_S
 
 **SQL / SAP desde contenedor:** `SQL_SERVER_SERVER` y URLs no pueden ser `localhost` del host API si la BD está en otra máquina; usa IP/hostname reales alcanzables desde el contenedor.
 
+**ODBC:** la imagen Docker incluye **Microsoft ODBC Driver 18**. En `/opt/odc-sap/.env` debe figurar:
+
+```bash
+SQL_SERVER_DRIVER={ODBC Driver 18 for SQL Server}
+SQL_SERVER_SAP_DRIVER={ODBC Driver 18 for SQL Server}
+```
+
+Tras cambiar el `Dockerfile` o el driver, reconstruir: `./scripts/docker-app-up-prod.sh --build`.
+
 ---
 
 ## Migración desde systemd (primera vez)
@@ -161,5 +170,6 @@ No hace falta `pip install` en el host si todo corre en imagen Docker (el `Docke
 | `bind: address already in use` en **6379** | `redis-server` systemd aún activo | `systemctl stop redis-server` |
 | `bind` en **8000** | `odc-sap-api` systemd activo | `systemctl stop odc-sap-api` |
 | MinIO unhealthy / S3 error | Firewall 153→211 o credenciales | `curl` a `192.168.2.211:9100`; revisar keys en `.env` |
+| `Can't open lib 'ODBC Driver 18 for SQL Server'` | Imagen antigua (solo Driver 17) o `.env` con Driver 17 | `SQL_SERVER_DRIVER={ODBC Driver 18 for SQL Server}` y `./scripts/docker-app-up-prod.sh --build` |
 | WARN `tr` / `d3s4rr0ll0` en compose | `$` en contraseñas del `.env` | Escapar con `$$` |
 | Worker sin tareas | Contenedor worker caído | `docker logs mba3-celery-worker` |

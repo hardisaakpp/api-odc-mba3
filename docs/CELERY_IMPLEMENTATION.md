@@ -128,7 +128,7 @@ AUTO_MIGRATE_INTERVAL_MINUTES=15
 MIGRATE_DATE_FILTER_DAYS=365
 
 # SQL Server (asegurar que estén configuradas)
-SQL_SERVER_DRIVER={ODBC Driver 17 for SQL Server}
+SQL_SERVER_DRIVER={ODBC Driver 18 for SQL Server}
 SQL_SERVER_SERVER=tu_servidor
 SQL_SERVER_DATABASE=tu_base_datos
 # ... resto de config SQL Server

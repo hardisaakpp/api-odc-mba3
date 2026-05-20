@@ -114,14 +114,14 @@ MBA3_DIGEST_PASSWORD = os.getenv("MBA3_DIGEST_PASSWORD", MBA3_SERVICE_PASSWORD)
 # ConfiguraciÃ³n de SQL Server (Principal - para almacenar datos)
 # ============================================================================
 # Para usar variables de entorno, configura en el archivo .env:
-# - SQL_SERVER_DRIVER={ODBC Driver 17 for SQL Server}
+# - SQL_SERVER_DRIVER={ODBC Driver 18 for SQL Server}
 # - SQL_SERVER_SERVER=tu_servidor
 # - SQL_SERVER_DATABASE=tu_base_de_datos
 # - SQL_SERVER_UID=tu_usuario (opcional para Windows Auth)
 # - SQL_SERVER_PWD=tu_contraseÃ±a (opcional para Windows Auth)
 # - ENABLE_SQL_SERVER_STORAGE=true
 
-SQL_SERVER_DRIVER = os.getenv("SQL_SERVER_DRIVER", "{ODBC Driver 17 for SQL Server}")
+SQL_SERVER_DRIVER = os.getenv("SQL_SERVER_DRIVER", "{ODBC Driver 18 for SQL Server}")
 SQL_SERVER_SERVER = os.getenv("SQL_SERVER_SERVER", "localhost")
 SQL_SERVER_DATABASE = os.getenv("SQL_SERVER_DATABASE", "TuBaseDeDatos")
 SQL_SERVER_UID = os.getenv("SQL_SERVER_UID", "")

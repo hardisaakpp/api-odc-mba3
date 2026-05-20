@@ -54,7 +54,7 @@ MBA3_DIGEST_PASSWORD=tu_contraseña  # Opcional
 ### SQL Server Principal (Almacenamiento)
 
 ```env
-SQL_SERVER_DRIVER={ODBC Driver 17 for SQL Server}
+SQL_SERVER_DRIVER={ODBC Driver 18 for SQL Server}
 SQL_SERVER_SERVER=210.17.1.54
 SQL_SERVER_DATABASE=store_control
 SQL_SERVER_UID=tu_usuario
@@ -72,7 +72,7 @@ ENABLE_SQL_SERVER_STORAGE=true
 Si usas un servidor SQL diferente para consultas SAP:
 
 ```env
-SQL_SERVER_SAP_DRIVER={ODBC Driver 17 for SQL Server}
+SQL_SERVER_SAP_DRIVER={ODBC Driver 18 for SQL Server}
 SQL_SERVER_SAP_SERVER=10.10.100.12
 SQL_SERVER_SAP_DATABASE=STORECONTROL
 SQL_SERVER_SAP_UID=usuario
