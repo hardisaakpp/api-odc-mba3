@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Wrapper: ejecutar desde la raíz del clone o con ruta absoluta desde ~:
+# Wrapper (ejecutable en git). Desde ~:
 #   /opt/odc-sap/deploy-prod.sh
-#   bash ~/deploys/mba3_api_prod.sh   # tras copiar deploy/scripts/mba3_api_prod.launcher.sh
-exec "$(cd "$(dirname "$0")" && pwd)/deploy/scripts/mba3_api_prod.sh" "$@"
+# Si aparece "Permission denied": bash /opt/odc-sap/deploy-prod.sh
+ROOT="$(cd "$(dirname "$0")" && pwd)"
+exec bash "${ROOT}/deploy/scripts/mba3_api_prod.sh" "$@"

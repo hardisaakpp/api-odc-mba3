@@ -10,4 +10,4 @@
 
 set -euo pipefail
 PROJECT_DIR="${PROJECT_DIR:-/opt/odc-sap}"
-exec "${PROJECT_DIR}/deploy-prod.sh" "$@"
+exec bash "${PROJECT_DIR}/deploy-prod.sh" "$@"

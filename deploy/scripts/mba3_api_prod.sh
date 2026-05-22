@@ -106,6 +106,11 @@ git_sync_from_origin() {
 
   echo ">> git reset --hard origin/$branch"
   git reset --hard "origin/${branch}"
+
+  # Tras reset los scripts pueden quedar sin +x (100644 en git antiguo); asegurar invocación directa.
+  chmod +x "${PROJECT_DIR}/deploy-prod.sh" \
+           "${PROJECT_DIR}/deploy/scripts/mba3_api_prod.sh" \
+           "${PROJECT_DIR}/deploy/scripts/mba3_api_prod.launcher.sh" 2>/dev/null || true
 }
 
 run_deploy() {

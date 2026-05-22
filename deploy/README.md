@@ -4,6 +4,8 @@ Un solo comando (desde `~` o desde el repo):
 
 ```bash
 /opt/odc-sap/deploy-prod.sh
+# Si "Permission denied" (script sin +x tras git reset):
+bash /opt/odc-sap/deploy-prod.sh
 ```
 
 O desde la raíz del clone:
