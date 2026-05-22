@@ -65,7 +65,7 @@ Desplegar en servidor de pruebas (DESA)
 Producción con Docker en `srv-mabuiosapi` (192.168.2.153)
 - Stack: Redis + API + Celery en contenedor
 - MinIO externo en `srv-mabuiosbdo` (192.168.2.211:9100)
-- Overlay `docker-compose.prod.yml`, script `docker-app-up-prod.sh`
+- Un comando: `./deploy-prod.sh` (pull + compose + health + log)
 
 ### 6b. **[DEPLOY_PRODUCCION.md](DEPLOY_PRODUCCION.md)** 🐧
 Actualizar backend en producción con systemd (legado)

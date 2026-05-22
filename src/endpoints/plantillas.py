@@ -719,6 +719,10 @@ def register_plantillas_endpoints(app: FastAPI):
         numero_pedido: Optional[str] = Query(None, description="Buscar por número de pedido (parcial)"),
         limit: int = Query(10, ge=1, le=100, description="Límite de registros por página"),
         offset: int = Query(0, ge=0, description="Offset para paginación"),
+        solo_pendientes_accion: Optional[str] = Query(
+            None,
+            description="Si 'true', solo pedidos que requieren acción del proveedor",
+        ),
         user: Dict = Depends(verify_jwt_token),
         _: None = Depends(require_permission('mabel.view'))
     ):
@@ -774,6 +778,10 @@ def register_plantillas_endpoints(app: FastAPI):
         """
         try:
             user_id = get_user_id(user)
+            filtrar_pendientes = (
+                solo_pendientes_accion is not None
+                and str(solo_pendientes_accion).lower() in ("true", "1")
+            )
             
             with get_db_connection_context() as conn:
                 repo = PedidoRepository(conn)
@@ -786,6 +794,7 @@ def register_plantillas_endpoints(app: FastAPI):
                     limit=limit,
                     offset=offset,
                     excluir_borrador=False,  # INCLUIR BORRADOR para cargar-plantilla
+                    solo_pendientes_accion=filtrar_pendientes,
                 )
                 
                 logger.info(

@@ -45,18 +45,32 @@ _ordenes_compra_cache: Dict[str, Any] = {}
 _oc_cache_ttl_seconds = 30  # 30 segundos de caché
 
 
-def get_cached_ordenes_compra(estado: Optional[str] = None) -> Optional[Dict[str, Any]]:
+def _ordenes_compra_cache_key(
+    estado: Optional[str],
+    page: int,
+    page_size: int,
+    referencia_despacho: Optional[str],
+    numero_oc_sap: Optional[str],
+    search: Optional[str],
+) -> str:
+    """Clave de caché que incluye paginación y filtros de listado."""
+    return (
+        f"ordenes_compra_{estado or 'all'}_p{page}_s{page_size}"
+        f"_ref{referencia_despacho or ''}_sap{numero_oc_sap or ''}_q{search or ''}"
+    )
+
+
+def get_cached_ordenes_compra(cache_key: str) -> Optional[Dict[str, Any]]:
     """
     Obtiene órdenes de compra del caché si aún es válido.
     
     Args:
-        estado: Estado filtrado (para diferenciar cachés)
+        cache_key: Clave compuesta (estado, página, filtros)
         
     Returns:
         Datos del caché si son válidos, None en caso contrario
     """
     with _oc_cache_lock:
-        cache_key = f"ordenes_compra_{estado or 'all'}"
         now = ahora_naive()
         
         if cache_key in _ordenes_compra_cache:
@@ -64,32 +78,31 @@ def get_cached_ordenes_compra(estado: Optional[str] = None) -> Optional[Dict[str
             cached_time = cached_data.get('timestamp')
             
             if cached_time and (now - cached_time).total_seconds() < _oc_cache_ttl_seconds:
-                logger.debug(f"📦 Cache HIT para /ordenes-compra (estado={estado})")
+                logger.debug(f"📦 Cache HIT para /ordenes-compra ({cache_key})")
                 return cached_data.get('data')
             else:
                 # Caché expirado, eliminarlo
                 del _ordenes_compra_cache[cache_key]
-                logger.debug(f"⏰ Cache EXPIRED para /ordenes-compra (estado={estado})")
+                logger.debug(f"⏰ Cache EXPIRED para /ordenes-compra ({cache_key})")
         
-        logger.debug(f"📭 Cache MISS para /ordenes-compra (estado={estado})")
+        logger.debug(f"📭 Cache MISS para /ordenes-compra ({cache_key})")
         return None
 
 
-def set_cached_ordenes_compra(data: Dict[str, Any], estado: Optional[str] = None):
+def set_cached_ordenes_compra(data: Dict[str, Any], cache_key: str):
     """
     Guarda datos en el caché.
     
     Args:
         data: Datos a guardar en caché
-        estado: Estado filtrado (para diferenciar cachés)
+        cache_key: Clave compuesta (estado, página, filtros)
     """
     with _oc_cache_lock:
-        cache_key = f"ordenes_compra_{estado or 'all'}"
         _ordenes_compra_cache[cache_key] = {
             'data': data,
             'timestamp': ahora_naive()
         }
-        logger.debug(f"💾 Cache SAVED para /ordenes-compra (estado={estado})")
+        logger.debug(f"💾 Cache SAVED para /ordenes-compra ({cache_key})")
 
 
 def invalidate_ordenes_compra_cache():
@@ -333,40 +346,56 @@ def register_ordenes_compra_endpoints(app: FastAPI):
     @app.get("/ordenes-compra", tags=["Órdenes de Compra"])
     async def get_ordenes_compra(
         request: Request,
+        page: int = Query(1, ge=1, description="Número de página (1-based)"),
+        page_size: int = Query(10, ge=1, le=100, description="Tamaño de página (snake_case)"),
+        pageSize: Optional[int] = Query(None, ge=1, le=100, description="Tamaño de página (camelCase)"),
         estado: Optional[str] = Query(None, description="Filtrar por estado (PENDIENTE, ENVIADA, ERROR)"),
+        referencia_despacho: Optional[str] = Query(None, description="Búsqueda parcial por referencia de despacho"),
+        numero_oc_sap: Optional[str] = Query(None, description="Búsqueda parcial por número OC SAP / doc_entry"),
+        search: Optional[str] = Query(None, description="Búsqueda parcial en referencia o número SAP"),
         user: dict = Depends(verify_jwt_token),
         _: None = Depends(require_any_permission(['odcsap.view', 'mabel.view']))
     ):
         """
-        Endpoint ORDENES-COMPRA: Obtiene órdenes de compra desde la base de datos.
+        Endpoint ORDENES-COMPRA: Lista órdenes de compra con paginación en servidor.
         
         **Query Parameters:**
+        - `page` (int, default: 1) - Número de página
+        - `pageSize` o `page_size` (int, default: 50, máx. 100) - Registros por página
         - `estado` (string, opcional) - Filtrar por estado (PENDIENTE, ENVIADA, ERROR)
+        - `referencia_despacho`, `numero_oc_sap`, `search` - Filtros opcionales en servidor
         
         **Ejemplo:**
         ```
-        GET /ordenes-compra?estado=PENDIENTE
+        GET /ordenes-compra?estado=PENDIENTE&page=1&pageSize=20
         ```
         
-        **Respuesta:**
+        **Respuesta (compatible con frontend / pedidos confirmados):**
         ```json
         {
           "status": "success",
           "data": [...],
+          "total": 150,
+          "page": 1,
+          "pageSize": 20,
+          "totalPages": 8,
           "metadata": {
-            "count": 10,
+            "count": 20,
             "estado_filter": "PENDIENTE"
           }
         }
         ```
-        
-        Returns:
-            JSON con órdenes de compra y metadata
         """
         source = get_source_from_headers(request)
-        
-        # Intentar obtener del caché primero
-        cached_result = get_cached_ordenes_compra(estado=estado)
+        size = pageSize if pageSize is not None else page_size
+        offset = (page - 1) * size
+        estado_norm = estado.strip().upper() if estado else None
+
+        cache_key = _ordenes_compra_cache_key(
+            estado_norm, page, size, referencia_despacho, numero_oc_sap, search
+        )
+
+        cached_result = get_cached_ordenes_compra(cache_key)
         if cached_result:
             logger.debug("📦 Retornando datos desde caché")
             return JSONResponse(
@@ -375,7 +404,8 @@ def register_ordenes_compra_endpoints(app: FastAPI):
                 headers={
                     "X-Source": source,
                     "X-Endpoint": "ORDENES-COMPRA",
-                    "X-Count": str(cached_result.get("metadata", {}).get("count", 0)),
+                    "X-Count": str(cached_result.get("total", 0)),
+                    "X-Page": str(cached_result.get("page", page)),
                     "X-Cache": "HIT"
                 }
             )
@@ -383,21 +413,31 @@ def register_ordenes_compra_endpoints(app: FastAPI):
         logger.info("=" * 70)
         logger.info(f"📋 GET /ordenes-compra: Consulta ejecutada a las {ahora_naive().isoformat()}")
         logger.info(f"Fuente: {source}")
-        logger.info(f"Filtro estado: {estado or 'Todos'}")
+        logger.info(f"Filtro estado: {estado_norm or 'Todos'} | page={page} pageSize={size}")
         logger.info("=" * 70)
         
         try:
-            # Función helper que se ejecutará en thread pool para no bloquear el event loop
-            def _query_ordenes_compra(estado_param: Optional[str]):
-                """Función helper que ejecuta la consulta en thread separado"""
+            def _query_ordenes_compra(
+                estado_param: Optional[str],
+                limit_param: int,
+                offset_param: int,
+                referencia_param: Optional[str],
+                numero_sap_param: Optional[str],
+                search_param: Optional[str],
+            ):
+                """Ejecuta listado paginado y enriquecimiento ST/ITR solo para la página actual."""
                 conn = get_db_connection()
                 try:
                     oc_repo = OrdenCompraRepository(conn)
-                    if estado_param:
-                        oc_list = oc_repo.get_by_estado(estado_param)
-                    else:
-                        oc_list = oc_repo.get_all()
-                    # Preferir doc_num de Solicitud de Transferencia (ITR, ej. 70214643) para la UI
+                    resultado = oc_repo.list_paginated(
+                        estado=estado_param,
+                        referencia_despacho=referencia_param,
+                        numero_oc_sap=numero_sap_param,
+                        search=search_param,
+                        limit=limit_param,
+                        offset=offset_param,
+                    )
+                    oc_list = resultado["data"]
                     if oc_list:
                         st_repo = SolicitudTransferenciaRepository(conn)
                         oc_ids_list = [o["oc_id"] for o in oc_list]
@@ -412,27 +452,48 @@ def register_ordenes_compra_endpoints(app: FastAPI):
                                 st_resumen=st_resumen_by_oc.get(o["oc_id"]),
                                 st_pendientes_reintento=st_pendientes_by_oc.get(o["oc_id"], 0),
                             )
-                    return oc_list
+                    return resultado
                 finally:
                     conn.close()
             
-            # Ejecutar consulta en thread pool para no bloquear el event loop
-            logger.debug("🔄 Ejecutando consulta de BD en thread pool (no bloquea otras peticiones)...")
-            oc_list = await asyncio.to_thread(_query_ordenes_compra, estado)
-            
+            logger.debug("🔄 Ejecutando consulta paginada en thread pool...")
+            resultado = await asyncio.to_thread(
+                _query_ordenes_compra,
+                estado_norm,
+                size,
+                offset,
+                referencia_despacho,
+                numero_oc_sap,
+                search,
+            )
+
+            oc_list = resultado["data"]
+            total = int(resultado["total"])
+            total_pages = (total + size - 1) // size if size else 0
+
             response_data = {
                 "status": "success",
                 "data": oc_list,
+                "total": total,
+                "page": page,
+                "pageSize": size,
+                "totalPages": total_pages,
                 "metadata": {
                     "count": len(oc_list),
-                    "estado_filter": estado or "PENDIENTE"
-                }
+                    "estado_filter": estado_norm,
+                    "total": total,
+                    "page": page,
+                    "pageSize": size,
+                    "totalPages": total_pages,
+                    "hasMore": page < total_pages,
+                },
             }
             
-            # Guardar en caché
-            set_cached_ordenes_compra(response_data, estado=estado)
+            set_cached_ordenes_compra(response_data, cache_key)
             
-            logger.info(f"✅ GET /ordenes-compra: {len(oc_list)} órdenes encontradas")
+            logger.info(
+                f"✅ GET /ordenes-compra: {len(oc_list)} órdenes (total={total}, página {page}/{total_pages})"
+            )
             
             return JSONResponse(
                 status_code=200,
@@ -440,7 +501,9 @@ def register_ordenes_compra_endpoints(app: FastAPI):
                 headers={
                     "X-Source": source,
                     "X-Endpoint": "ORDENES-COMPRA",
-                    "X-Count": str(len(oc_list)),
+                    "X-Count": str(total),
+                    "X-Page": str(page),
+                    "X-TotalPages": str(total_pages),
                     "X-Cache": "MISS"
                 }
             )

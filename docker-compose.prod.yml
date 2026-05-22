@@ -5,6 +5,7 @@
 #
 # Uso (tras parar systemd y redis-server nativo; ver docs/DEPLOY_DOCKER_PRODUCCION.md):
 #   docker compose -f docker-compose.yml -f docker-compose.prod.yml --profile app up -d --build
+#   ./deploy-prod.sh
 #   ./scripts/docker-app-up-prod.sh -Build
 
 x-app-prod: &app-prod

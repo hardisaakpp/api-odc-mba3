@@ -2,7 +2,7 @@
 
 Guía para aplicar cambios del backend en el servidor de producción (Linux).
 
-> **Despliegue Docker (recomendado en srv-mabuiosapi):** API + Celery + Redis en contenedores; MinIO en **192.168.2.211** (`srv-mabuiosbdo`). Ver **[DEPLOY_DOCKER_PRODUCCION.md](DEPLOY_DOCKER_PRODUCCION.md)**.
+> **Despliegue Docker (recomendado en srv-mabuiosapi):** un comando `./deploy-prod.sh` desde `/opt/odc-sap` (pull + build + health). Ver **[DEPLOY_DOCKER_PRODUCCION.md](DEPLOY_DOCKER_PRODUCCION.md)** y **[deploy/README.md](../deploy/README.md)**.
 >
 > Esta página describe el flujo **systemd + venv** (legado), útil si aún no migraste o para rollback.
 

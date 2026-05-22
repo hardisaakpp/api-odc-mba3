@@ -10,7 +10,7 @@ CHANGELOG:
 import logging
 import pyodbc
 from typing import Dict, Any, List, Optional, TYPE_CHECKING
-from datetime import date, datetime
+from datetime import date
 
 from src.utils.timezone import ahora_naive
 
@@ -19,7 +19,6 @@ from .pedido_utils import PedidoUtils, clamp_pedido_mensaje
 from src.database.pedido_estados import (
     ESTADO_BORRADOR,
     ESTADO_REDISTRIBUCION,
-    ESTADO_CONFIRMADO_PROVEEDOR,
     ESTADO_PEDIDO_CONFIRMADO,
     ESTADO_CONFIRMADO_ENVIADO,
     ESTADO_DESPACHAR_Y_FACTURAR,
@@ -1019,6 +1018,7 @@ class PedidoCabeceraRepository:
         offset: Optional[int] = None,
         excluir_borrador: bool = False,
         solo_redistribucion: bool = False,
+        solo_pendientes_accion: bool = False,
     ) -> Dict[str, Any]:
         """
         Obtiene pedidos con filtros y paginación.
@@ -1029,6 +1029,7 @@ class PedidoCabeceraRepository:
             excluir_borrador: si True, excluye pedidos en estado BORRADOR (estado_id=1)
             solo_redistribucion: si True, solo incluye pedidos aptos para redistribución
                 (estado_id >= 4 "CONFIRMADO POR EL RAYO" y excluye CANCELADO (19) y CANCELADO POR EL RAYO (20))
+            solo_pendientes_accion: si True, solo estados que requieren acción del proveedor
         """
         cursor = self.conn.cursor()
         try:
@@ -1088,6 +1089,20 @@ class PedidoCabeceraRepository:
             if creado_por:
                 where_conditions.append("p.creado_por = ?")
                 params.append(creado_por)
+
+            if solo_pendientes_accion and (tiene_estado_id or tiene_estado):
+                from src.database.pedido_estados import (
+                    ESTADOS_REQUIERE_ACCION_IDS,
+                    ESTADOS_REQUIERE_ACCION_NOMBRES,
+                )
+                if tiene_estado_id:
+                    placeholders = ",".join("?" * len(ESTADOS_REQUIERE_ACCION_IDS))
+                    where_conditions.append(f"p.estado_id IN ({placeholders})")
+                    params.extend(sorted(ESTADOS_REQUIERE_ACCION_IDS))
+                else:
+                    legacy_placeholders = ",".join("?" * len(ESTADOS_REQUIERE_ACCION_NOMBRES))
+                    where_conditions.append(f"p.estado IN ({legacy_placeholders})")
+                    params.extend(ESTADOS_REQUIERE_ACCION_NOMBRES)
             
             where_clause = " AND ".join(where_conditions) if where_conditions else "1=1"
             
@@ -1199,7 +1214,12 @@ class PedidoCabeceraRepository:
         self,
         limit: Optional[int] = None,
         offset: Optional[int] = None,
-        solo_redistribucion_confirmada: bool = False
+        solo_redistribucion_confirmada: bool = False,
+        fecha_desde: Optional[str] = None,
+        fecha_hasta: Optional[str] = None,
+        proveedor_nombre: Optional[str] = None,
+        numero_pedido: Optional[str] = None,
+        creado_por: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Obtiene pedidos para la pantalla Revisar Redistribución.
@@ -1285,6 +1305,44 @@ class PedidoCabeceraRepository:
                     p.creado_por, p.creado_en, p.estado
                 """
                 data_query = f"""
+                    SELECT {select_fields}
+                    FROM pedido p
+                    WHERE {where_clause}
+                    ORDER BY p.creado_en DESC
+                """
+
+            extra_conditions: List[str] = []
+            if fecha_desde:
+                extra_conditions.append("CAST(p.fecha_pedido AS DATE) >= CAST(? AS DATE)")
+                params.append(fecha_desde)
+            if fecha_hasta:
+                extra_conditions.append("CAST(p.fecha_pedido AS DATE) <= CAST(? AS DATE)")
+                params.append(fecha_hasta)
+            if proveedor_nombre:
+                extra_conditions.append("p.proveedor_nombre LIKE ?")
+                params.append(f"%{proveedor_nombre}%")
+            if numero_pedido:
+                extra_conditions.append("p.numero_pedido LIKE ?")
+                params.append(f"%{numero_pedido}%")
+            if creado_por:
+                extra_conditions.append("p.creado_por = ?")
+                params.append(creado_por)
+            if extra_conditions:
+                where_clause = f"({where_clause}) AND " + " AND ".join(extra_conditions)
+                count_query = f"SELECT COUNT(*) FROM pedido p WHERE {where_clause}"
+                cursor.execute(count_query, params)
+                result = cursor.fetchone()
+                total = result[0] if result else 0
+                if tiene_estado_id:
+                    data_query = f"""
+                    SELECT {select_fields}
+                    FROM pedido p
+                    LEFT JOIN pedido_estado pe ON pe.id = p.estado_id
+                    WHERE {where_clause}
+                    ORDER BY p.creado_en DESC
+                """
+                else:
+                    data_query = f"""
                     SELECT {select_fields}
                     FROM pedido p
                     WHERE {where_clause}

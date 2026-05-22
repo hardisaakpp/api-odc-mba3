@@ -18,6 +18,11 @@ debug/
 # Directorio de logs de la aplicación
 logs/
 
+# Despliegue en servidor (secretos y logs de deploy)
+deploy/env/active.env
+deploy/logs/*.log
+!deploy/logs/.gitkeep
+
 # Ruff
 .ruff_cache/
 

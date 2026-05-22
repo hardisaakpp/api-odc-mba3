@@ -8,7 +8,6 @@ CHANGELOG:
 import logging
 import pyodbc
 from typing import Optional, Dict, Any, List, TYPE_CHECKING
-from datetime import datetime
 
 from src.utils.timezone import ahora_naive
 
@@ -18,6 +17,36 @@ if TYPE_CHECKING:
     from src.utils.audit_context import AuditContext
 
 logger = logging.getLogger(__name__)
+
+_OC_CABECERA_SELECT = """
+    oc_id, despacho_id, pedido_id, proveedor, fecha_generacion,
+    estado, numero_oc_sap, doc_entry, referencia_despacho, codigo_bodega, created_at,
+    respuesta_sap, fecha_procesado, error_message, error_code, error_source, updated_at
+"""
+
+
+def _map_oc_cabecera_row(row: tuple) -> Dict[str, Any]:
+    """Mapea una fila de orden_compra_cabecera al dict usado por la API."""
+    return {
+        "oc_id": str(row[0]),
+        "despacho_id": str(row[1]) if row[1] else None,
+        "pedido_id": str(row[2]) if row[2] else None,
+        "proveedor": row[3],
+        "fecha_generacion": serialize_date(row[4]),
+        "estado": row[5],
+        "numero_oc_sap": row[6],
+        "doc_num": row[6],
+        "doc_entry": row[7],
+        "referencia_despacho": row[8],
+        "codigo_bodega": row[9],
+        "created_at": serialize_date(row[10]),
+        "respuesta_sap": row[11],
+        "fecha_procesado": serialize_date(row[12]),
+        "error_message": row[13],
+        "error_code": row[14],
+        "error_source": row[15],
+        "updated_at": serialize_date(row[16]),
+    }
 
 
 class OrdenCompraRepository:
@@ -436,6 +465,85 @@ class OrdenCompraRepository:
         finally:
             cursor.close()
     
+    def list_paginated(
+        self,
+        *,
+        estado: Optional[str] = None,
+        referencia_despacho: Optional[str] = None,
+        numero_oc_sap: Optional[str] = None,
+        search: Optional[str] = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> Dict[str, Any]:
+        """
+        Lista órdenes de compra con filtros y paginación en servidor.
+
+        Args:
+            estado: Filtrar por estado (PENDIENTE, ENVIADA, ERROR, etc.)
+            referencia_despacho: Búsqueda parcial por referencia de despacho
+            numero_oc_sap: Búsqueda parcial por número de OC en SAP
+            search: Búsqueda parcial en referencia_despacho o numero_oc_sap
+            limit: Máximo de filas a devolver
+            offset: Desplazamiento para paginación
+
+        Returns:
+            Dict con keys ``data`` (lista) y ``total`` (conteo sin paginar)
+        """
+        cursor = self.conn.cursor()
+        try:
+            where_conditions: List[str] = []
+            params: List[Any] = []
+
+            if estado:
+                where_conditions.append("estado = ?")
+                params.append(estado.strip().upper())
+
+            if referencia_despacho:
+                where_conditions.append("referencia_despacho LIKE ?")
+                params.append(f"%{referencia_despacho.strip()}%")
+
+            if numero_oc_sap:
+                where_conditions.append(
+                    "(CAST(numero_oc_sap AS NVARCHAR(50)) LIKE ? OR CAST(doc_entry AS NVARCHAR(50)) LIKE ?)"
+                )
+                term = f"%{numero_oc_sap.strip()}%"
+                params.extend([term, term])
+
+            if search:
+                term = f"%{search.strip()}%"
+                where_conditions.append(
+                    "(referencia_despacho LIKE ? OR CAST(numero_oc_sap AS NVARCHAR(50)) LIKE ? OR CAST(doc_entry AS NVARCHAR(50)) LIKE ?)"
+                )
+                params.extend([term, term, term])
+
+            where_clause = " AND ".join(where_conditions) if where_conditions else "1=1"
+
+            count_query = f"SELECT COUNT(*) FROM orden_compra_cabecera WHERE {where_clause}"
+            cursor.execute(count_query, params)
+            count_row = cursor.fetchone()
+            total = int(count_row[0]) if count_row else 0
+
+            data_query = f"""
+                SELECT {_OC_CABECERA_SELECT.strip()}
+                FROM orden_compra_cabecera
+                WHERE {where_clause}
+                ORDER BY created_at DESC
+                OFFSET ? ROWS FETCH NEXT ? ROWS ONLY
+            """
+            data_params = list(params) + [offset, limit]
+            cursor.execute(data_query, data_params)
+            oc_list = [_map_oc_cabecera_row(row) for row in cursor.fetchall()]
+
+            return {
+                "data": oc_list,
+                "total": total,
+                "limit": limit,
+                "offset": offset,
+                "has_more": (offset + len(oc_list)) < total,
+            }
+        finally:
+            cursor.close()
+
     def get_by_estado(self, estado: str) -> List[Dict[str, Any]]:
         """
         Obtiene todas las órdenes de compra con un estado específico.
@@ -461,32 +569,7 @@ class OrdenCompraRepository:
                 """,
                 (estado,)
             )
-            results = cursor.fetchall()
-            
-            oc_list = []
-            for row in results:
-                oc_list.append({
-                    "oc_id": str(row[0]),
-                    "despacho_id": str(row[1]) if row[1] else None,
-                    "pedido_id": str(row[2]) if row[2] else None,
-                    "proveedor": row[3],
-                    "fecha_generacion": serialize_date(row[4]),
-                    "estado": row[5],
-                    "numero_oc_sap": row[6],
-                    "doc_num": row[6],  # Número de documento SAP (para columna Docnum en frontend)
-                    "doc_entry": row[7],
-                    "referencia_despacho": row[8],
-                    "codigo_bodega": row[9],
-                    "created_at": serialize_date(row[10]),
-                    "respuesta_sap": row[11],
-                    "fecha_procesado": serialize_date(row[12]),
-                    "error_message": row[13],
-                    "error_code": row[14],
-                    "error_source": row[15],
-                    "updated_at": serialize_date(row[16]),
-                })
-            
-            return oc_list
+            return [_map_oc_cabecera_row(row) for row in cursor.fetchall()]
         finally:
             cursor.close()
     
@@ -510,32 +593,7 @@ class OrdenCompraRepository:
                 ORDER BY created_at DESC
                 """
             )
-            results = cursor.fetchall()
-            
-            oc_list = []
-            for row in results:
-                oc_list.append({
-                    "oc_id": str(row[0]),
-                    "despacho_id": str(row[1]) if row[1] else None,
-                    "pedido_id": str(row[2]) if row[2] else None,
-                    "proveedor": row[3],
-                    "fecha_generacion": serialize_date(row[4]),
-                    "estado": row[5],
-                    "numero_oc_sap": row[6],
-                    "doc_num": row[6],  # Número de documento SAP (para columna Docnum en frontend)
-                    "doc_entry": row[7],
-                    "referencia_despacho": row[8],
-                    "codigo_bodega": row[9],
-                    "created_at": serialize_date(row[10]),
-                    "respuesta_sap": row[11],
-                    "fecha_procesado": serialize_date(row[12]),
-                    "error_message": row[13],
-                    "error_code": row[14],
-                    "error_source": row[15],
-                    "updated_at": serialize_date(row[16]),
-                })
-            
-            return oc_list
+            return [_map_oc_cabecera_row(row) for row in cursor.fetchall()]
         finally:
             cursor.close()
     

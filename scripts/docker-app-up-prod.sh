@@ -7,6 +7,7 @@
 #   - systemd API/Celery y redis-server nativo detenidos (puertos 8000 y 6379 libres)
 #
 # Uso:
+#   ./deploy-prod.sh                    # recomendado: pull + build + health + log
 #   ./scripts/docker-app-up-prod.sh
 #   ./scripts/docker-app-up-prod.sh --build
 

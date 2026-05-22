@@ -136,6 +136,7 @@ class PedidoRepository:
         offset: Optional[int] = None,
         excluir_borrador: bool = False,
         solo_redistribucion: bool = False,
+        solo_pendientes_accion: bool = False,
     ) -> Dict[str, Any]:
         """
         Obtiene pedidos con filtros y paginación.
@@ -148,22 +149,34 @@ class PedidoRepository:
         """
         return self.cabecera_repo.get_pedidos_con_filtros(
             estado, fecha_desde, fecha_hasta, proveedor_nombre,
-            numero_pedido, creado_por, limit, offset, excluir_borrador, solo_redistribucion
+            numero_pedido, creado_por, limit, offset, excluir_borrador, solo_redistribucion,
+            solo_pendientes_accion,
         )
 
     def get_pedidos_confirmados(
         self,
         limit: Optional[int] = None,
         offset: Optional[int] = None,
-        solo_redistribucion_confirmada: bool = False
+        solo_redistribucion_confirmada: bool = False,
+        fecha_desde: Optional[str] = None,
+        fecha_hasta: Optional[str] = None,
+        proveedor_nombre: Optional[str] = None,
+        numero_pedido: Optional[str] = None,
+        creado_por: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Obtiene pedidos en estado confirmado, ordenados por creado_en DESC.
         DELEGADO a PedidoCabeceraRepository.
         """
         return self.cabecera_repo.get_pedidos_confirmados(
-            limit=limit, offset=offset,
-            solo_redistribucion_confirmada=solo_redistribucion_confirmada
+            limit=limit,
+            offset=offset,
+            solo_redistribucion_confirmada=solo_redistribucion_confirmada,
+            fecha_desde=fecha_desde,
+            fecha_hasta=fecha_hasta,
+            proveedor_nombre=proveedor_nombre,
+            numero_pedido=numero_pedido,
+            creado_por=creado_por,
         )
 
     def existe_numero_pedido(self, numero_pedido: str) -> bool:

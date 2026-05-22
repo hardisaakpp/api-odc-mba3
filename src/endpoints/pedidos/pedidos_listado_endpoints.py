@@ -29,11 +29,18 @@ def register_pedidos_listado_endpoints(app: FastAPI):
         proveedor_nombre: Optional[str] = Query(None, description="Buscar por nombre de proveedor (parcial)"),
         numero_pedido: Optional[str] = Query(None, description="Buscar por número de pedido (parcial)"),
         creado_por: Optional[str] = Query(None, description="Filtrar por usuario que creó el pedido"),
-        limit: Optional[int] = Query(50, description="Límite de registros por página"),
-        offset: Optional[int] = Query(0, description="Offset para paginación"),
+        limit: Optional[int] = Query(None, description="Límite de registros por página"),
+        offset: Optional[int] = Query(None, description="Offset para paginación"),
+        page: Optional[int] = Query(1, ge=1, description="Número de página (1-based, alternativa a offset)"),
+        page_size: Optional[int] = Query(10, ge=1, le=100, description="Tamaño de página (snake_case)"),
+        pageSize: Optional[int] = Query(None, ge=1, le=100, description="Tamaño de página (camelCase)"),
         solo_redistribucion: Optional[str] = Query(
             None,
             description="Si 'true', solo pedidos aptos para redistribución (estado >= CONFIRMADO POR EL RAYO, excluye CANCELADO y CANCELADO POR EL RAYO)"
+        ),
+        solo_pendientes_accion: Optional[str] = Query(
+            None,
+            description="Si 'true', solo pedidos que requieren acción (pendiente confirmación / respuesta proveedor / confirmado proveedor)"
         ),
         user: Dict = Depends(verify_jwt_token),
         _: None = Depends(require_any_permission(['odcsap.view', 'mabel.view']))
@@ -98,6 +105,16 @@ def register_pedidos_listado_endpoints(app: FastAPI):
                 solo_redistribucion is not None
                 and str(solo_redistribucion).lower() in ("true", "1")
             )
+            filtrar_pendientes = (
+                solo_pendientes_accion is not None
+                and str(solo_pendientes_accion).lower() in ("true", "1")
+            )
+            size = pageSize if pageSize is not None else page_size
+            if limit is not None:
+                use_limit, use_offset = limit, offset or 0
+            else:
+                use_limit = size if size is not None else 10
+                use_offset = ((page or 1) - 1) * use_limit
             
             with get_db_connection_context() as conn:
                 repo = PedidoRepository(conn)
@@ -108,10 +125,11 @@ def register_pedidos_listado_endpoints(app: FastAPI):
                     proveedor_nombre=proveedor_nombre,
                     numero_pedido=numero_pedido,
                     creado_por=creado_por,
-                    limit=limit,
-                    offset=offset,
+                    limit=use_limit,
+                    offset=use_offset,
                     excluir_borrador=True,
                     solo_redistribucion=filtrar_redistribucion,
+                    solo_pendientes_accion=filtrar_pendientes,
                 )
                 
                 return JSONResponse(
@@ -138,10 +156,15 @@ def register_pedidos_listado_endpoints(app: FastAPI):
     @app.get("/api/pedidos/confirmados", tags=["Pedidos"])
     async def listar_pedidos_confirmados(
         page: Optional[int] = Query(1, ge=1, description="Número de página (1-based)"),
-        page_size: Optional[int] = Query(50, ge=1, le=100, description="Tamaño de página (snake_case)"),
+        page_size: Optional[int] = Query(10, ge=1, le=100, description="Tamaño de página (snake_case)"),
         pageSize: Optional[int] = Query(None, ge=1, le=100, description="Tamaño de página (camelCase, alias de page_size)"),
         limit: Optional[int] = Query(None, description="Límite de registros (alternativa a page_size)"),
         offset: Optional[int] = Query(None, description="Offset (alternativa a page)"),
+        fecha_desde: Optional[str] = Query(None, description="Filtrar desde fecha (YYYY-MM-DD)"),
+        fecha_hasta: Optional[str] = Query(None, description="Filtrar hasta fecha (YYYY-MM-DD)"),
+        proveedor_nombre: Optional[str] = Query(None, description="Búsqueda parcial por proveedor"),
+        numero_pedido: Optional[str] = Query(None, description="Búsqueda parcial por número de pedido"),
+        creado_por: Optional[str] = Query(None, description="Filtrar por usuario creador"),
         redistribucion_confirmada: Optional[str] = Query(
             None,
             description="Si 'true', solo pedidos con redistribución ya confirmada (estado CONFIRMADO REDISTRIBUCION)"
@@ -173,7 +196,7 @@ def register_pedidos_listado_endpoints(app: FastAPI):
             if limit is not None:
                 use_limit, use_offset = limit, offset or 0
             else:
-                use_size = size if size is not None else 50
+                use_size = size if size is not None else 10
                 use_limit = use_size
                 use_offset = ((page or 1) - 1) * use_size
 
@@ -187,7 +210,12 @@ def register_pedidos_listado_endpoints(app: FastAPI):
                 resultado = repo.get_pedidos_confirmados(
                     limit=use_limit,
                     offset=use_offset,
-                    solo_redistribucion_confirmada=solo_redistribucion
+                    solo_redistribucion_confirmada=solo_redistribucion,
+                    fecha_desde=fecha_desde,
+                    fecha_hasta=fecha_hasta,
+                    proveedor_nombre=proveedor_nombre,
+                    numero_pedido=numero_pedido,
+                    creado_por=creado_por,
                 )
 
             # Formato esperado por frontend: cada item con cabecera.*

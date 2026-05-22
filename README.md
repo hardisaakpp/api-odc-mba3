@@ -65,8 +65,8 @@ SQL Server, SAP, MBA3 y el Core siguen **fuera** de Docker; configúralos en `.e
 .\scripts\docker-app-up.ps1 -Build
 .\scripts\docker-verify.ps1
 
-# Producción Linux (srv-mabuiosapi, MinIO en 192.168.2.211): ver docs/DEPLOY_DOCKER_PRODUCCION.md
-# ./scripts/docker-app-up-prod.sh --build
+# Producción Linux (srv-mabuiosapi): desde /opt/odc-sap
+# ./deploy-prod.sh   — ver docs/DEPLOY_DOCKER_PRODUCCION.md y deploy/README.md
 ```
 
 ```powershell

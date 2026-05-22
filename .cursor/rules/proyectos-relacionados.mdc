@@ -40,7 +40,7 @@ ITR / ST (solicitudes de transferencia post-ODC):
 
 ## Producción (srv-mabuiosapi / 192.168.2.153)
 
-- **Docker:** `docker-compose.prod.yml` + `./scripts/docker-app-up-prod.sh` — ver `docs/DEPLOY_DOCKER_PRODUCCION.md`.
+- **Docker:** `./deploy-prod.sh` (pull + compose prod + health) — ver `docs/DEPLOY_DOCKER_PRODUCCION.md` y `deploy/README.md`.
 - **MinIO:** solo en **srv-mabuiosbdo** (`192.168.2.211:9100`, contenedor `minio-storage`). No levantar MinIO en el host API.
 - **Frontend:** `npm run dev` en scnexus-front; el navegador usa `localhost:8000`, no `mba3-api`.
 - **Alternativa host:** `.\start-all-dev.ps1` o `docker compose up -d` + venv (no mezclar API host y contenedor en puerto 8000).

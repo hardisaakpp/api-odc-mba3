@@ -42,13 +42,21 @@ docker ps   # contenedor minio-storage, puertos 9100->9000, 9101->9001
 | `docker-compose.yml` | Base: Redis, servicios `app`, MinIO opcional (perfil `bundled-minio`, solo dev) |
 | `docker-compose.prod.yml` | Producción: monta `/opt/odc-sap/.env`, `ENVIRONMENT=production`, MinIO **192.168.2.211:9100**, sin MinIO local |
 
-Comando de arranque en producción:
+Comando de arranque / actualización en producción (recomendado):
 
 ```bash
 cd /opt/odc-sap
+chmod +x deploy-prod.sh deploy/scripts/mba3_api_prod.sh
+./deploy-prod.sh
+```
+
+Eso ejecuta `git pull` (rama actual), `docker compose` prod con `--build`, health check y log en `deploy/logs/deploy-prod.log`. Detalle: [deploy/README.md](../deploy/README.md).
+
+Equivalente manual (sin pull ni log):
+
+```bash
 docker compose -f docker-compose.yml -f docker-compose.prod.yml --profile app up -d --build
 # o:
-chmod +x scripts/docker-app-up-prod.sh
 ./scripts/docker-app-up-prod.sh --build
 ```
 
@@ -114,8 +122,7 @@ ss -tlnp | grep -E '6379|8000'   # sin listeners
 
 ```bash
 cd /opt/odc-sap
-git pull origin main
-./scripts/docker-app-up-prod.sh --build
+./deploy-prod.sh
 ```
 
 ### 5. Verificación
@@ -134,11 +141,12 @@ Desde una máquina con acceso a la red interna, prueba un flujo con plantilla/ar
 
 ```bash
 cd /opt/odc-sap
-git pull origin main
-./scripts/docker-app-up-prod.sh --build
+./deploy-prod.sh
 ```
 
-No hace falta `pip install` en el host si todo corre en imagen Docker (el `Dockerfile` instala `requirements.txt` en build).
+No hace falta `pip install` ni `source venv` en el host: el `Dockerfile` instala `requirements.txt` en build.
+
+Primera vez sin `.env`: el script copia `deploy/env/prod.env.example` → `.env` y pide editarlo antes de continuar.
 
 ---
 

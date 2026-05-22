@@ -25,6 +25,17 @@ ESTADO_CANCELADO_POR_EL_RAYO = 20  # Pedido cancelado por EL RAYO desde Gestiona
 # Fallo al enviar ODC a SAP (p. ej. prevalidación / conexión); se puede reintentar
 ESTADO_ERROR_ENVIO_SAP_REINTENTO = 21
 
+# Filtro rápido "solo pendientes" en listados de pedidos (El Rayo / Mabel)
+ESTADOS_REQUIERE_ACCION_IDS = frozenset({
+    ESTADO_RESPUESTA_PROVEEDOR_CARGADA,
+    ESTADO_CONFIRMADO_PROVEEDOR,
+})
+ESTADOS_REQUIERE_ACCION_NOMBRES = (
+    "PENDIENTE_CONFIRMACION_PROVEEDOR",
+    "RESPUESTA_PROVEEDOR_CARGADA",
+    "CONFIRMADO_PROVEEDOR",
+)
+
 # Estado inicial al subir Excel o crear pedido (siempre id = 1)
 ESTADO_INICIAL = ESTADO_BORRADOR
 
