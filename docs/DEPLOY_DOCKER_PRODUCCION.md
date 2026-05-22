@@ -45,9 +45,8 @@ docker ps   # contenedor minio-storage, puertos 9100->9000, 9101->9001
 Comando de arranque / actualización en producción (recomendado):
 
 ```bash
-cd /opt/odc-sap
-chmod +x deploy-prod.sh deploy/scripts/mba3_api_prod.sh
-./deploy-prod.sh
+/opt/odc-sap/deploy-prod.sh
+# o: bash ~/deploys/mba3_api_prod.sh  (ver deploy/scripts/mba3_api_prod.launcher.sh)
 ```
 
 Eso ejecuta `git pull` (rama actual), `docker compose` prod con `--build`, health check y log en `deploy/logs/deploy-prod.log`. Detalle: [deploy/README.md](../deploy/README.md).
@@ -140,11 +139,10 @@ Desde una máquina con acceso a la red interna, prueba un flujo con plantilla/ar
 ## Actualización rutinaria (solo código)
 
 ```bash
-cd /opt/odc-sap
-./deploy-prod.sh
+/opt/odc-sap/deploy-prod.sh
 ```
 
-No hace falta `pip install` ni `source venv` en el host: el `Dockerfile` instala `requirements.txt` en build.
+El script reintenta `/health` hasta 90 s tras levantar contenedores. No hace falta `pip install` ni `source venv` en el host: el `Dockerfile` instala `requirements.txt` en build.
 
 Primera vez sin `.env`: el script copia `deploy/env/prod.env.example` → `.env` y pide editarlo antes de continuar.
 

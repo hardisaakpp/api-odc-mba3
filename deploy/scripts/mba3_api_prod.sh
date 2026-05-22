@@ -25,6 +25,8 @@ ACTIVE_ENV="${ACTIVE_ENV:-$PROJECT_DIR/deploy/env/active.env}"
 EXAMPLE_ENV="${EXAMPLE_ENV:-$PROJECT_DIR/deploy/env/prod.env.example}"
 BRANCH="${DEPLOY_BRANCH:-}"
 API_PORT="${API_PORT:-8000}"
+HEALTH_WAIT_SECONDS="${HEALTH_WAIT_SECONDS:-90}"
+HEALTH_RETRY_INTERVAL="${HEALTH_RETRY_INTERVAL:-3}"
 DO_PULL=1
 DO_BUILD=1
 
@@ -65,6 +67,24 @@ resolve_env_file() {
   exit 1
 }
 
+wait_for_health() {
+  local url="http://127.0.0.1:${API_PORT}/health"
+  local max="$HEALTH_WAIT_SECONDS"
+  local interval="$HEALTH_RETRY_INTERVAL"
+  local elapsed=0
+
+  while [[ "$elapsed" -lt "$max" ]]; do
+    if curl -sfS "$url" 2>/dev/null; then
+      echo ""
+      return 0
+    fi
+    sleep "$interval"
+    elapsed=$((elapsed + interval))
+    echo "   esperando API (${elapsed}s / ${max}s)..." >&2
+  done
+  return 1
+}
+
 run_deploy() {
   local env_file branch build_args
   env_file="$(resolve_env_file)"
@@ -96,12 +116,11 @@ run_deploy() {
   docker ps --filter name=mba3-api --filter name=mba3-celery --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'
 
   echo ""
-  echo ">> Health http://127.0.0.1:${API_PORT}/health"
-  if curl -sfS "http://127.0.0.1:${API_PORT}/health"; then
-    echo ""
+  echo ">> Health http://127.0.0.1:${API_PORT}/health (reintentos hasta ${HEALTH_WAIT_SECONDS}s)"
+  if wait_for_health; then
     echo "Deploy OK."
   else
-    echo "WARN: health check falló. Revisa: docker logs --tail 80 mba3-api" >&2
+    echo "ERROR: health check falló tras ${HEALTH_WAIT_SECONDS}s. Revisa: docker logs --tail 80 mba3-api" >&2
     exit 1
   fi
 }

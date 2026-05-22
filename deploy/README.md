@@ -1,6 +1,12 @@
 # Despliegue en servidor (runbook)
 
-Un solo comando desde la raíz del clone:
+Un solo comando (desde `~` o desde el repo):
+
+```bash
+/opt/odc-sap/deploy-prod.sh
+```
+
+O desde la raíz del clone:
 
 ```bash
 cd /opt/odc-sap
@@ -22,13 +28,18 @@ Hace: comprobar `.env` → `git pull` (rama actual) → `docker compose` prod co
 3. Migrar desde systemd si aplica: [docs/DEPLOY_DOCKER_PRODUCCION.md](../docs/DEPLOY_DOCKER_PRODUCCION.md).
 4. `./deploy-prod.sh`
 
-## Copia opcional a `~/deploys/`
+## Mismo patrón que el front (`~/deploys/`)
 
 ```bash
-cp deploy/scripts/mba3_api_prod.sh ~/deploys/mba3_api_prod.sh
+mkdir -p ~/deploys
+cp /opt/odc-sap/deploy/scripts/mba3_api_prod.launcher.sh ~/deploys/mba3_api_prod.sh
 chmod +x ~/deploys/mba3_api_prod.sh
-# PROJECT_DIR=/opt/odc-sap ~/deploys/mba3_api_prod.sh
+bash ~/deploys/mba3_api_prod.sh
 ```
+
+Equivalente a `nexus_frontend_prod.sh` → llama a `/opt/odc-sap/deploy-prod.sh`.
+
+**No** copies `mba3_api_prod.sh` directo a `~/deploys/` (calcula mal la ruta del repo).
 
 ## Flags
 
@@ -46,5 +57,9 @@ chmod +x ~/deploys/mba3_api_prod.sh
 | `LOG_FILE` | `deploy/logs/deploy-prod.log` |
 | `ENV_PATH` | `$PROJECT_DIR/.env` |
 | `API_PORT` | `8000` |
+| `HEALTH_WAIT_SECONDS` | `90` (reintentos tras `up`) |
+| `HEALTH_RETRY_INTERVAL` | `3` |
+
+El health check espera a que uvicorn termine de arrancar (evita falso fallo con `Connection reset`).
 
 Documentación completa: [docs/DEPLOY_DOCKER_PRODUCCION.md](../docs/DEPLOY_DOCKER_PRODUCCION.md).
