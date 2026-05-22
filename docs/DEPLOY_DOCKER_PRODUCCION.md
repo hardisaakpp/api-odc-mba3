@@ -49,7 +49,7 @@ Comando de arranque / actualización en producción (recomendado):
 # o: bash ~/deploys/mba3_api_prod.sh  (ver deploy/scripts/mba3_api_prod.launcher.sh)
 ```
 
-Eso ejecuta `git pull` (rama actual), `docker compose` prod con `--build`, health check y log en `deploy/logs/deploy-prod.log`. Detalle: [deploy/README.md](../deploy/README.md).
+Eso ejecuta `git fetch` + `reset --hard origin/<rama>` (evita bloqueos por `chmod` o edits locales en tracked), `docker compose` prod con `--build`, health check y log. Detalle: [deploy/README.md](../deploy/README.md).
 
 Equivalente manual (sin pull ni log):
 

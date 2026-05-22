@@ -85,6 +85,29 @@ wait_for_health() {
   return 1
 }
 
+# Servidor de despliegue: alinear siempre con origin (descarta chmod/edits en tracked).
+git_sync_from_origin() {
+  local branch="$1"
+  local dirty
+
+  echo ">> git fetch origin $branch"
+  git fetch origin "$branch"
+
+  dirty="$(git status --porcelain --untracked-files=no 2>/dev/null || true)"
+  if [[ -n "$dirty" ]]; then
+    echo ">> Cambios locales en archivos versionados (se descartan; p. ej. chmod en scripts):" >&2
+    printf '%s\n' "$dirty" | sed 's/^/   /' >&2
+  fi
+
+  if ! git rev-parse --verify "origin/${branch}" >/dev/null 2>&1; then
+    echo "ERROR: no existe origin/${branch} tras fetch" >&2
+    exit 1
+  fi
+
+  echo ">> git reset --hard origin/$branch"
+  git reset --hard "origin/${branch}"
+}
+
 run_deploy() {
   local env_file branch build_args
   env_file="$(resolve_env_file)"
@@ -104,8 +127,7 @@ run_deploy() {
   cd "$PROJECT_DIR"
 
   if [[ "$DO_PULL" -eq 1 ]]; then
-    echo ">> git pull origin $branch"
-    git pull origin "$branch"
+    git_sync_from_origin "$branch"
   fi
 
   echo ">> docker compose (producción) up -d ${build_args[*]}"

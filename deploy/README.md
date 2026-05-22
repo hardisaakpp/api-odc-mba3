@@ -14,7 +14,9 @@ chmod +x deploy-prod.sh deploy/scripts/mba3_api_prod.sh
 ./deploy-prod.sh
 ```
 
-Hace: comprobar `.env` → `git pull` (rama actual) → `docker compose` prod con `--build` → health check → append en `deploy/logs/deploy-prod.log`.
+Hace: comprobar `.env` → `git fetch` + `reset --hard origin/<rama>` (descarta cambios locales en archivos versionados, p. ej. `chmod` en scripts) → `docker compose` prod con `--build` → health check → log en `deploy/logs/deploy-prod.log`.
+
+**No** edites archivos del repo en el servidor; usa solo `.env` (ignorado por git). Los commits van en tu PC → `git push` → deploy.
 
 ## Primera vez
 
