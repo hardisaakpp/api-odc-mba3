@@ -25,6 +25,9 @@ COPY . .
 
 # Variables de entorno se inyectan via docker-compose (env_file / environment)
 ENV PYTHONPATH=/app
+ENV PYTHONIOENCODING=utf-8
+ENV LANG=C.UTF-8
+ENV LC_ALL=C.UTF-8
 EXPOSE 8000
 
 # Por defecto arranca la API; celery-worker usa otro CMD en docker-compose

@@ -4,8 +4,6 @@ Endpoints relacionados con integración SAP.
 
 import logging
 import uuid
-from datetime import datetime
-
 from src.utils.timezone import ahora_naive
 from typing import Optional, List
 from fastapi import FastAPI, Request, Query as FastAPIQuery, Depends, Query
@@ -184,18 +182,22 @@ def register_sap_endpoints(app: FastAPI):
                 oc_ids_list = [id.strip() for id in oc_id if id and id.strip()]
                 logger.info(f"📋 Procesando {len(oc_ids_list)} OCs por UUID")
                 
-                # Validar que las OCs existan y estén en estado PENDIENTE
+                # Validar que las OCs existan y estén en estado PENDIENTE o ERROR (reintento)
                 for oc_id_item in oc_ids_list:
                     oc_cabecera = oc_repo.get_existing_cabecera(oc_id_item)
                     if not oc_cabecera:
                         logger.warning(f"⚠️ OC {oc_id_item[:8]}... no encontrada, omitiendo")
                         continue
-                    
+
                     estado_actual = oc_cabecera.get("estado")
-                    if estado_actual != "PENDIENTE":
-                        logger.warning(f"⚠️ OC {oc_id_item[:8]}... no está en estado PENDIENTE (estado: {estado_actual}), omitiendo")
+                    if estado_actual not in {"PENDIENTE", "ERROR"}:
+                        logger.warning(f"⚠️ OC {oc_id_item[:8]}... no está en estado procesable (estado: {estado_actual}), omitiendo")
                         continue
-                    
+
+                    if estado_actual == "ERROR":
+                        logger.info(f"🔄 OC {oc_id_item[:8]}... en ERROR, reseteando a PENDIENTE para reintento")
+                        oc_repo.update_estado(oc_id_item, "PENDIENTE", respuesta_sap=None, error_message=None)
+
                     oc_ids_a_procesar.append(oc_id_item)
                 
                 if not oc_ids_a_procesar:
@@ -229,11 +231,15 @@ def register_sap_endpoints(app: FastAPI):
                     
                     oc_id_encontrado = oc_encontrada.get("oc_id")
                     estado_actual = oc_encontrada.get("estado")
-                    
-                    if estado_actual != "PENDIENTE":
-                        logger.warning(f"⚠️ OC con ref {referencia} no está en estado PENDIENTE (estado: {estado_actual})")
+
+                    if estado_actual not in {"PENDIENTE", "ERROR"}:
+                        logger.warning(f"⚠️ OC con ref {referencia} no está en estado procesable (estado: {estado_actual})")
                         continue
-                    
+
+                    if estado_actual == "ERROR":
+                        logger.info(f"🔄 OC con ref {referencia} en ERROR, reseteando a PENDIENTE para reintento")
+                        oc_repo.update_estado(oc_id_encontrado, "PENDIENTE", respuesta_sap=None, error_message=None)
+
                     oc_ids_a_procesar.append(oc_id_encontrado)
                     referencias_usadas.append(referencia)
                 
@@ -629,7 +635,7 @@ def register_sap_endpoints(app: FastAPI):
             # Preparar mensaje
             if len(oc_ids_a_procesar) == 1:
                 if enviadas > 0:
-                    mensaje = f"ODC enviada exitosamente a SAP"
+                    mensaje = "ODC enviada exitosamente a SAP"
                     if detalles[0].get("doc_num"):
                         mensaje += f" (DocNum: {detalles[0].get('doc_num')})"
                     # ⭐ Agregar info de warnings de ST/ITR al mensaje principal
