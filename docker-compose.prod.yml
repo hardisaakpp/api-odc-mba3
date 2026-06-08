@@ -22,12 +22,19 @@ x-app-prod: &app-prod
 services:
   api:
     <<: *app-prod
+    volumes:
+      - ./.env:/app/.env:ro
+      - /opt/odc-sap/logs:/app/logs
 
   celery-worker:
     <<: *app-prod
+    volumes:
+      - ./.env:/app/.env:ro
+      - /opt/odc-sap/logs:/app/logs
 
   celery-beat:
     <<: *app-prod
     volumes:
       - ./.env:/app/.env:ro
       - celerybeat_data:/var/lib/celery
+      - /opt/odc-sap/logs:/app/logs
