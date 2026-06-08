@@ -5,7 +5,6 @@ Este módulo valida tokens JWT emitidos por el Core y extrae
 información del usuario, roles y permisos.
 """
 
-import os
 import logging
 from typing import Optional, Dict, Any, List
 import jwt
@@ -127,20 +126,24 @@ def _extract_roles(data: Dict[str, Any]) -> list:
     return roles
 
 
+# Mapeo de roles del Core a permisos locales.
+# El JWT del Core solo incluye roles, no los permisos expandidos de cada rol.
+# Este mapeo debe mantenerse sincronizado con la configuración de roles en SCNexus Core.
+_ROLE_PERMISSIONS: Dict[str, List[str]] = {
+    'Compras-Mabel': ['mabel.view'],
+    'Compras-Rayo':  ['odcsap.view'],
+}
+
+
 def _extract_permissions(data: Dict[str, Any]) -> list:
     """
     Extrae permisos del token JWT.
-    
-    Busca claims relacionados con permisos.
-    
-    Args:
-        data: Datos decodificados del token
-        
-    Returns:
-        Lista de permisos encontrados
+
+    Busca claims relacionados con permisos. Si el JWT no incluye permisos
+    explícitos, los deriva desde los roles usando _ROLE_PERMISSIONS.
     """
     permissions = []
-    
+
     # Buscar en diferentes formatos posibles
     permission_keys = [
         'permission',
@@ -148,9 +151,8 @@ def _extract_permissions(data: Dict[str, Any]) -> list:
         'Permission',
         'Permissions',
         'http://schemas.microsoft.com/ws/2008/06/identity/claims/role',
-        # Buscar en todas las claves que contengan 'permission'
     ]
-    
+
     # Primero buscar en claves específicas
     for key in permission_keys:
         if key in data:
@@ -159,7 +161,7 @@ def _extract_permissions(data: Dict[str, Any]) -> list:
                 permissions.extend(value)
             elif isinstance(value, str):
                 permissions.append(value)
-    
+
     # También buscar en cualquier clave que contenga 'permission' (case insensitive)
     for key, value in data.items():
         if 'permission' in key.lower() and key not in permission_keys:
@@ -167,13 +169,18 @@ def _extract_permissions(data: Dict[str, Any]) -> list:
                 permissions.extend(value)
             elif isinstance(value, str):
                 permissions.append(value)
-    
-    # Logging de debug solo cuando NO se encuentran permisos (caso anómalo)
-    if ENVIRONMENT == "development" and not permissions:
-        logger.debug(f"🔍 [DEBUG EXTRACT] ⚠️ No se encontraron permisos en el token")
-        logger.debug(f"🔍 [DEBUG EXTRACT] Claves disponibles: {list(data.keys())}")
-    
-    return permissions
+
+    # Si el JWT no trae permisos explícitos, derivarlos desde los roles
+    if not permissions:
+        roles = _extract_roles(data)
+        for role in roles:
+            permissions.extend(_ROLE_PERMISSIONS.get(role, []))
+        if permissions:
+            logger.debug(f"🔑 Permisos derivados desde roles {roles}: {permissions}")
+        else:
+            logger.debug(f"🔍 No se encontraron permisos en el token ni roles mapeados. Claves: {list(data.keys())}")
+
+    return list(set(permissions))
 
 
 def require_permission(permission_key: str, legacy_permission: Optional[str] = None):
