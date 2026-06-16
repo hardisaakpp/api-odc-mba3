@@ -169,6 +169,9 @@ SAP_CACHE_DAYS = int(os.getenv("SAP_CACHE_DAYS", "30"))
 # Contrato validado con Postman: Login, PurchaseOrders, InventoryTransferRequests (puerto 50001).
 # No hardcodear credenciales en servicios; usar variables de entorno.
 
+# URL del SAP Middleware (reemplaza conexión directa a SAP Service Layer)
+SAP_MIDDLEWARE_URL = os.getenv("SAP_MIDDLEWARE_URL", "http://localhost:5250")
+
 # URL base (sin /Login). Prioridad: SAP_SL_BASE_URL > SAP_SERVICE_LAYER_URL
 _sl_url = os.getenv("SAP_SL_BASE_URL") or os.getenv("SAP_SERVICE_LAYER_URL", "http://localhost:50001/b1s/v1")
 SAP_SERVICE_LAYER_URL = _sl_url.rstrip("/").replace("/Login", "").replace("/login", "")
