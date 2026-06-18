@@ -1,0 +1,68 @@
+trigger:
+  branches:
+    include:
+      - main
+      - test
+      - ci/*
+      - feature/*
+
+pool:
+  name: 'Test-Agents'
+
+variables:
+  pythonVersion: '3.11'
+  # Ruta de tu registro privado local
+  imageName: '210.17.1.53:5000/api-odc-mba3'
+
+steps:
+# 1. Configurar Python en el Agente Linux
+- task: UsePythonVersion@0
+  displayName: 'Setup Python $(pythonVersion)'
+  inputs:
+    versionSpec: '$(pythonVersion)'
+
+# 2. Instalar Dependencias (Core y Dev)
+- script: |
+    python -m pip install --upgrade pip
+    pip install -r requirements.txt -r requirements-dev.txt
+  displayName: 'Install Dependencies'
+
+# 3. Calidad de Código y Tipado (Ruff & Pyright)
+- script: |
+    echo "Ejecutando linter (Ruff)..."
+    ruff check .
+    echo "Ejecutando chequeo de tipos estáticos (Pyright)..."
+    pyright .
+  displayName: 'Code Quality (Ruff & Pyright)'
+
+# 4. Ejecución de Pruebas Unitarias y de Integración
+- script: |
+    # Ejecutamos pytest y generamos un reporte en formato XML para Azure DevOps
+    pytest tests/ -v --junitxml=junit/test-results.xml
+  displayName: 'Run Pytest'
+  env:
+    ENVIRONMENT: test
+
+# 5. Publicar los resultados de las pruebas en la interfaz de Azure DevOps
+- task: PublishTestResults@2
+  displayName: 'Publish Test Results'
+  inputs:
+    testResultsFormat: 'JUnit'
+    testResultsFiles: '**/test-results.xml'
+    testRunTitle: 'Python $(pythonVersion) Tests'
+  condition: succeededOrFailed() # Publica el reporte incluso si alguna prueba falla
+
+# ----------------------------------------------------------------------
+# EMPAQUETADO DOCKER Y SUBIDA AL REGISTRO
+# ----------------------------------------------------------------------
+- task: CmdLine@2
+  displayName: 'Build and Push Docker Image'
+  inputs:
+    script: |
+      echo "1. Construyendo la imagen de Docker para FastAPI / Celery..."
+      # Usa el mismo Dockerfile para la API y los workers
+      docker build -t $(imageName):$(Build.BuildId) -t $(imageName):test-latest -f Dockerfile .
+      
+      echo "2. Subiendo la imagen al registro local..."
+      docker push $(imageName):$(Build.BuildId)
+      docker push $(imageName):test-latest
