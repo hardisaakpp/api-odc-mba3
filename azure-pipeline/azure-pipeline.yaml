@@ -11,24 +11,27 @@ pool:
 
 variables:
   pythonVersion: '3.11'
-  # Ruta de tu registro privado local
   imageName: '210.17.1.53:5000/api-odc-mba3'
 
 steps:
-# 1. Configurar Python en el Agente Linux
-- task: UsePythonVersion@0
-  displayName: 'Setup Python $(pythonVersion)'
-  inputs:
-    versionSpec: '$(pythonVersion)'
-
-# 2. Instalar Dependencias (Core y Dev)
+# 1 & 2. Crear entorno virtual, activar e instalar dependencias
 - script: |
+    # Crear un entorno virtual aislado para esta ejecución
+    python$(pythonVersion) -m venv venv
+    
+    # Activar el entorno virtual
+    source venv/bin/activate
+    
+    # Asegurar que pip esté actualizado e instalar los requirements
     python -m pip install --upgrade pip
     pip install -r requirements.txt -r requirements-dev.txt
-  displayName: 'Install Dependencies'
+  displayName: 'Setup Virtual Environment & Install Dependencies'
 
 # 3. Calidad de Código y Tipado (Ruff & Pyright)
 - script: |
+    # Siempre activar el entorno virtual antes de ejecutar comandos
+    source venv/bin/activate
+    
     echo "Ejecutando linter (Ruff)..."
     ruff check .
     echo "Ejecutando chequeo de tipos estáticos (Pyright)..."
@@ -37,20 +40,23 @@ steps:
 
 # 4. Ejecución de Pruebas Unitarias y de Integración
 - script: |
-    # Ejecutamos pytest y generamos un reporte en formato XML para Azure DevOps
+    # Activar el entorno virtual
+    source venv/bin/activate
+    
+    # Ejecutamos pytest y generamos un reporte en formato XML
     pytest tests/ -v --junitxml=junit/test-results.xml
   displayName: 'Run Pytest'
   env:
     ENVIRONMENT: test
 
-# 5. Publicar los resultados de las pruebas en la interfaz de Azure DevOps
+# 5. Publicar los resultados de las pruebas
 - task: PublishTestResults@2
   displayName: 'Publish Test Results'
   inputs:
     testResultsFormat: 'JUnit'
     testResultsFiles: '**/test-results.xml'
     testRunTitle: 'Python $(pythonVersion) Tests'
-  condition: succeededOrFailed() # Publica el reporte incluso si alguna prueba falla
+  condition: succeededOrFailed()
 
 # ----------------------------------------------------------------------
 # EMPAQUETADO DOCKER Y SUBIDA AL REGISTRO
@@ -60,7 +66,6 @@ steps:
   inputs:
     script: |
       echo "1. Construyendo la imagen de Docker para FastAPI / Celery..."
-      # Usa el mismo Dockerfile para la API y los workers
       docker build -t $(imageName):$(Build.BuildId) -t $(imageName):test-latest -f Dockerfile .
       
       echo "2. Subiendo la imagen al registro local..."
