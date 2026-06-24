@@ -17,7 +17,7 @@ pool:
     - Agent.OS -equals Linux
 
 variables:
-  pythonVersion: '3.11'
+  pythonVersion: '3.14'
   
   # Ruta al registro corporativo en la nube (ACR)
   imageName: 'dockermg-g9hrgcc4etdrh8eg.azurecr.io/api-odc-mba3'
@@ -45,16 +45,15 @@ stages:
     displayName: 'Preparar Entorno y Dependencias'
     steps:
     
-    # 1. NUEVO: Configurar la versión de Python en el agente
-    - task: UsePythonVersion@0
-      displayName: 'Configurar Python $(pythonVersion)'
-      inputs:
-        versionSpec: '$(pythonVersion)'
-        addToPath: true
+    # 1. Verificar Python disponible en el agente (self-hosted, no requiere UsePythonVersion)
+    - script: |
+        echo "Python disponible en el agente:"
+        python3 --version
+      displayName: 'Verificar Python $(pythonVersion)'
 
     # 2. Crear entorno virtual, activar e instalar dependencias Python
     - script: |
-        python -m venv venv
+        python3 -m venv venv
         source venv/bin/activate
         python -m pip install --upgrade pip
         pip install -r requirements.txt -r requirements-dev.txt
