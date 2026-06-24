@@ -1,34 +1,34 @@
 """
-Excepciones personalizadas para la aplicaci?n.
+Excepciones personalizadas para la aplicación.
 """
 from typing import Optional
 
 
 class QueryValidationError(Exception):
-    """Excepci?n para errores de validaci?n de consultas SQL."""
+    """Excepción para errores de validación de consultas SQL."""
     pass
 
 
 class MBA3ConnectionError(Exception):
-    """Excepci?n para errores de conexi?n con MBA3."""
+    """Excepción para errores de conexión con MBA3."""
     pass
 
 
 class MBA3QueryError(Exception):
-    """Excepci?n para errores al ejecutar consultas en MBA3."""
+    """Excepción para errores al ejecutar consultas en MBA3."""
     pass
 
 
 class BusinessException(Exception):
     """
-    Excepci?n para errores de l?gica de negocio.
-    
-    Se usa para validaciones cr?ticas que deben bloquear operaciones,
-    como validaci?n SAP obligatoria antes de persistir pedidos.
-    
+    Excepción para errores de lógica de negocio.
+
+    Se usa para validaciones críticas que deben bloquear operaciones,
+    como validación SAP obligatoria antes de persistir pedidos.
+
     Attributes:
         message: Mensaje de error legible
-        error_code: C?digo de error para identificaci?n program?tica
+        error_code: Código de error para identificación programática
         data: Datos estructurados adicionales (dict) para el frontend
     """
     def __init__(self, message: str, error_code: Optional[str] = None, data: Optional[dict] = None):
@@ -40,21 +40,21 @@ class BusinessException(Exception):
 
 class SAPDataMasterError(BusinessException):
     """
-    Excepci?n para errores de datos maestros en SAP.
-    
-    Se lanza cuando un art?culo no est? configurado correctamente en SAP:
+    Excepción para errores de datos maestros en SAP.
+
+    Se lanza cuando un artículo no está configurado correctamente en SAP:
     - No existe en SAP
-    - No est? dado de alta en la bodega requerida
+    - No está dado de alta en la bodega requerida
     - No es inventariable
     - ItemCode incorrecto
-    
-    Esta excepci?n debe CORTAR el flujo inmediatamente, no continuar con validaciones.
-    
+
+    Esta excepción debe CORTAR el flujo inmediatamente, no continuar con validaciones.
+
     Attributes:
-        item_code: C?digo del art?culo con problema
-        warehouse_code: Bodega donde se requiere el art?culo
+        item_code: Código del artículo con problema
+        warehouse_code: Bodega donde se requiere el artículo
         error_type: Tipo de error ('no_warehouse_info', 'warehouse_not_found')
-        available_warehouses: Lista de bodegas donde S? est? configurado (si aplica)
+        available_warehouses: Lista de bodegas donde SÍ está configurado (si aplica)
     """
     def __init__(
         self, 
