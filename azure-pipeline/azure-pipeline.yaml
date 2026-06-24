@@ -1,3 +1,4 @@
+# Disparador para Integración Continua en múltiples ramas
 trigger:
   branches:
     include:
@@ -5,64 +6,99 @@ trigger:
       - test
       - ci/*
       - feature/*
+      - fix/*
+      - bugfix/*
+      - hotfix/*
 
+# Enrutamiento al servidor Ubuntu corporativo
 pool:
-  name: 'Test-Agents'
+  name: 'agents-srv-test'
+  demands:
+    - Agent.OS -equals Linux
 
 variables:
   pythonVersion: '3.11'
-  imageName: '210.17.1.53:5000/api-odc-mba3'
+  
+  # Ruta al registro corporativo en la nube (ACR)
+  imageName: 'dockermg-g9hrgcc4etdrh8eg.azurecr.io/api-odc-mba3'
+  dockerfilePath: '$(Build.SourcesDirectory)/Dockerfile'
 
-steps:
-# 1 & 2. Crear entorno virtual, activar e instalar dependencias
-- script: |
-    # Crear un entorno virtual aislado para esta ejecución
-    python$(pythonVersion) -m venv venv
+  # Lógica Declarativa de Prefijos Dinámicos por Rama
+  ${{ if eq(variables['Build.SourceBranchName'], 'main') }}:
+    envTag: 'prod-latest'
+    uniqueTag: 'prod-$(Build.BuildId)'
+  ${{ elseif eq(variables['Build.SourceBranchName'], 'test') }}:
+    envTag: 'test-latest'
+    uniqueTag: 'test-$(Build.BuildId)'
+  ${{ else }}:
+    envTag: 'none'
+    uniqueTag: 'none'
+
+stages:
+# =====================================================================
+# ETAPA 1: PREPARACIÓN Y VALIDACIÓN DE CÓDIGO (CI Puro)
+# =====================================================================
+- stage: CI_Code_Quality
+  displayName: 'Integración Continua - Python'
+  jobs:
+  - job: Validar_Dependencias
+    displayName: 'Preparar Entorno y Dependencias'
+    steps:
     
-    # Activar el entorno virtual
-    source venv/bin/activate
+    # 1. SOLUCIÓN AL ERROR DE PYODBC: Instalar dependencias del sistema en el Agente
+    - script: |
+        echo "Instalando cabeceras ODBC y compiladores de C++ en el agente Ubuntu..."
+        sudo apt-get update
+        sudo apt-get install -y unixodbc-dev gcc g++
+      displayName: 'Instalar dependencias del Sistema Operativo (ODC)'
+
+    # 2. Crear entorno virtual, activar e instalar dependencias Python
+    - script: |
+        python$(pythonVersion) -m venv venv
+        source venv/bin/activate
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt -r requirements-dev.txt
+      displayName: 'Setup Virtual Environment & Install Dependencies'
     
-    # Asegurar que pip esté actualizado e instalar los requirements
-    python -m pip install --upgrade pip
-    pip install -r requirements.txt -r requirements-dev.txt
-  displayName: 'Setup Virtual Environment & Install Dependencies'
+    # ----------------------------------------------------------------------
+    # VALIDACIONES Y PRUEBAS OMITIDAS TEMPORALMENTE (BYPASS)
+    # ----------------------------------------------------------------------
+    # - script: |
+    #     source venv/bin/activate
+    #     echo "Ejecutando linter (Ruff)..."
+    #     ruff check .
+    #     echo "Ejecutando chequeo de tipos estáticos (Pyright)..."
+    #     pyright .
+    #   displayName: 'Code Quality (Ruff & Pyright)'
 
-# ----------------------------------------------------------------------
-# VALIDACIONES Y PRUEBAS OMITIDAS TEMPORALMENTE (BYPASS)
-# ----------------------------------------------------------------------
-# - script: |
-#     source venv/bin/activate
-#     echo "Ejecutando linter (Ruff)..."
-#     ruff check .
-#     echo "Ejecutando chequeo de tipos estáticos (Pyright)..."
-#     pyright .
-#   displayName: 'Code Quality (Ruff & Pyright)'
+    # - script: |
+    #     source venv/bin/activate
+    #     pytest tests/ -v --junitxml=junit/test-results.xml
+    #   displayName: 'Run Pytest'
+    #   env:
+    #     ENVIRONMENT: test
 
-# - script: |
-#     source venv/bin/activate
-#     pytest tests/ -v --junitxml=junit/test-results.xml
-#   displayName: 'Run Pytest'
-#   env:
-#     ENVIRONMENT: test
-
-# - task: PublishTestResults@2
-#   displayName: 'Publish Test Results'
-#   inputs:
-#     testResultsFormat: 'JUnit'
-#     testResultsFiles: '**/test-results.xml'
-#     testRunTitle: 'Python $(pythonVersion) Tests'
-#   condition: succeededOrFailed()
-
-# ----------------------------------------------------------------------
-# EMPAQUETADO DOCKER Y SUBIDA AL REGISTRO
-# ----------------------------------------------------------------------
-- task: CmdLine@2
-  displayName: 'Build and Push Docker Image'
-  inputs:
-    script: |
-      echo "1. Construyendo la imagen de Docker para FastAPI / Celery..."
-      docker build -t $(imageName):$(Build.BuildId) -t $(imageName):test-latest -f Dockerfile .
-      
-      echo "2. Subiendo la imagen al registro local..."
-      docker push $(imageName):$(Build.BuildId)
-      docker push $(imageName):test-latest
+# =====================================================================
+# ETAPA 2: CONSTRUCCIÓN Y PUBLICACIÓN EN AZURE CONTAINER REGISTRY
+# =====================================================================
+- stage: Build_Docker
+  displayName: 'Construcción de Imagen Docker'
+  dependsOn: CI_Code_Quality
+  
+  # Candado de Seguridad: Solo construye Docker si pasó la Etapa 1 Y si la rama es main o test
+  condition: and(succeeded(), ne(variables.envTag, 'none'))
+  jobs:
+  - job: BuildAndPush
+    displayName: 'Construir y Subir a Azure ACR'
+    steps:
+    
+    - script: |
+        echo "1. Construyendo la imagen de Docker para FastAPI / Celery ($(envTag))..."
+        docker build -f $(dockerfilePath) \
+          -t $(imageName):$(uniqueTag) \
+          -t $(imageName):$(envTag) .
+        
+        echo "2. Subiendo la imagen al registro corporativo en Azure..."
+        docker push $(imageName):$(uniqueTag)
+        docker push $(imageName):$(envTag)
+      displayName: 'Empaquetar y Almacenar Contenedor'
