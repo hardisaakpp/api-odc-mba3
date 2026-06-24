@@ -45,10 +45,16 @@ stages:
     displayName: 'Preparar Entorno y Dependencias'
     steps:
     
-    # 1. Crear entorno virtual, activar e instalar dependencias Python
-    # (Las dependencias del SO ya fueron instaladas manualmente en el servidor)
+    # 1. NUEVO: Configurar la versión de Python en el agente
+    - task: UsePythonVersion@0
+      displayName: 'Configurar Python $(pythonVersion)'
+      inputs:
+        versionSpec: '$(pythonVersion)'
+        addToPath: true
+
+    # 2. Crear entorno virtual, activar e instalar dependencias Python
     - script: |
-        python$(pythonVersion) -m venv venv
+        python -m venv venv
         source venv/bin/activate
         python -m pip install --upgrade pip
         pip install -r requirements.txt -r requirements-dev.txt
