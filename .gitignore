@@ -43,5 +43,14 @@ celerybeat-schedule-wal
 # Visual Studio
 .vs/
 
+# JetBrains (PyCharm / IntelliJ)
+.idea/
+
+# Cursor IDE
+.cursor/
+
+# GitHub Actions (repo vive en Azure DevOps, no aplica)
+.github/
+
 # Archivos temporales / scratch
 scratch_*.py
