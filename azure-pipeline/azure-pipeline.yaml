@@ -45,14 +45,8 @@ stages:
     displayName: 'Preparar Entorno y Dependencias'
     steps:
     
-    # 1. SOLUCIÓN AL ERROR DE PYODBC: Instalar dependencias del sistema en el Agente
-    - script: |
-        echo "Instalando cabeceras ODBC y compiladores de C++ en el agente Ubuntu..."
-        sudo apt-get update
-        sudo apt-get install -y unixodbc-dev gcc g++
-      displayName: 'Instalar dependencias del Sistema Operativo (ODC)'
-
-    # 2. Crear entorno virtual, activar e instalar dependencias Python
+    # 1. Crear entorno virtual, activar e instalar dependencias Python
+    # (Las dependencias del SO ya fueron instaladas manualmente en el servidor)
     - script: |
         python$(pythonVersion) -m venv venv
         source venv/bin/activate
