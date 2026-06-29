@@ -17,7 +17,7 @@ if _dotenv_module is not None:
     load_dotenv = _dotenv_module.load_dotenv
 else:
     # Permite correr sin python-dotenv (e.g. en entornos de análisis estático).
-    def load_dotenv(*args, **kwargs):
+    def load_dotenv(*_args, **_kwargs):
         return False
 
 # Configuracion de li­mites
@@ -268,6 +268,7 @@ HIDE_SWAGGER_IN_PROD = os.getenv("HIDE_SWAGGER_IN_PROD", "true").lower() == "tru
 # Validaciones de Seguridad
 # ============================================================================
 logger = logging.getLogger(__name__)
+_CONFIG_INCOMPLETA_MSG = "⚠️ CONFIGURACIÓN INCOMPLETA (Desarrollo)"
 
 # Validar configuraciones crÃ­ticas en producciÃ³n
 if ENVIRONMENT == "production":
@@ -317,21 +318,21 @@ elif ENVIRONMENT == "development":
     if not MBA3_BASE_URL or not MBA3_SERVICE_CODE or not MBA3_SERVICE_PASSWORD:
         if not warnings_found:
             logger.warning("=" * 70)
-            logger.warning("âš ï¸ CONFIGURACIÃ“N INCOMPLETA (Desarrollo)")
+            logger.warning(_CONFIG_INCOMPLETA_MSG)
             warnings_found = True
         logger.warning("   Credenciales MBA3 no configuradas en .env")
     
     if ENABLE_JWT_AUTH and (not JWT_SECRET or JWT_SECRET == 'clave_super_secreta_para_jwt_12345'):
         if not warnings_found:
             logger.warning("=" * 70)
-            logger.warning("âš ï¸ CONFIGURACIÃ“N INCOMPLETA (Desarrollo)")
+            logger.warning(_CONFIG_INCOMPLETA_MSG)
             warnings_found = True
         logger.warning("   JWT_SECRET usando valor por defecto (inseguro)")
     
     if ENABLE_SAP_SERVICE_LAYER and not SAP_SERVICE_LAYER_VERIFY_SSL:
         if not warnings_found:
             logger.warning("=" * 70)
-            logger.warning("âš ï¸ CONFIGURACIÃ“N INCOMPLETA (Desarrollo)")
+            logger.warning(_CONFIG_INCOMPLETA_MSG)
             warnings_found = True
         logger.warning("   SAP SSL verification deshabilitada")
     
@@ -404,16 +405,17 @@ EMAIL_FROM_NAME = os.getenv("EMAIL_FROM_NAME", "INTEGRACIÃ“N SAP")
 # EMAIL_TO - SEGMENTADO POR TIPO (fallback desde .env)
 # La app lee primero de la tabla notificacion_destinatarios; si no hay datos, usa estas listas.
 # Tipos: OPERACIONES, MABEL_TRADING, HOMOLOGACIONES, TECNICOS (ver get_destinatarios_por_tipo).
+_DEFAULT_CORTIZ_EMAIL = "cortiz@mabeltrading.com.ec"
 # Usuario Principal: Operaciones/Despachos (recibe notificaciones de NUEVOS DESPACHOS)
 _email_operaciones = os.getenv("EMAIL_TO_OPERACIONES", "cortiz@mabeltrading.com.ec,pchafuel@mabeltrading.com.ec")
 EMAIL_TO_OPERACIONES = [email.strip() for email in _email_operaciones.split(",") if email.strip()]
 
 # Usuario Homologaciones: Productos no homologados (recibe notificaciones de SKUs faltantes)
-_email_homologaciones = os.getenv("EMAIL_TO_HOMOLOGACIONES", "cortiz@mabeltrading.com.ec")
+_email_homologaciones = os.getenv("EMAIL_TO_HOMOLOGACIONES", _DEFAULT_CORTIZ_EMAIL)
 EMAIL_TO_HOMOLOGACIONES = [email.strip() for email in _email_homologaciones.split(",") if email.strip()]
 
 # Usuario TÃ©cnico: Errores y advertencias del sistema (recibe notificaciones tÃ©cnicas)
-_email_tecnicos = os.getenv("EMAIL_TO_TECNICOS", "cortiz@mabeltrading.com.ec")
+_email_tecnicos = os.getenv("EMAIL_TO_TECNICOS", _DEFAULT_CORTIZ_EMAIL)
 EMAIL_TO_TECNICOS = [email.strip() for email in _email_tecnicos.split(",") if email.strip()]
 
 # EMAIL_TO (legacy - para compatibilidad con cÃ³digo existente)
@@ -423,8 +425,8 @@ EMAIL_TO = [email.strip() for email in _email_to_str.split(",") if email.strip()
 
 # Email del proveedor para pruebas (FASE 6)
 # Durante fase de pruebas, se usa este email para notificaciones de ODC
-# TODO: En producciÃ³n, obtener desde tabla cliente usando CardCode
-EMAIL_PROVEEDOR_PRUEBAS = os.getenv("EMAIL_PROVEEDOR_PRUEBAS", "cortiz@mabeltrading.com.ec")
+# NOTE: En producciÃ³n, obtener desde tabla cliente usando CardCode
+EMAIL_PROVEEDOR_PRUEBAS = os.getenv("EMAIL_PROVEEDOR_PRUEBAS", _DEFAULT_CORTIZ_EMAIL)
 
 # Email de MABEL TRADING para notificaciones de confirmacion de pedidos
 # Usado cuando EL RAYO confirma un pedido y se debe notificar a MABEL TRADING

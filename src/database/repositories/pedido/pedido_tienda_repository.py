@@ -32,6 +32,67 @@ class PedidoTiendaRepository:
         """
         self.conn = conn
 
+    def _detectar_columnas_tienda(self, cursor: pyodbc.Cursor):
+        def _tiene(col: str) -> bool:
+            cursor.execute("""
+                SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS
+                WHERE TABLE_NAME = 'pedido_detalle_tienda' AND COLUMN_NAME = ?
+            """, (col,))
+            row = cursor.fetchone()
+            return (row[0] if row else 0) > 0
+        return _tiene('fila_origen'), _tiene('es_bodega'), _tiene('creado_por')
+
+    def _construir_insert_tienda_sql(
+        self,
+        tiene_fila_origen: bool,
+        tiene_es_bodega: bool,
+        tiene_audit_cols: bool,
+    ) -> str:
+        columnas = ["id", "pedido_detalle_id", "tienda_id", "cantidad"]
+        valores_placeholders = ["NEWID()", "?", "?", "?"]
+        if tiene_fila_origen:
+            columnas.append("fila_origen")
+            valores_placeholders.append("?")
+        if tiene_es_bodega:
+            columnas.append("es_bodega")
+            valores_placeholders.append("?")
+        if tiene_audit_cols:
+            columnas.extend(["creado_por", "origen", "ip_origen"])
+            valores_placeholders.extend(["?", "?", "?"])
+        columnas.append("created_at")
+        valores_placeholders.append("?")
+        return f"INSERT INTO pedido_detalle_tienda ({', '.join(columnas)}) VALUES ({', '.join(valores_placeholders)})"
+
+    def _insertar_una_distribucion(
+        self,
+        cursor: pyodbc.Cursor,
+        sql: str,
+        dist: Dict[str, Any],
+        pedido_detalle_id: str,
+        audit,
+        tiene_fila_origen: bool,
+        tiene_es_bodega: bool,
+        tiene_audit_cols: bool,
+    ) -> bool:
+        tienda_id = dist.get("tienda_id")
+        cantidad = dist.get("cantidad")
+        if not tienda_id or cantidad is None or cantidad < 0:
+            return False
+        cantidad_decimal = float(cantidad)
+        es_bodega = dist.get("es_bodega", False)
+        if es_bodega:
+            logger.info(f"📦 Insertando bodega en BD: pedido_detalle_id={pedido_detalle_id}, tienda_id={tienda_id}, cantidad={cantidad_decimal}, es_bodega={es_bodega}, tiene_es_bodega_col={tiene_es_bodega}")
+        valores = [pedido_detalle_id, tienda_id, cantidad_decimal]
+        if tiene_fila_origen:
+            valores.append(dist.get("fila_origen"))
+        if tiene_es_bodega:
+            valores.append(1 if es_bodega else 0)
+        if tiene_audit_cols:
+            valores.extend([audit.get_creado_por(), audit.origen, audit.ip_origen])
+        valores.append(ahora_naive())
+        cursor.execute(sql, tuple(valores))
+        return True
+
     def insert_distribuciones(
         self,
         pedido_detalle_id: str,
@@ -50,112 +111,108 @@ class PedidoTiendaRepository:
         """
         from src.utils.audit_context import ensure_audit_context
         audit = ensure_audit_context(audit_context)
-        
+
         if not distribuciones:
             return 0
-        
+
         cursor = self.conn.cursor()
         inserted_count = 0
-        
+
         try:
-            cursor.execute("""
-                SELECT COUNT(*) 
-                FROM INFORMATION_SCHEMA.COLUMNS 
-                WHERE TABLE_NAME = 'pedido_detalle_tienda' 
-                AND COLUMN_NAME = 'fila_origen'
-            """)
-            row = cursor.fetchone()
-            tiene_fila_origen = (row[0] if row else 0) > 0
-            
-            cursor.execute("""
-                SELECT COUNT(*) 
-                FROM INFORMATION_SCHEMA.COLUMNS 
-                WHERE TABLE_NAME = 'pedido_detalle_tienda' 
-                AND COLUMN_NAME = 'es_bodega'
-            """)
-            row = cursor.fetchone()
-            tiene_es_bodega = (row[0] if row else 0) > 0
-            
-            # Verificar columnas de auditoría
-            cursor.execute("""
-                SELECT COUNT(*) 
-                FROM INFORMATION_SCHEMA.COLUMNS 
-                WHERE TABLE_NAME = 'pedido_detalle_tienda' 
-                AND COLUMN_NAME = 'creado_por'
-            """)
-            row = cursor.fetchone()
-            tiene_audit_cols = (row[0] if row else 0) > 0
-            
-            columnas = ["id", "pedido_detalle_id", "tienda_id", "cantidad"]
-            valores_placeholders = ["NEWID()", "?", "?", "?"]
-            
-            if tiene_fila_origen:
-                columnas.append("fila_origen")
-                valores_placeholders.append("?")
-            
-            if tiene_es_bodega:
-                columnas.append("es_bodega")
-                valores_placeholders.append("?")
-            
-            if tiene_audit_cols:
-                columnas.extend(["creado_por", "origen", "ip_origen"])
-                valores_placeholders.extend(["?", "?", "?"])
-            
-            columnas.append("created_at")
-            valores_placeholders.append("?")
-            
-            sql = f"""
-                INSERT INTO pedido_detalle_tienda (
-                    {', '.join(columnas)}
-                ) VALUES ({', '.join(valores_placeholders)})
-                """
-            
+            tiene_fila_origen, tiene_es_bodega, tiene_audit_cols = self._detectar_columnas_tienda(cursor)
+            sql = self._construir_insert_tienda_sql(tiene_fila_origen, tiene_es_bodega, tiene_audit_cols)
+
             for dist in distribuciones:
                 try:
-                    tienda_id = dist.get("tienda_id")
-                    cantidad = dist.get("cantidad")
-                    fila_origen = dist.get("fila_origen")
-                    es_bodega = dist.get("es_bodega", False)
-                    
-                    if not tienda_id or cantidad is None or cantidad < 0:
-                        continue
-                    # Asegurar float para que se persista correctamente en columna DECIMAL(18,4)
-                    cantidad_decimal = float(cantidad)
-                    if es_bodega:
-                        logger.info(f"📦 Insertando bodega en BD: pedido_detalle_id={pedido_detalle_id}, tienda_id={tienda_id}, cantidad={cantidad_decimal}, es_bodega={es_bodega}, tiene_es_bodega_col={tiene_es_bodega}")
-                    
-                    valores = [pedido_detalle_id, tienda_id, cantidad_decimal]
-                    
-                    if tiene_fila_origen:
-                        valores.append(fila_origen)
-                    
-                    if tiene_es_bodega:
-                        valores.append(1 if es_bodega else 0)
-                    
-                    if tiene_audit_cols:
-                        valores.extend([audit.get_creado_por(), audit.origen, audit.ip_origen])
-                    
-                    valores.append(ahora_naive())
-                    cursor.execute(sql, tuple(valores))
-                    inserted_count += 1
-                    
+                    if self._insertar_una_distribucion(
+                        cursor, sql, dist, pedido_detalle_id, audit,
+                        tiene_fila_origen, tiene_es_bodega, tiene_audit_cols,
+                    ):
+                        inserted_count += 1
                 except pyodbc.IntegrityError:
                     logger.debug(f"⚠️ Relación detalle-tienda ya existe: {pedido_detalle_id} - {dist.get('tienda_id')}")
-                    continue
                 except Exception as e:
                     logger.warning(f"⚠️ Error al insertar distribución: {e}")
-                    continue
-            
+
             self.conn.commit()
             logger.debug(f"✅ {inserted_count} distribuciones insertadas para detalle {pedido_detalle_id}")
             return inserted_count
-            
+
         except Exception as e:
             self.conn.rollback()
             logger.error(f"❌ Error al insertar distribuciones: {e}")
             raise
         finally:
             cursor.close()
+
+    def _necesita_nombre_sap(self, codigo: str, nombre: Optional[str]) -> bool:
+        return not nombre or nombre.strip() == "" or nombre.strip().upper() == codigo.strip().upper()
+
+    def _buscar_nombre_sap(self, codigo: str) -> Optional[str]:
+        try:
+            from ...services.bodega_sap_service import BodegaSAPService
+            bodega_sap_service = BodegaSAPService()
+            bodega_info = bodega_sap_service.get_or_fetch_bodega_info(codigo, force_refresh=False)
+            if bodega_info:
+                whs_name = bodega_info.get("WhsName")
+                if whs_name:
+                    nombre_sap = whs_name.strip()
+                    logger.info(f"✅ Nombre de tienda obtenido (caché o SAP): {codigo} → '{nombre_sap}'")
+                    return nombre_sap
+        except Exception as e:
+            logger.warning(f"⚠️ No se pudo obtener nombre de tienda {codigo} (caché o SAP): {e}")
+        return None
+
+    def _debe_actualizar_nombre_tienda(
+        self,
+        nombre_final: Optional[str],
+        nombre_existente: Optional[str],
+        codigo_upper: str,
+    ) -> bool:
+        if not nombre_final or not nombre_final.strip():
+            return False
+        nombre_upper = nombre_final.strip().upper()
+        nombre_existente_upper = str(nombre_existente).strip().upper() if nombre_existente else ""
+        return (
+            not nombre_existente
+            or nombre_existente.strip() == ""
+            or nombre_existente_upper == codigo_upper
+            or (nombre_upper != codigo_upper and nombre_upper != nombre_existente_upper)
+        )
+
+    def _actualizar_nombre_tienda(
+        self,
+        cursor: pyodbc.Cursor,
+        codigo: str,
+        nombre_final: str,
+        nombre_sap: Optional[str],
+        nombre_existente: Optional[str],
+    ) -> None:
+        nombre_final_stripped = nombre_final.strip()
+        cursor.execute(
+            "UPDATE tienda SET nombre = ?, updated_at = ? WHERE codigo = ?",
+            (nombre_final_stripped, ahora_naive(), codigo),
+        )
+        self.conn.commit()
+        origen = "SAP" if nombre_sap else "Excel"
+        logger.info(f"✅ Nombre de tienda actualizado desde {origen}: {codigo} → '{nombre_final_stripped}' (anterior: '{nombre_existente}')")
+
+    def _determinar_nombre_guardar_tienda(
+        self,
+        codigo: str,
+        nombre_final: Optional[str],
+        nombre_sap: Optional[str],
+    ) -> Optional[str]:
+        if not nombre_final or not nombre_final.strip():
+            logger.warning(f"⚠️ No se pudo obtener nombre para tienda '{codigo}', guardando NULL")
+            return None
+        nombre_stripped = nombre_final.strip()
+        if nombre_stripped.upper() == codigo.strip().upper():
+            logger.warning(f"⚠️ El nombre '{nombre_stripped}' es igual al código '{codigo}', guardando NULL")
+            return None
+        origen = "SAP" if nombre_sap else "Excel"
+        logger.info(f"✅ Creando tienda con nombre desde {origen}: {codigo} → '{nombre_stripped}'")
+        return nombre_stripped
 
     def get_or_create_tienda(
         self, 
@@ -175,88 +232,40 @@ class PedidoTiendaRepository:
             tienda_id (UUID)
         """
         cursor = self.conn.cursor()
-        
         try:
-            nombre_sap = None
-            if (not nombre or nombre.strip() == "" or nombre.strip().upper() == codigo.strip().upper()) and consultar_sap:
-                try:
-                    from ...services.bodega_sap_service import BodegaSAPService
-                    bodega_sap_service = BodegaSAPService()
-                    bodega_info = bodega_sap_service.get_or_fetch_bodega_info(codigo, force_refresh=False)
-                    if bodega_info:
-                        whs_name = bodega_info.get("WhsName")
-                        if whs_name:
-                            nombre_sap = whs_name.strip()
-                            logger.info(f"✅ Nombre de tienda obtenido (caché o SAP): {codigo} → '{nombre_sap}'")
-                except Exception as e:
-                    logger.warning(f"⚠️ No se pudo obtener nombre de tienda {codigo} (caché o SAP): {e}")
-            
+            nombre_sap = self._buscar_nombre_sap(codigo) if self._necesita_nombre_sap(codigo, nombre) and consultar_sap else None
             nombre_final = nombre_sap if nombre_sap else nombre
-            
+
             cursor.execute("SELECT tienda_id, nombre FROM tienda WHERE codigo = ?", (codigo,))
             row = cursor.fetchone()
-            
+
             if row:
                 tienda_id = str(row[0])
                 nombre_existente = row[1] if len(row) > 1 else None
-                
                 codigo_upper = codigo.strip().upper()
-                nombre_existente_upper = str(nombre_existente).strip().upper() if nombre_existente else ""
-                
-                debe_actualizar = False
-                if nombre_final and nombre_final.strip():
-                    nombre_upper = nombre_final.strip().upper()
-                    if (not nombre_existente or 
-                        nombre_existente.strip() == "" or 
-                        nombre_existente_upper == codigo_upper or
-                        (nombre_upper != codigo_upper and nombre_upper != nombre_existente_upper)):
-                        debe_actualizar = True
-                
-                if debe_actualizar and nombre_final:
-                    nombre_final_stripped = nombre_final.strip()
-                    cursor.execute("UPDATE tienda SET nombre = ?, updated_at = ? WHERE codigo = ?", (nombre_final_stripped, ahora_naive(), codigo))
-                    self.conn.commit()
-                    origen = "SAP" if nombre_sap else "Excel"
-                    logger.info(f"✅ Nombre de tienda actualizado desde {origen}: {codigo} → '{nombre_final_stripped}' (anterior: '{nombre_existente}')")
-                
+                if self._debe_actualizar_nombre_tienda(nombre_final, nombre_existente, codigo_upper) and nombre_final:
+                    self._actualizar_nombre_tienda(cursor, codigo, nombre_final, nombre_sap, nombre_existente)
                 logger.debug(f"✅ Tienda existente encontrada: {codigo} ({tienda_id})")
                 return tienda_id
-            
+
             cursor.execute("SELECT NEWID()")
             uuid_result = cursor.fetchone()
             if uuid_result is None:
                 raise ValueError("No se pudo generar UUID para tienda_id")
             tienda_id = str(uuid_result[0])
-            
-            nombre_guardar = None
-            if nombre_final and nombre_final.strip():
-                nombre_stripped = nombre_final.strip()
-                if nombre_stripped.upper() != codigo.strip().upper():
-                    nombre_guardar = nombre_stripped
-                    origen = "SAP" if nombre_sap else "Excel"
-                    logger.info(f"✅ Creando tienda con nombre desde {origen}: {codigo} → '{nombre_guardar}'")
-                else:
-                    logger.warning(f"⚠️ El nombre '{nombre_stripped}' es igual al código '{codigo}', guardando NULL")
-            else:
-                logger.warning(f"⚠️ No se pudo obtener nombre para tienda '{codigo}', guardando NULL")
-            
-            sql = """
-            INSERT INTO tienda (
-                tienda_id,
-                codigo,
-                nombre,
-                activa,
-                created_at
-            ) VALUES (?, ?, ?, 1, ?)
-            """
-            
-            cursor.execute(sql, (tienda_id, codigo, nombre_guardar, ahora_naive()))
+
+            nombre_guardar = self._determinar_nombre_guardar_tienda(codigo, nombre_final, nombre_sap)
+
+            cursor.execute("""
+                INSERT INTO tienda (tienda_id, codigo, nombre, activa, created_at)
+                VALUES (?, ?, ?, 1, ?)
+            """, (tienda_id, codigo, nombre_guardar, ahora_naive()))
             self.conn.commit()
-            
+
             logger.debug(f"✅ Nueva tienda creada: {codigo} ({tienda_id})")
             return tienda_id
-            
-        except pyodbc.IntegrityError as e:
+
+        except pyodbc.IntegrityError:
             self.conn.rollback()
             cursor.execute("SELECT tienda_id FROM tienda WHERE codigo = ?", (codigo,))
             row = cursor.fetchone()
@@ -392,15 +401,6 @@ class PedidoTiendaRepository:
         own_cursor = cursor is None
         cur = cursor or self.conn.cursor()
         try:
-            # Snapshot antes de eliminar
-            cur.execute("""
-                SELECT pdt.id, pdt.pedido_detalle_id, pdt.tienda_id, pdt.cantidad
-                FROM pedido_detalle_tienda pdt
-                INNER JOIN pedido_detalle pd ON pdt.pedido_detalle_id = pd.pedido_detalle_id
-                WHERE pd.pedido_id = ?
-            """, (pedido_id,))
-            rows_snapshot = cur.fetchall()
-            
             cur.execute("""
                 DELETE FROM pedido_detalle_tienda
                 WHERE pedido_detalle_id IN (

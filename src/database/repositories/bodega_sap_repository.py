@@ -140,9 +140,7 @@ class BodegaSAPRepository:
         # Verificar si la última consulta es más antigua que cache_days
         if isinstance(ultima_consulta, str):
             ultima_consulta = datetime.fromisoformat(ultima_consulta.replace('Z', '+00:00'))
-        elif isinstance(ultima_consulta, datetime):
-            pass
-        else:
+        elif not isinstance(ultima_consulta, datetime):
             return False
         
         fecha_limite = ahora_naive() - timedelta(days=cache_days)
@@ -195,6 +193,9 @@ class BodegaSAPRepository:
                 
                 cursor.execute(sql, values)
                 self.conn.commit()
+                if cursor.rowcount == 0:
+                    logger.warning(f"⚠️ Sin filas actualizadas para bodega {whs_code_normalized}")
+                    return False
                 logger.debug(f"✅ Bodega/Tienda SAP cache actualizada: {whs_code_normalized}")
                 return True
             else:
@@ -230,10 +231,9 @@ class BodegaSAPRepository:
                 logger.debug(f"✅ Bodega/Tienda SAP cache insertada: {whs_code_normalized}")
                 return True
                 
-        except Exception as e:
+        except Exception:
             self.conn.rollback()
-            logger.error(f"❌ Error al insertar/actualizar bodega_sap_cache: {e}")
-            logger.error(f"   WhsCode: {bodega_data.get('whs_code')}")
+            logger.exception("❌ Error al insertar/actualizar bodega_sap_cache: WhsCode=%s", bodega_data.get('whs_code'))
             raise
         finally:
             cursor.close()
@@ -266,8 +266,8 @@ class BodegaSAPRepository:
             logger.info(f"✅ {updated_count}/{len(bodegas_data)} bodegas/tiendas procesadas en batch")
             return updated_count
             
-        except Exception as e:
-            logger.error(f"❌ Error al procesar batch de bodegas: {e}")
+        except Exception:
+            logger.exception("❌ Error al procesar batch de bodegas")
             raise
         finally:
             cursor.close()

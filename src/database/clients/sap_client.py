@@ -63,6 +63,24 @@ class SAPClient:
         
         return True
     
+    def _build_producto_dict(self, result) -> Dict[str, Any]:
+        valid_for = result[4] if len(result) > 4 and result[4] is not None else "N"
+        return {
+            "ItemCode": result[0] or None,
+            "ItemName": result[1] or None,
+            "U_IXX_PACK": result[2] or None,
+            "ItmsGrpNam": result[3] or None,
+            "validFor": str(valid_for).strip().upper() if valid_for else "N",
+        }
+
+    @staticmethod
+    def _safe_close(conn, cursor) -> None:
+        try:
+            cursor.close()
+            conn.close()
+        except Exception:
+            pass
+
     def get_producto_info(self, item_code: str) -> Optional[Dict[str, Any]]:
         """
         Consulta información de un producto desde SAP usando OPENQUERY.
@@ -131,19 +149,11 @@ class SAPClient:
             result = cursor.fetchone()
             
             if result:
-                valid_for = (result[4] if len(result) > 4 and result[4] is not None else "N")
-                producto_info = {
-                    "ItemCode": result[0] if result[0] else None,
-                    "ItemName": result[1] if result[1] else None,
-                    "U_IXX_PACK": result[2] if result[2] else None,
-                    "ItmsGrpNam": result[3] if result[3] else None,
-                    "validFor": str(valid_for).strip().upper() if valid_for else "N",
-                }
+                producto_info = self._build_producto_dict(result)
                 logger.info(f"✅ Producto encontrado en SAP: {item_code_normalized} - Pack: {producto_info.get('U_IXX_PACK')}, Grupo: {producto_info.get('ItmsGrpNam')}, validFor: {producto_info.get('validFor')}")
                 return producto_info
-            else:
-                logger.warning(f"⚠️ Producto no encontrado en SAP: {item_code_normalized}")
-                return None
+            logger.warning(f"⚠️ Producto no encontrado en SAP: {item_code_normalized}")
+            return None
                 
         except pyodbc.Error as e:
             error_msg = f"Error al consultar SAP para ItemCode {item_code_normalized}: {str(e)}"
@@ -152,16 +162,12 @@ class SAPClient:
             return None
         except Exception as e:
             error_msg = f"Error inesperado al consultar SAP para ItemCode {item_code_normalized}: {str(e)}"
-            logger.error(f"❌ {error_msg}", exc_info=True)
+            logger.exception(f"❌ {error_msg}")
             return None
         finally:
             if conn:
-                try:
-                    cursor.close()
-                    conn.close()
-                except:
-                    pass
-    
+                SAPClient._safe_close(conn, cursor)
+
     def get_productos_info_batch(self, item_codes: list[str]) -> Dict[str, Dict[str, Any]]:
         """
         Consulta información de múltiples productos desde SAP en batch.
@@ -211,160 +217,88 @@ class SAPClient:
         logger.info(f"✅ Consultados {len(resultados)} de {len(item_codes)} productos desde SAP")
         return resultados
     
-    def buscar_skus_similares(
-        self, 
-        sku_referencia: str, 
-        limite: int = 20,
-        solo_activos: bool = True,
-        usar_staging: bool = True,
-        longitud_minima: int = 3
-    ) -> List[Dict[str, Any]]:
-        """
-        Busca SKUs similares usando staging (preferido) o OPENQUERY SAP (fallback).
-        
-        VALIDACIONES IMPLEMENTADAS:
-        #1: Normalización consistente (usa función centralizada)
-        #2: Validación de SKU corto/genérico
-        #3: Duplicados semánticos (manejados por scoring)
-        #4: Límite antes del scoring (pide 3x más)
-        #5: Observabilidad (métricas de staging vs SAP)
-        
-        Args:
-            sku_referencia: SKU de referencia para buscar similares
-            limite: Límite máximo de resultados (default: 20)
-            solo_activos: Si True, solo busca productos activos
-            usar_staging: Si True, intenta usar staging primero (recomendado)
-            longitud_minima: Longitud mínima del código normalizado para validación
-            
-        Returns:
-            Lista de productos SAP ordenados por relevancia:
-            [{
-                "ItemCode": "5-0012.9",
-                "ItemName": "Nombre del producto",
-                "U_IXX_PACK": "X3",
-                "ItmsGrpNam": "R-MEDIAS",
-                "validFor": "Y",
-                "ItmsGrpCod": 103
-            }, ...]
-        """
+    def _buscar_skus_en_staging(
+        self,
+        sku_clean: str,
+        sku_normalizado: str,
+        limite_ajustado: int,
+        solo_activos: bool,
+        longitud_minima: int,
+    ):
+        """Busca SKUs en staging. Retorna lista de productos o None si falla o no hay resultados."""
         import time
-        
-        # Validar y normalizar SKU de referencia
-        if not sku_referencia or not sku_referencia.strip():
-            return []
-        
-        sku_clean = sku_referencia.strip()
-        
-        # Validar longitud máxima
-        if len(sku_clean) > 50:
-            logger.warning(f"⚠️ SKU de referencia demasiado largo: {len(sku_clean)} caracteres")
-            return []
-        
-        # VALIDACIÓN #1: Normalización consistente (función centralizada)
-        from src.utils import normalizar_codigo_producto, validar_longitud_minima_codigo
-        sku_normalizado = normalizar_codigo_producto(sku_clean)
-        
-        if not sku_normalizado:
-            logger.warning(f"⚠️ SKU '{sku_clean}' se normalizó a string vacío")
-            return []
-        
-        # VALIDACIÓN #2: SKU corto/genérico
-        if not validar_longitud_minima_codigo(sku_normalizado, longitud_minima):
-            logger.warning(
-                f"⚠️ SKU normalizado muy corto ({len(sku_normalizado)} < {longitud_minima}): "
-                f"'{sku_normalizado}' (original: '{sku_clean}'). "
-                f"La búsqueda puede devolver muchos resultados."
-            )
-            # Ajustar límite para SKUs cortos (más restrictivo)
-            limite_ajustado = min(limite, 10)
-        else:
-            limite_ajustado = limite
-        
-        # INTENTO 1: Buscar en staging (rápido y eficiente)
-        if usar_staging:
-            start_time_staging = time.time()
+        start_time = time.time()
+        try:
+            from ..connection import get_db_connection
+            from ..repositories.producto_sap_staging_repository import ProductoSAPStagingRepository
+
+            conn = get_db_connection()
             try:
-                from ..connection import get_db_connection
-                from ..repositories.producto_sap_staging_repository import ProductoSAPStagingRepository
-                
-                conn = get_db_connection()
-                try:
-                    staging_repo = ProductoSAPStagingRepository(conn)
-                    productos = staging_repo.buscar_por_normalizado_similar(
-                        codigo_normalizado=sku_normalizado,
-                        limite=limite_ajustado,
-                        solo_activos=solo_activos,
-                        longitud_minima=longitud_minima
-                    )
-                    
-                    elapsed_staging = time.time() - start_time_staging
-                    
-                    # VALIDACIÓN #5: Observabilidad
-                    if productos:
-                        logger.info(
-                            f"✅ Staging: {len(productos)} productos encontrados en {elapsed_staging:.3f}s "
-                            f"para '{sku_clean}' (normalizado: '{sku_normalizado}')"
-                        )
-                        return productos
-                    else:
-                        logger.debug(
-                            f"⚠️ Staging: 0 productos encontrados en {elapsed_staging:.3f}s, "
-                            f"usando fallback a SAP"
-                        )
-                finally:
-                    conn.close()
-            except Exception as e:
-                elapsed_staging = time.time() - start_time_staging
-                logger.warning(
-                    f"⚠️ Error en staging ({elapsed_staging:.3f}s), usando fallback a SAP: {e}"
+                staging_repo = ProductoSAPStagingRepository(conn)
+                productos = staging_repo.buscar_por_normalizado_similar(
+                    codigo_normalizado=sku_normalizado,
+                    limite=limite_ajustado,
+                    solo_activos=solo_activos,
+                    longitud_minima=longitud_minima,
                 )
-                # Continuar con fallback
-        
-        # FALLBACK: Buscar directamente en SAP (más lento, pero funciona)
-        start_time_sap = time.time()
-        
+                elapsed = time.time() - start_time
+                if productos:
+                    logger.info(
+                        f"✅ Staging: {len(productos)} productos encontrados en {elapsed:.3f}s "
+                        f"para '{sku_clean}' (normalizado: '{sku_normalizado}')"
+                    )
+                    return productos
+                logger.debug(
+                    f"⚠️ Staging: 0 productos encontrados en {elapsed:.3f}s, usando fallback a SAP"
+                )
+                return None
+            finally:
+                conn.close()
+        except Exception as e:
+            elapsed = time.time() - start_time
+            logger.warning(f"⚠️ Error en staging ({elapsed:.3f}s), usando fallback a SAP: {e}")
+            return None
+
+    def _buscar_skus_en_sap(
+        self,
+        sku_clean: str,
+        sku_normalizado: str,
+        limite_ajustado: int,
+        solo_activos: bool,
+    ) -> List[Dict[str, Any]]:
+        """Busca SKUs similares directamente en SAP vía OPENQUERY (fallback)."""
+        import time
+
         if not self.enabled:
             logger.debug(f"⏭️ Consultas SAP deshabilitadas para: {sku_clean}")
             return []
-        
-        # Búsqueda mejorada con múltiples condiciones OR para manejar diferentes separadores
-        import re
+
+        start_time_sap = time.time()
         sku_escaped = sku_clean.replace("'", "''").replace("%", "[%]").replace("_", "[_]")
-        
-        # Extraer partes para búsqueda más flexible
+
         prefijo_match = re.match(r'^([A-Za-z]+)', sku_clean)
         prefijo = prefijo_match.group(1) if prefijo_match else None
         numeros = re.findall(r'\d+', sku_clean)
         numero_principal = numeros[0] if numeros else None
-        
-        # Construir condiciones OR
-        condiciones = []
-        
-        # Condición 1: Búsqueda exacta (código tal cual)
-        condiciones.append(f"T0.\"ItemCode\" LIKE ''%{sku_escaped}%''")
-        
-        # Condición 2: Prefijo + número principal (más flexible)
+
+        condiciones = [f"T0.\"ItemCode\" LIKE ''%{sku_escaped}%''"]
         if prefijo and numero_principal:
-            prefijo_escaped = prefijo.replace("'", "''").replace("%", "[%]").replace("_", "[_]")
-            numero_escaped = numero_principal.replace("'", "''").replace("%", "[%]").replace("_", "[_]")
+            p_esc = prefijo.replace("'", "''").replace("%", "[%]").replace("_", "[_]")
+            n_esc = numero_principal.replace("'", "''").replace("%", "[%]").replace("_", "[_]")
             condiciones.append(
-                f"(T0.\"ItemCode\" LIKE ''%{prefijo_escaped}%'' AND T0.\"ItemCode\" LIKE ''%{numero_escaped}%'')"
+                f"(T0.\"ItemCode\" LIKE ''%{p_esc}%'' AND T0.\"ItemCode\" LIKE ''%{n_esc}%'')"
             )
-        
-        # Condición 3: Solo número principal (si es largo, 4+ dígitos)
         if numero_principal and len(numero_principal) >= 4:
-            numero_escaped = numero_principal.replace("'", "''").replace("%", "[%]").replace("_", "[_]")
-            condiciones.append(f"T0.\"ItemCode\" LIKE ''%{numero_escaped}%''")
-        
+            n_esc = numero_principal.replace("'", "''").replace("%", "[%]").replace("_", "[_]")
+            condiciones.append(f"T0.\"ItemCode\" LIKE ''%{n_esc}%''")
+
         where_clause = " OR ".join(f"({cond})" for cond in condiciones)
         if solo_activos:
             where_clause = f"({where_clause}) AND T0.\"validFor\" = ''Y''"
-        
-        # VALIDACIÓN #4: Pedir más resultados antes del scoring
+
         limite_busqueda = limite_ajustado * 3
-        
         query = f"""
-        SELECT 
+        SELECT
             T0."ItemCode",
             T0."ItemName",
             T0."U_IXX_PACK",
@@ -372,7 +306,7 @@ class SAPClient:
             T0."validFor",
             T0."ItmsGrpCod"
         FROM OPENQUERY([{SAP_LINKED_SERVER}], '
-            SELECT 
+            SELECT
                 T0."ItemCode",
                 T0."ItemName",
                 T0."U_IXX_PACK",
@@ -387,7 +321,7 @@ class SAPClient:
         ') T0
         ORDER BY T0."ItemCode";
         """
-        
+
         conn = None
         try:
             logger.info(
@@ -396,31 +330,28 @@ class SAPClient:
             )
             conn = get_sap_db_connection()
             cursor = conn.cursor()
-            
             cursor.execute(query)
             results = cursor.fetchall()
-            
-            productos = []
-            for row in results:
-                productos.append({
-                    "ItemCode": row[0] if row[0] else None,
-                    "ItemName": row[1] if row[1] else None,
-                    "U_IXX_PACK": row[2] if row[2] else None,
-                    "ItmsGrpNam": row[3] if row[3] else None,
-                    "validFor": row[4] if row[4] else "N",
-                    "ItmsGrpCod": row[5] if row[5] else None,
-                })
-            
+
+            productos = [
+                {
+                    "ItemCode": row[0] or None,
+                    "ItemName": row[1] or None,
+                    "U_IXX_PACK": row[2] or None,
+                    "ItmsGrpNam": row[3] or None,
+                    "validFor": row[4] or "N",
+                    "ItmsGrpCod": row[5] or None,
+                }
+                for row in results
+            ]
+
             elapsed_sap = time.time() - start_time_sap
-            
-            # VALIDACIÓN #5: Observabilidad
             logger.info(
                 f"{'✅' if productos else '⚠️'} SAP directo: {len(productos)} productos encontrados "
                 f"en {elapsed_sap:.3f}s para '{sku_clean}'"
             )
-            
             return productos
-            
+
         except pyodbc.Error as e:
             elapsed_sap = time.time() - start_time_sap
             error_msg = f"Error al buscar SKUs similares para '{sku_clean}': {str(e)}"
@@ -429,16 +360,60 @@ class SAPClient:
         except Exception as e:
             elapsed_sap = time.time() - start_time_sap
             error_msg = f"Error inesperado al buscar SKUs similares para '{sku_clean}': {str(e)}"
-            logger.error(f"❌ SAP directo ({elapsed_sap:.3f}s): {error_msg}", exc_info=True)
+            logger.exception(f"❌ SAP directo ({elapsed_sap:.3f}s): {error_msg}")
             return []
         finally:
             if conn:
-                try:
-                    cursor.close()
-                    conn.close()
-                except:
-                    pass
-    
+                SAPClient._safe_close(conn, cursor)
+
+    def buscar_skus_similares(
+        self,
+        sku_referencia: str,
+        limite: int = 20,
+        solo_activos: bool = True,
+        usar_staging: bool = True,
+        longitud_minima: int = 3,
+    ) -> List[Dict[str, Any]]:
+        """
+        Busca SKUs similares usando staging (preferido) o OPENQUERY SAP (fallback).
+
+        VALIDACIONES: #1 normalización  #2 SKU corto  #3 duplicados por scoring
+                      #4 límite 3x      #5 observabilidad staging vs SAP
+        """
+        from src.utils import normalizar_codigo_producto, validar_longitud_minima_codigo
+
+        if not sku_referencia or not sku_referencia.strip():
+            return []
+
+        sku_clean = sku_referencia.strip()
+        if len(sku_clean) > 50:
+            logger.warning(f"⚠️ SKU de referencia demasiado largo: {len(sku_clean)} caracteres")
+            return []
+
+        sku_normalizado = normalizar_codigo_producto(sku_clean)
+        if not sku_normalizado:
+            logger.warning(f"⚠️ SKU '{sku_clean}' se normalizó a string vacío")
+            return []
+
+        if not validar_longitud_minima_codigo(sku_normalizado, longitud_minima):
+            logger.warning(
+                f"⚠️ SKU normalizado muy corto ({len(sku_normalizado)} < {longitud_minima}): "
+                f"'{sku_normalizado}' (original: '{sku_clean}'). "
+                f"La búsqueda puede devolver muchos resultados."
+            )
+            limite_ajustado = min(limite, 10)
+        else:
+            limite_ajustado = limite
+
+        if usar_staging:
+            resultado = self._buscar_skus_en_staging(
+                sku_clean, sku_normalizado, limite_ajustado, solo_activos, longitud_minima
+            )
+            if resultado is not None:
+                return resultado
+
+        return self._buscar_skus_en_sap(sku_clean, sku_normalizado, limite_ajustado, solo_activos)
+
     def get_bodega_info(self, whs_code: str) -> Optional[Dict[str, Any]]:
         """
         Consulta información de una bodega desde SAP usando OPENQUERY.
@@ -463,7 +438,7 @@ class SAPClient:
         
         # Validar formato del whs_code antes de procesarlo
         if not whs_code or not whs_code.strip():
-            logger.warning(f"⚠️ WhsCode vacío")
+            logger.warning("⚠️ WhsCode vacío")
             return None
         
         # Normalizar whs_code (quitar espacios)
@@ -508,18 +483,14 @@ class SAPClient:
         except pyodbc.Error as e:
             error_msg = f"Error al consultar bodega '{whs_code_normalized}': {str(e)}"
             logger.error(f"❌ SAP: {error_msg}")
-            raise Exception(error_msg) from e
+            raise RuntimeError(error_msg) from e
         except Exception as e:
             error_msg = f"Error inesperado al consultar bodega '{whs_code_normalized}': {str(e)}"
-            logger.error(f"❌ SAP: {error_msg}", exc_info=True)
-            raise Exception(error_msg) from e
+            logger.exception(f"❌ SAP: {error_msg}")
+            raise RuntimeError(error_msg) from e
         finally:
             if conn:
-                try:
-                    cursor.close()
-                    conn.close()
-                except:
-                    pass
+                SAPClient._safe_close(conn, cursor)
     
     def get_todas_bodegas(self) -> List[Dict[str, Any]]:
         """
@@ -535,7 +506,7 @@ class SAPClient:
             O lista vacía si hay error
         """
         if not self.enabled:
-            logger.debug(f"⏭️ Consulta SAP deshabilitada para obtener todas las bodegas")
+            logger.debug("⏭️ Consulta SAP deshabilitada para obtener todas las bodegas")
             return []
         
         query = f"""
@@ -553,7 +524,7 @@ class SAPClient:
         
         conn = None
         try:
-            logger.info(f"🔍 SAP: Consultando TODAS las bodegas desde OWHS")
+            logger.info("🔍 SAP: Consultando TODAS las bodegas desde OWHS")
             conn = get_sap_db_connection()
             cursor = conn.cursor()
             
@@ -576,13 +547,9 @@ class SAPClient:
             return []
         except Exception as e:
             error_msg = f"Error inesperado al consultar todas las bodegas: {str(e)}"
-            logger.error(f"❌ SAP: {error_msg}", exc_info=True)
+            logger.exception(f"❌ SAP: {error_msg}")
             return []
         finally:
             if conn:
-                try:
-                    cursor.close()
-                    conn.close()
-                except:
-                    pass
+                SAPClient._safe_close(conn, cursor)
 

@@ -36,6 +36,10 @@ from src.database.services.audit_log_service import AuditLogService
 
 logger = logging.getLogger(__name__)
 
+# Literales reutilizados (evita duplicación detectada por SonarQube)
+_SQL_NOMBRE_ESTADO_POR_ID = "SELECT nombre FROM pedido_estado WHERE id = ?"
+_SEP_AND = " AND "
+
 
 class PedidoCabeceraRepository:
     """Repositorio para operaciones de pedido (cabecera)."""
@@ -49,6 +53,292 @@ class PedidoCabeceraRepository:
         """
         self.conn = conn
         self.utils = PedidoUtils(conn)
+
+    # ------------------------------------------------------------------
+    # Helpers de mapeo fila → dict (reducen complejidad y duplicación)
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _map_pedido_estado_id(row) -> Dict[str, Any]:
+        """Fila de 16 columnas con estado_id (estado_id@13, estado_nombre@14, creado_en@15)."""
+        return {
+            "pedido_id": str(row[0]),
+            "numero_pedido": row[1],
+            "fecha_pedido": row[2].isoformat() if row[2] else None,
+            "fecha_entrega": row[3],
+            "forma_pago": row[4],
+            "mensaje": row[5],
+            "proveedor_nombre": row[6],
+            "comprador_nombre": row[7],
+            "comprador_codigo": row[8],
+            "origen_traslado": row[9],
+            "serie": row[10],
+            "archivo_nombre": row[11],
+            "creado_por": row[12],
+            "estado_id": row[13],
+            "estado_nombre": row[14],
+            "estado": row[14],
+            "creado_en": row[15].isoformat() if row[15] else None,
+        }
+
+    @staticmethod
+    def _map_pedido_estado(row) -> Dict[str, Any]:
+        """Fila de 15 columnas con estado string (estado@13, creado_en@14)."""
+        return {
+            "pedido_id": str(row[0]),
+            "numero_pedido": row[1],
+            "fecha_pedido": row[2].isoformat() if row[2] else None,
+            "fecha_entrega": row[3],
+            "forma_pago": row[4],
+            "mensaje": row[5],
+            "proveedor_nombre": row[6],
+            "comprador_nombre": row[7],
+            "comprador_codigo": row[8],
+            "origen_traslado": row[9],
+            "serie": row[10],
+            "archivo_nombre": row[11],
+            "creado_por": row[12],
+            "estado": row[13],
+            "creado_en": row[14].isoformat() if row[14] else None,
+        }
+
+    @staticmethod
+    def _map_pedido_confirmado_legacy(row) -> Dict[str, Any]:
+        """Fila confirmados sin estado_id (creado_en@13, estado@14)."""
+        return {
+            "pedido_id": str(row[0]),
+            "numero_pedido": row[1],
+            "fecha_pedido": row[2].isoformat() if row[2] else None,
+            "fecha_entrega": row[3],
+            "forma_pago": row[4],
+            "mensaje": row[5],
+            "proveedor_nombre": row[6],
+            "comprador_nombre": row[7],
+            "comprador_codigo": row[8],
+            "origen_traslado": row[9],
+            "serie": row[10],
+            "archivo_nombre": row[11],
+            "creado_por": row[12],
+            "creado_en": row[13].isoformat() if row[13] else None,
+            "estado": row[14],
+        }
+
+    @staticmethod
+    def _map_pedido_filtros_estado_id(row) -> Dict[str, Any]:
+        """Fila de filtros con estado_id (incluye modificado_fecha@16, modificado_por@17)."""
+        return {
+            "pedido_id": str(row[0]),
+            "numero_pedido": row[1],
+            "fecha_pedido": row[2].isoformat() if row[2] else None,
+            "fecha_entrega": row[3],
+            "forma_pago": row[4],
+            "mensaje": row[5],
+            "proveedor_nombre": row[6],
+            "comprador_nombre": row[7],
+            "comprador_codigo": row[8],
+            "origen_traslado": row[9],
+            "serie": row[10],
+            "archivo_nombre": row[11],
+            "creado_por": row[12],
+            "estado_id": row[13],
+            "estado_nombre": row[14],
+            "estado": row[14],
+            "creado_en": row[15].isoformat() if row[15] else None,
+            "modificado_fecha": row[16].isoformat() if row[16] else None,
+            "modificado_por": row[17],
+        }
+
+    @staticmethod
+    def _map_pedido_filtros_legacy(row, tiene_estado: bool) -> Dict[str, Any]:
+        """Fila de filtros sin estado_id (estado opcional en columna string @16)."""
+        pedido = {
+            "pedido_id": str(row[0]),
+            "numero_pedido": row[1],
+            "fecha_pedido": row[2].isoformat() if row[2] else None,
+            "fecha_entrega": row[3],
+            "forma_pago": row[4],
+            "mensaje": row[5],
+            "proveedor_nombre": row[6],
+            "comprador_nombre": row[7],
+            "comprador_codigo": row[8],
+            "origen_traslado": row[9],
+            "serie": row[10],
+            "archivo_nombre": row[11],
+            "creado_por": row[12],
+            "creado_en": row[13].isoformat() if row[13] else None,
+            "modificado_fecha": row[14].isoformat() if row[14] else None,
+            "modificado_por": row[15],
+        }
+        pedido["estado"] = row[16] if tiene_estado else None
+        return pedido
+
+    def _preparar_datos_insert(
+        self, datos_cabecera: Dict[str, Any], audit_context: Optional["AuditContext"]
+    ) -> Dict[str, Any]:
+        """Copia datos_cabecera aplicando auditoría y normalización de fechas."""
+        datos = dict(datos_cabecera)
+
+        # Aplicar campos de auditoría si se proporciona contexto
+        if audit_context:
+            if not datos.get("creado_por"):
+                datos["creado_por"] = audit_context.get_creado_por()
+            if not datos.get("origen"):
+                datos["origen"] = audit_context.origen
+            if not datos.get("ip_origen"):
+                datos["ip_origen"] = audit_context.ip_origen
+
+        if "fecha_pedido" in datos:
+            datos["fecha_pedido"] = self.utils.normalizar_fecha(datos["fecha_pedido"])
+
+        if "fecha_entrega" in datos:
+            fecha_entrega = datos["fecha_entrega"]
+            if fecha_entrega is not None and not isinstance(fecha_entrega, str):
+                datos["fecha_entrega"] = self.utils.normalizar_fecha(fecha_entrega)
+
+        return datos
+
+    def _construir_insert_sql_values(
+        self, pedido_id: str, datos: Dict[str, Any], tiene_estado_id: bool, tiene_estado: bool
+    ):
+        """
+        Construye (sql, values, estado_inicial) para insertar el pedido según las
+        columnas de estado disponibles.
+        """
+        _ahora = ahora_naive()
+
+        if tiene_estado_id:
+            estado_id = datos.get("estado_id", ESTADO_BORRADOR)
+            if isinstance(estado_id, str):
+                estado_id = estado_id_desde_legacy(estado_id)
+            # SQL con campos de auditoría (origen, ip_origen) - Buenas Prácticas Sección 3
+            sql = """
+            INSERT INTO pedido (
+                pedido_id,
+                numero_pedido,
+                fecha_pedido,
+                fecha_entrega,
+                forma_pago,
+                mensaje,
+                proveedor_nombre,
+                comprador_nombre,
+                comprador_codigo,
+                origen_traslado,
+                serie,
+                archivo_nombre,
+                creado_por,
+                estado_id,
+                origen,
+                ip_origen,
+                creado_en,
+                modificado_por,
+                modificado_fecha
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """
+            values = (
+                pedido_id,
+                datos.get("numero_pedido"),
+                datos.get("fecha_pedido"),
+                datos.get("fecha_entrega"),
+                datos.get("forma_pago"),
+                datos.get("mensaje"),
+                datos.get("proveedor_nombre"),
+                datos.get("comprador_nombre"),
+                datos.get("comprador_codigo"),
+                datos.get("origen_traslado"),
+                datos.get("serie"),
+                datos.get("archivo_nombre"),
+                datos.get("creado_por"),
+                estado_id,
+                datos.get("origen"),  # Campo de auditoría
+                datos.get("ip_origen"),  # Campo de auditoría
+                _ahora,  # creado_en
+                datos.get("creado_por"),  # modificado_por = creado_por al crear
+                _ahora,  # modificado_fecha
+            )
+            return sql, values, estado_id
+
+        if tiene_estado:
+            sql = """
+            INSERT INTO pedido (
+                pedido_id,
+                numero_pedido,
+                fecha_pedido,
+                fecha_entrega,
+                forma_pago,
+                mensaje,
+                proveedor_nombre,
+                comprador_nombre,
+                comprador_codigo,
+                origen_traslado,
+                serie,
+                archivo_nombre,
+                creado_por,
+                estado,
+                creado_en,
+                modificado_por,
+                modificado_fecha
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """
+            estado = datos.get("estado", "PENDIENTE_CONFIRMACION_PROVEEDOR")
+            values = (
+                pedido_id,
+                datos.get("numero_pedido"),
+                datos.get("fecha_pedido"),
+                datos.get("fecha_entrega"),
+                datos.get("forma_pago"),
+                datos.get("mensaje"),
+                datos.get("proveedor_nombre"),
+                datos.get("comprador_nombre"),
+                datos.get("comprador_codigo"),
+                datos.get("origen_traslado"),
+                datos.get("serie"),
+                datos.get("archivo_nombre"),
+                datos.get("creado_por"),
+                estado,
+                _ahora,  # creado_en
+                datos.get("creado_por"),  # modificado_por = creado_por al crear
+                _ahora,  # modificado_fecha
+            )
+            return sql, values, ESTADO_BORRADOR
+
+        sql = """
+        INSERT INTO pedido (
+            pedido_id,
+            numero_pedido,
+            fecha_pedido,
+            fecha_entrega,
+            forma_pago,
+            mensaje,
+            proveedor_nombre,
+            comprador_nombre,
+            comprador_codigo,
+            origen_traslado,
+            serie,
+            archivo_nombre,
+            creado_por,
+            creado_en,
+            modificado_por,
+            modificado_fecha
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """
+        values = (
+            pedido_id,
+            datos.get("numero_pedido"),
+            datos.get("fecha_pedido"),
+            datos.get("fecha_entrega"),
+            datos.get("forma_pago"),
+            datos.get("mensaje"),
+            datos.get("proveedor_nombre"),
+            datos.get("comprador_nombre"),
+            datos.get("comprador_codigo"),
+            datos.get("origen_traslado"),
+            datos.get("serie"),
+            datos.get("archivo_nombre"),
+            datos.get("creado_por"),
+            _ahora,  # creado_en
+            datos.get("creado_por"),  # modificado_por = creado_por al crear
+            _ahora,  # modificado_fecha
+        )
+        return sql, values, ESTADO_BORRADOR
 
     def insert(self, datos_cabecera: Dict[str, Any], audit_context: Optional["AuditContext"] = None) -> str:
         """
@@ -65,26 +355,7 @@ class PedidoCabeceraRepository:
         Raises:
             Exception: Si falla la inserción
         """
-        datos_cabecera_normalizado = dict(datos_cabecera)
-        
-        # Aplicar campos de auditoría si se proporciona contexto
-        if audit_context:
-            if not datos_cabecera_normalizado.get("creado_por"):
-                datos_cabecera_normalizado["creado_por"] = audit_context.get_creado_por()
-            if not datos_cabecera_normalizado.get("origen"):
-                datos_cabecera_normalizado["origen"] = audit_context.origen
-            if not datos_cabecera_normalizado.get("ip_origen"):
-                datos_cabecera_normalizado["ip_origen"] = audit_context.ip_origen
-        
-        if "fecha_pedido" in datos_cabecera_normalizado:
-            datos_cabecera_normalizado["fecha_pedido"] = self.utils.normalizar_fecha(
-                datos_cabecera_normalizado["fecha_pedido"]
-            )
-        
-        if "fecha_entrega" in datos_cabecera_normalizado:
-            fecha_entrega = datos_cabecera_normalizado["fecha_entrega"]
-            if fecha_entrega is not None and not isinstance(fecha_entrega, str):
-                datos_cabecera_normalizado["fecha_entrega"] = self.utils.normalizar_fecha(fecha_entrega)
+        datos_cabecera_normalizado = self._preparar_datos_insert(datos_cabecera, audit_context)
 
         cursor = self.conn.cursor()
         max_mensaje = self.utils.get_mensaje_column_max_len(cursor, "pedido")
@@ -100,158 +371,24 @@ class PedidoCabeceraRepository:
             if uuid_result is None:
                 raise ValueError("No se pudo generar UUID para pedido_id")
             pedido_id = str(uuid_result[0])
-            
+
             tiene_estado = self.utils.tiene_columna_estado(cursor)
             tiene_estado_id = self.utils.tiene_columna_estado_id(cursor)
 
-            if tiene_estado_id:
-                estado_id = datos_cabecera_normalizado.get("estado_id", ESTADO_BORRADOR)
-                if isinstance(estado_id, str):
-                    estado_id = estado_id_desde_legacy(estado_id)
-                # SQL con campos de auditoría (origen, ip_origen) - Buenas Prácticas Sección 3
-                sql = """
-                INSERT INTO pedido (
-                    pedido_id,
-                    numero_pedido,
-                    fecha_pedido,
-                    fecha_entrega,
-                    forma_pago,
-                    mensaje,
-                    proveedor_nombre,
-                    comprador_nombre,
-                    comprador_codigo,
-                    origen_traslado,
-                    serie,
-                    archivo_nombre,
-                    creado_por,
-                    estado_id,
-                    origen,
-                    ip_origen,
-                    creado_en,
-                    modificado_por,
-                    modificado_fecha
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """
-                _ahora = ahora_naive()
-                values = (
-                    pedido_id,
-                    datos_cabecera_normalizado.get("numero_pedido"),
-                    datos_cabecera_normalizado.get("fecha_pedido"),
-                    datos_cabecera_normalizado.get("fecha_entrega"),
-                    datos_cabecera_normalizado.get("forma_pago"),
-                    datos_cabecera_normalizado.get("mensaje"),
-                    datos_cabecera_normalizado.get("proveedor_nombre"),
-                    datos_cabecera_normalizado.get("comprador_nombre"),
-                    datos_cabecera_normalizado.get("comprador_codigo"),
-                    datos_cabecera_normalizado.get("origen_traslado"),
-                    datos_cabecera_normalizado.get("serie"),
-                    datos_cabecera_normalizado.get("archivo_nombre"),
-                    datos_cabecera_normalizado.get("creado_por"),
-                    estado_id,
-                    datos_cabecera_normalizado.get("origen"),  # Campo de auditoría
-                    datos_cabecera_normalizado.get("ip_origen"),  # Campo de auditoría
-                    _ahora,  # creado_en
-                    datos_cabecera_normalizado.get("creado_por"),  # modificado_por = creado_por al crear
-                    _ahora,  # modificado_fecha
-                )
-            elif tiene_estado:
-                sql = """
-                INSERT INTO pedido (
-                    pedido_id,
-                    numero_pedido,
-                    fecha_pedido,
-                    fecha_entrega,
-                    forma_pago,
-                    mensaje,
-                    proveedor_nombre,
-                    comprador_nombre,
-                    comprador_codigo,
-                    origen_traslado,
-                    serie,
-                    archivo_nombre,
-                    creado_por,
-                    estado,
-                    creado_en,
-                    modificado_por,
-                    modificado_fecha
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """
-                estado = datos_cabecera_normalizado.get("estado", "PENDIENTE_CONFIRMACION_PROVEEDOR")
-                _ahora = ahora_naive()
-                values = (
-                    pedido_id,
-                    datos_cabecera_normalizado.get("numero_pedido"),
-                    datos_cabecera_normalizado.get("fecha_pedido"),
-                    datos_cabecera_normalizado.get("fecha_entrega"),
-                    datos_cabecera_normalizado.get("forma_pago"),
-                    datos_cabecera_normalizado.get("mensaje"),
-                    datos_cabecera_normalizado.get("proveedor_nombre"),
-                    datos_cabecera_normalizado.get("comprador_nombre"),
-                    datos_cabecera_normalizado.get("comprador_codigo"),
-                    datos_cabecera_normalizado.get("origen_traslado"),
-                    datos_cabecera_normalizado.get("serie"),
-                    datos_cabecera_normalizado.get("archivo_nombre"),
-                    datos_cabecera_normalizado.get("creado_por"),
-                    estado,
-                    _ahora,  # creado_en
-                    datos_cabecera_normalizado.get("creado_por"),  # modificado_por = creado_por al crear
-                    _ahora,  # modificado_fecha
-                )
-            else:
-                sql = """
-                INSERT INTO pedido (
-                    pedido_id,
-                    numero_pedido,
-                    fecha_pedido,
-                    fecha_entrega,
-                    forma_pago,
-                    mensaje,
-                    proveedor_nombre,
-                    comprador_nombre,
-                    comprador_codigo,
-                    origen_traslado,
-                    serie,
-                    archivo_nombre,
-                    creado_por,
-                    creado_en,
-                    modificado_por,
-                    modificado_fecha
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """
-                _ahora = ahora_naive()
-                values = (
-                    pedido_id,
-                    datos_cabecera_normalizado.get("numero_pedido"),
-                    datos_cabecera_normalizado.get("fecha_pedido"),
-                    datos_cabecera_normalizado.get("fecha_entrega"),
-                    datos_cabecera_normalizado.get("forma_pago"),
-                    datos_cabecera_normalizado.get("mensaje"),
-                    datos_cabecera_normalizado.get("proveedor_nombre"),
-                    datos_cabecera_normalizado.get("comprador_nombre"),
-                    datos_cabecera_normalizado.get("comprador_codigo"),
-                    datos_cabecera_normalizado.get("origen_traslado"),
-                    datos_cabecera_normalizado.get("serie"),
-                    datos_cabecera_normalizado.get("archivo_nombre"),
-                    datos_cabecera_normalizado.get("creado_por"),
-                    _ahora,  # creado_en
-                    datos_cabecera_normalizado.get("creado_por"),  # modificado_por = creado_por al crear
-                    _ahora,  # modificado_fecha
-                )
-            
-            cursor.execute(sql, values)
-            
-            # Registrar creación inicial en pedido_estado_historial
-            estado_inicial = (
-                estado_id if tiene_estado_id
-                else ESTADO_BORRADOR
+            sql, values, estado_inicial = self._construir_insert_sql_values(
+                pedido_id, datos_cabecera_normalizado, tiene_estado_id, tiene_estado
             )
+
+            cursor.execute(sql, values)
+
+            # Registrar creación inicial en pedido_estado_historial
             self._registrar_transicion_estado(
                 cursor, pedido_id,
                 estado_anterior_id=None,
                 estado_nuevo_id=estado_inicial,
                 audit_context=audit_context,
             )
-            
+
             self.conn.commit()
             
             logger.debug(f"✅ Pedido cabecera insertada: {pedido_id} - Pedido: {datos_cabecera_normalizado.get('numero_pedido')}")
@@ -571,7 +708,7 @@ class PedidoCabeceraRepository:
                 """, (estado_id, estado_id, modificado_por, modificado_fecha, estado_id, pedido_id))
             elif tiene_estado:
                 cursor.execute(
-                    "SELECT nombre FROM pedido_estado WHERE id = ?", (estado_id,)
+                    _SQL_NOMBRE_ESTADO_POR_ID, (estado_id,)
                 )
                 nom = cursor.fetchone()
                 nombre = nom[0] if nom and nom[0] else str(estado_id)
@@ -709,6 +846,157 @@ class PedidoCabeceraRepository:
             if own_cursor:
                 cur.close()
 
+    def _cargar_existing_update(
+        self, cursor: pyodbc.Cursor, pedido_id: str, tiene_estado: bool
+    ) -> Optional[Dict[str, Any]]:
+        """Lee el pedido existente y devuelve el dict de campos fusionables, o None si no existe."""
+        if tiene_estado:
+            cursor.execute("""
+                SELECT
+                    pedido_id, numero_pedido, fecha_pedido, fecha_entrega,
+                    forma_pago, mensaje, proveedor_nombre, comprador_nombre,
+                    comprador_codigo, origen_traslado, serie, archivo_nombre,
+                    creado_por, estado
+                FROM pedido
+                WHERE pedido_id = ?
+            """, (pedido_id,))
+        else:
+            cursor.execute("""
+                SELECT
+                    pedido_id, numero_pedido, fecha_pedido, fecha_entrega,
+                    forma_pago, mensaje, proveedor_nombre, comprador_nombre,
+                    comprador_codigo, origen_traslado, serie, archivo_nombre,
+                    creado_por
+                FROM pedido
+                WHERE pedido_id = ?
+            """, (pedido_id,))
+
+        row = cursor.fetchone()
+        if not row:
+            return None
+
+        existing = {
+            "fecha_pedido": row[2].isoformat() if row[2] else None,
+            "fecha_entrega": row[3],
+            "forma_pago": row[4],
+            "mensaje": row[5],
+            "proveedor_nombre": row[6],
+            "comprador_nombre": row[7],
+            "comprador_codigo": row[8],
+            "origen_traslado": row[9],
+            "serie": row[10],
+            "archivo_nombre": row[11],
+        }
+        if tiene_estado:
+            existing["estado"] = row[13]
+        return existing
+
+    def _fusionar_datos_update(
+        self, cursor: pyodbc.Cursor, existing: Dict[str, Any], datos_cabecera: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Fusiona datos nuevos sobre los existentes (preserva existente si el nuevo es None)."""
+        merged = {}
+        for key in existing.keys():
+            new_value = datos_cabecera.get(key)
+            merged[key] = new_value if new_value is not None else existing[key]
+
+        if "fecha_pedido" in merged and merged["fecha_pedido"] is not None:
+            fp = merged["fecha_pedido"]
+            if isinstance(fp, date):
+                merged["fecha_pedido"] = fp.isoformat()
+
+        if "mensaje" in merged:
+            max_m = self.utils.get_mensaje_column_max_len(cursor, "pedido")
+            merged["mensaje"] = clamp_pedido_mensaje(
+                merged.get("mensaje"),
+                max_length=max_m,
+            )
+        return merged
+
+    def _construir_update_sql_values(
+        self, merged: Dict[str, Any], tiene_estado: bool,
+        modificado_por, modificado_fecha, audit, pedido_id: str
+    ):
+        """Construye (sql, values) para el UPDATE de la cabecera del pedido."""
+        if tiene_estado:
+            sql = """
+            UPDATE pedido SET
+                fecha_pedido = ?,
+                fecha_entrega = ?,
+                forma_pago = ?,
+                mensaje = ?,
+                proveedor_nombre = ?,
+                comprador_nombre = ?,
+                comprador_codigo = ?,
+                origen_traslado = ?,
+                serie = ?,
+                estado = ?,
+                modificado_por = ?,
+                modificado_fecha = ?,
+                origen = COALESCE(?, origen),
+                ip_origen = COALESCE(?, ip_origen)
+            WHERE pedido_id = ?
+            """
+            values = (
+                merged.get("fecha_pedido"),
+                merged.get("fecha_entrega"),
+                merged.get("forma_pago"),
+                merged.get("mensaje"),
+                merged.get("proveedor_nombre"),
+                merged.get("comprador_nombre"),
+                merged.get("comprador_codigo"),
+                merged.get("origen_traslado"),
+                merged.get("serie"),
+                merged.get("estado"),
+                modificado_por,
+                modificado_fecha,
+                audit.origen,
+                audit.ip_origen,
+                pedido_id,
+            )
+        else:
+            sql = """
+            UPDATE pedido SET
+                fecha_pedido = ?,
+                fecha_entrega = ?,
+                forma_pago = ?,
+                mensaje = ?,
+                proveedor_nombre = ?,
+                comprador_nombre = ?,
+                comprador_codigo = ?,
+                origen_traslado = ?,
+                serie = ?,
+                modificado_por = ?,
+                modificado_fecha = ?
+            WHERE pedido_id = ?
+            """
+            values = (
+                merged.get("fecha_pedido"),
+                merged.get("fecha_entrega"),
+                merged.get("forma_pago"),
+                merged.get("mensaje"),
+                merged.get("proveedor_nombre"),
+                merged.get("comprador_nombre"),
+                merged.get("comprador_codigo"),
+                merged.get("origen_traslado"),
+                merged.get("serie"),
+                modificado_por,
+                modificado_fecha,
+                pedido_id,
+            )
+        return sql, values
+
+    @staticmethod
+    def _calcular_cambios(existing: Dict[str, Any], merged: Dict[str, Any]) -> Dict[str, Any]:
+        """Determina qué campos cambiaron entre existing y merged (para audit log)."""
+        cambios = {}
+        for campo in existing:
+            val_anterior = existing[campo]
+            val_nuevo = merged.get(campo)
+            if str(val_anterior) != str(val_nuevo):
+                cambios[campo] = {"anterior": val_anterior, "nuevo": val_nuevo}
+        return cambios
+
     def update(
         self,
         pedido_id: str,
@@ -733,153 +1021,31 @@ class PedidoCabeceraRepository:
         audit = ensure_audit_context(audit_context)
         
         cursor = self.conn.cursor()
-        
+
         try:
             tiene_estado = self.utils.tiene_columna_estado(cursor)
-            
-            if tiene_estado:
-                cursor.execute("""
-                    SELECT 
-                        pedido_id, numero_pedido, fecha_pedido, fecha_entrega,
-                        forma_pago, mensaje, proveedor_nombre, comprador_nombre,
-                        comprador_codigo, origen_traslado, serie, archivo_nombre,
-                        creado_por, estado
-                    FROM pedido
-                    WHERE pedido_id = ?
-                """, (pedido_id,))
-            else:
-                cursor.execute("""
-                    SELECT 
-                        pedido_id, numero_pedido, fecha_pedido, fecha_entrega,
-                        forma_pago, mensaje, proveedor_nombre, comprador_nombre,
-                        comprador_codigo, origen_traslado, serie, archivo_nombre,
-                        creado_por
-                    FROM pedido
-                    WHERE pedido_id = ?
-                """, (pedido_id,))
-            
-            row = cursor.fetchone()
-            if not row:
+
+            existing = self._cargar_existing_update(cursor, pedido_id, tiene_estado)
+            if existing is None:
                 logger.warning(f"⚠️ No se encontró pedido para actualizar: {pedido_id}")
                 return False
-            
-            existing = {
-                "fecha_pedido": row[2].isoformat() if row[2] else None,
-                "fecha_entrega": row[3],
-                "forma_pago": row[4],
-                "mensaje": row[5],
-                "proveedor_nombre": row[6],
-                "comprador_nombre": row[7],
-                "comprador_codigo": row[8],
-                "origen_traslado": row[9],
-                "serie": row[10],
-                "archivo_nombre": row[11],
-            }
-            if tiene_estado:
-                existing["estado"] = row[13]
-            
-            merged = {}
-            for key in existing.keys():
-                new_value = datos_cabecera.get(key)
-                if new_value is not None:
-                    merged[key] = new_value
-                else:
-                    merged[key] = existing[key]
-            
-            if "fecha_pedido" in merged and merged["fecha_pedido"] is not None:
-                fp = merged["fecha_pedido"]
-                if isinstance(fp, date):
-                    merged["fecha_pedido"] = fp.isoformat()
 
-            if "mensaje" in merged:
-                max_m = self.utils.get_mensaje_column_max_len(cursor, "pedido")
-                merged["mensaje"] = clamp_pedido_mensaje(
-                    merged.get("mensaje"),
-                    max_length=max_m,
-                )
+            merged = self._fusionar_datos_update(cursor, existing, datos_cabecera)
 
             # Campos de auditoría
             modificado_por = audit.get_modificado_por()
             modificado_fecha = ahora_naive()
-            
-            if tiene_estado:
-                sql = """
-                UPDATE pedido SET
-                    fecha_pedido = ?,
-                    fecha_entrega = ?,
-                    forma_pago = ?,
-                    mensaje = ?,
-                    proveedor_nombre = ?,
-                    comprador_nombre = ?,
-                    comprador_codigo = ?,
-                    origen_traslado = ?,
-                    serie = ?,
-                    estado = ?,
-                    modificado_por = ?,
-                    modificado_fecha = ?,
-                    origen = COALESCE(?, origen),
-                    ip_origen = COALESCE(?, ip_origen)
-                WHERE pedido_id = ?
-                """
-                values = (
-                    merged.get("fecha_pedido"),
-                    merged.get("fecha_entrega"),
-                    merged.get("forma_pago"),
-                    merged.get("mensaje"),
-                    merged.get("proveedor_nombre"),
-                    merged.get("comprador_nombre"),
-                    merged.get("comprador_codigo"),
-                    merged.get("origen_traslado"),
-                    merged.get("serie"),
-                    merged.get("estado"),
-                    modificado_por,
-                    modificado_fecha,
-                    audit.origen,
-                    audit.ip_origen,
-                    pedido_id,
-                )
-            else:
-                sql = """
-                UPDATE pedido SET
-                    fecha_pedido = ?,
-                    fecha_entrega = ?,
-                    forma_pago = ?,
-                    mensaje = ?,
-                    proveedor_nombre = ?,
-                    comprador_nombre = ?,
-                    comprador_codigo = ?,
-                    origen_traslado = ?,
-                    serie = ?,
-                    modificado_por = ?,
-                    modificado_fecha = ?
-                WHERE pedido_id = ?
-                """
-                values = (
-                    merged.get("fecha_pedido"),
-                    merged.get("fecha_entrega"),
-                    merged.get("forma_pago"),
-                    merged.get("mensaje"),
-                    merged.get("proveedor_nombre"),
-                    merged.get("comprador_nombre"),
-                    merged.get("comprador_codigo"),
-                    merged.get("origen_traslado"),
-                    merged.get("serie"),
-                    modificado_por,
-                    modificado_fecha,
-                    pedido_id,
-                )
-            
+
+            sql, values = self._construir_update_sql_values(
+                merged, tiene_estado, modificado_por, modificado_fecha, audit, pedido_id
+            )
+
             cursor.execute(sql, values)
             rows_affected = cursor.rowcount
-            
+
             # Registrar cambios en audit log
-            cambios = {}
-            for campo in existing:
-                val_anterior = existing[campo]
-                val_nuevo = merged.get(campo)
-                if str(val_anterior) != str(val_nuevo):
-                    cambios[campo] = {"anterior": val_anterior, "nuevo": val_nuevo}
-            
+            cambios = self._calcular_cambios(existing, merged)
+
             if cambios:
                 audit_svc = AuditLogService(self.conn)
                 audit_svc.registrar_cambios(
@@ -939,39 +1105,18 @@ class PedidoCabeceraRepository:
                     WHERE p.estado_id = ?
                     ORDER BY p.creado_en DESC
                 """, (estado_id,))
-                pedidos = []
-                for row in cursor.fetchall():
-                    pedidos.append({
-                        "pedido_id": str(row[0]),
-                        "numero_pedido": row[1],
-                        "fecha_pedido": row[2].isoformat() if row[2] else None,
-                        "fecha_entrega": row[3],
-                        "forma_pago": row[4],
-                        "mensaje": row[5],
-                        "proveedor_nombre": row[6],
-                        "comprador_nombre": row[7],
-                        "comprador_codigo": row[8],
-                        "origen_traslado": row[9],
-                        "serie": row[10],
-                        "archivo_nombre": row[11],
-                        "creado_por": row[12],
-                        "estado_id": row[13],
-                        "estado_nombre": row[14],
-                        "estado": row[14],
-                        "creado_en": row[15].isoformat() if row[15] else None,
-                    })
-                return pedidos
+                return [self._map_pedido_estado_id(row) for row in cursor.fetchall()]
 
             # Solo columna estado: filtrar por string; si recibimos int, resolver nombre
             filtro_estado: str
             if isinstance(estado, str):
                 filtro_estado = estado
             else:
-                cursor.execute("SELECT nombre FROM pedido_estado WHERE id = ?", (estado_id,))
+                cursor.execute(_SQL_NOMBRE_ESTADO_POR_ID, (estado_id,))
                 r = cursor.fetchone()
                 filtro_estado = r[0] if r and r[0] else str(estado_id)
             cursor.execute("""
-                SELECT 
+                SELECT
                     pedido_id, numero_pedido, fecha_pedido, fecha_entrega,
                     forma_pago, mensaje, proveedor_nombre, comprador_nombre,
                     comprador_codigo, origen_traslado, serie, archivo_nombre,
@@ -980,31 +1125,123 @@ class PedidoCabeceraRepository:
                 WHERE estado = ?
                 ORDER BY creado_en DESC
             """, (filtro_estado,))
-            pedidos = []
-            for row in cursor.fetchall():
-                pedidos.append({
-                    "pedido_id": str(row[0]),
-                    "numero_pedido": row[1],
-                    "fecha_pedido": row[2].isoformat() if row[2] else None,
-                    "fecha_entrega": row[3],
-                    "forma_pago": row[4],
-                    "mensaje": row[5],
-                    "proveedor_nombre": row[6],
-                    "comprador_nombre": row[7],
-                    "comprador_codigo": row[8],
-                    "origen_traslado": row[9],
-                    "serie": row[10],
-                    "archivo_nombre": row[11],
-                    "creado_por": row[12],
-                    "estado": row[13],
-                    "creado_en": row[14].isoformat() if row[14] else None,
-                })
-            return pedidos
+            return [self._map_pedido_estado(row) for row in cursor.fetchall()]
         except Exception as e:
             logger.error(f"❌ Error al obtener pedidos por estado: {e}", exc_info=True)
             raise
         finally:
             cursor.close()
+
+    def _construir_filtros_pedidos(
+        self, cursor, *,
+        estado, excluir_borrador, solo_redistribucion, solo_pendientes_accion,
+        fecha_desde, fecha_hasta, proveedor_nombre, numero_pedido, creado_por,
+        tiene_estado_id, tiene_estado,
+    ):
+        """Construye (where_conditions, params) para get_pedidos_con_filtros."""
+        where_conditions: List[str] = []
+        params: List[Any] = []
+
+        if estado is not None and (tiene_estado_id or tiene_estado):
+            estado_id = int(estado) if isinstance(estado, int) else estado_id_desde_legacy(estado)
+            if tiene_estado_id:
+                where_conditions.append("p.estado_id = ?")
+                params.append(estado_id)
+            else:
+                cursor.execute(_SQL_NOMBRE_ESTADO_POR_ID, (estado_id,))
+                r = cursor.fetchone()
+                nom = r[0] if r and r[0] else str(estado_id)
+                where_conditions.append("p.estado = ?")
+                params.append(nom)
+
+        if excluir_borrador and (tiene_estado_id or tiene_estado):
+            if tiene_estado_id:
+                where_conditions.append("(p.estado_id IS NULL OR p.estado_id <> ?)")
+                params.append(ESTADO_BORRADOR)
+            else:
+                where_conditions.append("(p.estado IS NULL OR (p.estado <> N'BORRADOR' AND p.estado <> N'PENDIENTE_CONFIRMACION_PROVEEDOR'))")
+
+        # Filtro para vista de redistribución: solo pedidos con estado >= 4 (CONFIRMADO POR EL RAYO)
+        # y excluir DESPACHAR_Y_FACTURAR (17), FINALIZADO (18), CANCELADO (19) y CANCELADO POR EL RAYO (20)
+        if solo_redistribucion and (tiene_estado_id or tiene_estado):
+            if tiene_estado_id:
+                where_conditions.append("p.estado_id >= ?")
+                params.append(ESTADO_REDISTRIBUCION)
+                where_conditions.append("p.estado_id NOT IN (?, ?, ?, ?)")
+                params.extend([ESTADO_DESPACHAR_Y_FACTURAR, ESTADO_FINALIZADO, ESTADO_CANCELADO, ESTADO_CANCELADO_POR_EL_RAYO])
+            else:
+                # Fallback para bases de datos sin columna estado_id
+                where_conditions.append("p.estado NOT IN (N'BORRADOR', N'NUEVO_PEDIDO', N'GESTIONAR_PEDIDO', N'PENDIENTE_CONFIRMACION_PROVEEDOR', N'DESPACHAR_Y_FACTURAR', N'DESPACHAR Y FACTURAR', N'FINALIZADO', N'CANCELADO', N'CANCELADO POR EL RAYO')")
+
+        if fecha_desde:
+            where_conditions.append("CAST(p.fecha_pedido AS DATE) >= CAST(? AS DATE)")
+            params.append(fecha_desde)
+
+        if fecha_hasta:
+            where_conditions.append("CAST(p.fecha_pedido AS DATE) <= CAST(? AS DATE)")
+            params.append(fecha_hasta)
+
+        if proveedor_nombre:
+            where_conditions.append("p.proveedor_nombre LIKE ?")
+            params.append(f"%{proveedor_nombre}%")
+
+        if numero_pedido:
+            where_conditions.append("p.numero_pedido LIKE ?")
+            params.append(f"%{numero_pedido}%")
+
+        if creado_por:
+            where_conditions.append("p.creado_por = ?")
+            params.append(creado_por)
+
+        if solo_pendientes_accion and (tiene_estado_id or tiene_estado):
+            from src.database.pedido_estados import (
+                ESTADOS_REQUIERE_ACCION_IDS,
+                ESTADOS_REQUIERE_ACCION_NOMBRES,
+            )
+            if tiene_estado_id:
+                placeholders = ",".join("?" * len(ESTADOS_REQUIERE_ACCION_IDS))
+                where_conditions.append(f"p.estado_id IN ({placeholders})")
+                params.extend(sorted(ESTADOS_REQUIERE_ACCION_IDS))
+            else:
+                legacy_placeholders = ",".join("?" * len(ESTADOS_REQUIERE_ACCION_NOMBRES))
+                where_conditions.append(f"p.estado IN ({legacy_placeholders})")
+                params.extend(ESTADOS_REQUIERE_ACCION_NOMBRES)
+
+        return where_conditions, params
+
+    @staticmethod
+    def _construir_data_query_filtros(where_clause: str, tiene_estado_id: bool, tiene_estado: bool) -> str:
+        """Construye el SELECT paginable para get_pedidos_con_filtros."""
+        if tiene_estado_id:
+            select_fields = """
+                p.pedido_id, p.numero_pedido, p.fecha_pedido, p.fecha_entrega,
+                p.forma_pago, p.mensaje, p.proveedor_nombre, p.comprador_nombre,
+                p.comprador_codigo, p.origen_traslado, p.serie, p.archivo_nombre,
+                p.creado_por, p.estado_id, pe.nombre AS estado_nombre, p.creado_en,
+                p.modificado_fecha, p.modificado_por
+            """
+            return f"""
+                SELECT {select_fields}
+                FROM pedido p
+                LEFT JOIN pedido_estado pe ON pe.id = p.estado_id
+                WHERE {where_clause}
+                ORDER BY p.creado_en DESC
+            """
+
+        select_fields = """
+            p.pedido_id, p.numero_pedido, p.fecha_pedido, p.fecha_entrega,
+            p.forma_pago, p.mensaje, p.proveedor_nombre, p.comprador_nombre,
+            p.comprador_codigo, p.origen_traslado, p.serie, p.archivo_nombre,
+            p.creado_por, p.creado_en, p.modificado_fecha, p.modificado_por
+        """
+        if tiene_estado:
+            select_fields += ", p.estado"
+        return f"""
+            SELECT {select_fields}
+            FROM pedido p
+            WHERE {where_clause}
+            ORDER BY p.creado_en DESC
+        """
 
     def get_pedidos_con_filtros(
         self,
@@ -1036,166 +1273,41 @@ class PedidoCabeceraRepository:
             tiene_estado = self.utils.tiene_columna_estado(cursor)
             tiene_estado_id = self.utils.tiene_columna_estado_id(cursor)
 
-            where_conditions = []
-            params: List[Any] = []
+            where_conditions, params = self._construir_filtros_pedidos(
+                cursor,
+                estado=estado,
+                excluir_borrador=excluir_borrador,
+                solo_redistribucion=solo_redistribucion,
+                solo_pendientes_accion=solo_pendientes_accion,
+                fecha_desde=fecha_desde,
+                fecha_hasta=fecha_hasta,
+                proveedor_nombre=proveedor_nombre,
+                numero_pedido=numero_pedido,
+                creado_por=creado_por,
+                tiene_estado_id=tiene_estado_id,
+                tiene_estado=tiene_estado,
+            )
 
-            if estado is not None and (tiene_estado_id or tiene_estado):
-                estado_id = int(estado) if isinstance(estado, int) else estado_id_desde_legacy(estado)
-                if tiene_estado_id:
-                    where_conditions.append("p.estado_id = ?")
-                    params.append(estado_id)
-                else:
-                    cursor.execute("SELECT nombre FROM pedido_estado WHERE id = ?", (estado_id,))
-                    r = cursor.fetchone()
-                    nom = r[0] if r and r[0] else str(estado_id)
-                    where_conditions.append("p.estado = ?")
-                    params.append(nom)
+            where_clause = _SEP_AND.join(where_conditions) if where_conditions else "1=1"
 
-            if excluir_borrador and (tiene_estado_id or tiene_estado):
-                if tiene_estado_id:
-                    where_conditions.append("(p.estado_id IS NULL OR p.estado_id <> ?)")
-                    params.append(ESTADO_BORRADOR)
-                else:
-                    where_conditions.append("(p.estado IS NULL OR (p.estado <> N'BORRADOR' AND p.estado <> N'PENDIENTE_CONFIRMACION_PROVEEDOR'))")
-
-            # Filtro para vista de redistribución: solo pedidos con estado >= 4 (CONFIRMADO POR EL RAYO)
-            # y excluir DESPACHAR_Y_FACTURAR (17), FINALIZADO (18), CANCELADO (19) y CANCELADO POR EL RAYO (20)
-            if solo_redistribucion and (tiene_estado_id or tiene_estado):
-                if tiene_estado_id:
-                    where_conditions.append("p.estado_id >= ?")
-                    params.append(ESTADO_REDISTRIBUCION)
-                    where_conditions.append("p.estado_id NOT IN (?, ?, ?, ?)")
-                    params.extend([ESTADO_DESPACHAR_Y_FACTURAR, ESTADO_FINALIZADO, ESTADO_CANCELADO, ESTADO_CANCELADO_POR_EL_RAYO])
-                else:
-                    # Fallback para bases de datos sin columna estado_id
-                    where_conditions.append("p.estado NOT IN (N'BORRADOR', N'NUEVO_PEDIDO', N'GESTIONAR_PEDIDO', N'PENDIENTE_CONFIRMACION_PROVEEDOR', N'DESPACHAR_Y_FACTURAR', N'DESPACHAR Y FACTURAR', N'FINALIZADO', N'CANCELADO', N'CANCELADO POR EL RAYO')")
-
-            if fecha_desde:
-                where_conditions.append("CAST(p.fecha_pedido AS DATE) >= CAST(? AS DATE)")
-                params.append(fecha_desde)
-            
-            if fecha_hasta:
-                where_conditions.append("CAST(p.fecha_pedido AS DATE) <= CAST(? AS DATE)")
-                params.append(fecha_hasta)
-            
-            if proveedor_nombre:
-                where_conditions.append("p.proveedor_nombre LIKE ?")
-                params.append(f"%{proveedor_nombre}%")
-            
-            if numero_pedido:
-                where_conditions.append("p.numero_pedido LIKE ?")
-                params.append(f"%{numero_pedido}%")
-            
-            if creado_por:
-                where_conditions.append("p.creado_por = ?")
-                params.append(creado_por)
-
-            if solo_pendientes_accion and (tiene_estado_id or tiene_estado):
-                from src.database.pedido_estados import (
-                    ESTADOS_REQUIERE_ACCION_IDS,
-                    ESTADOS_REQUIERE_ACCION_NOMBRES,
-                )
-                if tiene_estado_id:
-                    placeholders = ",".join("?" * len(ESTADOS_REQUIERE_ACCION_IDS))
-                    where_conditions.append(f"p.estado_id IN ({placeholders})")
-                    params.extend(sorted(ESTADOS_REQUIERE_ACCION_IDS))
-                else:
-                    legacy_placeholders = ",".join("?" * len(ESTADOS_REQUIERE_ACCION_NOMBRES))
-                    where_conditions.append(f"p.estado IN ({legacy_placeholders})")
-                    params.extend(ESTADOS_REQUIERE_ACCION_NOMBRES)
-            
-            where_clause = " AND ".join(where_conditions) if where_conditions else "1=1"
-            
             count_query = f"SELECT COUNT(*) FROM pedido p WHERE {where_clause}"
             cursor.execute(count_query, params)
             result = cursor.fetchone()
             total = result[0] if result else 0
 
-            if tiene_estado_id:
-                select_fields = """
-                    p.pedido_id, p.numero_pedido, p.fecha_pedido, p.fecha_entrega,
-                    p.forma_pago, p.mensaje, p.proveedor_nombre, p.comprador_nombre,
-                    p.comprador_codigo, p.origen_traslado, p.serie, p.archivo_nombre,
-                    p.creado_por, p.estado_id, pe.nombre AS estado_nombre, p.creado_en,
-                    p.modificado_fecha, p.modificado_por
-                """
-                data_query = f"""
-                    SELECT {select_fields}
-                    FROM pedido p
-                    LEFT JOIN pedido_estado pe ON pe.id = p.estado_id
-                    WHERE {where_clause}
-                    ORDER BY p.creado_en DESC
-                """
-            else:
-                select_fields = """
-                    p.pedido_id, p.numero_pedido, p.fecha_pedido, p.fecha_entrega,
-                    p.forma_pago, p.mensaje, p.proveedor_nombre, p.comprador_nombre,
-                    p.comprador_codigo, p.origen_traslado, p.serie, p.archivo_nombre,
-                    p.creado_por, p.creado_en, p.modificado_fecha, p.modificado_por
-                """
-                if tiene_estado:
-                    select_fields += ", p.estado"
-                data_query = f"""
-                    SELECT {select_fields}
-                    FROM pedido p
-                    WHERE {where_clause}
-                    ORDER BY p.creado_en DESC
-                """
-
+            data_query = self._construir_data_query_filtros(where_clause, tiene_estado_id, tiene_estado)
             if limit is not None:
                 data_query += f" OFFSET {offset or 0} ROWS FETCH NEXT {limit} ROWS ONLY"
 
             cursor.execute(data_query, params)
 
-            pedidos = []
-            for row in cursor.fetchall():
-                idx = 0
-                if tiene_estado_id:
-                    pedido = {
-                        "pedido_id": str(row[idx]),
-                        "numero_pedido": row[idx + 1],
-                        "fecha_pedido": row[idx + 2].isoformat() if row[idx + 2] else None,
-                        "fecha_entrega": row[idx + 3],
-                        "forma_pago": row[idx + 4],
-                        "mensaje": row[idx + 5],
-                        "proveedor_nombre": row[idx + 6],
-                        "comprador_nombre": row[idx + 7],
-                        "comprador_codigo": row[idx + 8],
-                        "origen_traslado": row[idx + 9],
-                        "serie": row[idx + 10],
-                        "archivo_nombre": row[idx + 11],
-                        "creado_por": row[idx + 12],
-                        "estado_id": row[idx + 13],
-                        "estado_nombre": row[idx + 14],
-                        "estado": row[idx + 14],
-                        "creado_en": row[idx + 15].isoformat() if row[idx + 15] else None,
-                        "modificado_fecha": row[idx + 16].isoformat() if row[idx + 16] else None,
-                        "modificado_por": row[idx + 17],
-                    }
-                else:
-                    pedido = {
-                        "pedido_id": str(row[idx]),
-                        "numero_pedido": row[idx + 1],
-                        "fecha_pedido": row[idx + 2].isoformat() if row[idx + 2] else None,
-                        "fecha_entrega": row[idx + 3],
-                        "forma_pago": row[idx + 4],
-                        "mensaje": row[idx + 5],
-                        "proveedor_nombre": row[idx + 6],
-                        "comprador_nombre": row[idx + 7],
-                        "comprador_codigo": row[idx + 8],
-                        "origen_traslado": row[idx + 9],
-                        "serie": row[idx + 10],
-                        "archivo_nombre": row[idx + 11],
-                        "creado_por": row[idx + 12],
-                        "creado_en": row[idx + 13].isoformat() if row[idx + 13] else None,
-                        "modificado_fecha": row[idx + 14].isoformat() if row[idx + 14] else None,
-                        "modificado_por": row[idx + 15],
-                    }
-                    pedido["estado"] = row[idx + 16] if tiene_estado else None
-                pedidos.append(pedido)
-            
+            if tiene_estado_id:
+                pedidos = [self._map_pedido_filtros_estado_id(row) for row in cursor.fetchall()]
+            else:
+                pedidos = [self._map_pedido_filtros_legacy(row, tiene_estado) for row in cursor.fetchall()]
+
             has_more = (offset or 0) + len(pedidos) < total if limit else False
-            
+
             return {
                 "data": pedidos,
                 "total": total,
@@ -1203,12 +1315,103 @@ class PedidoCabeceraRepository:
                 "offset": offset or 0,
                 "has_more": has_more
             }
-            
+
         except Exception as e:
             logger.error(f"❌ Error al obtener pedidos con filtros: {e}", exc_info=True)
             raise
         finally:
             cursor.close()
+
+    @staticmethod
+    def _base_confirmados(tiene_estado_id: bool):
+        """Devuelve (where_clause, params, select_fields) base para pedidos confirmados."""
+        if tiene_estado_id:
+            # Desde CONFIRMADO REDISTRIBUCION (10) en adelante,
+            # excluyendo estados de cancelación (19, 20). Este filtro aplica tanto
+            # cuando solo_redistribucion_confirmada es True como cuando es False,
+            # para incluir también estados posteriores como DESPACHAR_Y_FACTURAR (17)
+            # y FINALIZADO (18) en la pantalla Revisar Redistribución.
+            where_clause = "p.estado_id >= ? AND p.estado_id NOT IN (?, ?)"
+            params: List[Any] = [
+                ESTADO_PEDIDO_CONFIRMADO,
+                ESTADO_CANCELADO,
+                ESTADO_CANCELADO_POR_EL_RAYO,
+            ]
+            select_fields = """
+                p.pedido_id, p.numero_pedido, p.fecha_pedido, p.fecha_entrega,
+                p.forma_pago, p.mensaje, p.proveedor_nombre, p.comprador_nombre,
+                p.comprador_codigo, p.origen_traslado, p.serie, p.archivo_nombre,
+                p.creado_por, p.estado_id, pe.nombre AS estado_nombre, p.creado_en
+            """
+            return where_clause, params, select_fields
+
+        # Fallback para bases de datos sin columna estado_id (usando campo estado string).
+        # Estados desde CONFIRMADO REDISTRIBUCION (10) en adelante,
+        # excluyendo cancelados. Usar strings legacy mapeados en LEGACY_STRING_TO_ID.
+        # Incluye también DESPACHAR_Y_FACTURAR y FINALIZADO.
+        where_clause = (
+            "p.estado IN ("
+            "N'PEDIDO_CONFIRMADO', "
+            "N'CONFIRMADO REDISTRIBUCION', "
+            "N'CONFIRMADO_ENVIADO', "
+            "N'PENDIENTE_LOGISTICA', "
+            "N'ERROR_DATOS_MAESTROS', "
+            "N'DESPACHAR_Y_FACTURAR', "
+            "N'DESPACHAR Y FACTURAR', "
+            "N'FINALIZADO'"
+            ")"
+        )
+        params = []
+        select_fields = """
+            p.pedido_id, p.numero_pedido, p.fecha_pedido, p.fecha_entrega,
+            p.forma_pago, p.mensaje, p.proveedor_nombre, p.comprador_nombre,
+            p.comprador_codigo, p.origen_traslado, p.serie, p.archivo_nombre,
+            p.creado_por, p.creado_en, p.estado
+        """
+        return where_clause, params, select_fields
+
+    @staticmethod
+    def _aplicar_filtros_extra_confirmados(
+        where_clause, params, fecha_desde, fecha_hasta, proveedor_nombre, numero_pedido, creado_por
+    ):
+        """Agrega filtros opcionales (fechas, proveedor, número, creador) a la consulta base."""
+        extra_conditions: List[str] = []
+        if fecha_desde:
+            extra_conditions.append("CAST(p.fecha_pedido AS DATE) >= CAST(? AS DATE)")
+            params.append(fecha_desde)
+        if fecha_hasta:
+            extra_conditions.append("CAST(p.fecha_pedido AS DATE) <= CAST(? AS DATE)")
+            params.append(fecha_hasta)
+        if proveedor_nombre:
+            extra_conditions.append("p.proveedor_nombre LIKE ?")
+            params.append(f"%{proveedor_nombre}%")
+        if numero_pedido:
+            extra_conditions.append("p.numero_pedido LIKE ?")
+            params.append(f"%{numero_pedido}%")
+        if creado_por:
+            extra_conditions.append("p.creado_por = ?")
+            params.append(creado_por)
+        if extra_conditions:
+            where_clause = f"({where_clause}){_SEP_AND}" + _SEP_AND.join(extra_conditions)
+        return where_clause, params
+
+    @staticmethod
+    def _data_query_confirmados(where_clause: str, select_fields: str, tiene_estado_id: bool) -> str:
+        """Construye el SELECT de datos para pedidos confirmados."""
+        if tiene_estado_id:
+            return f"""
+                SELECT {select_fields}
+                FROM pedido p
+                LEFT JOIN pedido_estado pe ON pe.id = p.estado_id
+                WHERE {where_clause}
+                ORDER BY p.creado_en DESC
+            """
+        return f"""
+            SELECT {select_fields}
+            FROM pedido p
+            WHERE {where_clause}
+            ORDER BY p.creado_en DESC
+        """
 
     def get_pedidos_confirmados(
         self,
@@ -1245,156 +1448,25 @@ class PedidoCabeceraRepository:
             if not tiene_estado_id and not tiene_estado:
                 return {"data": [], "total": 0, "limit": limit, "offset": offset or 0, "has_more": False}
 
-            if tiene_estado_id:
-                # Desde CONFIRMADO REDISTRIBUCION (10) en adelante,
-                # excluyendo estados de cancelación (19, 20). Este filtro aplica tanto
-                # cuando solo_redistribucion_confirmada es True como cuando es False,
-                # para incluir también estados posteriores como DESPACHAR_Y_FACTURAR (17)
-                # y FINALIZADO (18) en la pantalla Revisar Redistribución.
-                where_clause = "p.estado_id >= ? AND p.estado_id NOT IN (?, ?)"
-                params_list = [
-                    ESTADO_PEDIDO_CONFIRMADO,
-                    ESTADO_CANCELADO,
-                    ESTADO_CANCELADO_POR_EL_RAYO,
-                ]
-                params = list(params_list)
-                count_query = f"SELECT COUNT(*) FROM pedido p WHERE {where_clause}"
-                cursor.execute(count_query, params)
-                result = cursor.fetchone()
-                total = result[0] if result else 0
-                select_fields = """
-                    p.pedido_id, p.numero_pedido, p.fecha_pedido, p.fecha_entrega,
-                    p.forma_pago, p.mensaje, p.proveedor_nombre, p.comprador_nombre,
-                    p.comprador_codigo, p.origen_traslado, p.serie, p.archivo_nombre,
-                    p.creado_por, p.estado_id, pe.nombre AS estado_nombre, p.creado_en
-                """
-                data_query = f"""
-                    SELECT {select_fields}
-                    FROM pedido p
-                    LEFT JOIN pedido_estado pe ON pe.id = p.estado_id
-                    WHERE {where_clause}
-                    ORDER BY p.creado_en DESC
-                """
-            else:
-                # Fallback para bases de datos sin columna estado_id (usando campo estado string).
-                # Estados desde CONFIRMADO REDISTRIBUCION (10) en adelante,
-                # excluyendo cancelados. Usar strings legacy mapeados en LEGACY_STRING_TO_ID.
-                # Incluye también DESPACHAR_Y_FACTURAR y FINALIZADO.
-                where_clause = (
-                    "p.estado IN ("
-                    "N'PEDIDO_CONFIRMADO', "
-                    "N'CONFIRMADO REDISTRIBUCION', "
-                    "N'CONFIRMADO_ENVIADO', "
-                    "N'PENDIENTE_LOGISTICA', "
-                    "N'ERROR_DATOS_MAESTROS', "
-                    "N'DESPACHAR_Y_FACTURAR', "
-                    "N'DESPACHAR Y FACTURAR', "
-                    "N'FINALIZADO'"
-                    ")"
-                )
-                params_list = []
-                params: List[Any] = list(params_list)
-                count_query = f"SELECT COUNT(*) FROM pedido p WHERE {where_clause}"
-                cursor.execute(count_query, params)
-                result = cursor.fetchone()
-                total = result[0] if result else 0
-                select_fields = """
-                    p.pedido_id, p.numero_pedido, p.fecha_pedido, p.fecha_entrega,
-                    p.forma_pago, p.mensaje, p.proveedor_nombre, p.comprador_nombre,
-                    p.comprador_codigo, p.origen_traslado, p.serie, p.archivo_nombre,
-                    p.creado_por, p.creado_en, p.estado
-                """
-                data_query = f"""
-                    SELECT {select_fields}
-                    FROM pedido p
-                    WHERE {where_clause}
-                    ORDER BY p.creado_en DESC
-                """
+            where_clause, params, select_fields = self._base_confirmados(tiene_estado_id)
+            where_clause, params = self._aplicar_filtros_extra_confirmados(
+                where_clause, params, fecha_desde, fecha_hasta, proveedor_nombre, numero_pedido, creado_por
+            )
 
-            extra_conditions: List[str] = []
-            if fecha_desde:
-                extra_conditions.append("CAST(p.fecha_pedido AS DATE) >= CAST(? AS DATE)")
-                params.append(fecha_desde)
-            if fecha_hasta:
-                extra_conditions.append("CAST(p.fecha_pedido AS DATE) <= CAST(? AS DATE)")
-                params.append(fecha_hasta)
-            if proveedor_nombre:
-                extra_conditions.append("p.proveedor_nombre LIKE ?")
-                params.append(f"%{proveedor_nombre}%")
-            if numero_pedido:
-                extra_conditions.append("p.numero_pedido LIKE ?")
-                params.append(f"%{numero_pedido}%")
-            if creado_por:
-                extra_conditions.append("p.creado_por = ?")
-                params.append(creado_por)
-            if extra_conditions:
-                where_clause = f"({where_clause}) AND " + " AND ".join(extra_conditions)
-                count_query = f"SELECT COUNT(*) FROM pedido p WHERE {where_clause}"
-                cursor.execute(count_query, params)
-                result = cursor.fetchone()
-                total = result[0] if result else 0
-                if tiene_estado_id:
-                    data_query = f"""
-                    SELECT {select_fields}
-                    FROM pedido p
-                    LEFT JOIN pedido_estado pe ON pe.id = p.estado_id
-                    WHERE {where_clause}
-                    ORDER BY p.creado_en DESC
-                """
-                else:
-                    data_query = f"""
-                    SELECT {select_fields}
-                    FROM pedido p
-                    WHERE {where_clause}
-                    ORDER BY p.creado_en DESC
-                """
+            count_query = f"SELECT COUNT(*) FROM pedido p WHERE {where_clause}"
+            cursor.execute(count_query, params)
+            result = cursor.fetchone()
+            total = result[0] if result else 0
 
+            data_query = self._data_query_confirmados(where_clause, select_fields, tiene_estado_id)
             if limit is not None:
                 data_query += f" OFFSET {offset or 0} ROWS FETCH NEXT {limit} ROWS ONLY"
 
             cursor.execute(data_query, params)
-            pedidos = []
-            for row in cursor.fetchall():
-                idx = 0
-                if tiene_estado_id:
-                    pedido = {
-                        "pedido_id": str(row[idx]),
-                        "numero_pedido": row[idx + 1],
-                        "fecha_pedido": row[idx + 2].isoformat() if row[idx + 2] else None,
-                        "fecha_entrega": row[idx + 3],
-                        "forma_pago": row[idx + 4],
-                        "mensaje": row[idx + 5],
-                        "proveedor_nombre": row[idx + 6],
-                        "comprador_nombre": row[idx + 7],
-                        "comprador_codigo": row[idx + 8],
-                        "origen_traslado": row[idx + 9],
-                        "serie": row[idx + 10],
-                        "archivo_nombre": row[idx + 11],
-                        "creado_por": row[idx + 12],
-                        "estado_id": row[idx + 13],
-                        "estado_nombre": row[idx + 14],
-                        "estado": row[idx + 14],
-                        "creado_en": row[idx + 15].isoformat() if row[idx + 15] else None,
-                    }
-                else:
-                    pedido = {
-                        "pedido_id": str(row[idx]),
-                        "numero_pedido": row[idx + 1],
-                        "fecha_pedido": row[idx + 2].isoformat() if row[idx + 2] else None,
-                        "fecha_entrega": row[idx + 3],
-                        "forma_pago": row[idx + 4],
-                        "mensaje": row[idx + 5],
-                        "proveedor_nombre": row[idx + 6],
-                        "comprador_nombre": row[idx + 7],
-                        "comprador_codigo": row[idx + 8],
-                        "origen_traslado": row[idx + 9],
-                        "serie": row[idx + 10],
-                        "archivo_nombre": row[idx + 11],
-                        "creado_por": row[idx + 12],
-                        "creado_en": row[idx + 13].isoformat() if row[idx + 13] else None,
-                        "estado": row[idx + 14],
-                    }
-                pedidos.append(pedido)
+            if tiene_estado_id:
+                pedidos = [self._map_pedido_estado_id(row) for row in cursor.fetchall()]
+            else:
+                pedidos = [self._map_pedido_confirmado_legacy(row) for row in cursor.fetchall()]
 
             has_more = (offset or 0) + len(pedidos) < total if limit else False
             return {
@@ -1744,7 +1816,7 @@ class PedidoCabeceraRepository:
                 where_conditions.append(f"pe.id NOT IN ({placeholders})")
                 params.extend(excluir_ids)
 
-            where_clause = " AND ".join(where_conditions) if where_conditions else "1=1"
+            where_clause = _SEP_AND.join(where_conditions) if where_conditions else "1=1"
 
             query = f"""
                 SELECT pe.id, pe.nombre, pe.orden

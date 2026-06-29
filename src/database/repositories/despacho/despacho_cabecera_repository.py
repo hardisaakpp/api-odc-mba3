@@ -288,8 +288,8 @@ class DespachoCabeceraRepository:
         codigo_factura = datos_cabecera.get("codigo_factura")
         if not codigo_factura:
             raise ValueError(
-                f"El campo 'codigo_factura' es requerido y no puede ser NULL. "
-                f"Verifique que el campo CODIGO_FACTURA esté presente en los datos de MBA3."
+                "El campo 'codigo_factura' es requerido y no puede ser NULL. "
+                "Verifique que el campo CODIGO_FACTURA esté presente en los datos de MBA3."
             )
 
         campos_faltantes = []

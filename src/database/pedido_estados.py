@@ -88,7 +88,7 @@ ESTADOS_BLOQUEADOS_PROVEEDOR = frozenset({
     ESTADO_CONFIRMADO_ENVIADO,
 })
 
-# Todos los ids conocidos (para validar que un id existe)
+# Ids conocidos del sistema (para validar que un id existe)
 ESTADO_IDS_VALIDOS = frozenset({
     ESTADO_BORRADOR,
     ESTADO_NUEVO_PEDIDO,

@@ -23,7 +23,73 @@ class SkuRepository:
             conn: Conexión a SQL Server
         """
         self.conn = conn
-    
+
+    def _map_homologacion_row(self, row) -> Dict[str, Any]:
+        """Convierte una fila de sku_homologacion (21 columnas) a diccionario."""
+        return {
+            "homologacion_id": str(row[0]),
+            "sku_mba3": row[1],
+            "nombre_producto_mba3": row[2],
+            "precio_unitario_mba3": serialize_decimal(row[3]),
+            "cantidad_docena_mba3": serialize_decimal(row[4]),
+            "total_linea_mba3": serialize_decimal(row[5]),
+            "sku_sap": row[6],
+            "nombre_producto_sap": row[7],
+            "precio_unitario_sap": serialize_decimal(row[8]),
+            "cantidad_pack_sap": serialize_decimal(row[9]),
+            "unidad_sap": row[10],
+            "subtotal_sap": serialize_decimal(row[11]),
+            "estado": row[12],
+            "tiene_diferencias": bool(row[13]),
+            "tiene_datos_sap": bool(row[14]),
+            "detalle_id": str(row[15]) if row[15] else None,
+            "despacho_id": str(row[16]) if row[16] else None,
+            "created_at": serialize_date(row[17]),
+            "updated_at": serialize_date(row[18]),
+            "ultima_modificacion": serialize_date(row[19]),
+            "modificado_por": row[20]
+        }
+
+    def _construir_where_homologaciones(
+        self,
+        estado: Optional[str],
+        tiene_diferencias: Optional[bool],
+        tiene_datos_sap: Optional[bool],
+        sku: Optional[str],
+        search: Optional[str],
+    ) -> Tuple[str, list]:
+        """Construye dinámicamente la cláusula WHERE y sus parámetros para el listado."""
+        where_clauses = []
+        params = []
+
+        if estado:
+            where_clauses.append("estado = ?")
+            params.append(estado)
+
+        if tiene_diferencias is not None:
+            where_clauses.append("tiene_diferencias = ?")
+            params.append(1 if tiene_diferencias else 0)
+
+        if tiene_datos_sap is not None:
+            where_clauses.append("tiene_datos_sap = ?")
+            params.append(1 if tiene_datos_sap else 0)
+
+        # Búsqueda por SKU específico (prioridad sobre search)
+        if sku:
+            where_clauses.append("(sku_mba3 LIKE ? OR sku_sap LIKE ?)")
+            params.extend([f"%{sku}%", f"%{sku}%"])
+        # Búsqueda general (si no hay sku específico)
+        elif search:
+            search_pattern = f"%{search}%"
+            where_clauses.append(
+                "(sku_mba3 LIKE ? OR sku_sap LIKE ? OR "
+                "nombre_producto_mba3 LIKE ? OR nombre_producto_sap LIKE ?)"
+            )
+            params.extend([search_pattern, search_pattern, search_pattern, search_pattern])
+
+        where_sql = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
+        return where_sql, params
+
     def get_homologaciones_sku(
         self, 
         page: int = 1, 
@@ -52,46 +118,20 @@ class SkuRepository:
         cursor = self.conn.cursor()
         try:
             # Construir WHERE dinámicamente
-            where_clauses = []
-            params = []
-            
-            if estado:
-                where_clauses.append("estado = ?")
-                params.append(estado)
-            
-            if tiene_diferencias is not None:
-                where_clauses.append("tiene_diferencias = ?")
-                params.append(1 if tiene_diferencias else 0)
-            
-            if tiene_datos_sap is not None:
-                where_clauses.append("tiene_datos_sap = ?")
-                params.append(1 if tiene_datos_sap else 0)
-            
-            # Búsqueda por SKU específico (prioridad sobre search)
-            if sku:
-                where_clauses.append("(sku_mba3 LIKE ? OR sku_sap LIKE ?)")
-                params.extend([f"%{sku}%", f"%{sku}%"])
-            # Búsqueda general (si no hay sku específico)
-            elif search:
-                search_pattern = f"%{search}%"
-                where_clauses.append(
-                    "(sku_mba3 LIKE ? OR sku_sap LIKE ? OR "
-                    "nombre_producto_mba3 LIKE ? OR nombre_producto_sap LIKE ?)"
-                )
-                params.extend([search_pattern, search_pattern, search_pattern, search_pattern])
-            
-            where_sql = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
-            
+            where_sql, params = self._construir_where_homologaciones(
+                estado, tiene_diferencias, tiene_datos_sap, sku, search
+            )
+
             # Contar total de registros (para paginación)
             count_query = f"""
-                SELECT COUNT(*) 
-                FROM sku_homologacion 
+                SELECT COUNT(*)
+                FROM sku_homologacion
                 {where_sql}
             """
             cursor.execute(count_query, params)
             result = cursor.fetchone()
             total = result[0] if result else 0
-            
+
             # Obtener registros paginados
             offset = (page - 1) * page_size
             data_query = f"""
@@ -125,33 +165,9 @@ class SkuRepository:
             """
             cursor.execute(data_query, params + [offset, page_size])
             rows = cursor.fetchall()
-            
-            homologaciones = []
-            for row in rows:
-                homologaciones.append({
-                    "homologacion_id": str(row[0]),
-                    "sku_mba3": row[1],
-                    "nombre_producto_mba3": row[2],
-                    "precio_unitario_mba3": serialize_decimal(row[3]),
-                    "cantidad_docena_mba3": serialize_decimal(row[4]),
-                    "total_linea_mba3": serialize_decimal(row[5]),
-                    "sku_sap": row[6],
-                    "nombre_producto_sap": row[7],
-                    "precio_unitario_sap": serialize_decimal(row[8]),
-                    "cantidad_pack_sap": serialize_decimal(row[9]),
-                    "unidad_sap": row[10],
-                    "subtotal_sap": serialize_decimal(row[11]),
-                    "estado": row[12],
-                    "tiene_diferencias": bool(row[13]),
-                    "tiene_datos_sap": bool(row[14]),
-                    "detalle_id": str(row[15]) if row[15] else None,
-                    "despacho_id": str(row[16]) if row[16] else None,
-                    "created_at": serialize_date(row[17]),
-                    "updated_at": serialize_date(row[18]),
-                    "ultima_modificacion": serialize_date(row[19]),
-                    "modificado_por": row[20]
-                })
-            
+
+            homologaciones = [self._map_homologacion_row(row) for row in rows]
+
             logger.debug(f"✅ Obtenidas {len(homologaciones)} homologaciones (total: {total})")
             return homologaciones, total
             
@@ -201,40 +217,38 @@ class SkuRepository:
             """
             cursor.execute(query, (homologacion_id,))
             row = cursor.fetchone()
-            
+
             if not row:
                 return None
-            
-            return {
-                "homologacion_id": str(row[0]),
-                "sku_mba3": row[1],
-                "nombre_producto_mba3": row[2],
-                "precio_unitario_mba3": serialize_decimal(row[3]),
-                "cantidad_docena_mba3": serialize_decimal(row[4]),
-                "total_linea_mba3": serialize_decimal(row[5]),
-                "sku_sap": row[6],
-                "nombre_producto_sap": row[7],
-                "precio_unitario_sap": serialize_decimal(row[8]),
-                "cantidad_pack_sap": serialize_decimal(row[9]),
-                "unidad_sap": row[10],
-                "subtotal_sap": serialize_decimal(row[11]),
-                "estado": row[12],
-                "tiene_diferencias": bool(row[13]),
-                "tiene_datos_sap": bool(row[14]),
-                "detalle_id": str(row[15]) if row[15] else None,
-                "despacho_id": str(row[16]) if row[16] else None,
-                "created_at": serialize_date(row[17]),
-                "updated_at": serialize_date(row[18]),
-                "ultima_modificacion": serialize_date(row[19]),
-                "modificado_por": row[20]
-            }
-            
+
+            return self._map_homologacion_row(row)
+
         except Exception as e:
             logger.error(f"❌ Error al obtener homologación {homologacion_id}: {e}", exc_info=True)
             raise
         finally:
             cursor.close()
     
+    def _calcular_tiene_diferencias(self, data: Dict[str, Any], tiene_datos_sap: bool) -> bool:
+        """Determina si hay diferencias entre datos MBA3 y SAP (SKU o precio)."""
+        if not tiene_datos_sap:
+            return False
+
+        tiene_diferencias = False
+        # Si hay SKU SAP y es diferente al MBA3
+        if data.get('sku_sap') and data.get('sku_mba3'):
+            if data['sku_sap'].strip().upper() != data['sku_mba3'].strip().upper():
+                tiene_diferencias = True
+
+        # Si hay precios, comparar (tolerancia 0.01)
+        precio_mba3 = data.get('precio_unitario_mba3')
+        precio_sap = data.get('precio_unitario_sap')
+        if precio_mba3 is not None and precio_sap is not None:
+            if abs(float(precio_mba3) - float(precio_sap)) > 0.01:
+                tiene_diferencias = True
+
+        return tiene_diferencias
+
     def create_homologacion_sku(
         self,
         data: Dict[str, Any],
@@ -267,20 +281,8 @@ class SkuRepository:
             ])
             
             # Calcular tiene_diferencias
-            tiene_diferencias = False
-            if tiene_datos_sap:
-                # Si hay SKU SAP y es diferente al MBA3
-                if data.get('sku_sap') and data.get('sku_mba3'):
-                    if data['sku_sap'].strip().upper() != data['sku_mba3'].strip().upper():
-                        tiene_diferencias = True
-                
-                # Si hay precios, comparar (tolerancia 0.01)
-                precio_mba3 = data.get('precio_unitario_mba3')
-                precio_sap = data.get('precio_unitario_sap')
-                if precio_mba3 is not None and precio_sap is not None:
-                    if abs(float(precio_mba3) - float(precio_sap)) > 0.01:
-                        tiene_diferencias = True
-            
+            tiene_diferencias = self._calcular_tiene_diferencias(data, tiene_datos_sap)
+
             # Estado por defecto
             estado = data.get('estado', 'PENDIENTE')
             if tiene_diferencias or not tiene_datos_sap:
@@ -505,11 +507,101 @@ class SkuRepository:
             "detalles": detalles
         }
     
+    def _calcular_flags_sincronizacion(self, row) -> Tuple[bool, bool, str]:
+        """Calcula (tiene_datos_sap, tiene_diferencias, estado) para una fila de despacho."""
+        tiene_datos_sap = bool(row[7] or row[8] or row[9] or row[10] or row[11])
+        tiene_diferencias = False
+
+        if tiene_datos_sap:
+            # Detectar diferencias
+            if row[2] != row[7]:  # SKU diferente
+                tiene_diferencias = True
+            elif row[4] and row[9]:  # Comparar precios
+                precio_mba3 = float(row[4]) if row[4] else 0
+                precio_sap = float(row[9]) if row[9] else 0
+                if abs(precio_mba3 - precio_sap) > 0.01:  # Tolerancia de 1 centavo
+                    tiene_diferencias = True
+
+        estado = 'PENDIENTE' if tiene_diferencias or not tiene_datos_sap else 'HOMOLOGADO'
+        return tiene_datos_sap, tiene_diferencias, estado
+
+    def _procesar_fila_sincronizacion(self, cursor, row) -> str:
+        """
+        Inserta o actualiza la homologación de una fila de despacho.
+
+        Returns:
+            "nueva" si se insertó, "actualizada" si se actualizó una existente.
+        """
+        detalle_id = row[0]
+        despacho_id = row[1]
+
+        # Verificar si ya existe homologación para este detalle
+        cursor.execute(
+            "SELECT homologacion_id FROM sku_homologacion WHERE detalle_id = ?",
+            (detalle_id,)
+        )
+        existing = cursor.fetchone()
+
+        tiene_datos_sap, tiene_diferencias, estado = self._calcular_flags_sincronizacion(row)
+
+        if existing:
+            # Actualizar existente
+            cursor.execute("""
+                UPDATE sku_homologacion
+                SET sku_sap = ?,
+                    nombre_producto_sap = ?,
+                    precio_unitario_sap = ?,
+                    cantidad_pack_sap = ?,
+                    unidad_sap = ?,
+                    tiene_datos_sap = ?,
+                    tiene_diferencias = ?,
+                    estado = ?,
+                    updated_at = ?
+                WHERE homologacion_id = ?
+            """, (
+                row[7], row[8], row[9], row[10], row[11],
+                1 if tiene_datos_sap else 0,
+                1 if tiene_diferencias else 0,
+                estado,
+                ahora_naive(),
+                existing[0]
+            ))
+            return "actualizada"
+
+        # Insertar nueva
+        cursor.execute("""
+            INSERT INTO sku_homologacion (
+                detalle_id,
+                despacho_id,
+                sku_mba3,
+                nombre_producto_mba3,
+                precio_unitario_mba3,
+                cantidad_docena_mba3,
+                total_linea_mba3,
+                sku_sap,
+                nombre_producto_sap,
+                precio_unitario_sap,
+                cantidad_pack_sap,
+                unidad_sap,
+                tiene_datos_sap,
+                tiene_diferencias,
+                estado
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            detalle_id, despacho_id,
+            row[2], row[3], row[4], row[5], row[6],
+            row[7], row[8], row[9], row[10], row[11],
+            1 if tiene_datos_sap else 0,
+            1 if tiene_diferencias else 0,
+            estado
+        ))
+        return "nueva"
+
     def sincronizar_homologaciones_desde_despachos(self) -> Dict[str, Any]:
         """
         Sincroniza homologaciones desde los despachos.
         Detecta SKUs que existen en despacho_detalle y busca diferencias con SAP.
-        
+
         Returns:
             Diccionario con estadísticas de sincronización
         """
@@ -541,88 +633,14 @@ class SkuRepository:
             homologaciones_encontradas = len(rows)
             homologaciones_nuevas = 0
             homologaciones_actualizadas = 0
-            
+
             for row in rows:
-                detalle_id = row[0]
-                despacho_id = row[1]
-                sku_mba3 = row[2]
-                
-                # Verificar si ya existe homologación para este detalle
-                cursor.execute(
-                    "SELECT homologacion_id FROM sku_homologacion WHERE detalle_id = ?",
-                    (detalle_id,)
-                )
-                existing = cursor.fetchone()
-                
-                # Calcular flags
-                tiene_datos_sap = bool(row[7] or row[8] or row[9] or row[10] or row[11])
-                tiene_diferencias = False
-                
-                if tiene_datos_sap:
-                    # Detectar diferencias
-                    if row[2] != row[7]:  # SKU diferente
-                        tiene_diferencias = True
-                    elif row[4] and row[9]:  # Comparar precios
-                        precio_mba3 = float(row[4]) if row[4] else 0
-                        precio_sap = float(row[9]) if row[9] else 0
-                        if abs(precio_mba3 - precio_sap) > 0.01:  # Tolerancia de 1 centavo
-                            tiene_diferencias = True
-                
-                estado = 'PENDIENTE' if tiene_diferencias or not tiene_datos_sap else 'HOMOLOGADO'
-                
-                if existing:
-                    # Actualizar existente
-                    cursor.execute("""
-                        UPDATE sku_homologacion
-                        SET sku_sap = ?,
-                            nombre_producto_sap = ?,
-                            precio_unitario_sap = ?,
-                            cantidad_pack_sap = ?,
-                            unidad_sap = ?,
-                            tiene_datos_sap = ?,
-                            tiene_diferencias = ?,
-                            estado = ?,
-                            updated_at = ?
-                        WHERE homologacion_id = ?
-                    """, (
-                        row[7], row[8], row[9], row[10], row[11],
-                        1 if tiene_datos_sap else 0,
-                        1 if tiene_diferencias else 0,
-                        estado,
-                        ahora_naive(),
-                        existing[0]
-                    ))
-                    homologaciones_actualizadas += 1
-                else:
-                    # Insertar nueva
-                    cursor.execute("""
-                        INSERT INTO sku_homologacion (
-                            detalle_id,
-                            despacho_id,
-                            sku_mba3,
-                            nombre_producto_mba3,
-                            precio_unitario_mba3,
-                            cantidad_docena_mba3,
-                            total_linea_mba3,
-                            sku_sap,
-                            nombre_producto_sap,
-                            precio_unitario_sap,
-                            cantidad_pack_sap,
-                            unidad_sap,
-                            tiene_datos_sap,
-                            tiene_diferencias,
-                            estado
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """, (
-                        detalle_id, despacho_id,
-                        row[2], row[3], row[4], row[5], row[6],
-                        row[7], row[8], row[9], row[10], row[11],
-                        1 if tiene_datos_sap else 0,
-                        1 if tiene_diferencias else 0,
-                        estado
-                    ))
+                resultado_fila = self._procesar_fila_sincronizacion(cursor, row)
+                if resultado_fila == "nueva":
                     homologaciones_nuevas += 1
-            
+                else:
+                    homologaciones_actualizadas += 1
+
             self.conn.commit()
             
             resultado = {

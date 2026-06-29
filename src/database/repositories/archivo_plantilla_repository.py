@@ -12,6 +12,8 @@ from src.utils.timezone import ahora_naive
 
 logger = logging.getLogger(__name__)
 
+_CAMPO_TAMANO_BYTES = "tamaño_bytes"
+
 
 class ArchivoPlantillaRepository:
     """
@@ -39,18 +41,18 @@ class ArchivoPlantillaRepository:
         pedido_id: str,  # UNIQUEIDENTIFIER (GUID) como string
         nombre_original: str,
         storage_path: str,
-        tamaño_bytes: int,
+        tamano_bytes: int,
         subido_por: str,
         content_type: str = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     ) -> int:
         """
         Registra una nueva referencia de archivo en la base de datos.
-        
+
         Args:
             pedido_id: ID del pedido asociado
             nombre_original: Nombre original del archivo
             storage_path: Ruta del archivo en el storage (MinIO/S3)
-            tamaño_bytes: Tamaño del archivo en bytes
+            tamano_bytes: Tamaño del archivo en bytes
             subido_por: ID/nombre del usuario que subió el archivo
             content_type: Tipo MIME del archivo
             
@@ -78,14 +80,14 @@ class ArchivoPlantillaRepository:
                 nombre_original,
                 storage_path,
                 content_type,
-                tamaño_bytes,
+                tamano_bytes,
                 subido_por,
                 ahora_naive(),
             ))
             
             row = cursor.fetchone()
             if not row:
-                raise Exception("No se obtuvo el ID del archivo registrado")
+                raise RuntimeError("No se obtuvo el ID del archivo registrado")
             archivo_id: int = row[0]
             
             self.conn.commit()
@@ -146,7 +148,7 @@ class ArchivoPlantillaRepository:
             "nombre_original": row[2],
             "storage_path": row[3],
             "content_type": row[4],
-            "tamaño_bytes": row[5],
+            _CAMPO_TAMANO_BYTES: row[5],
             "subido_por": row[6],
             "fecha_subida": row[7].isoformat() if row[7] else None,
             "activo": row[8],
@@ -196,7 +198,7 @@ class ArchivoPlantillaRepository:
             "nombre_original": row[2],
             "storage_path": row[3],
             "content_type": row[4],
-            "tamaño_bytes": row[5],
+            _CAMPO_TAMANO_BYTES: row[5],
             "subido_por": row[6],
             "fecha_subida": row[7].isoformat() if row[7] else None,
             "activo": row[8],
@@ -340,7 +342,7 @@ class ArchivoPlantillaRepository:
                 "nombre_original": row[2],
                 "storage_path": row[3],
                 "content_type": row[4],
-                "tamaño_bytes": row[5],
+                _CAMPO_TAMANO_BYTES: row[5],
                 "subido_por": row[6],
                 "fecha_subida": row[7].isoformat() if row[7] else None,
                 "activo": row[8],
@@ -409,7 +411,7 @@ class ArchivoPlantillaRepository:
                 "nombre_original": row[2],
                 "storage_path": row[3],
                 "content_type": row[4],
-                "tamaño_bytes": row[5],
+                _CAMPO_TAMANO_BYTES: row[5],
                 "subido_por": row[6],
                 "fecha_subida": row[7].isoformat() if row[7] else None,
                 "activo": row[8],

@@ -172,72 +172,74 @@ class DespachoQueryRepository:
 
         return base_query
 
+    def _construir_despacho_entry(self, row) -> Dict[str, Any]:
+        oc_id = str(row[20]) if row[20] else None
+        return {
+            "despacho_id": str(row[0]),
+            "empresa": row[1],
+            "codigo_cliente": row[2],
+            "fecha_despacho": serialize_date(row[3]),
+            "codigo_factura": row[4],
+            "anulada": bool(row[5]) if row[5] is not None else None,
+            "numero_pedido_sistema": row[6],
+            "numero_orden": row[7],
+            "numero_factura": row[8],
+            "tipo_documento": row[9],
+            "orden_compra": row[10],
+            "orden_compra_cliente": row[11],
+            "remision_facturada": bool(row[12]) if row[12] is not None else None,
+            "num_id_factura_relacionada": row[13],
+            "fecha_factura": serialize_date(row[14]),
+            "codigo_despacho": row[15],
+            "codigo_bodega": row[16],
+            "confirmado": bool(row[17]) if row[17] is not None else None,
+            "despacho_created_at": serialize_date(row[18]),
+            "despacho_updated_at": serialize_date(row[19]),
+            "tiene_odc": oc_id is not None,
+            "oc_id": oc_id,
+            "despacho_detalles": [],
+            "orden_compra_info": {
+                "oc_id": oc_id,
+                "proveedor": row[21],
+                "fecha_generacion": serialize_date(row[22]),
+                "referencia_despacho": row[23],
+                "estado": row[24],
+                "numero_oc_sap": row[25],
+                "oc_created_at": serialize_date(row[26])
+            } if oc_id else None
+        }
+
+    def _construir_detalle_entry(self, row, despacho_id: str) -> Optional[Dict[str, Any]]:
+        detalle_id = str(row[27]) if row[27] else None
+        if not detalle_id:
+            return None
+        return {
+            "detalle_id": detalle_id,
+            "despacho_id": despacho_id,
+            "sku": row[28],
+            "cantidad_docena_mba3": serialize_decimal(row[29]),
+            "subtotal_sap": serialize_decimal(row[30]),
+            "cantidad_pack_sap": serialize_decimal(row[31]),
+            "unidad_sap": row[32],
+            "precio_unitario_mba3": serialize_decimal(row[33]),
+            "descuento": serialize_decimal(row[34]),
+            "total_linea_mba3": serialize_decimal(row[35]),
+            "impuesto": serialize_decimal(row[36]),
+            "nombre_producto": row[37],
+            "tipo_linea": row[38],
+            "precio_unitario_sap": serialize_decimal(row[39]),
+        }
+
     def _agrupar_resultados(self, results: List) -> List[Dict[str, Any]]:
         """Agrupa los resultados de la query en estructura de despachos con detalles."""
         despachos_dict = {}
 
         for row in results:
             despacho_id = str(row[0])
-
-            # Si es la primera vez que vemos este despacho, crear la entrada
             if despacho_id not in despachos_dict:
-                oc_id = str(row[20]) if row[20] else None
-                tiene_odc = oc_id is not None
-
-                despachos_dict[despacho_id] = {
-                    "despacho_id": despacho_id,
-                    "empresa": row[1],
-                    "codigo_cliente": row[2],
-                    "fecha_despacho": serialize_date(row[3]),
-                    "codigo_factura": row[4],
-                    "anulada": bool(row[5]) if row[5] is not None else None,
-                    "numero_pedido_sistema": row[6],
-                    "numero_orden": row[7],
-                    "numero_factura": row[8],
-                    "tipo_documento": row[9],
-                    "orden_compra": row[10],
-                    "orden_compra_cliente": row[11],
-                    "remision_facturada": bool(row[12]) if row[12] is not None else None,
-                    "num_id_factura_relacionada": row[13],
-                    "fecha_factura": serialize_date(row[14]),
-                    "codigo_despacho": row[15],
-                    "codigo_bodega": row[16],
-                    "confirmado": bool(row[17]) if row[17] is not None else None,
-                    "despacho_created_at": serialize_date(row[18]),
-                    "despacho_updated_at": serialize_date(row[19]),
-                    "tiene_odc": tiene_odc,
-                    "oc_id": oc_id,
-                    "despacho_detalles": [],
-                    "orden_compra_info": {
-                        "oc_id": oc_id,
-                        "proveedor": row[21],
-                        "fecha_generacion": serialize_date(row[22]),
-                        "referencia_despacho": row[23],
-                        "estado": row[24],
-                        "numero_oc_sap": row[25],
-                        "oc_created_at": serialize_date(row[26])
-                    } if oc_id else None
-                }
-
-            # Agregar detalle si existe
-            detalle_id = str(row[27]) if row[27] else None
-            if detalle_id:
-                detalle = {
-                    "detalle_id": detalle_id,
-                    "despacho_id": despacho_id,
-                    "sku": row[28],
-                    "cantidad_docena_mba3": serialize_decimal(row[29]),
-                    "subtotal_sap": serialize_decimal(row[30]),
-                    "cantidad_pack_sap": serialize_decimal(row[31]),
-                    "unidad_sap": row[32],
-                    "precio_unitario_mba3": serialize_decimal(row[33]),
-                    "descuento": serialize_decimal(row[34]),
-                    "total_linea_mba3": serialize_decimal(row[35]),
-                    "impuesto": serialize_decimal(row[36]),
-                    "nombre_producto": row[37],
-                    "tipo_linea": row[38],
-                    "precio_unitario_sap": serialize_decimal(row[39]),
-                }
+                despachos_dict[despacho_id] = self._construir_despacho_entry(row)
+            detalle = self._construir_detalle_entry(row, despacho_id)
+            if detalle:
                 despachos_dict[despacho_id]["despacho_detalles"].append(detalle)
 
         return list(despachos_dict.values())

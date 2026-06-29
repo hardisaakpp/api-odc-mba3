@@ -20,6 +20,12 @@ from src.database.services.audit_log_service import AuditLogService
 
 logger = logging.getLogger(__name__)
 
+_SET_UPDATED_AT = "updated_at = ?"
+_SET_MODIFICADO_POR = "modificado_por = ?"
+_SET_MODIFICADO_FECHA = "modificado_fecha = ?"
+_SET_ORIGEN = "origen = COALESCE(?, origen)"
+_SET_IP_ORIGEN = "ip_origen = COALESCE(?, ip_origen)"
+
 
 class PedidoDetalleRepository:
     """Repositorio para operaciones de pedido_detalle."""
@@ -394,12 +400,12 @@ class PedidoDetalleRepository:
             
             set_clauses = [
                 "costo_doc_sin_iva = ?",
-                "updated_at = ?",
+                _SET_UPDATED_AT,
                 "costo_modificado_manual = 1",
-                "modificado_por = ?",
-                "modificado_fecha = ?",
-                "origen = COALESCE(?, origen)",
-                "ip_origen = COALESCE(?, ip_origen)"
+                _SET_MODIFICADO_POR,
+                _SET_MODIFICADO_FECHA,
+                _SET_ORIGEN,
+                _SET_IP_ORIGEN,
             ]
             _ahora = ahora_naive()
             values: List[Any] = [
@@ -512,12 +518,12 @@ class PedidoDetalleRepository:
             
             set_clauses = [
                 "total = ?",
-                "updated_at = ?",
+                _SET_UPDATED_AT,
                 "total_modificado_manual = 1",
-                "modificado_por = ?",
-                "modificado_fecha = ?",
-                "origen = COALESCE(?, origen)",
-                "ip_origen = COALESCE(?, ip_origen)"
+                _SET_MODIFICADO_POR,
+                _SET_MODIFICADO_FECHA,
+                _SET_ORIGEN,
+                _SET_IP_ORIGEN,
             ]
             _ahora = ahora_naive()
             values: List[Any] = [
@@ -631,11 +637,11 @@ class PedidoDetalleRepository:
             _ahora = ahora_naive()
             set_clauses = [
                 "comentario = ?",
-                "updated_at = ?",
-                "modificado_por = ?",
-                "modificado_fecha = ?",
-                "origen = COALESCE(?, origen)",
-                "ip_origen = COALESCE(?, ip_origen)"
+                _SET_UPDATED_AT,
+                _SET_MODIFICADO_POR,
+                _SET_MODIFICADO_FECHA,
+                _SET_ORIGEN,
+                _SET_IP_ORIGEN,
             ]
             if nuevo_comentario_str:
                 set_clauses.append("comentario_modificado_manual = 1")
@@ -696,6 +702,94 @@ class PedidoDetalleRepository:
             raise
         finally:
             cursor.close()
+
+    def _ejecutar_merge_columna(
+        self,
+        cursor: pyodbc.Cursor,
+        pedido_detalle_id: str,
+        columna_key: str,
+        usuario_mod: Optional[str],
+        tiene_valores: bool,
+        valor_anterior: Optional[str],
+        valor_nuevo: Optional[str],
+        fecha_actual,
+    ) -> None:
+        if tiene_valores:
+            cursor.execute("""
+                MERGE pedido_detalle_modificacion_columna AS target
+                USING (SELECT ? AS pedido_detalle_id, ? AS columna_key, ? AS modificado_por,
+                              ? AS valor_anterior, ? AS valor_nuevo) AS source
+                ON target.pedido_detalle_id = source.pedido_detalle_id
+                AND target.columna_key = source.columna_key
+                WHEN MATCHED THEN
+                    UPDATE SET
+                        modificado_por = source.modificado_por,
+                        fecha_modificacion = ?,
+                        valor_anterior = source.valor_anterior,
+                        valor_nuevo = source.valor_nuevo
+                WHEN NOT MATCHED THEN
+                    INSERT (pedido_detalle_id, columna_key, modificado_por, fecha_modificacion, valor_anterior, valor_nuevo)
+                    VALUES (source.pedido_detalle_id, source.columna_key, source.modificado_por, ?, source.valor_anterior, source.valor_nuevo);
+            """, (pedido_detalle_id, columna_key, usuario_mod, valor_anterior, valor_nuevo, fecha_actual, fecha_actual))
+        else:
+            cursor.execute("""
+                MERGE pedido_detalle_modificacion_columna AS target
+                USING (SELECT ? AS pedido_detalle_id, ? AS columna_key, ? AS modificado_por) AS source
+                ON target.pedido_detalle_id = source.pedido_detalle_id
+                AND target.columna_key = source.columna_key
+                WHEN MATCHED THEN
+                    UPDATE SET
+                        modificado_por = source.modificado_por,
+                        fecha_modificacion = ?
+                WHEN NOT MATCHED THEN
+                    INSERT (pedido_detalle_id, columna_key, modificado_por, fecha_modificacion)
+                    VALUES (source.pedido_detalle_id, source.columna_key, source.modificado_por, ?);
+            """, (pedido_detalle_id, columna_key, usuario_mod, fecha_actual, fecha_actual))
+
+    def _procesar_modificacion_columna(
+        self,
+        cursor: pyodbc.Cursor,
+        mod: Dict[str, str],
+        pedido_id: str,
+        numero_pedido: str,
+        columnas_validas: set,
+        tiene_valores: bool,
+        usuario_mod: Optional[str],
+        errores: List[str],
+    ) -> bool:
+        pedido_detalle_id = mod.get('pedido_detalle_id')
+        columna_key = mod.get('columna_key')
+
+        if not pedido_detalle_id or not columna_key:
+            errores.append(f"Modificación inválida: {mod}")
+            return False
+
+        if columna_key not in columnas_validas:
+            errores.append(f"Columna inválida '{columna_key}' para detalle {pedido_detalle_id}")
+            return False
+
+        cursor.execute("""
+            SELECT pedido_detalle_id
+            FROM pedido_detalle
+            WHERE pedido_detalle_id = ?
+            AND pedido_id = ?
+        """, (pedido_detalle_id, pedido_id))
+
+        if not cursor.fetchone():
+            errores.append(f"Detalle {pedido_detalle_id} no pertenece al pedido {numero_pedido}")
+            return False
+
+        self._ejecutar_merge_columna(
+            cursor,
+            pedido_detalle_id,
+            columna_key,
+            usuario_mod,
+            tiene_valores,
+            mod.get('valor_anterior'),
+            mod.get('valor_nuevo'),
+            ahora_naive(),
+        )
+        return True
 
     def guardar_modificaciones_columnas(
         self,
@@ -758,66 +852,11 @@ class PedidoDetalleRepository:
             tiene_valores = (row[0] if row else 0) > 0
             
             for mod in modificaciones:
-                pedido_detalle_id = mod.get('pedido_detalle_id')
-                columna_key = mod.get('columna_key')
-                
-                if not pedido_detalle_id or not columna_key:
-                    errores.append(f"Modificación inválida: {mod}")
-                    continue
-                
-                if columna_key not in columnas_validas:
-                    errores.append(f"Columna inválida '{columna_key}' para detalle {pedido_detalle_id}")
-                    continue
-                
-                cursor.execute("""
-                    SELECT pedido_detalle_id
-                    FROM pedido_detalle
-                    WHERE pedido_detalle_id = ?
-                    AND pedido_id = ?
-                """, (pedido_detalle_id, pedido_id))
-                
-                detalle_row = cursor.fetchone()
-                if not detalle_row:
-                    errores.append(f"Detalle {pedido_detalle_id} no pertenece al pedido {numero_pedido}")
-                    continue
-                
-                fecha_actual = ahora_naive()
-                valor_anterior = mod.get('valor_anterior')
-                valor_nuevo = mod.get('valor_nuevo')
-                
-                if tiene_valores:
-                    cursor.execute("""
-                        MERGE pedido_detalle_modificacion_columna AS target
-                        USING (SELECT ? AS pedido_detalle_id, ? AS columna_key, ? AS modificado_por,
-                                      ? AS valor_anterior, ? AS valor_nuevo) AS source
-                        ON target.pedido_detalle_id = source.pedido_detalle_id 
-                        AND target.columna_key = source.columna_key
-                        WHEN MATCHED THEN
-                            UPDATE SET 
-                                modificado_por = source.modificado_por,
-                                fecha_modificacion = ?,
-                                valor_anterior = source.valor_anterior,
-                                valor_nuevo = source.valor_nuevo
-                        WHEN NOT MATCHED THEN
-                            INSERT (pedido_detalle_id, columna_key, modificado_por, fecha_modificacion, valor_anterior, valor_nuevo)
-                            VALUES (source.pedido_detalle_id, source.columna_key, source.modificado_por, ?, source.valor_anterior, source.valor_nuevo);
-                    """, (pedido_detalle_id, columna_key, usuario_mod, valor_anterior, valor_nuevo, fecha_actual, fecha_actual))
-                else:
-                    cursor.execute("""
-                        MERGE pedido_detalle_modificacion_columna AS target
-                        USING (SELECT ? AS pedido_detalle_id, ? AS columna_key, ? AS modificado_por) AS source
-                        ON target.pedido_detalle_id = source.pedido_detalle_id 
-                        AND target.columna_key = source.columna_key
-                        WHEN MATCHED THEN
-                            UPDATE SET 
-                                modificado_por = source.modificado_por,
-                                fecha_modificacion = ?
-                        WHEN NOT MATCHED THEN
-                            INSERT (pedido_detalle_id, columna_key, modificado_por, fecha_modificacion)
-                            VALUES (source.pedido_detalle_id, source.columna_key, source.modificado_por, ?);
-                    """, (pedido_detalle_id, columna_key, usuario_mod, fecha_actual, fecha_actual))
-                
-                modificaciones_count += 1
+                if self._procesar_modificacion_columna(
+                    cursor, mod, pedido_id, numero_pedido,
+                    columnas_validas, tiene_valores, usuario_mod, errores,
+                ):
+                    modificaciones_count += 1
             
             # Registrar en audit log
             if modificaciones_count > 0:

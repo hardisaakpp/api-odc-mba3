@@ -265,7 +265,7 @@ def register_plantillas_endpoints(app: FastAPI):
                             pedido_id=resultado["pedido_id"],
                             nombre_original=file.filename or "sin_nombre.xlsx",
                             storage_path=storage_path,
-                            tamaño_bytes=file_size,
+                            tamano_bytes=file_size,
                             subido_por=user_id
                         )
                     
@@ -508,7 +508,7 @@ def register_plantillas_endpoints(app: FastAPI):
                             pedido_id=resultado["pedido_id"],
                             nombre_original=file.filename or "sin_nombre.xlsx",
                             storage_path=storage_path,
-                            tamaño_bytes=file_size,
+                            tamano_bytes=file_size,
                             subido_por=user_id
                         )
                     response_data["archivo_original"] = {

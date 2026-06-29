@@ -111,7 +111,7 @@ def procesar_plantilla_upload(
                         pedido_id=resultado["pedido_id"],
                         nombre_original=filename,
                         storage_path=path_final,
-                        tamaño_bytes=len(file_content),
+                        tamano_bytes=len(file_content),
                         subido_por=user_id
                     )
                 logger.info(f"✅ Archivo original guardado en storage definitivo: {path_final}")

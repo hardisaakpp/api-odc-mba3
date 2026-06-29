@@ -139,7 +139,7 @@ def get_sap_db_connection() -> pyodbc.Connection:
             raise ValueError("No se pudo obtener el nombre de la base de datos actual")
         current_db = db_result[0]
         
-        logger.info(f"✅ Conexión a SQL Server SAP establecida")
+        logger.info("✅ Conexión a SQL Server SAP establecida")
         logger.info(f"   Servidor: {SQL_SERVER_SAP_SERVER}")
         logger.info(f"   Base de datos configurada: {SQL_SERVER_SAP_DATABASE}")
         logger.info(f"   Base de datos actual: {current_db}")
@@ -149,6 +149,60 @@ def get_sap_db_connection() -> pyodbc.Connection:
     except Exception as e:
         logger.error(f"❌ Error al conectar a SQL Server SAP: {e}")
         raise
+
+
+def _build_connection_string() -> str:
+    if SQL_SERVER_UID and SQL_SERVER_PWD:
+        return (
+            f"DRIVER={SQL_SERVER_DRIVER};"
+            f"SERVER={SQL_SERVER_SERVER};"
+            f"DATABASE={SQL_SERVER_DATABASE};"
+            f"UID={SQL_SERVER_UID};"
+            f"PWD={SQL_SERVER_PWD};"
+            f"MARS_Connection=yes;"
+            f"Connection Timeout=10;"
+            f"Command Timeout=30;"
+            f"Encrypt=yes;"
+            f"TrustServerCertificate=yes;"
+        )
+    return (
+        f"DRIVER={SQL_SERVER_DRIVER};"
+        f"SERVER={SQL_SERVER_SERVER};"
+        f"DATABASE={SQL_SERVER_DATABASE};"
+        f"Trusted_Connection=yes;"
+        f"MARS_Connection=yes;"
+        f"Connection Timeout=10;"
+        f"Command Timeout=30;"
+        f"Encrypt=yes;"
+        f"TrustServerCertificate=yes;"
+    )
+
+
+def _build_sap_connection_string() -> str:
+    if SQL_SERVER_SAP_UID and SQL_SERVER_SAP_PWD:
+        return (
+            f"DRIVER={SQL_SERVER_SAP_DRIVER};"
+            f"SERVER={SQL_SERVER_SAP_SERVER};"
+            f"DATABASE={SQL_SERVER_SAP_DATABASE};"
+            f"UID={SQL_SERVER_SAP_UID};"
+            f"PWD={SQL_SERVER_SAP_PWD};"
+            f"MARS_Connection=yes;"
+            f"Connection Timeout=10;"
+            f"Command Timeout=30;"
+            f"Encrypt=yes;"
+            f"TrustServerCertificate=yes;"
+        )
+    return (
+        f"DRIVER={SQL_SERVER_SAP_DRIVER};"
+        f"SERVER={SQL_SERVER_SAP_SERVER};"
+        f"DATABASE={SQL_SERVER_SAP_DATABASE};"
+        f"Trusted_Connection=yes;"
+        f"MARS_Connection=yes;"
+        f"Connection Timeout=10;"
+        f"Command Timeout=30;"
+        f"Encrypt=yes;"
+        f"TrustServerCertificate=yes;"
+    )
 
 
 @contextmanager
@@ -179,34 +233,7 @@ def get_db_connection_context() -> Iterator[pyodbc.Connection]:
     """
     conn = None
     try:
-        # Construir cadena de conexión con timeouts para prevenir bloqueos
-        if SQL_SERVER_UID and SQL_SERVER_PWD:
-            connection_string = (
-                f"DRIVER={SQL_SERVER_DRIVER};"
-                f"SERVER={SQL_SERVER_SERVER};"
-                f"DATABASE={SQL_SERVER_DATABASE};"
-                f"UID={SQL_SERVER_UID};"
-                f"PWD={SQL_SERVER_PWD};"
-                # CRÍTICO: Configuraciones para evitar bloqueos
-                f"MARS_Connection=yes;"  # Múltiples result sets activos
-                f"Connection Timeout=10;"  # Timeout de conexión (10 segundos)
-                f"Command Timeout=30;"  # Timeout de comandos (30 segundos)
-                f"Encrypt=yes;"
-                f"TrustServerCertificate=yes;"
-            )
-        else:
-            connection_string = (
-                f"DRIVER={SQL_SERVER_DRIVER};"
-                f"SERVER={SQL_SERVER_SERVER};"
-                f"DATABASE={SQL_SERVER_DATABASE};"
-                f"Trusted_Connection=yes;"
-                f"MARS_Connection=yes;"
-                f"Connection Timeout=10;"
-                f"Command Timeout=30;"
-                f"Encrypt=yes;"
-                f"TrustServerCertificate=yes;"
-            )
-        
+        connection_string = _build_connection_string()
         logger.debug(f"[Context Manager] Creando conexión a {SQL_SERVER_SERVER}/{SQL_SERVER_DATABASE}")
         conn = pyodbc.connect(connection_string, timeout=10)
         
@@ -224,7 +251,7 @@ def get_db_connection_context() -> Iterator[pyodbc.Connection]:
             conn.commit()
             logger.debug("[Context Manager] Transacción confirmada (commit)")
             
-    except Exception as e:
+    except Exception:
         # Si hay error, revertir transacción
         if conn and not conn.closed:
             try:
@@ -258,32 +285,7 @@ def get_sap_db_connection_context() -> Iterator[pyodbc.Connection]:
     """
     conn = None
     try:
-        if SQL_SERVER_SAP_UID and SQL_SERVER_SAP_PWD:
-            connection_string = (
-                f"DRIVER={SQL_SERVER_SAP_DRIVER};"
-                f"SERVER={SQL_SERVER_SAP_SERVER};"
-                f"DATABASE={SQL_SERVER_SAP_DATABASE};"
-                f"UID={SQL_SERVER_SAP_UID};"
-                f"PWD={SQL_SERVER_SAP_PWD};"
-                f"MARS_Connection=yes;"
-                f"Connection Timeout=10;"
-                f"Command Timeout=30;"
-                f"Encrypt=yes;"
-                f"TrustServerCertificate=yes;"
-            )
-        else:
-            connection_string = (
-                f"DRIVER={SQL_SERVER_SAP_DRIVER};"
-                f"SERVER={SQL_SERVER_SAP_SERVER};"
-                f"DATABASE={SQL_SERVER_SAP_DATABASE};"
-                f"Trusted_Connection=yes;"
-                f"MARS_Connection=yes;"
-                f"Connection Timeout=10;"
-                f"Command Timeout=30;"
-                f"Encrypt=yes;"
-                f"TrustServerCertificate=yes;"
-            )
-        
+        connection_string = _build_sap_connection_string()
         logger.debug(f"[Context Manager SAP] Creando conexión a {SQL_SERVER_SAP_SERVER}/{SQL_SERVER_SAP_DATABASE}")
         conn = pyodbc.connect(connection_string, timeout=10)
         conn.autocommit = False
@@ -295,7 +297,7 @@ def get_sap_db_connection_context() -> Iterator[pyodbc.Connection]:
             conn.commit()
             logger.debug("[Context Manager SAP] Transacción confirmada")
             
-    except Exception as e:
+    except Exception:
         if conn and not conn.closed:
             try:
                 conn.rollback()

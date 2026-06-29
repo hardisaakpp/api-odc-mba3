@@ -22,7 +22,7 @@ from celery.schedules import crontab
 from celery.signals import worker_process_init, worker_process_shutdown, beat_init, worker_ready
 
 # Importar configuración centralizada desde config.py
-# Todo se maneja en un solo lugar: src/config.py
+# Toda la configuración se maneja en un solo lugar: src/config.py
 from src.config import (
     REDIS_URL,
     ENABLE_AUTO_MIGRATE,
