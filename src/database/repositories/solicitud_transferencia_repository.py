@@ -106,6 +106,38 @@ class SolicitudTransferenciaRepository:
                 pass
             return None
 
+    @staticmethod
+    def _insert_one_detalle(cursor, solicitud_transferencia_id: str, r: Dict[str, Any]) -> bool:
+        tienda_codigo = (r.get("tienda_codigo") or "N/A")[:20]
+        tienda_nombre = (r.get("tienda_nombre") or "")[:255] if r.get("tienda_nombre") else None
+        success = bool(r.get("success", False))
+        estado = "Creada" if success else "Error"
+        doc_num = r.get("doc_num")
+        doc_entry = r.get("doc_entry")
+        error_mensaje = (r.get("error") or "")[:500] if r.get("error") else None
+        try:
+            cursor.execute(
+                """
+                INSERT INTO solicitud_transferencia_detalle (
+                    solicitud_transferencia_id, tienda_codigo, tienda_nombre,
+                    estado, doc_num, doc_entry, error_mensaje
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    str(solicitud_transferencia_id),
+                    tienda_codigo,
+                    tienda_nombre,
+                    estado,
+                    doc_num,
+                    doc_entry,
+                    error_mensaje,
+                ),
+            )
+            return True
+        except Exception as e:
+            logger.warning(f"No se pudo insertar detalle para {tienda_codigo}: {e}")
+            return False
+
     def insert_detalle(
         self,
         solicitud_transferencia_id: str,
@@ -128,35 +160,8 @@ class SolicitudTransferenciaRepository:
             cursor = self.conn.cursor()
             insertados = 0
             for r in resultados:
-                tienda_codigo = (r.get("tienda_codigo") or "N/A")[:20]
-                tienda_nombre = (r.get("tienda_nombre") or "")[:255] if r.get("tienda_nombre") else None
-                success = bool(r.get("success", False))
-                estado = "Creada" if success else "Error"
-                doc_num = r.get("doc_num")
-                doc_entry = r.get("doc_entry")
-                error_mensaje = (r.get("error") or "")[:500] if r.get("error") else None
-
-                try:
-                    cursor.execute(
-                        """
-                        INSERT INTO solicitud_transferencia_detalle (
-                            solicitud_transferencia_id, tienda_codigo, tienda_nombre,
-                            estado, doc_num, doc_entry, error_mensaje
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?)
-                        """,
-                        (
-                            str(solicitud_transferencia_id),
-                            tienda_codigo,
-                            tienda_nombre,
-                            estado,
-                            doc_num,
-                            doc_entry,
-                            error_mensaje,
-                        ),
-                    )
+                if self._insert_one_detalle(cursor, solicitud_transferencia_id, r):
                     insertados += 1
-                except Exception as e:
-                    logger.warning(f"No se pudo insertar detalle para {tienda_codigo}: {e}")
             self.conn.commit()
             cursor.close()
             if insertados:
@@ -447,6 +452,22 @@ class SolicitudTransferenciaRepository:
             return []
         return candidatas
 
+    @staticmethod
+    def _filtrar_tiendas_fallidas(resultados: List[Any], ok_norms: set) -> List[str]:
+        out: List[str] = []
+        for r in resultados:
+            if not isinstance(r, dict):
+                continue
+            if r.get("success"):
+                continue
+            cod = (r.get("tienda_codigo") or "").strip()
+            if not cod:
+                continue
+            if cod.upper() in ok_norms:
+                continue
+            out.append(cod)
+        return out
+
     def get_tiendas_fallidas_desde_resultado_json_fallback(self, oc_id: str) -> List[str]:
         """
         Si no hay filas en solicitud_transferencia_detalle,
@@ -474,19 +495,7 @@ class SolicitudTransferenciaRepository:
                 return []
             resultados = data.get("resultados") or []
             ok_norms = self.get_tiendas_itr_ok_norms_por_oc_id(oc_id)
-            out: List[str] = []
-            for r in resultados:
-                if not isinstance(r, dict):
-                    continue
-                if r.get("success"):
-                    continue
-                cod = (r.get("tienda_codigo") or "").strip()
-                if not cod:
-                    continue
-                if self._norm_tienda(cod) in ok_norms:
-                    continue
-                out.append(cod)
-            return list(dict.fromkeys(out))
+            return list(dict.fromkeys(self._filtrar_tiendas_fallidas(resultados, ok_norms)))
         except Exception as e:
             logger.warning(f"Fallback resultado_json ST no disponible: {e}")
             return []

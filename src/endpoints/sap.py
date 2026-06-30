@@ -13,7 +13,7 @@ from src.utils import get_source_from_headers
 from src.database.services.sap_service import SAPService
 from src.database.clients.sap_client import SAPClient
 from src.database.repositories.orden_compra_repository import OrdenCompraRepository
-from src.database.repositories.sap_integration_log_repository import SAPIntegrationLogRepository
+from src.database.repositories.sap_integration_log_repository import SAPIntegrationLogRepository, SAPLogEntry
 from src.database.services.oc_sap_service import OCSAPService
 from src.database.connection import get_db_connection, get_db_connection_context
 from src.config import ENABLE_SAP_QUERIES, SAP_LINKED_SERVER, ENABLE_SAP_SERVICE_LAYER
@@ -141,25 +141,25 @@ def register_sap_endpoints(app: FastAPI):
             
             # Guardar log de inicio
             try:
-                log_repo.guardar_log(
+                log_repo.guardar_log(SAPLogEntry(
                     proceso_id=proceso_id,
                     nivel_log="INFO",
                     mensaje=f"INTEGRAR-SAP iniciado (usuario: {username}, fuente: {source})",
                     usuario=username,
                     fuente=source
-                )
+                ))
             except Exception as e:
                 logger.warning(f"No se pudo guardar log de inicio: {e}")
             
             # Guardar log de conexión
             try:
-                log_repo.guardar_log(
+                log_repo.guardar_log(SAPLogEntry(
                     proceso_id=proceso_id,
                     nivel_log="INFO",
                     mensaje="Conexión a SQL Server establecida",
                     usuario=username,
                     fuente=source
-                )
+                ))
             except Exception as e:
                 logger.warning(f"No se pudo guardar log de conexión: {e}")
             
@@ -297,13 +297,13 @@ def register_sap_endpoints(app: FastAPI):
             
             # Guardar log de procesamiento
             try:
-                log_repo.guardar_log(
+                log_repo.guardar_log(SAPLogEntry(
                     proceso_id=proceso_id,
                     nivel_log="INFO",
                     mensaje=f"Procesando {len(oc_ids_a_procesar)} OCs...",
                     usuario=username,
                     fuente=source
-                )
+                ))
             except Exception as e:
                 logger.warning(f"No se pudo guardar log de procesamiento: {e}")
             
@@ -321,7 +321,7 @@ def register_sap_endpoints(app: FastAPI):
                     
                     # Guardar log de inicio de procesamiento de OC
                     try:
-                        log_repo.guardar_log(
+                        log_repo.guardar_log(SAPLogEntry(
                             proceso_id=proceso_id,
                             nivel_log="INFO",
                             mensaje=f"Procesando ODC {oc_id_item[:8]}...",
@@ -330,7 +330,7 @@ def register_sap_endpoints(app: FastAPI):
                             oc_id=oc_id_item,
                             proveedor=proveedor,
                             referencia_despacho=referencia
-                        )
+                        ))
                     except Exception as e:
                         logger.warning(f"No se pudo guardar log de OC: {e}")
                     
@@ -360,7 +360,7 @@ def register_sap_endpoints(app: FastAPI):
                     # Guardar log de resultado
                     try:
                         if success:
-                            log_repo.guardar_log(
+                            log_repo.guardar_log(SAPLogEntry(
                                 proceso_id=proceso_id,
                                 nivel_log="INFO",
                                 mensaje=f"ODC {oc_id_item[:8]}... enviada exitosamente: DocNum={doc_num}",
@@ -373,9 +373,9 @@ def register_sap_endpoints(app: FastAPI):
                                 doc_num=doc_num,
                                 success=True,
                                 detalles_adicionales={"sap_response": sap_response} if sap_response else None
-                            )
+                            ))
                         else:
-                            log_repo.guardar_log(
+                            log_repo.guardar_log(SAPLogEntry(
                                 proceso_id=proceso_id,
                                 nivel_log="ERROR",
                                 mensaje=f"Error ODC {oc_id_item[:8]}...: {error}",
@@ -388,7 +388,7 @@ def register_sap_endpoints(app: FastAPI):
                                 error_source=error_source,
                                 success=False,
                                 detalles_adicionales={"sap_error_details": sap_error_details} if sap_error_details else None
-                            )
+                            ))
                     except Exception as e:
                         logger.warning(f"No se pudo guardar log de resultado: {e}")
                     
@@ -472,7 +472,7 @@ def register_sap_endpoints(app: FastAPI):
                     
                     # Guardar log de error excepcional
                     try:
-                        log_repo.guardar_log(
+                        log_repo.guardar_log(SAPLogEntry(
                             proceso_id=proceso_id,
                             nivel_log="ERROR",
                             mensaje=f"Error al procesar ODC {oc_id_item[:8]}...: {str(e)}",
@@ -482,7 +482,7 @@ def register_sap_endpoints(app: FastAPI):
                             proveedor=proveedor if 'proveedor' in locals() else "UNKNOWN",
                             error_source="BACKEND",
                             success=False
-                        )
+                        ))
                     except Exception:
                         pass
                     
@@ -607,7 +607,7 @@ def register_sap_endpoints(app: FastAPI):
                 # Usar context manager para garantizar transacción y cierre de conexión
                 with get_db_connection_context() as conn_final:
                     log_repo_final = SAPIntegrationLogRepository(conn_final)
-                    log_repo_final.guardar_log(
+                    log_repo_final.guardar_log(SAPLogEntry(
                         proceso_id=proceso_id,
                         nivel_log="INFO",
                         mensaje=f"INTEGRAR-SAP completado: {enviadas} enviadas, {errores} errores. "
@@ -616,7 +616,7 @@ def register_sap_endpoints(app: FastAPI):
                         fuente=source,
                         success=enviadas > 0 and errores == 0,
                         detalles_adicionales=resumen_cierre
-                    )
+                    ))
             except Exception as e:
                 logger.warning(f"⚠️ No se pudo guardar log final consolidado: {e}")
             
@@ -652,13 +652,13 @@ def register_sap_endpoints(app: FastAPI):
             
             # Guardar log de finalización
             try:
-                log_repo.guardar_log(
+                log_repo.guardar_log(SAPLogEntry(
                     proceso_id=proceso_id,
                     nivel_log="INFO",
                     mensaje=f"INTEGRAR-SAP completado: {enviadas} enviadas, {errores} errores de {len(oc_ids_a_procesar)} procesadas",
                     usuario=username,
                     fuente=source
-                )
+                ))
             except Exception as e:
                 logger.warning(f"No se pudo guardar log de finalización: {e}")
             

@@ -20,6 +20,8 @@ from ..repositories.pedido_repository import PedidoRepository
 
 logger = logging.getLogger(__name__)
 
+_FECHA_VACIA = "00/00/0000"
+
 
 @dataclass
 class MBAExportConfig:
@@ -88,7 +90,7 @@ Número secuencial de registro\tValor temporal de pedido, marca el bloque que co
             Fecha formateada como DD/MM/YYYY o 00/00/0000 si no hay fecha
         """
         if not date_value:
-            return "00/00/0000"
+            return _FECHA_VACIA
         
         try:
             if isinstance(date_value, str):
@@ -100,9 +102,9 @@ Número secuencial de registro\tValor temporal de pedido, marca el bloque que co
             elif isinstance(date_value, (date, datetime)):
                 return date_value.strftime("%d/%m/%Y")
             else:
-                return "00/00/0000"
+                return _FECHA_VACIA
         except (ValueError, TypeError):
-            return "00/00/0000"
+            return _FECHA_VACIA
     
     @staticmethod
     def _format_boolean(value: bool) -> str:
@@ -167,7 +169,31 @@ Número secuencial de registro\tValor temporal de pedido, marca el bloque que co
         
         # Por defecto, tomar los primeros 3 caracteres
         return codigo[:3]
-    
+
+    @staticmethod
+    def _extraer_datos_exportacion(cabecera: dict, config: "MBAExportConfig") -> dict:
+        """Extrae y normaliza los datos de cabecera y config para la exportación MBA."""
+        fd = MBAPedidoExporter._format_date
+        return {
+            "fecha_pedido": fd(cabecera.get("fecha_pedido")),
+            "fecha_entrega": fd(cabecera.get("fecha_entrega")),
+            "orden_compra_cliente": (cabecera.get("mensaje") or "").strip(),
+            "bodega": config.bodega or cabecera.get("origen_traslado") or "",
+            "codigo_cliente": (config.codigo_cliente or "CLI1795").strip(),
+            "moneda": (config.moneda or "US").strip(),
+        }
+
+    @staticmethod
+    def _resolver_precio_unitario(detalle: dict) -> float:
+        """Resuelve el precio unitario: costo_doc_sin_iva con fallback a pvp."""
+        precio = detalle.get("costo_doc_sin_iva")
+        if precio is None:
+            precio = detalle.get("pvp") or 0
+        try:
+            return float(precio)
+        except (TypeError, ValueError):
+            return 0.0
+
     def exportar_pedido_formato_mba(
         self,
         pedido_id: str,
@@ -208,14 +234,13 @@ Número secuencial de registro\tValor temporal de pedido, marca el bloque que co
             
             logger.info(f"📄 Exportando pedido {pedido_id} a formato MBA ({len(detalles)} productos)")
             
-            # Extraer datos del pedido (del sistema) para la exportación
-            # Fecha Pedido (col 5), Fecha Entrega (col 6), Orden Compra Cliente (col 12)
-            fecha_pedido = self._format_date(cabecera.get("fecha_pedido"))
-            fecha_entrega = self._format_date(cabecera.get("fecha_entrega"))
-            orden_compra_cliente = (cabecera.get("mensaje") or "").strip()
-            bodega = config.bodega or cabecera.get("origen_traslado") or ""
-            codigo_cliente = (config.codigo_cliente or "CLI1795").strip()
-            moneda = (config.moneda or "US").strip()
+            datos = self._extraer_datos_exportacion(cabecera, config)
+            fecha_pedido = datos["fecha_pedido"]
+            fecha_entrega = datos["fecha_entrega"]
+            orden_compra_cliente = datos["orden_compra_cliente"]
+            bodega = datos["bodega"]
+            codigo_cliente = datos["codigo_cliente"]
+            moneda = datos["moneda"]
             
             # Construir líneas del archivo
             lines = []
@@ -230,15 +255,8 @@ Número secuencial de registro\tValor temporal de pedido, marca el bloque que co
             # Generar una línea por cada combinación producto-tienda
             for detalle in detalles:
                 codigo_producto = (detalle.get("codigo_interno") or "").strip()  # Col 21 Código Producto
-                # Precio Final (col 24): precio unitario del sistema
-                precio_unitario = detalle.get("costo_doc_sin_iva")
-                if precio_unitario is None:
-                    precio_unitario = detalle.get("pvp") or 0
-                try:
-                    precio_unitario = float(precio_unitario)
-                except (TypeError, ValueError):
-                    precio_unitario = 0
-                
+                precio_unitario = self._resolver_precio_unitario(detalle)
+
                 for tienda in detalle.get("tiendas", []):
                     cantidad = tienda.get("cantidad", 0)
                     
@@ -339,13 +357,13 @@ Número secuencial de registro\tValor temporal de pedido, marca el bloque que co
             
             logger.info(f"📄 Exportando pedido {pedido_id} a formato MBA consolidado ({len(detalles)} productos)")
             
-            # Extraer datos del pedido (del sistema)
-            fecha_pedido = self._format_date(cabecera.get("fecha_pedido"))
-            fecha_entrega = self._format_date(cabecera.get("fecha_entrega"))
-            orden_compra_cliente = (cabecera.get("mensaje") or "").strip()
-            bodega = config.bodega or cabecera.get("origen_traslado") or ""
-            codigo_cliente = (config.codigo_cliente or "CLI1795").strip()
-            moneda = (config.moneda or "US").strip()
+            datos = self._extraer_datos_exportacion(cabecera, config)
+            fecha_pedido = datos["fecha_pedido"]
+            fecha_entrega = datos["fecha_entrega"]
+            orden_compra_cliente = datos["orden_compra_cliente"]
+            bodega = datos["bodega"]
+            codigo_cliente = datos["codigo_cliente"]
+            moneda = datos["moneda"]
             
             # Usar la primera tienda para la sucursal (o el campo bodega del config)
             sucursal_default = ""
@@ -362,14 +380,8 @@ Número secuencial de registro\tValor temporal de pedido, marca el bloque que co
             
             for detalle in detalles:
                 codigo_producto = (detalle.get("codigo_interno") or "").strip()
-                precio_unitario = detalle.get("costo_doc_sin_iva")
-                if precio_unitario is None:
-                    precio_unitario = detalle.get("pvp") or 0
-                try:
-                    precio_unitario = float(precio_unitario)
-                except (TypeError, ValueError):
-                    precio_unitario = 0
-                
+                precio_unitario = self._resolver_precio_unitario(detalle)
+
                 # Consolidar cantidad total de todas las tiendas
                 cantidad_total = sum(t.get("cantidad", 0) for t in detalle.get("tiendas", []))
                 

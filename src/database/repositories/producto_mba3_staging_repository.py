@@ -5,7 +5,6 @@ Repositorio para operaciones de producto_mba3_staging en SQL Server.
 import logging
 import pyodbc
 from typing import List, Dict, Any, Optional
-from datetime import datetime
 
 from src.utils.timezone import ahora_naive
 
@@ -385,10 +384,7 @@ class ProductoMBA3StagingRepository:
             # Si se permite búsqueda normalizada, buscar también por product_id_normalizado
             if usar_normalizado:
                 from src.utils import normalizar_codigo_producto
-                
-                # Normalizar todos los códigos
-                codigos_normalizados = [normalizar_codigo_producto(c) for c in codigos]
-                
+
                 # Buscar por código normalizado (solo los que no se encontraron antes)
                 codigos_no_encontrados = [c for c, existe in resultado.items() if not existe]
                 if codigos_no_encontrados:

@@ -9,12 +9,10 @@ import logging
 import re
 import pyodbc
 from typing import Optional, Dict, Any, List
-from datetime import datetime
 
 from src.config import (
     SAP_LINKED_SERVER,
     SAP_DATABASE,
-    SAP_SCHEMA,
     ENABLE_SAP_QUERIES
 )
 from ..connection import get_sap_db_connection
@@ -259,6 +257,34 @@ class SAPClient:
             logger.warning(f"⚠️ Error en staging ({elapsed:.3f}s), usando fallback a SAP: {e}")
             return None
 
+    def _build_where_clause(
+        self,
+        sku_escaped: str,
+        prefijo: Optional[str],
+        numero_principal: Optional[str],
+        solo_activos: bool,
+    ) -> str:
+        """Construye la cláusula WHERE para la búsqueda de SKUs similares en SAP."""
+        condiciones = [f"T0.\"ItemCode\" LIKE ''%{sku_escaped}%''"]
+
+        if prefijo and numero_principal:
+            p_esc = prefijo.replace("'", "''").replace("%", "[%]").replace("_", "[_]")
+            n_esc = numero_principal.replace("'", "''").replace("%", "[%]").replace("_", "[_]")
+            condiciones.append(
+                f"(T0.\"ItemCode\" LIKE ''%{p_esc}%'' AND T0.\"ItemCode\" LIKE ''%{n_esc}%'')"
+            )
+
+        if numero_principal and len(numero_principal) >= 4:
+            n_esc = numero_principal.replace("'", "''").replace("%", "[%]").replace("_", "[_]")
+            condiciones.append(f"T0.\"ItemCode\" LIKE ''%{n_esc}%''")
+
+        where_clause = " OR ".join(f"({cond})" for cond in condiciones)
+
+        if solo_activos:
+            where_clause = f"({where_clause}) AND T0.\"validFor\" = ''Y''"
+
+        return where_clause
+
     def _buscar_skus_en_sap(
         self,
         sku_clean: str,
@@ -281,20 +307,7 @@ class SAPClient:
         numeros = re.findall(r'\d+', sku_clean)
         numero_principal = numeros[0] if numeros else None
 
-        condiciones = [f"T0.\"ItemCode\" LIKE ''%{sku_escaped}%''"]
-        if prefijo and numero_principal:
-            p_esc = prefijo.replace("'", "''").replace("%", "[%]").replace("_", "[_]")
-            n_esc = numero_principal.replace("'", "''").replace("%", "[%]").replace("_", "[_]")
-            condiciones.append(
-                f"(T0.\"ItemCode\" LIKE ''%{p_esc}%'' AND T0.\"ItemCode\" LIKE ''%{n_esc}%'')"
-            )
-        if numero_principal and len(numero_principal) >= 4:
-            n_esc = numero_principal.replace("'", "''").replace("%", "[%]").replace("_", "[_]")
-            condiciones.append(f"T0.\"ItemCode\" LIKE ''%{n_esc}%''")
-
-        where_clause = " OR ".join(f"({cond})" for cond in condiciones)
-        if solo_activos:
-            where_clause = f"({where_clause}) AND T0.\"validFor\" = ''Y''"
+        where_clause = self._build_where_clause(sku_escaped, prefijo, numero_principal, solo_activos)
 
         limite_busqueda = limite_ajustado * 3
         query = f"""

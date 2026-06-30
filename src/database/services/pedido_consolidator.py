@@ -8,7 +8,7 @@ NO hace parsing, NO persiste en BD.
 import logging
 import pandas as pd
 from typing import Dict, Any, Optional, List
-from datetime import date
+from datetime import date, datetime
 
 logger = logging.getLogger(__name__)
 
@@ -20,6 +20,58 @@ class PedidoConsolidator:
     Convierte datos parseados a formato normalizado para BD.
     """
     
+    _CAMPO_ALIASES: Dict[str, list] = {
+        "numero_pedido": ["numero_pedido", "CODIGO PEDIDO", "CÓDIGO PEDIDO"],
+        "fecha_pedido": ["fecha_pedido", "FECHA DE PEDIDO", "FECHA PEDIDO"],
+        "fecha_entrega": ["fecha_entrega", "FECHA DE ENTREGA", "FECHA ENTREGA"],
+        "forma_pago": ["forma_pago", "FORMA PAGO", "FORMA DE PAGO"],
+        "mensaje": ["mensaje", "MENSAJE"],
+        "proveedor_nombre": ["proveedor_nombre", "NOMBRE PROVEEDOR"],
+        "comprador_nombre": ["comprador_nombre", "COMPRADOR NOMBRE"],
+        "comprador_codigo": ["comprador_codigo", "COD COMPRADOR", "CÓD COMPRADOR"],
+        "origen_traslado": ["origen_traslado", "ORIGEN TRASLADO"],
+        "serie": ["serie", "SERIE"],
+    }
+
+    @staticmethod
+    def _parsear_fecha_simple(valor: Any) -> Optional[date]:
+        try:
+            if isinstance(valor, datetime):
+                return valor.date()
+            if isinstance(valor, date):
+                return valor
+            if isinstance(valor, str):
+                valor_limpio = valor.strip()
+                if "/" in valor_limpio:
+                    return pd.to_datetime(valor_limpio, dayfirst=True).date()
+                return pd.to_datetime(valor_limpio).date()
+            return None
+        except Exception as e:
+            logger.warning(f"⚠️ Error al parsear fecha '{valor}': {e}")
+            return None
+
+    @staticmethod
+    def _parsear_fecha_entrega(valor: Any) -> Any:
+        try:
+            if isinstance(valor, datetime):
+                return valor.date()
+            if isinstance(valor, date):
+                return valor
+            if isinstance(valor, str):
+                valor_limpio = valor.strip().upper()
+                if valor_limpio in ("INMEDIATO", "ASAP", "URGE", ""):
+                    return valor_limpio.lower() if valor_limpio else None
+                try:
+                    if "/" in valor_limpio:
+                        return pd.to_datetime(valor_limpio, dayfirst=True).date()
+                    return pd.to_datetime(valor_limpio).date()
+                except Exception:
+                    return valor.lower()
+            return None
+        except Exception as e:
+            logger.warning(f"⚠️ Error al parsear fecha_entrega '{valor}': {e}")
+            return None
+
     def normalizar_cabecera_para_bd(
         self, 
         cabecera_parseada: Dict[str, Any], 
@@ -54,128 +106,23 @@ class PedidoConsolidator:
             "archivo_nombre": filename,
             "creado_por": usuario_id,
         }
-        
-        # Mapeo de campos del Excel a campos de BD
-        # Priorizar nombres normalizados, luego buscar variaciones
-        if "numero_pedido" in cabecera_parseada:
-            cabecera_bd["numero_pedido"] = cabecera_parseada["numero_pedido"]
-        elif "CODIGO PEDIDO" in cabecera_parseada:
-            cabecera_bd["numero_pedido"] = cabecera_parseada["CODIGO PEDIDO"]
-        elif "CÓDIGO PEDIDO" in cabecera_parseada:
-            cabecera_bd["numero_pedido"] = cabecera_parseada["CÓDIGO PEDIDO"]
-        
-        if "fecha_pedido" in cabecera_parseada:
-            cabecera_bd["fecha_pedido"] = cabecera_parseada["fecha_pedido"]
-        elif "FECHA DE PEDIDO" in cabecera_parseada:
-            cabecera_bd["fecha_pedido"] = cabecera_parseada["FECHA DE PEDIDO"]
-        elif "FECHA PEDIDO" in cabecera_parseada:
-            cabecera_bd["fecha_pedido"] = cabecera_parseada["FECHA PEDIDO"]
-        
-        if "fecha_entrega" in cabecera_parseada:
-            cabecera_bd["fecha_entrega"] = cabecera_parseada["fecha_entrega"]
-        elif "FECHA DE ENTREGA" in cabecera_parseada:
-            cabecera_bd["fecha_entrega"] = cabecera_parseada["FECHA DE ENTREGA"]
-        elif "FECHA ENTREGA" in cabecera_parseada:
-            cabecera_bd["fecha_entrega"] = cabecera_parseada["FECHA ENTREGA"]
-        
-        if "forma_pago" in cabecera_parseada:
-            cabecera_bd["forma_pago"] = cabecera_parseada["forma_pago"]
-        elif "FORMA PAGO" in cabecera_parseada:
-            cabecera_bd["forma_pago"] = cabecera_parseada["FORMA PAGO"]
-        elif "FORMA DE PAGO" in cabecera_parseada:
-            cabecera_bd["forma_pago"] = cabecera_parseada["FORMA DE PAGO"]
-        
-        if "mensaje" in cabecera_parseada:
-            cabecera_bd["mensaje"] = cabecera_parseada["mensaje"]
-        elif "MENSAJE" in cabecera_parseada:
-            cabecera_bd["mensaje"] = cabecera_parseada["MENSAJE"]
-        
-        if "proveedor_nombre" in cabecera_parseada:
-            cabecera_bd["proveedor_nombre"] = cabecera_parseada["proveedor_nombre"]
-        elif "NOMBRE PROVEEDOR" in cabecera_parseada:
-            cabecera_bd["proveedor_nombre"] = cabecera_parseada["NOMBRE PROVEEDOR"]
-        
-        if "comprador_nombre" in cabecera_parseada:
-            cabecera_bd["comprador_nombre"] = cabecera_parseada["comprador_nombre"]
-        elif "COMPRADOR NOMBRE" in cabecera_parseada:
-            cabecera_bd["comprador_nombre"] = cabecera_parseada["COMPRADOR NOMBRE"]
-        
-        if "comprador_codigo" in cabecera_parseada:
-            cabecera_bd["comprador_codigo"] = cabecera_parseada["comprador_codigo"]
-        elif "COD COMPRADOR" in cabecera_parseada:
-            cabecera_bd["comprador_codigo"] = cabecera_parseada["COD COMPRADOR"]
-        elif "CÓD COMPRADOR" in cabecera_parseada:
-            cabecera_bd["comprador_codigo"] = cabecera_parseada["CÓD COMPRADOR"]
-        
-        if "origen_traslado" in cabecera_parseada:
-            cabecera_bd["origen_traslado"] = cabecera_parseada["origen_traslado"]
-        elif "ORIGEN TRASLADO" in cabecera_parseada:
-            cabecera_bd["origen_traslado"] = cabecera_parseada["ORIGEN TRASLADO"]
-        
-        if "serie" in cabecera_parseada:
-            cabecera_bd["serie"] = cabecera_parseada["serie"]
-        elif "SERIE" in cabecera_parseada:
-            cabecera_bd["serie"] = cabecera_parseada["SERIE"]
-        
-        # Convertir fecha_pedido a DATE (manejar Timestamp, datetime, string)
+
+        for campo_bd, aliases in PedidoConsolidator._CAMPO_ALIASES.items():
+            for alias in aliases:
+                if alias in cabecera_parseada:
+                    cabecera_bd[campo_bd] = cabecera_parseada[alias]
+                    break
+
         if cabecera_bd["fecha_pedido"]:
-            try:
-                import pandas as pd
-                from datetime import datetime, date
-                
-                valor = cabecera_bd["fecha_pedido"]
-                
-                # Si ya es date, dejar como está
-                if isinstance(valor, date) and not isinstance(valor, datetime):
-                    pass
-                # Si es datetime o Timestamp, convertir a date
-                elif isinstance(valor, (datetime, pd.Timestamp)):
-                    cabecera_bd["fecha_pedido"] = valor.date()
-                # Si es string, parsear
-                elif isinstance(valor, str):
-                    valor_limpio = valor.strip()
-                    if "/" in valor_limpio:
-                        cabecera_bd["fecha_pedido"] = pd.to_datetime(valor_limpio, dayfirst=True).date()
-                    else:
-                        cabecera_bd["fecha_pedido"] = pd.to_datetime(valor_limpio).date()
-            except Exception as e:
-                logger.warning(f"⚠️ Error al parsear fecha_pedido '{cabecera_bd['fecha_pedido']}': {e}")
-                cabecera_bd["fecha_pedido"] = None
-        
-        # Convertir fecha_entrega a DATE (manejar Timestamp, datetime, string)
+            cabecera_bd["fecha_pedido"] = PedidoConsolidator._parsear_fecha_simple(
+                cabecera_bd["fecha_pedido"]
+            )
+
         if cabecera_bd["fecha_entrega"]:
-            try:
-                import pandas as pd
-                from datetime import datetime, date
-                
-                valor = cabecera_bd["fecha_entrega"]
-                
-                # Si ya es date, dejar como está
-                if isinstance(valor, date) and not isinstance(valor, datetime):
-                    pass
-                # Si es datetime o Timestamp, convertir a date
-                elif isinstance(valor, (datetime, pd.Timestamp)):
-                    cabecera_bd["fecha_entrega"] = valor.date()
-                # Si es string, intentar parsear (pero si dice "INMEDIATO", dejar como está)
-                elif isinstance(valor, str):
-                    valor_limpio = valor.strip().upper()
-                    # Si es "INMEDIATO" u otro texto especial, mantener como string
-                    if valor_limpio in ("INMEDIATO", "ASAP", "URGE", ""):
-                        cabecera_bd["fecha_entrega"] = valor_limpio.lower() if valor_limpio else None
-                    else:
-                        # Intentar parsear como fecha
-                        try:
-                            if "/" in valor_limpio:
-                                cabecera_bd["fecha_entrega"] = pd.to_datetime(valor_limpio, dayfirst=True).date()
-                            else:
-                                cabecera_bd["fecha_entrega"] = pd.to_datetime(valor_limpio).date()
-                        except:
-                            # Si no es fecha, mantener el string original
-                            cabecera_bd["fecha_entrega"] = valor.lower()
-            except Exception as e:
-                logger.warning(f"⚠️ Error al parsear fecha_entrega '{cabecera_bd['fecha_entrega']}': {e}")
-                cabecera_bd["fecha_entrega"] = None
-        
+            cabecera_bd["fecha_entrega"] = PedidoConsolidator._parsear_fecha_entrega(
+                cabecera_bd["fecha_entrega"]
+            )
+
         return cabecera_bd
     
     def consolidar_detalles_simple(

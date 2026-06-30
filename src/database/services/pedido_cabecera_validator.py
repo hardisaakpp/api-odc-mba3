@@ -77,51 +77,60 @@ class PedidoCabeceraValidator:
         # Validar fecha_pedido
         fecha_pedido = cabecera.get("fecha_pedido")
         if fecha_pedido:
-            fecha_parsed = self._parsear_fecha(fecha_pedido)
-            if fecha_parsed is None:
-                issues.append(ValidationIssue(
-                    row_number=row_number,
-                    field="fecha_pedido",
-                    severity=ValidationSeverity.ERROR,
-                    message="Formato de fecha inválido. Use YYYY-MM-DD o DD/MM/YYYY",
-                    value=cabecera.get("fecha_pedido")
-                ))
-            else:
-                # Validar que fecha_pedido no sea muy antigua (ej: > 1 año)
-                hoy = date.today()
-                if fecha_parsed < date(hoy.year - 1, hoy.month, hoy.day):
-                    issues.append(ValidationIssue(
-                        row_number=row_number,
-                        field="fecha_pedido",
-                        severity=ValidationSeverity.WARNING,
-                        message=f"La fecha de pedido es muy antigua: {fecha_parsed}",
-                        value=fecha_parsed
-                    ))
+            issues.extend(self._validar_fecha_pedido(fecha_pedido, row_number))
 
         # Validar fecha_entrega
         fecha_entrega = cabecera.get("fecha_entrega")
         if fecha_entrega and str(fecha_entrega).upper() != "INMEDIATO":
-            fecha_entrega_dt = self._parsear_fecha(fecha_entrega)
-            if fecha_entrega_dt is None:
-                issues.append(ValidationIssue(
+            issues.extend(self._validar_fecha_entrega(fecha_entrega, row_number))
+
+        return issues
+
+    def _validar_fecha_pedido(self, fecha_pedido: Any, row_number: int) -> List[ValidationIssue]:
+        result = []
+        fecha_parsed = self._parsear_fecha(fecha_pedido)
+        if fecha_parsed is None:
+            result.append(ValidationIssue(
+                row_number=row_number,
+                field="fecha_pedido",
+                severity=ValidationSeverity.ERROR,
+                message="Formato de fecha inválido. Use YYYY-MM-DD o DD/MM/YYYY",
+                value=fecha_pedido
+            ))
+        else:
+            hoy = date.today()
+            if fecha_parsed < date(hoy.year - 1, hoy.month, hoy.day):
+                result.append(ValidationIssue(
+                    row_number=row_number,
+                    field="fecha_pedido",
+                    severity=ValidationSeverity.WARNING,
+                    message=f"La fecha de pedido es muy antigua: {fecha_parsed}",
+                    value=fecha_parsed
+                ))
+        return result
+
+    def _validar_fecha_entrega(self, fecha_entrega: Any, row_number: int) -> List[ValidationIssue]:
+        result = []
+        fecha_entrega_dt = self._parsear_fecha(fecha_entrega)
+        if fecha_entrega_dt is None:
+            result.append(ValidationIssue(
+                row_number=row_number,
+                field="fecha_entrega",
+                severity=ValidationSeverity.ERROR,
+                message="Formato de fecha de entrega inválido. Use YYYY-MM-DD, DD/MM/YYYY o 'INMEDIATO'",
+                value=fecha_entrega
+            ))
+        elif not self.permitir_fechas_pasadas:
+            hoy = date.today()
+            if fecha_entrega_dt < hoy:
+                result.append(ValidationIssue(
                     row_number=row_number,
                     field="fecha_entrega",
                     severity=ValidationSeverity.ERROR,
-                    message="Formato de fecha de entrega inválido. Use YYYY-MM-DD, DD/MM/YYYY o 'INMEDIATO'",
-                    value=fecha_entrega
+                    message=f"La fecha de entrega no puede ser pasada: {fecha_entrega_dt}",
+                    value=fecha_entrega_dt
                 ))
-            elif not self.permitir_fechas_pasadas:
-                hoy = date.today()
-                if fecha_entrega_dt < hoy:
-                    issues.append(ValidationIssue(
-                        row_number=row_number,
-                        field="fecha_entrega",
-                        severity=ValidationSeverity.ERROR,
-                        message=f"La fecha de entrega no puede ser pasada: {fecha_entrega_dt}",
-                        value=fecha_entrega_dt
-                    ))
-
-        return issues
+        return result
 
     def _parsear_fecha(self, fecha_value: Any) -> date | None:
         """

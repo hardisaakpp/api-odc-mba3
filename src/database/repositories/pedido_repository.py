@@ -157,7 +157,6 @@ class PedidoRepository:
         self,
         limit: Optional[int] = None,
         offset: Optional[int] = None,
-        solo_redistribucion_confirmada: bool = False,
         fecha_desde: Optional[str] = None,
         fecha_hasta: Optional[str] = None,
         proveedor_nombre: Optional[str] = None,
@@ -171,7 +170,6 @@ class PedidoRepository:
         return self.cabecera_repo.get_pedidos_confirmados(
             limit=limit,
             offset=offset,
-            solo_redistribucion_confirmada=solo_redistribucion_confirmada,
             fecha_desde=fecha_desde,
             fecha_hasta=fecha_hasta,
             proveedor_nombre=proveedor_nombre,
@@ -281,6 +279,25 @@ class PedidoRepository:
 
         return respuestas_proveedor
 
+    def _tiene_datos_asociados(self, cursor, pedido_id: str) -> bool:
+        """Verifica si el pedido tiene registros en tablas que impedirían su eliminación."""
+        for table, col in [
+            ("pedido_respuesta_proveedor", "pedido_id"),
+            ("distribucion_confirmada", "pedido_id"),
+            ("orden_compra_cabecera", "pedido_id"),
+        ]:
+            try:
+                cursor.execute(
+                    f"SELECT COUNT(*) FROM {table} WHERE {col} = ?",
+                    (pedido_id,),
+                )
+                row = cursor.fetchone()
+                if row and (row[0] or 0) > 0:
+                    return True
+            except pyodbc.Error:
+                pass
+        return False
+
     def validar_puede_descartar(
         self, pedido_id: str, es_cancelar_pedido: bool = False
     ) -> Tuple[bool, str, str]:
@@ -329,25 +346,12 @@ class PedidoRepository:
 
         cursor = self.conn.cursor()
         try:
-            for table, col in [
-                ("pedido_respuesta_proveedor", "pedido_id"),
-                ("distribucion_confirmada", "pedido_id"),
-                ("orden_compra_cabecera", "pedido_id"),
-            ]:
-                try:
-                    cursor.execute(
-                        f"SELECT COUNT(*) FROM {table} WHERE {col} = ?",
-                        (pedido_id,),
-                    )
-                    row = cursor.fetchone()
-                    if row and (row[0] or 0) > 0:
-                        return (
-                            False,
-                            "tiene_datos_asociados",
-                            "El pedido tiene información asociada (respuesta de proveedor, redistribución u orden de compra) y no puede descartarse.",
-                        )
-                except pyodbc.Error:
-                    pass
+            if self._tiene_datos_asociados(cursor, pedido_id):
+                return (
+                    False,
+                    "tiene_datos_asociados",
+                    "El pedido tiene información asociada (respuesta de proveedor, redistribución u orden de compra) y no puede descartarse.",
+                )
             return (True, "", "")
         finally:
             cursor.close()

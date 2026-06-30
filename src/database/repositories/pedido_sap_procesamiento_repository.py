@@ -6,8 +6,6 @@ Almacena información SAP procesada cuando MT confirma la redistribución.
 import logging
 import pyodbc
 from typing import Dict, Any, List, Optional
-from datetime import datetime
-from decimal import Decimal
 
 from src.utils.timezone import ahora_naive
 
@@ -234,20 +232,56 @@ class PedidoSAPProcesamientoRepository:
             # Insertar
             return self.insert_procesamiento(datos)
     
+    @staticmethod
+    def _norm_unit(v: Any) -> Any:
+        """Devuelve None si el valor es None o string vacío (para no mostrar N/A ni raya en Pack)."""
+        if v is None:
+            return None
+        if isinstance(v, str) and not v.strip():
+            return None
+        return v.strip() if isinstance(v, str) else v
+
+    def _map_procesamiento_row(self, row: Any) -> Dict[str, Any]:
+        """Mapea una fila de pedido_sap_procesamiento_detalle a dict."""
+        return {
+            "procesamiento_detalle_id": str(row[0]),
+            "pedido_id": str(row[1]),
+            "pedido_detalle_id": str(row[2]),
+            "codigo_interno": row[3],
+            "unidad_original": self._norm_unit(row[4]),
+            "descripcion_producto": row[5],
+            "item_code_sap": row[6],
+            "pack_sap": row[7],
+            "unidad_conversion": float(row[8]) if row[8] else None,
+            "unidad_sap": self._norm_unit(row[9]),
+            "cantidad_original": float(row[10]) if row[10] else None,
+            "cantidad_sap": float(row[11]) if row[11] else None,
+            "precio_unitario_original": float(row[12]) if row[12] else None,
+            "precio_unitario_sap": float(row[13]) if row[13] else None,
+            "total_linea_original": float(row[14]) if row[14] else None,
+            "total_linea_sap": float(row[15]) if row[15] else None,
+            "producto_homologado": bool(row[16]) if row[16] is not None else True,
+            "tipo_problema": row[17],
+            "item_code_sap_encontrado": row[18],
+            "mensaje_error": row[19],
+            "fecha_procesamiento": row[20],
+            "procesado_por": row[21]
+        }
+
     def get_procesamientos_por_pedido(self, pedido_id: str) -> List[Dict[str, Any]]:
         """
         Obtiene todos los procesamientos SAP de un pedido.
-        
+
         Args:
             pedido_id: UUID del pedido
-            
+
         Returns:
             Lista de diccionarios con información de procesamiento
         """
         cursor = self.conn.cursor()
         try:
             cursor.execute("""
-                SELECT 
+                SELECT
                     ps.procesamiento_detalle_id,
                     ps.pedido_id,
                     ps.pedido_detalle_id,
@@ -275,44 +309,7 @@ class PedidoSAPProcesamientoRepository:
                 WHERE ps.pedido_id = ?
                 ORDER BY pd.codigo_interno
             """, (pedido_id,))
-            
-            def _norm_unit(v):
-                """Devuelve None si el valor es None o string vacío (para no mostrar N/A ni raya en Pack)."""
-                if v is None:
-                    return None
-                if isinstance(v, str) and not v.strip():
-                    return None
-                return v.strip() if isinstance(v, str) else v
-
-            resultados = []
-            for row in cursor.fetchall():
-                resultados.append({
-                    "procesamiento_detalle_id": str(row[0]),
-                    "pedido_id": str(row[1]),
-                    "pedido_detalle_id": str(row[2]),
-                    "codigo_interno": row[3],
-                    "unidad_original": _norm_unit(row[4]),
-                    "descripcion_producto": row[5],
-                    "item_code_sap": row[6],
-                    "pack_sap": row[7],
-                    "unidad_conversion": float(row[8]) if row[8] else None,
-                    "unidad_sap": _norm_unit(row[9]),
-                    "cantidad_original": float(row[10]) if row[10] else None,
-                    "cantidad_sap": float(row[11]) if row[11] else None,
-                    "precio_unitario_original": float(row[12]) if row[12] else None,
-                    "precio_unitario_sap": float(row[13]) if row[13] else None,
-                    "total_linea_original": float(row[14]) if row[14] else None,
-                    "total_linea_sap": float(row[15]) if row[15] else None,
-                    "producto_homologado": bool(row[16]) if row[16] is not None else True,
-                    "tipo_problema": row[17],
-                    "item_code_sap_encontrado": row[18],
-                    "mensaje_error": row[19],
-                    "fecha_procesamiento": row[20],
-                    "procesado_por": row[21]
-                })
-            
-            return resultados
-            
+            return [self._map_procesamiento_row(row) for row in cursor.fetchall()]
         except Exception as e:
             logger.error(f"❌ Error al obtener procesamientos: {e}", exc_info=True)
             return []

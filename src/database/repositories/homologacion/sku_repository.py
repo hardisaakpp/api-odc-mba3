@@ -507,21 +507,21 @@ class SkuRepository:
             "detalles": detalles
         }
     
+    def _detectar_diferencias(self, row) -> bool:
+        """Detecta diferencias de SKU o precio entre datos MBA3 y SAP de una fila."""
+        if row[2] != row[7]:  # SKU diferente
+            return True
+        if row[4] and row[9]:  # Comparar precios con tolerancia de 1 centavo
+            precio_mba3 = float(row[4]) if row[4] else 0
+            precio_sap = float(row[9]) if row[9] else 0
+            if abs(precio_mba3 - precio_sap) > 0.01:
+                return True
+        return False
+
     def _calcular_flags_sincronizacion(self, row) -> Tuple[bool, bool, str]:
         """Calcula (tiene_datos_sap, tiene_diferencias, estado) para una fila de despacho."""
         tiene_datos_sap = bool(row[7] or row[8] or row[9] or row[10] or row[11])
-        tiene_diferencias = False
-
-        if tiene_datos_sap:
-            # Detectar diferencias
-            if row[2] != row[7]:  # SKU diferente
-                tiene_diferencias = True
-            elif row[4] and row[9]:  # Comparar precios
-                precio_mba3 = float(row[4]) if row[4] else 0
-                precio_sap = float(row[9]) if row[9] else 0
-                if abs(precio_mba3 - precio_sap) > 0.01:  # Tolerancia de 1 centavo
-                    tiene_diferencias = True
-
+        tiene_diferencias = self._detectar_diferencias(row) if tiene_datos_sap else False
         estado = 'PENDIENTE' if tiene_diferencias or not tiene_datos_sap else 'HOMOLOGADO'
         return tiene_datos_sap, tiene_diferencias, estado
 

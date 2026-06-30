@@ -76,6 +76,17 @@ class PedidoRespuestaRepository:
         finally:
             cursor.close()
     
+    def _construir_mapa_precios(
+        self, respuestas_precios: List[Dict[str, Any]]
+    ) -> Dict[str, Dict[str, Any]]:
+        """Indexa respuestas_precios por pedido_detalle_id para búsqueda O(1)."""
+        precios_map: Dict[str, Dict[str, Any]] = {}
+        for precio_resp in respuestas_precios:
+            pedido_detalle_id = precio_resp.get("pedido_detalle_id")
+            if pedido_detalle_id:
+                precios_map[pedido_detalle_id] = precio_resp
+        return precios_map
+
     def guardar_respuesta_detalles(
         self,
         respuesta_id: str,
@@ -84,27 +95,22 @@ class PedidoRespuestaRepository:
     ) -> Dict[str, int]:
         """
         Guarda los detalles de respuesta (cantidades y precios) por producto.
-        
+
         Args:
             respuesta_id: UUID de la respuesta (cabecera)
             respuestas_cantidades: Lista de dicts con pedido_detalle_id, cantidad_solicitada_total, cantidad_confirmada_total, observaciones
             respuestas_precios: Lista de dicts con pedido_detalle_id, costo_ajustado, descuento_ajustado, observaciones_precio
-            
+
         Returns:
             Dict con conteos: {"cantidades_guardadas": N, "precios_guardados": M}
         """
         cursor = self.conn.cursor()
         cantidades_guardadas = 0
         precios_guardados = 0
-        
+
         try:
-            # Crear mapa de precios por pedido_detalle_id
-            precios_map = {}
-            for precio_resp in respuestas_precios:
-                pedido_detalle_id = precio_resp.get("pedido_detalle_id")
-                if pedido_detalle_id:
-                    precios_map[pedido_detalle_id] = precio_resp
-            
+            precios_map = self._construir_mapa_precios(respuestas_precios)
+
             # Guardar cada respuesta de cantidad (que incluye precio si existe)
             for cant_resp in respuestas_cantidades:
                 pedido_detalle_id = cant_resp.get("pedido_detalle_id")
@@ -205,18 +211,66 @@ class PedidoRespuestaRepository:
         finally:
             cursor.close()
 
+    def _map_cabecera_respuesta(self, row: Any, respuesta_id: str) -> Dict[str, Any]:
+        """Mapea una fila de pedido_respuesta_proveedor a dict de cabecera."""
+        return {
+            "respuesta_id": respuesta_id,
+            "version": row[1],
+            "estado": row[2],
+            "fecha_respuesta": row[3].isoformat() if row[3] else None,
+            "fecha_aprobacion": row[4].isoformat() if row[4] else None,
+            "creado_por": row[5],
+            "aprobado_por": row[6],
+            "observaciones_generales": row[7],
+            "created_at": row[8].isoformat() if row[8] else None,
+            "updated_at": row[9].isoformat() if row[9] else None,
+        }
+
+    def _map_detalle_respuesta(self, det_row: Any, tiene_campos_modificados: bool) -> Dict[str, Any]:
+        """Mapea una fila de pedido_respuesta_proveedor_detalle a dict."""
+        # Normalizar cantidades a float para preservar decimales (ej. 0.5)
+        try:
+            cant_sol = float(det_row[2]) if det_row[2] is not None else 0.0
+        except (TypeError, ValueError):
+            cant_sol = 0.0
+        try:
+            cant_conf = float(det_row[3]) if det_row[3] is not None else 0.0
+        except (TypeError, ValueError):
+            cant_conf = 0.0
+        detalle_dict = {
+            "id": str(det_row[0]),
+            "pedido_detalle_id": str(det_row[1]),
+            "codigo_producto": det_row[9],
+            "descripcion": det_row[10],
+            "cantidad_solicitada_total": cant_sol,
+            "cantidad_confirmada_total": cant_conf,
+            "costo_doc_sin_iva_original": float(det_row[4]) if det_row[4] else None,
+            "costo_doc_sin_iva_ajustado": float(det_row[5]) if det_row[5] else None,
+            "descuento_1_original": float(det_row[6]) if det_row[6] else None,
+            "descuento_1_ajustado": float(det_row[7]) if det_row[7] else None,
+            "observaciones": det_row[8],
+        }
+        if tiene_campos_modificados and len(det_row) > 11:
+            detalle_dict["costo_modificado_manual"] = bool(det_row[11])
+            detalle_dict["total_modificado_manual"] = bool(det_row[12])
+        else:
+            # Campos no presentes en BD antigua: devolver False por defecto
+            detalle_dict["costo_modificado_manual"] = False
+            detalle_dict["total_modificado_manual"] = False
+        return detalle_dict
+
     def obtener_respuesta_activa(self, pedido_id: str) -> Optional[Dict[str, Any]]:
         """
         Obtiene la respuesta más reciente (última versión) del proveedor para un pedido.
-        
+
         Args:
             pedido_id: UUID del pedido
-            
+
         Returns:
             Dict con respuesta completa incluyendo cabecera y detalles, o None si no existe
         """
         cursor = self.conn.cursor()
-        
+
         try:
             # Obtener cabecera de respuesta más reciente
             cursor.execute("""
@@ -228,30 +282,19 @@ class PedidoRespuestaRepository:
                 WHERE pedido_id = ?
                 ORDER BY version DESC
             """, (pedido_id,))
-            
+
             row = cursor.fetchone()
             if not row:
                 return None
-            
+
             respuesta_id = str(row[0])
-            cabecera = {
-                "respuesta_id": respuesta_id,
-                "version": row[1],
-                "estado": row[2],
-                "fecha_respuesta": row[3].isoformat() if row[3] else None,
-                "fecha_aprobacion": row[4].isoformat() if row[4] else None,
-                "creado_por": row[5],
-                "aprobado_por": row[6],
-                "observaciones_generales": row[7],
-                "created_at": row[8].isoformat() if row[8] else None,
-                "updated_at": row[9].isoformat() if row[9] else None,
-            }
-            
+            cabecera = self._map_cabecera_respuesta(row, respuesta_id)
+
             # Obtener detalles de respuesta con campos de modificación manual
             # Nota: Los campos costo_modificado_manual y total_modificado_manual pueden no existir en BD antigua
             try:
                 cursor.execute("""
-                    SELECT 
+                    SELECT
                         r.id,
                         r.pedido_detalle_id,
                         r.cantidad_solicitada_total,
@@ -273,7 +316,7 @@ class PedidoRespuestaRepository:
             except Exception:
                 # Si los campos no existen, usar consulta sin ellos
                 cursor.execute("""
-                    SELECT 
+                    SELECT
                         r.id,
                         r.pedido_detalle_id,
                         r.cantidad_solicitada_total,
@@ -290,48 +333,17 @@ class PedidoRespuestaRepository:
                     WHERE r.respuesta_id = ?
                 """, (respuesta_id,))
                 tiene_campos_modificados = False
-            
-            detalles = []
-            for det_row in cursor.fetchall():
-                # Normalizar cantidades a float para preservar decimales (ej. 0.5)
-                try:
-                    cant_sol = float(det_row[2]) if det_row[2] is not None else 0.0
-                except (TypeError, ValueError):
-                    cant_sol = 0.0
-                try:
-                    cant_conf = float(det_row[3]) if det_row[3] is not None else 0.0
-                except (TypeError, ValueError):
-                    cant_conf = 0.0
-                detalle_dict = {
-                    "id": str(det_row[0]),
-                    "pedido_detalle_id": str(det_row[1]),
-                    "codigo_producto": det_row[9],
-                    "descripcion": det_row[10],
-                    "cantidad_solicitada_total": cant_sol,
-                    "cantidad_confirmada_total": cant_conf,
-                    "costo_doc_sin_iva_original": float(det_row[4]) if det_row[4] else None,
-                    "costo_doc_sin_iva_ajustado": float(det_row[5]) if det_row[5] else None,
-                    "descuento_1_original": float(det_row[6]) if det_row[6] else None,
-                    "descuento_1_ajustado": float(det_row[7]) if det_row[7] else None,
-                    "observaciones": det_row[8],
-                }
-                
-                # Agregar campos de modificación manual si existen
-                if tiene_campos_modificados and len(det_row) > 11:
-                    detalle_dict["costo_modificado_manual"] = bool(det_row[11])
-                    detalle_dict["total_modificado_manual"] = bool(det_row[12])
-                else:
-                    # Si los campos no existen en BD antigua, devolver False por defecto
-                    detalle_dict["costo_modificado_manual"] = False
-                    detalle_dict["total_modificado_manual"] = False
-                
-                detalles.append(detalle_dict)
-            
+
+            detalles = [
+                self._map_detalle_respuesta(det_row, tiene_campos_modificados)
+                for det_row in cursor.fetchall()
+            ]
+
             return {
                 "cabecera": cabecera,
-                "detalles": detalles
+                "detalles": detalles,
             }
-            
+
         except Exception as e:
             logger.error(f"❌ Error al obtener respuesta activa: {e}", exc_info=True)
             raise

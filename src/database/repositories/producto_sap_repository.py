@@ -99,9 +99,7 @@ class ProductoSAPRepository:
         # Verificar si la última consulta es más antigua que cache_days
         if isinstance(ultima_consulta, str):
             ultima_consulta = datetime.fromisoformat(ultima_consulta.replace('Z', '+00:00'))
-        elif isinstance(ultima_consulta, datetime):
-            pass
-        else:
+        elif not isinstance(ultima_consulta, datetime):
             return False
         
         fecha_limite = ahora_naive() - timedelta(days=cache_days)
@@ -122,7 +120,7 @@ class ProductoSAPRepository:
                 - grupo_articulos: Grupo de artículos (ItmsGrpNam)
                 
         Returns:
-            True si se insertó/actualizó correctamente
+            True si se insertó (nuevo registro), False si se actualizó (registro existente)
         """
         cursor = self.conn.cursor()
         
@@ -164,7 +162,7 @@ class ProductoSAPRepository:
                 cursor.execute(sql, values)
                 self.conn.commit()
                 logger.debug(f"✅ Producto SAP cache actualizado: {sku}")
-                return True
+                return False
             else:
                 # INSERTAR
                 sql = """

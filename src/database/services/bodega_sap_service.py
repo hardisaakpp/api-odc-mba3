@@ -132,27 +132,96 @@ class BodegaSAPService:
             if conn:
                 try:
                     conn.close()
-                except:
+                except Exception:
                     pass
     
+    def _llenar_desde_cache(
+        self,
+        repository: BodegaSAPRepository,
+        codigos: List[str],
+        force_refresh: bool,
+    ):
+        resultado = {}
+        a_consultar = []
+        for codigo in codigos:
+            if force_refresh:
+                a_consultar.append(codigo)
+                continue
+            cache_valid = repository.is_cache_valid(codigo, cache_days=SAP_CACHE_DAYS)
+            if cache_valid:
+                bodega = repository.find_by_whs_code(codigo)
+                if bodega:
+                    resultado[codigo] = {
+                        "WhsCode": bodega["whs_code"],
+                        "WhsName": bodega["whs_name"],
+                        "es_bodega": bodega.get("es_bodega", self._es_bodega_central(codigo)),
+                        "encontrado": True,
+                        "fuente": "cache"
+                    }
+                    logger.info(f"📦 Código {codigo} encontrado en caché: '{bodega.get('whs_name')}'")
+                    continue
+            a_consultar.append(codigo)
+        return resultado, a_consultar
+
+    def _consultar_sap_codigos(
+        self,
+        repository: BodegaSAPRepository,
+        codigos: List[str],
+    ):
+        resultado = {}
+        nuevos_en_cache = []
+        for codigo in codigos:
+            sap_info = None
+            try:
+                sap_info = self.sap_client.get_bodega_info(codigo)
+            except Exception as e:
+                logger.warning(f"⚠️ Error al consultar SAP para {codigo}: {e}")
+                resultado[codigo] = {"WhsCode": codigo, "encontrado": False, "error": str(e), "fuente": "sap"}
+                continue
+            if sap_info:
+                es_bodega_central = self._es_bodega_central(codigo)
+                bodega_data = {
+                    "whs_code": codigo,
+                    "whs_name": sap_info.get("WhsName"),
+                    "es_bodega": es_bodega_central,
+                    "activo": True
+                }
+                try:
+                    repository.insert_or_update(bodega_data)
+                    nuevos_en_cache.append(codigo)
+                except Exception as cache_error:
+                    logger.warning(f"⚠️ Error al guardar en caché {codigo}: {cache_error}")
+                resultado[codigo] = {
+                    "WhsCode": codigo,
+                    "WhsName": sap_info.get("WhsName"),
+                    "es_bodega": es_bodega_central,
+                    "encontrado": True,
+                    "fuente": "sap"
+                }
+                logger.debug(f"✅ Código {codigo} encontrado en SAP y guardado en caché")
+            else:
+                resultado[codigo] = {"WhsCode": codigo, "encontrado": False, "fuente": "sap"}
+                logger.debug(f"⚠️ Código {codigo} NO encontrado en SAP")
+        return resultado, nuevos_en_cache
+
     def validate_codigos_bodegas_tiendas(
-        self, 
-        codigos: List[str], 
+        self,
+        codigos: List[str],
         force_refresh: bool = False
     ) -> Dict[str, Dict[str, Any]]:
         """
         Valida una lista de códigos de bodegas/tiendas consultando caché primero y SAP solo si es necesario.
-        
+
         Este método es más eficiente que obtener todas las bodegas:
         1. Verifica qué códigos ya están en caché (y son válidos)
         2. Solo consulta SAP para los códigos que NO están en caché
         3. Guarda los nuevos códigos en caché
         4. Retorna un diccionario con la información de todos los códigos
-        
+
         Args:
             codigos: Lista de códigos de bodegas/tiendas a validar
             force_refresh: Si True, fuerza la consulta a SAP incluso si están en caché
-            
+
         Returns:
             Diccionario con información de cada código:
             {
@@ -164,112 +233,39 @@ class BodegaSAPService:
         if not self.enabled:
             logger.debug("⏭️ Servicio SAP deshabilitado para validar códigos")
             return {}
-        
         if not codigos:
             return {}
-        
+
         conn = None
         resultado = {}
-        codigos_a_consultar_sap = []
-        
         try:
             conn = get_db_connection()
             repository = BodegaSAPRepository(conn)
-            
-            # Normalizar códigos y limpiar
             codigos_normalizados = [c.strip().upper() for c in codigos if c and c.strip()]
-            
-            # Paso 1: Verificar qué códigos están en caché y son válidos
-            for codigo in codigos_normalizados:
-                if force_refresh:
-                    # Si se fuerza refresh, todos van a SAP
-                    codigos_a_consultar_sap.append(codigo)
-                    continue
-                
-                cache_valid = repository.is_cache_valid(codigo, cache_days=SAP_CACHE_DAYS)
-                if cache_valid:
-                    bodega = repository.find_by_whs_code(codigo)
-                    if bodega:
-                        resultado[codigo] = {
-                            "WhsCode": bodega["whs_code"],
-                            "WhsName": bodega["whs_name"],
-                            "es_bodega": bodega.get("es_bodega", self._es_bodega_central(codigo)),
-                            "encontrado": True,
-                            "fuente": "cache"
-                        }
-                        logger.info(f"📦 Código {codigo} encontrado en caché: '{bodega.get('whs_name')}'")
-                    else:
-                        # No está en caché, consultar SAP
-                        codigos_a_consultar_sap.append(codigo)
-                else:
-                    # Cache expirado o no existe, consultar SAP
-                    codigos_a_consultar_sap.append(codigo)
-            
-            # Paso 2: Consultar SAP solo para códigos que faltan en caché
+
+            resultado, codigos_a_consultar_sap = self._llenar_desde_cache(
+                repository, codigos_normalizados, force_refresh
+            )
+
             if codigos_a_consultar_sap:
-                logger.info(f"🔍 Consultando SAP para {len(codigos_a_consultar_sap)} códigos nuevos/faltantes: {codigos_a_consultar_sap[:5]}...")
-                
-                # Consultar SAP individualmente para cada código faltante
-                nuevos_en_cache = []
-                for codigo in codigos_a_consultar_sap:
-                    try:
-                        sap_info = self.sap_client.get_bodega_info(codigo)
-                        
-                        if sap_info:
-                            # Encontrado en SAP, guardar en caché
-                            es_bodega_central = self._es_bodega_central(codigo)
-                            bodega_data = {
-                                "whs_code": codigo,
-                                "whs_name": sap_info.get("WhsName"),
-                                "es_bodega": es_bodega_central,
-                                "activo": True
-                            }
-                            
-                            try:
-                                repository.insert_or_update(bodega_data)
-                                nuevos_en_cache.append(codigo)
-                            except Exception as cache_error:
-                                logger.warning(f"⚠️ Error al guardar en caché {codigo}: {cache_error}")
-                            
-                            resultado[codigo] = {
-                                "WhsCode": codigo,
-                                "WhsName": sap_info.get("WhsName"),
-                                "es_bodega": es_bodega_central,
-                                "encontrado": True,
-                                "fuente": "sap"
-                            }
-                            logger.debug(f"✅ Código {codigo} encontrado en SAP y guardado en caché")
-                        else:
-                            # No encontrado en SAP
-                            resultado[codigo] = {
-                                "WhsCode": codigo,
-                                "encontrado": False,
-                                "fuente": "sap"
-                            }
-                            logger.debug(f"⚠️ Código {codigo} NO encontrado en SAP")
-                    except Exception as e:
-                        logger.warning(f"⚠️ Error al consultar SAP para {codigo}: {e}")
-                        resultado[codigo] = {
-                            "WhsCode": codigo,
-                            "encontrado": False,
-                            "error": str(e),
-                            "fuente": "sap"
-                        }
-                
+                logger.info(
+                    f"🔍 Consultando SAP para {len(codigos_a_consultar_sap)} códigos nuevos/faltantes: "
+                    f"{codigos_a_consultar_sap[:5]}..."
+                )
+                nuevos, nuevos_en_cache = self._consultar_sap_codigos(repository, codigos_a_consultar_sap)
+                resultado.update(nuevos)
                 if nuevos_en_cache:
                     logger.info(f"✅ {len(nuevos_en_cache)} códigos nuevos guardados en caché: {nuevos_en_cache[:5]}...")
-            
+
             return resultado
-            
         except Exception as e:
             logger.error(f"❌ Error al validar códigos: {e}", exc_info=True)
-            # Retornar diccionario vacío o parcial en caso de error
             return resultado
         finally:
             if conn:
                 try:
                     conn.close()
-                except:
+                except Exception:
                     pass
     
     def get_or_fetch_all_bodegas(self, force_refresh: bool = False) -> List[Dict[str, Any]]:
@@ -369,5 +365,5 @@ class BodegaSAPService:
             if conn:
                 try:
                     conn.close()
-                except:
+                except Exception:
                     pass

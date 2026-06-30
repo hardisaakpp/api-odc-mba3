@@ -67,7 +67,6 @@ class PedidoAjusteService:
             
             # PASO 1: Validar estado
             respuesta, pedido = self._validar_estado_respuesta(
-                conn=conn,
                 pedido_id=pedido_id,
                 respuesta_repo=respuesta_repo,
                 pedido_repo=pedido_repo
@@ -137,7 +136,6 @@ class PedidoAjusteService:
     
     def _validar_estado_respuesta(
         self,
-        conn,
         pedido_id: str,
         respuesta_repo: PedidoRespuestaRepository,
         pedido_repo: PedidoRepository
@@ -240,6 +238,120 @@ class PedidoAjusteService:
         
         return ajustes_realizados
     
+    @staticmethod
+    def _aplicar_distribucion_especifica(
+        cursor,
+        conn,
+        distribucion_especifica: Dict[str, float],
+        audit_context: Optional[AuditContext],
+        pedido_id: Optional[str],
+    ) -> Dict[str, Any]:
+        ajustes = []
+        for pedido_detalle_tienda_id, cantidad_confirmada in distribucion_especifica.items():
+            cantidad_val = float(cantidad_confirmada)
+            cursor.execute("""
+                UPDATE pedido_detalle_tienda
+                SET cantidad = ?
+                WHERE id = ?
+            """, (cantidad_val, pedido_detalle_tienda_id))
+            ajustes.append({
+                "pedido_detalle_tienda_id": pedido_detalle_tienda_id,
+                "cantidad_anterior": None,
+                "cantidad_nueva": cantidad_val,
+                "metodo": "distribucion_especifica"
+            })
+        if audit_context and pedido_id:
+            audit_svc = AuditLogService(conn)
+            for aj in ajustes:
+                audit_svc.registrar(
+                    pedido_id=pedido_id,
+                    entidad="pedido_detalle_tienda",
+                    entidad_id=aj["pedido_detalle_tienda_id"],
+                    accion="UPDATE",
+                    audit_context=audit_context,
+                    campo="cantidad",
+                    valor_anterior=str(aj.get("cantidad_anterior")),
+                    valor_nuevo=str(aj["cantidad_nueva"]),
+                    comentario="Ajuste por confirmación proveedor (distribución específica)",
+                    cursor=cursor,
+                )
+        return {
+            "metodo": "distribucion_especifica",
+            "tiendas_ajustadas": len(ajustes),
+            "ajustes": ajustes
+        }
+
+    @staticmethod
+    def _redistribuir_proporcionalmente(
+        cursor,
+        conn,
+        distribucion_original: List[Dict[str, Any]],
+        cantidad_confirmada_total: int,
+        pedido_detalle_id: str,
+        audit_context: Optional[AuditContext],
+        pedido_id: Optional[str],
+    ) -> Dict[str, Any]:
+        cantidad_total_original = sum(float(t["cantidad"]) for t in distribucion_original)
+        if cantidad_total_original == 0:
+            raise ValueError(
+                f"No hay cantidades originales para redistribuir en detalle {pedido_detalle_id}"
+            )
+        ajustes = []
+        cantidad_asignada = Decimal(0)
+        cantidad_confirmada_decimal = Decimal(str(cantidad_confirmada_total))
+        distribucion_ordenada = sorted(
+            distribucion_original,
+            key=lambda x: float(x["cantidad"]),
+            reverse=True
+        )
+        for i, tienda in enumerate(distribucion_ordenada):
+            if i == len(distribucion_ordenada) - 1:
+                resto = cantidad_confirmada_decimal - cantidad_asignada
+                cantidad_nueva = round(float(resto), 4)
+            else:
+                proporcion = Decimal(str(tienda["cantidad"])) / Decimal(str(cantidad_total_original))
+                cantidad_calculada = (cantidad_confirmada_decimal * proporcion).quantize(
+                    Decimal('0.0001'),
+                    rounding=ROUND_HALF_UP
+                )
+                cantidad_nueva = float(cantidad_calculada)
+                cantidad_asignada += cantidad_calculada
+            cursor.execute("""
+                UPDATE pedido_detalle_tienda
+                SET cantidad = ?
+                WHERE pedido_detalle_id = ?
+                    AND tienda_id = ?
+            """, (cantidad_nueva, pedido_detalle_id, tienda["tienda_id"]))
+            cant_anterior = float(tienda["cantidad"]) if tienda.get("cantidad") is not None else 0.0
+            ajustes.append({
+                "tienda_id": tienda["tienda_id"],
+                "tienda_codigo": tienda["codigo"],
+                "cantidad_anterior": cant_anterior,
+                "cantidad_nueva": cantidad_nueva,
+                "diferencia": round(cantidad_nueva - cant_anterior, 4),
+                "metodo": "redistribucion_proporcional"
+            })
+        if audit_context and pedido_id:
+            audit_svc = AuditLogService(conn)
+            for aj in ajustes:
+                audit_svc.registrar(
+                    pedido_id=pedido_id,
+                    entidad="pedido_detalle_tienda",
+                    entidad_id=aj.get("tienda_id", ""),
+                    accion="UPDATE",
+                    audit_context=audit_context,
+                    campo="cantidad",
+                    valor_anterior=str(aj["cantidad_anterior"]),
+                    valor_nuevo=str(aj["cantidad_nueva"]),
+                    comentario="Ajuste por confirmación proveedor (redistribución proporcional)",
+                    cursor=cursor,
+                )
+        return {
+            "metodo": "redistribucion_proporcional",
+            "tiendas_ajustadas": len(ajustes),
+            "ajustes": ajustes
+        }
+
     def _ajustar_cantidades_por_tienda(
         self,
         conn,
@@ -274,156 +386,72 @@ class PedidoAjusteService:
             Dict con información del ajuste realizado
         """
         cursor = conn.cursor()
-        
         try:
-            # Verificar si existe distribución específica del proveedor
             cursor.execute("""
-                SELECT 
+                SELECT
                     rdt.pedido_detalle_tienda_id,
                     rdt.cantidad_confirmada
                 FROM pedido_respuesta_proveedor_detalle_tienda rdt
-                INNER JOIN pedido_respuesta_proveedor_detalle rd 
+                INNER JOIN pedido_respuesta_proveedor_detalle rd
                     ON rdt.respuesta_detalle_id = rd.id
-                WHERE rd.respuesta_id = ? 
+                WHERE rd.respuesta_id = ?
                     AND rd.pedido_detalle_id = ?
             """, (respuesta_id, pedido_detalle_id))
-            
+
             distribucion_especifica = {}
             for row in cursor.fetchall():
-                # Preservar decimales (columna puede ser DECIMAL)
                 distribucion_especifica[str(row[0])] = float(row[1]) if row[1] is not None else 0.0
-            
-            # Calcular total de distribución específica
+
             total_distribucion_especifica = sum(distribucion_especifica.values())
             cantidad_confirmada_float = float(cantidad_confirmada_total) if cantidad_confirmada_total is not None else 0.0
-            
+
             usar_distribucion_especifica = (
-                len(distribucion_especifica) > 0 
+                len(distribucion_especifica) > 0
                 and abs(total_distribucion_especifica - cantidad_confirmada_float) < 1e-6
                 and not forzar_redistribucion
             )
-            
+
             if usar_distribucion_especifica:
-                # Usar distribución específica del proveedor
-                ajustes = []
-                for pedido_detalle_tienda_id, cantidad_confirmada in distribucion_especifica.items():
-                    cantidad_val = float(cantidad_confirmada)
-                    cursor.execute("""
-                        UPDATE pedido_detalle_tienda
-                        SET cantidad = ?
-                        WHERE id = ?
-                    """, (cantidad_val, pedido_detalle_tienda_id))
-                    ajustes.append({
-                        "pedido_detalle_tienda_id": pedido_detalle_tienda_id,
-                        "cantidad_anterior": None,
-                        "cantidad_nueva": cantidad_val,
-                        "metodo": "distribucion_especifica"
-                    })
-                
-                # Registrar ajustes en audit log
-                if audit_context and pedido_id:
-                    audit_svc = AuditLogService(conn)
-                    for aj in ajustes:
-                        audit_svc.registrar(
-                            pedido_id=pedido_id,
-                            entidad="pedido_detalle_tienda",
-                            entidad_id=aj["pedido_detalle_tienda_id"],
-                            accion="UPDATE",
-                            audit_context=audit_context,
-                            campo="cantidad",
-                            valor_anterior=str(aj.get("cantidad_anterior")),
-                            valor_nuevo=str(aj["cantidad_nueva"]),
-                            comentario="Ajuste por confirmación proveedor (distribución específica)",
-                            cursor=cursor,
-                        )
-                
-                return {
-                    "metodo": "distribucion_especifica",
-                    "tiendas_ajustadas": len(ajustes),
-                    "ajustes": ajustes
-                }
-            else:
-                # Redistribuir proporcionalmente (admite decimales; columna cantidad es DECIMAL(18,4))
-                cantidad_total_original = sum(float(t["cantidad"]) for t in distribucion_original)
-                
-                if cantidad_total_original == 0:
-                    raise ValueError(
-                        f"No hay cantidades originales para redistribuir en detalle {pedido_detalle_id}"
-                    )
-                
-                ajustes = []
-                cantidad_asignada = Decimal(0)
-                cantidad_confirmada_decimal = Decimal(str(cantidad_confirmada_total))
-                
-                # Ordenar por cantidad (mayor a menor) para mejor distribución
-                distribucion_ordenada = sorted(
-                    distribucion_original,
-                    key=lambda x: float(x["cantidad"]),
-                    reverse=True
+                return PedidoAjusteService._aplicar_distribucion_especifica(
+                    cursor, conn, distribucion_especifica, audit_context, pedido_id
                 )
-                
-                for i, tienda in enumerate(distribucion_ordenada):
-                    if i == len(distribucion_ordenada) - 1:
-                        # Última tienda: asignar el resto para que sume exactamente
-                        resto = cantidad_confirmada_decimal - cantidad_asignada
-                        cantidad_nueva = round(float(resto), 4)
-                    else:
-                        # Calcular proporción con Decimal; redondear a 4 decimales
-                        proporcion = Decimal(str(tienda["cantidad"])) / Decimal(str(cantidad_total_original))
-                        cantidad_calculada = (cantidad_confirmada_decimal * proporcion).quantize(
-                            Decimal('0.0001'),
-                            rounding=ROUND_HALF_UP
-                        )
-                        cantidad_nueva = float(cantidad_calculada)
-                        cantidad_asignada += cantidad_calculada
-                    
-                    # Actualizar cantidad en BD (DECIMAL(18,4))
-                    cursor.execute("""
-                        UPDATE pedido_detalle_tienda
-                        SET cantidad = ?
-                        WHERE pedido_detalle_id = ?
-                            AND tienda_id = ?
-                    """, (cantidad_nueva, pedido_detalle_id, tienda["tienda_id"]))
-                    
-                    cant_anterior = float(tienda["cantidad"]) if tienda.get("cantidad") is not None else 0.0
-                    ajustes.append({
-                        "tienda_id": tienda["tienda_id"],
-                        "tienda_codigo": tienda["codigo"],
-                        "cantidad_anterior": cant_anterior,
-                        "cantidad_nueva": cantidad_nueva,
-                        "diferencia": round(cantidad_nueva - cant_anterior, 4),
-                        "metodo": "redistribucion_proporcional"
-                    })
-                
-                # Registrar ajustes en audit log
-                if audit_context and pedido_id:
-                    audit_svc = AuditLogService(conn)
-                    for aj in ajustes:
-                        audit_svc.registrar(
-                            pedido_id=pedido_id,
-                            entidad="pedido_detalle_tienda",
-                            entidad_id=aj.get("tienda_id", ""),
-                            accion="UPDATE",
-                            audit_context=audit_context,
-                            campo="cantidad",
-                            valor_anterior=str(aj["cantidad_anterior"]),
-                            valor_nuevo=str(aj["cantidad_nueva"]),
-                            comentario="Ajuste por confirmación proveedor (redistribución proporcional)",
-                            cursor=cursor,
-                        )
-                
-                return {
-                    "metodo": "redistribucion_proporcional",
-                    "tiendas_ajustadas": len(ajustes),
-                    "ajustes": ajustes
-                }
-                
+            return PedidoAjusteService._redistribuir_proporcionalmente(
+                cursor, conn, distribucion_original, cantidad_confirmada_total,
+                pedido_detalle_id, audit_context, pedido_id
+            )
         except Exception as e:
             logger.error(f"❌ Error al ajustar cantidades por tienda: {e}", exc_info=True)
             raise
         finally:
             cursor.close()
     
+    @staticmethod
+    def _registrar_cambios_costos(
+        conn,
+        cursor,
+        pedido_id: str,
+        pedido_detalle_id: str,
+        audit_context: AuditContext,
+        costo_original: Optional[float],
+        costo_ajustado: float,
+        descuento_original: Optional[float],
+        descuento_ajustado: Optional[float],
+    ) -> None:
+        cambios = {}
+        if costo_original != costo_ajustado:
+            cambios["costo_doc_sin_iva"] = {"anterior": costo_original, "nuevo": costo_ajustado}
+        if descuento_original != descuento_ajustado and descuento_ajustado is not None:
+            cambios["descuento_1"] = {"anterior": descuento_original, "nuevo": descuento_ajustado}
+        if cambios:
+            AuditLogService(conn).registrar_cambios(
+                pedido_id=pedido_id,
+                entidad="pedido_detalle",
+                entidad_id=pedido_detalle_id,
+                audit_context=audit_context,
+                cambios=cambios,
+                cursor=cursor,
+            )
+
     def _actualizar_costos_producto(
         self,
         conn,
@@ -463,49 +491,34 @@ class PedidoAjusteService:
             cantidad_decimal = Decimal(cantidad_confirmada)
             costo_decimal = Decimal(str(costo_ajustado))
             
-            # Subtotal = cantidad * costo_unitario
             subtotal_nuevo = float(cantidad_decimal * costo_decimal)
-            
-            # Aplicar descuento si existe
+
             descuento_aplicar = descuento_ajustado if descuento_ajustado is not None else descuento_original
             if descuento_aplicar:
                 total_nuevo = subtotal_nuevo * (1 - descuento_aplicar / 100)
             else:
                 total_nuevo = subtotal_nuevo
-            
-            # Actualizar en BD (sin commit)
+
             update_fields = ["costo_doc_sin_iva = ?", "subtotal = ?", "total = ?"]
             values: List[Any] = [costo_ajustado, subtotal_nuevo, total_nuevo]
-            
+
             if descuento_ajustado is not None:
                 update_fields.append("descuento_1 = ?")
                 values.append(descuento_ajustado)
-            
+
             values.append(pedido_detalle_id)
-            
+
             cursor.execute(f"""
                 UPDATE pedido_detalle
                 SET {', '.join(update_fields)}
                 WHERE pedido_detalle_id = ?
             """, values)
-            
-            # Registrar cambios en audit log
+
             if audit_context and pedido_id:
-                audit_svc = AuditLogService(conn)
-                cambios = {}
-                if costo_original != costo_ajustado:
-                    cambios["costo_doc_sin_iva"] = {"anterior": costo_original, "nuevo": costo_ajustado}
-                if descuento_original != descuento_ajustado and descuento_ajustado is not None:
-                    cambios["descuento_1"] = {"anterior": descuento_original, "nuevo": descuento_ajustado}
-                if cambios:
-                    audit_svc.registrar_cambios(
-                        pedido_id=pedido_id,
-                        entidad="pedido_detalle",
-                        entidad_id=pedido_detalle_id,
-                        audit_context=audit_context,
-                        cambios=cambios,
-                        cursor=cursor,
-                    )
+                PedidoAjusteService._registrar_cambios_costos(
+                    conn, cursor, pedido_id, pedido_detalle_id, audit_context,
+                    costo_original, costo_ajustado, descuento_original, descuento_ajustado
+                )
             
             return {
                 "costo_original": costo_original,

@@ -7,7 +7,6 @@ import logging
 import json
 import pyodbc
 from typing import Dict, Any, List, Optional
-from datetime import datetime
 
 from src.utils.timezone import ahora_naive
 
@@ -195,25 +194,42 @@ class PedidoConfirmacionRayoRepository:
         finally:
             cursor.close()
     
+    def _map_detalle_confirmacion(self, detalle_row: Any) -> Dict[str, Any]:
+        """Mapea una fila de pedido_confirmacion_rayo_detalle a dict."""
+        return {
+            "confirmacion_detalle_id": str(detalle_row[0]),
+            "pedido_detalle_id": str(detalle_row[1]),
+            "costo_anterior": float(detalle_row[2]) if detalle_row[2] is not None else None,
+            "costo_nuevo": float(detalle_row[3]) if detalle_row[3] is not None else None,
+            "total_anterior": float(detalle_row[4]) if detalle_row[4] is not None else None,
+            "total_nuevo": float(detalle_row[5]) if detalle_row[5] is not None else None,
+            "comentario_anterior": detalle_row[6],
+            "comentario_nuevo": detalle_row[7],
+            "cambio_costo": bool(detalle_row[8]),
+            "cambio_total": bool(detalle_row[9]),
+            "cambio_comentario": bool(detalle_row[10]),
+            "codigo_producto": detalle_row[11],
+        }
+
     def obtener_confirmacion(
         self,
         confirmacion_id: str
     ) -> Optional[Dict[str, Any]]:
         """
         Obtiene una confirmación completa con sus detalles.
-        
+
         Args:
             confirmacion_id: UUID de la confirmación
-            
+
         Returns:
             Dict con confirmación y detalles, o None si no existe
         """
         cursor = self.conn.cursor()
-        
+
         try:
             # Obtener cabecera
             cursor.execute("""
-                SELECT 
+                SELECT
                     confirmacion_id, pedido_id, respuesta_id,
                     confirmado_por, fecha_confirmacion,
                     total_detalles_modificados, detalles_modificados,
@@ -221,11 +237,11 @@ class PedidoConfirmacionRayoRepository:
                 FROM pedido_confirmacion_rayo
                 WHERE confirmacion_id = ?
             """, (confirmacion_id,))
-            
+
             row = cursor.fetchone()
             if not row:
                 return None
-            
+
             # Construir cabecera
             detalles_modificados_json = None
             if row[6]:
@@ -233,7 +249,7 @@ class PedidoConfirmacionRayoRepository:
                     detalles_modificados_json = json.loads(row[6])
                 except json.JSONDecodeError:
                     logger.warning(f"Error al parsear JSON de detalles_modificados: {row[6]}")
-            
+
             confirmacion = {
                 "confirmacion_id": str(row[0]),
                 "pedido_id": str(row[1]),
@@ -244,10 +260,10 @@ class PedidoConfirmacionRayoRepository:
                 "detalles_modificados": detalles_modificados_json,
                 "observaciones_generales": row[7]
             }
-            
+
             # Obtener detalles
             cursor.execute("""
-                SELECT 
+                SELECT
                     confirmacion_detalle_id, pedido_detalle_id,
                     costo_anterior, costo_nuevo,
                     total_anterior, total_nuevo,
@@ -258,27 +274,12 @@ class PedidoConfirmacionRayoRepository:
                 WHERE confirmacion_id = ?
                 ORDER BY codigo_producto
             """, (confirmacion_id,))
-            
-            detalles = []
-            for detalle_row in cursor.fetchall():
-                detalles.append({
-                    "confirmacion_detalle_id": str(detalle_row[0]),
-                    "pedido_detalle_id": str(detalle_row[1]),
-                    "costo_anterior": float(detalle_row[2]) if detalle_row[2] is not None else None,
-                    "costo_nuevo": float(detalle_row[3]) if detalle_row[3] is not None else None,
-                    "total_anterior": float(detalle_row[4]) if detalle_row[4] is not None else None,
-                    "total_nuevo": float(detalle_row[5]) if detalle_row[5] is not None else None,
-                    "comentario_anterior": detalle_row[6],
-                    "comentario_nuevo": detalle_row[7],
-                    "cambio_costo": bool(detalle_row[8]),
-                    "cambio_total": bool(detalle_row[9]),
-                    "cambio_comentario": bool(detalle_row[10]),
-                    "codigo_producto": detalle_row[11]
-                })
-            
-            confirmacion["detalles"] = detalles
+
+            confirmacion["detalles"] = [
+                self._map_detalle_confirmacion(r) for r in cursor.fetchall()
+            ]
             return confirmacion
-            
+
         except Exception as e:
             logger.error(f"❌ Error al obtener confirmación: {e}", exc_info=True)
             raise

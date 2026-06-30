@@ -170,6 +170,32 @@ class PedidoUtils:
         
         return str(fecha)
     
+    def _campos_estado_id(self, row: Any) -> Dict[str, Any]:
+        """Campos extras de estado cuando la tabla tiene columna estado_id."""
+        nombre = row[14]
+        return {
+            "estado_id": row[13],
+            "estado_nombre": nombre,
+            "estado": nombre,  # compat
+            "creado_en": row[15].isoformat() if row[15] else None,
+            "modificado_por": row[16] if len(row) > 16 else None,
+        }
+
+    def _campos_estado(self, row: Any) -> Dict[str, Any]:
+        """Campos extras de estado cuando la tabla tiene columna estado (legacy)."""
+        return {
+            "estado": row[13],
+            "creado_en": row[14].isoformat() if row[14] else None,
+            "modificado_por": row[15] if len(row) > 15 else None,
+        }
+
+    def _campos_sin_estado(self, row: Any) -> Dict[str, Any]:
+        """Campos extras cuando la tabla no tiene columna de estado."""
+        return {
+            "creado_en": row[13].isoformat() if row[13] else None,
+            "modificado_por": row[14] if len(row) > 14 else None,
+        }
+
     def construir_cabecera_desde_row(
         self, row: Any, tiene_estado: bool, tiene_estado_id: bool = False
     ) -> Dict[str, Any]:
@@ -196,19 +222,11 @@ class PedidoUtils:
             "creado_por": row[12],
         }
         if tiene_estado_id:
-            # row: ..., creado_por, estado_id, estado_nombre, creado_en, modificado_por
-            base["estado_id"] = row[13] if row[13] is not None else None
-            base["estado_nombre"] = row[14] if row[14] is not None else None
-            base["estado"] = base["estado_nombre"]  # compat
-            base["creado_en"] = row[15].isoformat() if row[15] else None
-            base["modificado_por"] = row[16] if len(row) > 16 else None
+            base.update(self._campos_estado_id(row))
         elif tiene_estado:
-            base["estado"] = row[13]
-            base["creado_en"] = row[14].isoformat() if row[14] else None
-            base["modificado_por"] = row[15] if len(row) > 15 else None
+            base.update(self._campos_estado(row))
         else:
-            base["creado_en"] = row[13].isoformat() if row[13] else None
-            base["modificado_por"] = row[14] if len(row) > 14 else None
+            base.update(self._campos_sin_estado(row))
         return base
     
     def obtener_distribuciones_tienda(

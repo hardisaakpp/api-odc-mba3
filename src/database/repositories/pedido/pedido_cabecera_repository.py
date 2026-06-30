@@ -1132,6 +1132,72 @@ class PedidoCabeceraRepository:
         finally:
             cursor.close()
 
+    def _filtro_estado(
+        self, cursor, estado, tiene_estado_id: bool, tiene_estado: bool
+    ) -> tuple:
+        """Condición y parámetros para filtrar por estado."""
+        conditions: List[str] = []
+        params: List[Any] = []
+        if estado is not None and (tiene_estado_id or tiene_estado):
+            estado_id = int(estado) if isinstance(estado, int) else estado_id_desde_legacy(estado)
+            if tiene_estado_id:
+                conditions.append("p.estado_id = ?")
+                params.append(estado_id)
+            else:
+                cursor.execute(_SQL_NOMBRE_ESTADO_POR_ID, (estado_id,))
+                r = cursor.fetchone()
+                nom = r[0] if r and r[0] else str(estado_id)
+                conditions.append("p.estado = ?")
+                params.append(nom)
+        return conditions, params
+
+    def _filtro_excluir_borrador(self, tiene_estado_id: bool) -> tuple:
+        """Condición y parámetros para excluir pedidos en borrador."""
+        if tiene_estado_id:
+            return (
+                ["(p.estado_id IS NULL OR p.estado_id <> ?)"],
+                [ESTADO_BORRADOR],
+            )
+        return (
+            ["(p.estado IS NULL OR (p.estado <> N'BORRADOR' AND p.estado <> N'PENDIENTE_CONFIRMACION_PROVEEDOR'))"],
+            [],
+        )
+
+    def _filtro_redistribucion(self, tiene_estado_id: bool) -> tuple:
+        """Condición y parámetros para la vista de redistribución.
+
+        Incluye solo pedidos con estado >= 4 (CONFIRMADO POR EL RAYO) y excluye
+        DESPACHAR_Y_FACTURAR (17), FINALIZADO (18), CANCELADO (19) y CANCELADO POR EL RAYO (20).
+        """
+        if tiene_estado_id:
+            return (
+                ["p.estado_id >= ?", "p.estado_id NOT IN (?, ?, ?, ?)"],
+                [ESTADO_REDISTRIBUCION, ESTADO_DESPACHAR_Y_FACTURAR, ESTADO_FINALIZADO, ESTADO_CANCELADO, ESTADO_CANCELADO_POR_EL_RAYO],
+            )
+        # Fallback para bases de datos sin columna estado_id
+        return (
+            ["p.estado NOT IN (N'BORRADOR', N'NUEVO_PEDIDO', N'GESTIONAR_PEDIDO', N'PENDIENTE_CONFIRMACION_PROVEEDOR', N'DESPACHAR_Y_FACTURAR', N'DESPACHAR Y FACTURAR', N'FINALIZADO', N'CANCELADO', N'CANCELADO POR EL RAYO')"],
+            [],
+        )
+
+    def _filtro_pendientes_accion(self, tiene_estado_id: bool) -> tuple:
+        """Condición y parámetros para filtrar estados que requieren acción."""
+        from src.database.pedido_estados import (
+            ESTADOS_REQUIERE_ACCION_IDS,
+            ESTADOS_REQUIERE_ACCION_NOMBRES,
+        )
+        if tiene_estado_id:
+            placeholders = ",".join("?" * len(ESTADOS_REQUIERE_ACCION_IDS))
+            return (
+                [f"p.estado_id IN ({placeholders})"],
+                list(sorted(ESTADOS_REQUIERE_ACCION_IDS)),
+            )
+        legacy_placeholders = ",".join("?" * len(ESTADOS_REQUIERE_ACCION_NOMBRES))
+        return (
+            [f"p.estado IN ({legacy_placeholders})"],
+            list(ESTADOS_REQUIERE_ACCION_NOMBRES),
+        )
+
     def _construir_filtros_pedidos(
         self, cursor, *,
         estado, excluir_borrador, solo_redistribucion, solo_pendientes_accion,
@@ -1142,36 +1208,19 @@ class PedidoCabeceraRepository:
         where_conditions: List[str] = []
         params: List[Any] = []
 
-        if estado is not None and (tiene_estado_id or tiene_estado):
-            estado_id = int(estado) if isinstance(estado, int) else estado_id_desde_legacy(estado)
-            if tiene_estado_id:
-                where_conditions.append("p.estado_id = ?")
-                params.append(estado_id)
-            else:
-                cursor.execute(_SQL_NOMBRE_ESTADO_POR_ID, (estado_id,))
-                r = cursor.fetchone()
-                nom = r[0] if r and r[0] else str(estado_id)
-                where_conditions.append("p.estado = ?")
-                params.append(nom)
+        c, p = self._filtro_estado(cursor, estado, tiene_estado_id, tiene_estado)
+        where_conditions.extend(c)
+        params.extend(p)
 
         if excluir_borrador and (tiene_estado_id or tiene_estado):
-            if tiene_estado_id:
-                where_conditions.append("(p.estado_id IS NULL OR p.estado_id <> ?)")
-                params.append(ESTADO_BORRADOR)
-            else:
-                where_conditions.append("(p.estado IS NULL OR (p.estado <> N'BORRADOR' AND p.estado <> N'PENDIENTE_CONFIRMACION_PROVEEDOR'))")
+            c, p = self._filtro_excluir_borrador(tiene_estado_id)
+            where_conditions.extend(c)
+            params.extend(p)
 
-        # Filtro para vista de redistribución: solo pedidos con estado >= 4 (CONFIRMADO POR EL RAYO)
-        # y excluir DESPACHAR_Y_FACTURAR (17), FINALIZADO (18), CANCELADO (19) y CANCELADO POR EL RAYO (20)
         if solo_redistribucion and (tiene_estado_id or tiene_estado):
-            if tiene_estado_id:
-                where_conditions.append("p.estado_id >= ?")
-                params.append(ESTADO_REDISTRIBUCION)
-                where_conditions.append("p.estado_id NOT IN (?, ?, ?, ?)")
-                params.extend([ESTADO_DESPACHAR_Y_FACTURAR, ESTADO_FINALIZADO, ESTADO_CANCELADO, ESTADO_CANCELADO_POR_EL_RAYO])
-            else:
-                # Fallback para bases de datos sin columna estado_id
-                where_conditions.append("p.estado NOT IN (N'BORRADOR', N'NUEVO_PEDIDO', N'GESTIONAR_PEDIDO', N'PENDIENTE_CONFIRMACION_PROVEEDOR', N'DESPACHAR_Y_FACTURAR', N'DESPACHAR Y FACTURAR', N'FINALIZADO', N'CANCELADO', N'CANCELADO POR EL RAYO')")
+            c, p = self._filtro_redistribucion(tiene_estado_id)
+            where_conditions.extend(c)
+            params.extend(p)
 
         if fecha_desde:
             where_conditions.append("CAST(p.fecha_pedido AS DATE) >= CAST(? AS DATE)")
@@ -1194,18 +1243,9 @@ class PedidoCabeceraRepository:
             params.append(creado_por)
 
         if solo_pendientes_accion and (tiene_estado_id or tiene_estado):
-            from src.database.pedido_estados import (
-                ESTADOS_REQUIERE_ACCION_IDS,
-                ESTADOS_REQUIERE_ACCION_NOMBRES,
-            )
-            if tiene_estado_id:
-                placeholders = ",".join("?" * len(ESTADOS_REQUIERE_ACCION_IDS))
-                where_conditions.append(f"p.estado_id IN ({placeholders})")
-                params.extend(sorted(ESTADOS_REQUIERE_ACCION_IDS))
-            else:
-                legacy_placeholders = ",".join("?" * len(ESTADOS_REQUIERE_ACCION_NOMBRES))
-                where_conditions.append(f"p.estado IN ({legacy_placeholders})")
-                params.extend(ESTADOS_REQUIERE_ACCION_NOMBRES)
+            c, p = self._filtro_pendientes_accion(tiene_estado_id)
+            where_conditions.extend(c)
+            params.extend(p)
 
         return where_conditions, params
 
@@ -1417,7 +1457,6 @@ class PedidoCabeceraRepository:
         self,
         limit: Optional[int] = None,
         offset: Optional[int] = None,
-        solo_redistribucion_confirmada: bool = False,
         fecha_desde: Optional[str] = None,
         fecha_hasta: Optional[str] = None,
         proveedor_nombre: Optional[str] = None,
@@ -1426,20 +1465,13 @@ class PedidoCabeceraRepository:
     ) -> Dict[str, Any]:
         """
         Obtiene pedidos para la pantalla Revisar Redistribución.
-        
-        - Si `solo_redistribucion_confirmada` es True: incluye todos los pedidos desde
-          CONFIRMADO REDISTRIBUCION (10) en adelante, excluyendo los estados CANCELADO (19)
-          y CANCELADO POR EL RAYO (20).
-        - En caso contrario: aplica el mismo filtro general de pedidos confirmados
-          (desde 10 en adelante, excluyendo cancelados).
-        
-        Esta función se usa en la interfaz /revisar-redistribucion que debe mostrar
-        únicamente pedidos que ya pasaron por el proceso de redistribución.
-        
+
+        Incluye pedidos desde CONFIRMADO REDISTRIBUCION (10) en adelante,
+        excluyendo los estados CANCELADO (19) y CANCELADO POR EL RAYO (20).
+
         Args:
             limit: Límite de registros
             offset: Desplazamiento para paginación
-            solo_redistribucion_confirmada: Si True, solo pedidos que ya pasaron por redistribución
         """
         cursor = self.conn.cursor()
         try:
@@ -1518,6 +1550,63 @@ class PedidoCabeceraRepository:
         finally:
             cursor.close()
 
+    def _map_ultimo_pedido(self, row, tiene_estado_id: bool, tiene_estado: bool) -> Dict[str, Any]:
+        """Mapea una fila de BD al dict de respuesta de get_ultimo_pedido."""
+        if tiene_estado_id:
+            return {
+                "pedido_id": str(row[0]),
+                "numero_pedido": row[1],
+                "fecha_pedido": row[2].isoformat() if row[2] else None,
+                "fecha_entrega": row[3],
+                "forma_pago": row[4],
+                "mensaje": row[5],
+                "proveedor_nombre": row[6],
+                "comprador_nombre": row[7],
+                "comprador_codigo": row[8],
+                "origen_traslado": row[9],
+                "serie": row[10],
+                "archivo_nombre": row[11],
+                "creado_por": row[12],
+                "estado_id": row[13],
+                "estado_nombre": row[14],
+                "estado": row[14],
+                "creado_en": row[15].isoformat() if row[15] else None,
+            }
+        if tiene_estado:
+            return {
+                "pedido_id": str(row[0]),
+                "numero_pedido": row[1],
+                "fecha_pedido": row[2].isoformat() if row[2] else None,
+                "fecha_entrega": row[3],
+                "forma_pago": row[4],
+                "mensaje": row[5],
+                "proveedor_nombre": row[6],
+                "comprador_nombre": row[7],
+                "comprador_codigo": row[8],
+                "origen_traslado": row[9],
+                "serie": row[10],
+                "archivo_nombre": row[11],
+                "creado_por": row[12],
+                "estado": row[13],
+                "creado_en": row[14].isoformat() if row[14] else None,
+            }
+        return {
+            "pedido_id": str(row[0]),
+            "numero_pedido": row[1],
+            "fecha_pedido": row[2].isoformat() if row[2] else None,
+            "fecha_entrega": row[3],
+            "forma_pago": row[4],
+            "mensaje": row[5],
+            "proveedor_nombre": row[6],
+            "comprador_nombre": row[7],
+            "comprador_codigo": row[8],
+            "origen_traslado": row[9],
+            "serie": row[10],
+            "archivo_nombre": row[11],
+            "creado_por": row[12],
+            "creado_en": row[13].isoformat() if row[13] else None,
+        }
+
     def get_ultimo_pedido(self, usuario_id: str) -> Optional[Dict[str, Any]]:
         """
         Obtiene el último pedido cargado por un usuario específico.
@@ -1567,77 +1656,75 @@ class PedidoCabeceraRepository:
             if not row:
                 return None
 
-            if tiene_estado_id:
-                return {
-                    "pedido_id": str(row[0]),
-                    "numero_pedido": row[1],
-                    "fecha_pedido": row[2].isoformat() if row[2] else None,
-                    "fecha_entrega": row[3],
-                    "forma_pago": row[4],
-                    "mensaje": row[5],
-                    "proveedor_nombre": row[6],
-                    "comprador_nombre": row[7],
-                    "comprador_codigo": row[8],
-                    "origen_traslado": row[9],
-                    "serie": row[10],
-                    "archivo_nombre": row[11],
-                    "creado_por": row[12],
-                    "estado_id": row[13],
-                    "estado_nombre": row[14],
-                    "estado": row[14],
-                    "creado_en": row[15].isoformat() if row[15] else None,
-                }
-            if tiene_estado:
-                return {
-                    "pedido_id": str(row[0]),
-                    "numero_pedido": row[1],
-                    "fecha_pedido": row[2].isoformat() if row[2] else None,
-                    "fecha_entrega": row[3],
-                    "forma_pago": row[4],
-                    "mensaje": row[5],
-                    "proveedor_nombre": row[6],
-                    "comprador_nombre": row[7],
-                    "comprador_codigo": row[8],
-                    "origen_traslado": row[9],
-                    "serie": row[10],
-                    "archivo_nombre": row[11],
-                    "creado_por": row[12],
-                    "estado": row[13],
-                    "creado_en": row[14].isoformat() if row[14] else None,
-                }
-            return {
-                "pedido_id": str(row[0]),
-                "numero_pedido": row[1],
-                "fecha_pedido": row[2].isoformat() if row[2] else None,
-                "fecha_entrega": row[3],
-                "forma_pago": row[4],
-                "mensaje": row[5],
-                "proveedor_nombre": row[6],
-                "comprador_nombre": row[7],
-                "comprador_codigo": row[8],
-                "origen_traslado": row[9],
-                "serie": row[10],
-                "archivo_nombre": row[11],
-                "creado_por": row[12],
-                "creado_en": row[13].isoformat() if row[13] else None,
-            }
+            return self._map_ultimo_pedido(row, tiene_estado_id, tiene_estado)
         except Exception as e:
             logger.error(f"❌ Error al obtener último pedido del usuario {usuario_id}: {e}", exc_info=True)
             raise
         finally:
             cursor.close()
 
+    def _ejecutar_query_ultimo_confirmado(
+        self, cursor, tiene_estado_id: bool, usuario_id: Optional[str]
+    ) -> None:
+        """Ejecuta la query de get_ultimo_pedido_respuesta_proveedor_cargada según columnas disponibles."""
+        if tiene_estado_id:
+            if usuario_id is not None:
+                cursor.execute("""
+                    SELECT TOP 1
+                        p.pedido_id, p.numero_pedido, p.fecha_pedido, p.fecha_entrega,
+                        p.forma_pago, p.mensaje, p.proveedor_nombre, p.comprador_nombre,
+                        p.comprador_codigo, p.origen_traslado, p.serie, p.archivo_nombre,
+                        p.creado_por, p.estado_id, pe.nombre AS estado_nombre, p.creado_en
+                    FROM pedido p
+                    LEFT JOIN pedido_estado pe ON pe.id = p.estado_id
+                    WHERE p.estado_id = ? AND p.creado_por = ?
+                    ORDER BY p.creado_en DESC
+                """, (ESTADO_CONFIRMADO_ENVIADO, usuario_id))
+            else:
+                cursor.execute("""
+                    SELECT TOP 1
+                        p.pedido_id, p.numero_pedido, p.fecha_pedido, p.fecha_entrega,
+                        p.forma_pago, p.mensaje, p.proveedor_nombre, p.comprador_nombre,
+                        p.comprador_codigo, p.origen_traslado, p.serie, p.archivo_nombre,
+                        p.creado_por, p.estado_id, pe.nombre AS estado_nombre, p.creado_en
+                    FROM pedido p
+                    LEFT JOIN pedido_estado pe ON pe.id = p.estado_id
+                    WHERE p.estado_id = ?
+                    ORDER BY p.creado_en DESC
+                """, (ESTADO_CONFIRMADO_ENVIADO,))
+        else:
+            # Fallback para bases de datos sin columna estado_id (usando campo estado string)
+            if usuario_id is not None:
+                cursor.execute("""
+                    SELECT TOP 1
+                        pedido_id, numero_pedido, fecha_pedido, fecha_entrega,
+                        forma_pago, mensaje, proveedor_nombre, comprador_nombre,
+                        comprador_codigo, origen_traslado, serie, archivo_nombre,
+                        creado_por, estado, creado_en
+                    FROM pedido
+                    WHERE estado = ? AND creado_por = ?
+                    ORDER BY creado_en DESC
+                """, ("CONFIRMADO_ENVIADO", usuario_id))
+            else:
+                cursor.execute("""
+                    SELECT TOP 1
+                        pedido_id, numero_pedido, fecha_pedido, fecha_entrega,
+                        forma_pago, mensaje, proveedor_nombre, comprador_nombre,
+                        comprador_codigo, origen_traslado, serie, archivo_nombre,
+                        creado_por, estado, creado_en
+                    FROM pedido
+                    WHERE estado = ?
+                    ORDER BY creado_en DESC
+                """, ("CONFIRMADO_ENVIADO",))
+
     def get_ultimo_pedido_respuesta_proveedor_cargada(
         self, usuario_id: Optional[str] = None
     ) -> Optional[Dict[str, Any]]:
         """
         Obtiene el último pedido para la pantalla Revisar Redistribución.
-        
-        Solo incluye pedidos con estado:
-        - CONFIRMADO_ENVIADO (12)
-        
-        Usado en pantalla Revisar Redistribución: al entrar en /redistribucion se carga el último
-        pedido que ya haya sido enviado.
+
+        Solo incluye pedidos con estado CONFIRMADO_ENVIADO (12).
+        Usado en /redistribucion: carga el último pedido ya enviado al proveedor.
         """
         cursor = self.conn.cursor()
         try:
@@ -1646,99 +1733,12 @@ class PedidoCabeceraRepository:
             if not tiene_estado_id and not tiene_estado:
                 return None
 
-            if tiene_estado_id:
-                # Filtrar solo por estado: CONFIRMADO_ENVIADO (12)
-                if usuario_id is not None:
-                    cursor.execute("""
-                        SELECT TOP 1
-                            p.pedido_id, p.numero_pedido, p.fecha_pedido, p.fecha_entrega,
-                            p.forma_pago, p.mensaje, p.proveedor_nombre, p.comprador_nombre,
-                            p.comprador_codigo, p.origen_traslado, p.serie, p.archivo_nombre,
-                            p.creado_por, p.estado_id, pe.nombre AS estado_nombre, p.creado_en
-                        FROM pedido p
-                        LEFT JOIN pedido_estado pe ON pe.id = p.estado_id
-                        WHERE p.estado_id = ? AND p.creado_por = ?
-                        ORDER BY p.creado_en DESC
-                    """, (ESTADO_CONFIRMADO_ENVIADO, usuario_id))
-                else:
-                    cursor.execute("""
-                        SELECT TOP 1
-                            p.pedido_id, p.numero_pedido, p.fecha_pedido, p.fecha_entrega,
-                            p.forma_pago, p.mensaje, p.proveedor_nombre, p.comprador_nombre,
-                            p.comprador_codigo, p.origen_traslado, p.serie, p.archivo_nombre,
-                            p.creado_por, p.estado_id, pe.nombre AS estado_nombre, p.creado_en
-                        FROM pedido p
-                        LEFT JOIN pedido_estado pe ON pe.id = p.estado_id
-                        WHERE p.estado_id = ?
-                        ORDER BY p.creado_en DESC
-                    """, (ESTADO_CONFIRMADO_ENVIADO,))
-            else:
-                # Fallback para bases de datos sin columna estado_id (usando campo estado string)
-                # Solo incluir estado: CONFIRMADO_ENVIADO
-                if usuario_id is not None:
-                    cursor.execute("""
-                        SELECT TOP 1
-                            pedido_id, numero_pedido, fecha_pedido, fecha_entrega,
-                            forma_pago, mensaje, proveedor_nombre, comprador_nombre,
-                            comprador_codigo, origen_traslado, serie, archivo_nombre,
-                            creado_por, estado, creado_en
-                        FROM pedido
-                        WHERE estado = ? AND creado_por = ?
-                        ORDER BY creado_en DESC
-                    """, ("CONFIRMADO_ENVIADO", usuario_id))
-                else:
-                    cursor.execute("""
-                        SELECT TOP 1
-                            pedido_id, numero_pedido, fecha_pedido, fecha_entrega,
-                            forma_pago, mensaje, proveedor_nombre, comprador_nombre,
-                            comprador_codigo, origen_traslado, serie, archivo_nombre,
-                            creado_por, estado, creado_en
-                        FROM pedido
-                        WHERE estado = ?
-                        ORDER BY creado_en DESC
-                    """, ("CONFIRMADO_ENVIADO",))
-
+            self._ejecutar_query_ultimo_confirmado(cursor, tiene_estado_id, usuario_id)
             row = cursor.fetchone()
             if not row:
                 return None
 
-            if tiene_estado_id:
-                return {
-                    "pedido_id": str(row[0]),
-                    "numero_pedido": row[1],
-                    "fecha_pedido": row[2].isoformat() if row[2] else None,
-                    "fecha_entrega": row[3],
-                    "forma_pago": row[4],
-                    "mensaje": row[5],
-                    "proveedor_nombre": row[6],
-                    "comprador_nombre": row[7],
-                    "comprador_codigo": row[8],
-                    "origen_traslado": row[9],
-                    "serie": row[10],
-                    "archivo_nombre": row[11],
-                    "creado_por": row[12],
-                    "estado_id": row[13],
-                    "estado_nombre": row[14],
-                    "estado": row[14],
-                    "creado_en": row[15].isoformat() if row[15] else None,
-                }
-            return {
-                "pedido_id": str(row[0]),
-                "numero_pedido": row[1],
-                "fecha_pedido": row[2].isoformat() if row[2] else None,
-                "fecha_entrega": row[3],
-                "forma_pago": row[4],
-                "mensaje": row[5],
-                "proveedor_nombre": row[6],
-                "comprador_nombre": row[7],
-                "comprador_codigo": row[8],
-                "origen_traslado": row[9],
-                "serie": row[10],
-                "archivo_nombre": row[11],
-                "creado_por": row[12],
-                "estado": row[13],
-                "creado_en": row[14].isoformat() if row[14] else None,
-            }
+            return self._map_ultimo_pedido(row, tiene_estado_id, tiene_estado)
         except Exception as e:
             logger.error(
                 "❌ Error al obtener último pedido CONFIRMADO/CONFIRMADO REDISTRIBUCION: %s", e, exc_info=True

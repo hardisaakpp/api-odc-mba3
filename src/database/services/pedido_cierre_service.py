@@ -19,25 +19,46 @@ logger = logging.getLogger(__name__)
 class PedidoCierreService:
     """Servicio para evaluar y cerrar pedidos."""
     
+    @staticmethod
+    def _es_doc_entry_invalido(doc_entry: Any) -> bool:
+        return not doc_entry or doc_entry == 0 or (isinstance(doc_entry, str) and not doc_entry.strip())
+
+    @staticmethod
+    def _construir_razon_no_cierre(
+        odc_enviadas: int,
+        total_odc: int,
+        odc_pendientes: int,
+        odc_con_error: int,
+        odc_sin_doc_entry: int,
+    ) -> str:
+        razones = []
+        if odc_pendientes > 0:
+            razones.append(f"{odc_pendientes} ODC pendientes")
+        if odc_con_error > 0:
+            razones.append(f"{odc_con_error} ODC con error")
+        if odc_sin_doc_entry > 0:
+            razones.append(f"{odc_sin_doc_entry} ODC sin DocEntry válido")
+        if odc_enviadas < total_odc:
+            razones.append(f"Solo {odc_enviadas}/{total_odc} ODC enviadas")
+        return "; ".join(razones) if razones else "Condiciones no cumplidas"
+
     def evaluar_cierre_pedido(
         self,
         pedido_id: str,
         oc_repo: OrdenCompraRepository,
-        pedido_repo: PedidoRepository
     ) -> Dict[str, Any]:
         """
         Evalúa si un pedido puede cerrarse (todas sus ODC están enviadas).
-        
+
         Condiciones para cerrar:
         - Todas las ODC asociadas están en estado ENVIADA
         - Todas tienen DocEntry válido (no NULL)
         - No hay ODC en estado ERROR o PENDIENTE
-        
+
         Args:
             pedido_id: UUID del pedido
             oc_repo: Repositorio de órdenes de compra
-            pedido_repo: Repositorio de pedidos
-            
+
         Returns:
             {
                 "puede_cerrar": bool,
@@ -49,9 +70,8 @@ class PedidoCierreService:
                 "razon_no_cierre": Optional[str]
             }
         """
-        # Obtener todas las ODC del pedido
         ocs = oc_repo.get_by_pedido_id(pedido_id)
-        
+
         if not ocs:
             return {
                 "puede_cerrar": False,
@@ -62,28 +82,26 @@ class PedidoCierreService:
                 "odc_sin_doc_entry": 0,
                 "razon_no_cierre": "No hay ODC asociadas al pedido"
             }
-        
+
         total_odc = len(ocs)
         odc_enviadas = 0
         odc_pendientes = 0
         odc_con_error = 0
         odc_sin_doc_entry = 0
-        
+
         for oc in ocs:
             estado = oc.get("estado")
             doc_entry = oc.get("doc_entry")
-            
+
             if estado == "ENVIADA":
                 odc_enviadas += 1
-                # Validar que doc_entry sea válido (no None, no 0, no string vacío)
-                if not doc_entry or doc_entry == 0 or (isinstance(doc_entry, str) and not doc_entry.strip()):
+                if PedidoCierreService._es_doc_entry_invalido(doc_entry):
                     odc_sin_doc_entry += 1
             elif estado == "PENDIENTE":
                 odc_pendientes += 1
             elif estado == "ERROR":
                 odc_con_error += 1
-        
-        # Evaluar si puede cerrar
+
         puede_cerrar = (
             total_odc > 0 and
             odc_enviadas == total_odc and
@@ -91,21 +109,13 @@ class PedidoCierreService:
             odc_con_error == 0 and
             odc_sin_doc_entry == 0
         )
-        
+
         razon_no_cierre = None
         if not puede_cerrar:
-            razones = []
-            if odc_pendientes > 0:
-                razones.append(f"{odc_pendientes} ODC pendientes")
-            if odc_con_error > 0:
-                razones.append(f"{odc_con_error} ODC con error")
-            if odc_sin_doc_entry > 0:
-                razones.append(f"{odc_sin_doc_entry} ODC sin DocEntry válido")
-            if odc_enviadas < total_odc:
-                razones.append(f"Solo {odc_enviadas}/{total_odc} ODC enviadas")
-            
-            razon_no_cierre = "; ".join(razones) if razones else "Condiciones no cumplidas"
-        
+            razon_no_cierre = PedidoCierreService._construir_razon_no_cierre(
+                odc_enviadas, total_odc, odc_pendientes, odc_con_error, odc_sin_doc_entry
+            )
+
         return {
             "puede_cerrar": puede_cerrar,
             "total_odc": total_odc,
@@ -116,6 +126,50 @@ class PedidoCierreService:
             "razon_no_cierre": razon_no_cierre
         }
     
+    @staticmethod
+    def _determinar_estado_fallo_st(
+        resultado_st: Dict[str, Any],
+        pedido_id: str,
+        estado_anterior: Optional[str],
+    ) -> tuple:
+        error_type = resultado_st.get("error_type")
+        error_st = resultado_st.get("error")
+        transferencias_errores = resultado_st.get("transferencias_errores", 0)
+
+        if not error_st:
+            resultados_st = resultado_st.get("resultados", [])
+            errores_individuales = [
+                f"{r.get('tienda_codigo', 'N/A')}: {r.get('error', 'Sin detalle')}"
+                for r in resultados_st
+                if not r.get("success") and r.get("error")
+            ]
+            error_st = "; ".join(errores_individuales) if errores_individuales else "Error desconocido al crear Solicitudes de Transferencia"
+
+        if error_type == "datos_maestros":
+            estado_nuevo_id = ESTADO_ERROR_DATOS_MAESTROS
+            estado_nuevo = "ERROR_DATOS_MAESTROS"
+            razon_estado = (
+                f"OC enviada pero ST fallaron por errores de datos maestros en SAP. "
+                f"Error: {error_st}"
+            )
+            logger.error(
+                f"❌ Pedido {pedido_id}: OC OK pero ST fallaron por datos maestros. "
+                f"Estado: {estado_anterior} → {estado_nuevo}"
+            )
+        else:
+            estado_nuevo_id = ESTADO_PENDIENTE_LOGISTICA
+            estado_nuevo = "PENDIENTE_LOGISTICA"
+            razon_estado = (
+                f"OC enviada pero ST fallaron: {transferencias_errores} error(es). "
+                f"Error: {error_st}"
+            )
+            logger.warning(
+                f"⚠️ Pedido {pedido_id}: OC OK pero ST fallaron. "
+                f"Estado: {estado_anterior} → {estado_nuevo}"
+            )
+
+        return estado_nuevo_id, estado_nuevo, razon_estado
+
     def cerrar_pedido_si_corresponde(
         self,
         pedido_id: str,
@@ -153,7 +207,7 @@ class PedidoCierreService:
             }
         """
         # Evaluar si OC está OK
-        evaluacion = self.evaluar_cierre_pedido(pedido_id, oc_repo, pedido_repo)
+        evaluacion = self.evaluar_cierre_pedido(pedido_id, oc_repo)
         
         # Obtener estado actual del pedido
         pedido = pedido_repo.get_pedido_completo(pedido_id)
@@ -190,45 +244,9 @@ class PedidoCierreService:
                 f"{resultado_st.get('total_tiendas', 0)} transferencias creadas"
             )
         else:
-            # ST fallaron - determinar estado según tipo de error
-            error_type = resultado_st.get("error_type")
-            error_st = resultado_st.get("error")
-            transferencias_errores = resultado_st.get("transferencias_errores", 0)
-            
-            # ⭐ FIX: Si no hay error de nivel superior, extraer de resultados individuales
-            if not error_st:
-                resultados_st = resultado_st.get("resultados", [])
-                errores_individuales = [
-                    f"{r.get('tienda_codigo', 'N/A')}: {r.get('error', 'Sin detalle')}"
-                    for r in resultados_st
-                    if not r.get("success") and r.get("error")
-                ]
-                error_st = "; ".join(errores_individuales) if errores_individuales else "Error desconocido al crear Solicitudes de Transferencia"
-            
-            if error_type == "datos_maestros":
-                # ❌ ERROR DE DATOS MAESTROS: No es problema de logística
-                estado_nuevo_id = ESTADO_ERROR_DATOS_MAESTROS
-                estado_nuevo = "ERROR_DATOS_MAESTROS"
-                razon_estado = (
-                    f"OC enviada pero ST fallaron por errores de datos maestros en SAP. "
-                    f"Error: {error_st}"
-                )
-                logger.error(
-                    f"❌ Pedido {pedido_id}: OC OK pero ST fallaron por datos maestros. "
-                    f"Estado: {estado_anterior} → {estado_nuevo}"
-                )
-            else:
-                # Stock insuficiente u otro error → PENDIENTE_LOGISTICA
-                estado_nuevo_id = ESTADO_PENDIENTE_LOGISTICA
-                estado_nuevo = "PENDIENTE_LOGISTICA"
-                razon_estado = (
-                    f"OC enviada pero ST fallaron: {transferencias_errores} error(es). "
-                    f"Error: {error_st}"
-                )
-                logger.warning(
-                    f"⚠️ Pedido {pedido_id}: OC OK pero ST fallaron. "
-                    f"Estado: {estado_anterior} → {estado_nuevo}"
-                )
+            estado_nuevo_id, estado_nuevo, razon_estado = PedidoCierreService._determinar_estado_fallo_st(
+                resultado_st, pedido_id, estado_anterior
+            )
         
         # Actualizar estado del pedido (por id)
         audit = get_system_audit_context("pedido_cierre")

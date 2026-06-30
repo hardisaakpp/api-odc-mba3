@@ -4,7 +4,6 @@ Servicio para gestionar la detección y notificación de productos no homologado
 
 import logging
 from typing import List, Dict, Any, Set, Optional
-from datetime import datetime
 
 from src.utils.timezone import ahora_naive
 
@@ -106,14 +105,11 @@ class HomologacionService:
             for sku in skus_nuevos_para_notificar:
                 tipo_problema = self._tipos_problema.get(sku, "no_existe")
                 info_adicional = self._info_adicional.get(sku, {})
-                
+
                 if sku in productos_dict:
                     # Producto existe en BD, usar información completa
                     producto = productos_dict[sku].copy()
                     producto["tipo_problema"] = tipo_problema
-                    if info_adicional:
-                        producto.update(info_adicional)
-                    productos_info.append(producto)
                 else:
                     # Producto muy nuevo (aún no está en la consulta de BD), crear entrada básica
                     producto = {
@@ -126,9 +122,9 @@ class HomologacionService:
                         "ultima_aparicion": ahora_naive().strftime("%Y-%m-%d"),
                         "tipo_problema": tipo_problema
                     }
-                    if info_adicional:
-                        producto.update(info_adicional)
-                    productos_info.append(producto)
+                if info_adicional:
+                    producto.update(info_adicional)
+                productos_info.append(producto)
             
             logger.info(f"✅ Encontrados {len(productos_info)} productos NUEVOS para notificar")
             return productos_info
@@ -140,9 +136,9 @@ class HomologacionService:
             if conn:
                 try:
                     conn.close()
-                except:
+                except Exception:
                     pass
-    
+
     def registrar_productos_notificados(self, skus: List[str]) -> int:
         """
         Registra productos como notificados después de enviar el email.
@@ -172,9 +168,9 @@ class HomologacionService:
             if conn:
                 try:
                     conn.close()
-                except:
+                except Exception:
                     pass
-    
+
     def get_todos_productos_no_homologados(self) -> Dict[str, Any]:
         """
         Obtiene todos los productos no homologados con estadísticas.
@@ -220,9 +216,9 @@ class HomologacionService:
             if conn:
                 try:
                     conn.close()
-                except:
+                except Exception:
                     pass
-    
+
     # =========================================================================
     # MÉTODOS PARA GESTIÓN DE HOMOLOGACIONES SKU
     # =========================================================================
@@ -315,9 +311,9 @@ class HomologacionService:
             if conn:
                 try:
                     conn.close()
-                except:
+                except Exception:
                     pass
-    
+
     def get_homologacion_by_id(self, homologacion_id: str) -> Dict[str, Any]:
         """
         Obtiene una homologación por ID.
@@ -358,9 +354,29 @@ class HomologacionService:
             if conn:
                 try:
                     conn.close()
-                except:
+                except Exception:
                     pass
-    
+
+    @staticmethod
+    def _validar_campos_homologacion(data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Valida campos numéricos y estado. Retorna error dict o None si es válido."""
+        campos_numericos = [
+            ('precio_unitario_mba3', 'El precio unitario MBA3 debe ser mayor o igual a 0'),
+            ('precio_unitario_sap', 'El precio unitario SAP debe ser mayor o igual a 0'),
+            ('cantidad_docena_mba3', 'La cantidad docena MBA3 debe ser mayor o igual a 0'),
+            ('cantidad_pack_sap', 'La cantidad pack SAP debe ser mayor o igual a 0'),
+        ]
+        for campo, mensaje in campos_numericos:
+            if campo in data and data[campo] is not None and data[campo] < 0:
+                return {"status": "error", "message": mensaje, "error_code": "VALIDATION_ERROR"}
+        if 'estado' in data and data['estado'] not in ['PENDIENTE', 'HOMOLOGADO', 'ERROR']:
+            return {
+                "status": "error",
+                "message": "Estado inválido. Debe ser PENDIENTE, HOMOLOGADO o ERROR",
+                "error_code": "VALIDATION_ERROR"
+            }
+        return None
+
     def create_homologacion_sku(
         self,
         data: Dict[str, Any],
@@ -388,48 +404,11 @@ class HomologacionService:
                     "message": "sku_mba3 es requerido",
                     "error_code": "VALIDATION_ERROR"
                 }
-            
-            # Validar datos numéricos
-            if 'precio_unitario_mba3' in data and data['precio_unitario_mba3'] is not None:
-                if data['precio_unitario_mba3'] < 0:
-                    return {
-                        "status": "error",
-                        "message": "El precio unitario MBA3 debe ser mayor o igual a 0",
-                        "error_code": "VALIDATION_ERROR"
-                    }
-            
-            if 'precio_unitario_sap' in data and data['precio_unitario_sap'] is not None:
-                if data['precio_unitario_sap'] < 0:
-                    return {
-                        "status": "error",
-                        "message": "El precio unitario SAP debe ser mayor o igual a 0",
-                        "error_code": "VALIDATION_ERROR"
-                    }
-            
-            if 'cantidad_docena_mba3' in data and data['cantidad_docena_mba3'] is not None:
-                if data['cantidad_docena_mba3'] < 0:
-                    return {
-                        "status": "error",
-                        "message": "La cantidad docena MBA3 debe ser mayor o igual a 0",
-                        "error_code": "VALIDATION_ERROR"
-                    }
-            
-            if 'cantidad_pack_sap' in data and data['cantidad_pack_sap'] is not None:
-                if data['cantidad_pack_sap'] < 0:
-                    return {
-                        "status": "error",
-                        "message": "La cantidad pack SAP debe ser mayor o igual a 0",
-                        "error_code": "VALIDATION_ERROR"
-                    }
-            
-            if 'estado' in data:
-                if data['estado'] not in ['PENDIENTE', 'HOMOLOGADO', 'ERROR']:
-                    return {
-                        "status": "error",
-                        "message": "Estado inválido. Debe ser PENDIENTE, HOMOLOGADO o ERROR",
-                        "error_code": "VALIDATION_ERROR"
-                    }
-            
+
+            error = self._validar_campos_homologacion(data)
+            if error:
+                return error
+
             # Crear
             homologacion_creada = repository.create_homologacion_sku(data, modificado_por)
             
@@ -457,9 +436,9 @@ class HomologacionService:
             if conn:
                 try:
                     conn.close()
-                except:
+                except Exception:
                     pass
-    
+
     def update_homologacion_sku(
         self,
         homologacion_id: str,
@@ -483,30 +462,10 @@ class HomologacionService:
             repository = HomologacionRepository(conn)
             
             # Validar datos
-            if 'precio_unitario_sap' in data and data['precio_unitario_sap'] is not None:
-                if data['precio_unitario_sap'] < 0:
-                    return {
-                        "status": "error",
-                        "message": "El precio unitario SAP debe ser mayor o igual a 0",
-                        "error_code": "VALIDATION_ERROR"
-                    }
-            
-            if 'cantidad_pack_sap' in data and data['cantidad_pack_sap'] is not None:
-                if data['cantidad_pack_sap'] < 0:
-                    return {
-                        "status": "error",
-                        "message": "La cantidad pack SAP debe ser mayor o igual a 0",
-                        "error_code": "VALIDATION_ERROR"
-                    }
-            
-            if 'estado' in data:
-                if data['estado'] not in ['PENDIENTE', 'HOMOLOGADO', 'ERROR']:
-                    return {
-                        "status": "error",
-                        "message": "Estado inválido. Debe ser PENDIENTE, HOMOLOGADO o ERROR",
-                        "error_code": "VALIDATION_ERROR"
-                    }
-            
+            error = self._validar_campos_homologacion(data)
+            if error:
+                return error
+
             # Actualizar
             success = repository.update_homologacion_sku(homologacion_id, data, modificado_por)
             
@@ -536,9 +495,9 @@ class HomologacionService:
             if conn:
                 try:
                     conn.close()
-                except:
+                except Exception:
                     pass
-    
+
     def bulk_update_homologaciones(
         self,
         updates: List[Dict[str, Any]],
@@ -577,9 +536,9 @@ class HomologacionService:
             if conn:
                 try:
                     conn.close()
-                except:
+                except Exception:
                     pass
-    
+
     def sincronizar_homologaciones(self) -> Dict[str, Any]:
         """
         Sincroniza homologaciones desde los despachos.
@@ -610,5 +569,5 @@ class HomologacionService:
             if conn:
                 try:
                     conn.close()
-                except:
+                except Exception:
                     pass

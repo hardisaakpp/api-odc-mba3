@@ -200,17 +200,11 @@ def register_pedidos_listado_endpoints(app: FastAPI):
                 use_limit = use_size
                 use_offset = ((page or 1) - 1) * use_size
 
-            solo_redistribucion = (
-                redistribucion_confirmada is not None
-                and str(redistribucion_confirmada).lower() in ("true", "1")
-            )
-
             with get_db_connection_context() as conn:
                 repo = PedidoRepository(conn)
                 resultado = repo.get_pedidos_confirmados(
                     limit=use_limit,
                     offset=use_offset,
-                    solo_redistribucion_confirmada=solo_redistribucion,
                     fecha_desde=fecha_desde,
                     fecha_hasta=fecha_hasta,
                     proveedor_nombre=proveedor_nombre,
