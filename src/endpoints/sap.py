@@ -230,6 +230,9 @@ def register_sap_endpoints(app: FastAPI):
                         continue
                     
                     oc_id_encontrado = oc_encontrada.get("oc_id")
+                    if not oc_id_encontrado:
+                        logger.warning(f"⚠️ OC con referencia {referencia} no tiene oc_id registrado")
+                        continue
                     estado_actual = oc_encontrada.get("estado")
 
                     if estado_actual not in {"PENDIENTE", "ERROR"}:

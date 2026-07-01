@@ -230,6 +230,7 @@ def _ejecutar_proceso_completo_sync(
                     redistribucion=resultado_redistribucion,
                     odc_generada=None,
                     envio_sap=None,
+                    solicitudes_transferencia=None,
                     resumen=resumen,
                     fecha_proceso=ahora_naive(),
                     paso_fallido="generar_odc",
@@ -321,7 +322,7 @@ def _ejecutar_proceso_completo_sync(
                         usuario_mabel=user_id,
                         version_confirmada=resultado_redistribucion.get("version_confirmada"),
                         total_productos=resumen.total_productos if resumen else 0,
-                        total_cantidad_ajustada=resumen.total_cantidad_ajustada if resumen else 0
+                        total_cantidad_ajustada=int(resumen.total_cantidad_ajustada if resumen else 0)
                     )
                 except Exception:
                     pass
@@ -438,6 +439,7 @@ def _ejecutar_proceso_completo_sync(
                     redistribucion=resultado_redistribucion,
                     odc_generada=resultado_odc,
                     envio_sap=None,
+                    solicitudes_transferencia=None,
                     resumen=resumen,
                     fecha_proceso=ahora_naive(),
                     paso_fallido="envio_sap",

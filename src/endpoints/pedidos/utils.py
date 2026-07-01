@@ -10,7 +10,7 @@ from src.config import MAX_EXCEL_UPLOAD_SIZE_BYTES
 logger = logging.getLogger(__name__)
 
 # Constantes
-MAX_FILE_SIZE = MAX_EXCEL_UPLOAD_SIZE_BYTES
+MAX_FILE_SIZE: int = MAX_EXCEL_UPLOAD_SIZE_BYTES
 ALLOWED_EXTENSIONS = {'.xlsx', '.xls'}
 ALLOWED_MIME_TYPES = {
     'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',  # .xlsx
@@ -33,7 +33,7 @@ def validate_excel_file(file: UploadFile) -> None:
     if not any(file_name.endswith(ext) for ext in ALLOWED_EXTENSIONS):
         raise HTTPException(
             status_code=400,
-            detail=f"Formato de archivo no permitido. Solo se permiten archivos Excel (.xlsx, .xls)"
+            detail="Formato de archivo no permitido. Solo se permiten archivos Excel (.xlsx, .xls)"
         )
     
     # Validar tipo MIME (opcional, algunos navegadores no lo envían correctamente)

@@ -4,7 +4,6 @@ Mapper para transformar datos de facturas MBA3 a formato SQL Server.
 
 import logging
 from typing import Optional, Dict, Any, Tuple
-from datetime import datetime
 
 from src.utils.timezone import ahora_naive
 
@@ -241,10 +240,7 @@ class FacturaMapper:
         subtotal_sap = None
         unidad_sap = None
 
-        # Verificar si sap_info es válido (no es None y no tiene error)
-        sap_info_valido = sap_info is not None and not sap_info.get("_error", False)
-
-        if sap_info_valido and cantidad > 0:
+        if sap_info is not None and not sap_info.get("_error", False) and cantidad > 0:
             cantidad_sap, precio_unitario_sap, subtotal_sap, unidad_sap = (
                 FacturaMapper._calcular_conversion_sap(
                     codigo, cantidad, precio_unitario_mba3, sap_info

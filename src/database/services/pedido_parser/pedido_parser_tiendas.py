@@ -28,7 +28,7 @@ class PedidoParserTiendas:
     def _buscar_hoja_movimiento(excel_file: pd.ExcelFile) -> Optional[str]:
         for sheet_name in excel_file.sheet_names:
             if str(sheet_name).upper().strip() == "MOVIMIENTO":
-                return sheet_name
+                return str(sheet_name)
         return None
 
     @staticmethod

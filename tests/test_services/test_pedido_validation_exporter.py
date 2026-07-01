@@ -2,7 +2,6 @@
 Tests para PedidoValidationExporter - Exportación de logs de validación.
 """
 
-import pytest  # type: ignore[reportMissingImports]
 import pandas as pd
 import io
 
@@ -86,9 +85,9 @@ class TestPedidoValidationExporter:
         """Test que ordena issues por severidad (ERROR primero)."""
         # Issues en la misma fila para que el ordenamiento por severidad sea visible
         issues = [
-            ValidationIssue(2, "campo1", ValidationSeverity.WARNING, "Warning 1", None),
-            ValidationIssue(2, "campo2", ValidationSeverity.ERROR, "Error 1", None),
-            ValidationIssue(2, "campo3", ValidationSeverity.WARNING, "Warning 2", None)
+            ValidationIssue(row_number=2, field="campo1", severity=ValidationSeverity.WARNING, message="Warning 1"),
+            ValidationIssue(row_number=2, field="campo2", severity=ValidationSeverity.ERROR, message="Error 1"),
+            ValidationIssue(row_number=2, field="campo3", severity=ValidationSeverity.WARNING, message="Warning 2"),
         ]
         
         resultado = self._crear_resultado_validacion(issues)
@@ -137,8 +136,8 @@ class TestPedidoValidationExporter:
     def test_export_to_excel_bytes_con_issues(self):
         """Test que exporta Excel con issues."""
         issues = [
-            ValidationIssue(2, "campo1", ValidationSeverity.ERROR, "Error 1", "valor1"),
-            ValidationIssue(3, "campo2", ValidationSeverity.WARNING, "Warning 1", "valor2")
+            ValidationIssue(row_number=2, field="campo1", severity=ValidationSeverity.ERROR, message="Error 1", value="valor1"),
+            ValidationIssue(row_number=3, field="campo2", severity=ValidationSeverity.WARNING, message="Warning 1", value="valor2"),
         ]
         
         resultado = self._crear_resultado_validacion(issues)
@@ -176,11 +175,11 @@ class TestPedidoValidationExporter:
     def test_export_to_csv_con_issues(self):
         """Test que exporta CSV con issues."""
         issues = [
-            ValidationIssue(2, "campo1", ValidationSeverity.ERROR, "Error 1", "valor1")
+            ValidationIssue(row_number=2, field="campo1", severity=ValidationSeverity.ERROR, message="Error 1", value="valor1")
         ]
-        
+
         resultado = self._crear_resultado_validacion(issues)
-        
+
         csv_str = PedidoValidationExporter.export_to_csv(resultado)
         
         assert isinstance(csv_str, str)
@@ -193,7 +192,7 @@ class TestPedidoValidationExporter:
     def test_export_to_csv_encoding_utf8_sig(self):
         """Test que CSV usa encoding utf-8-sig (para Excel)."""
         issues = [
-            ValidationIssue(2, "campo1", ValidationSeverity.ERROR, "Error con ñ y á", "valor1")
+            ValidationIssue(row_number=2, field="campo1", severity=ValidationSeverity.ERROR, message="Error con ñ y á", value="valor1")
         ]
         
         resultado = self._crear_resultado_validacion(issues)

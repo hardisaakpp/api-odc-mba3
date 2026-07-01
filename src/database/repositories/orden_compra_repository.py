@@ -25,7 +25,7 @@ _OC_CABECERA_SELECT = """
 """
 
 
-def _map_oc_cabecera_row(row: tuple) -> Dict[str, Any]:
+def _map_oc_cabecera_row(row: Any) -> Dict[str, Any]:
     """Mapea una fila de orden_compra_cabecera al dict usado por la API."""
     return {
         "oc_id": str(row[0]),

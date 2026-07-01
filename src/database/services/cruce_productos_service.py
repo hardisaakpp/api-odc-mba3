@@ -279,7 +279,7 @@ class CruceProductosService:
             return self._obtener_productos_sap_directo()
     
     @staticmethod
-    def _row_get(row, index, default=""):
+    def _row_get(row, index, default: Optional[str] = ""):
         return row[index] if len(row) > index and row[index] else default
 
     def _normalizar_row_sap(self, row) -> Optional[dict]:

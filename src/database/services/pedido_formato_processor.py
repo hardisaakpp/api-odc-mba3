@@ -156,7 +156,7 @@ class PedidoFormatoProcessor:
                 hoja_cabecera=str(hoja_cabecera_encontrada),
                 hoja_detalle=str(hoja_detalle_encontrada)
             )
-            detalles: List[Dict[str, Any]] = self.consolidator.consolidar_detalles_simple(
+            detalles = self.consolidator.consolidar_detalles_simple(
                 resultado_parsing.get("data", [])
             )
         else:

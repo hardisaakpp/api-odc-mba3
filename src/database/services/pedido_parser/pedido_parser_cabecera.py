@@ -161,7 +161,11 @@ class PedidoParserCabecera:
             f"📊 Primera fila con datos: {primera_fila_idx}, Segunda fila con datos: {segunda_fila_idx}"
         )
 
-        if self._detectar_formato_horizontal(df_cabecera, primera_fila_idx, segunda_fila_idx):
+        if (
+            primera_fila_idx is not None
+            and segunda_fila_idx is not None
+            and self._detectar_formato_horizontal(df_cabecera, primera_fila_idx, segunda_fila_idx)
+        ):
             cabecera = self._procesar_formato_horizontal(df_cabecera, primera_fila_idx, segunda_fila_idx)
         else:
             cabecera = self._procesar_formato_vertical(df_cabecera)
