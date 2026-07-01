@@ -52,8 +52,7 @@ class PedidoParser:
         self,
         file_content: bytes,
         hoja_cabecera: str = "cabecera",
-        hoja_detalle: str = "detalle",
-        es_formato_nuevo_v1_0: bool = True
+        hoja_detalle: str = "detalle"
     ) -> Dict[str, Any]:
         """
         Parsea un archivo Excel de pedido en formato v1.0.

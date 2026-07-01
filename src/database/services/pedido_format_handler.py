@@ -5,7 +5,7 @@ Detecta y procesa diferentes formatos de plantillas Excel.
 
 import logging
 import pandas as pd
-from typing import Dict, Any, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 import io
 
 from .pedido_parser.pedido_parser_utils import normalize_column_name
@@ -40,30 +40,30 @@ class PedidoFormatHandler:
             
             for sheet_name in excel_file.sheet_names:
                 sheet_upper = str(sheet_name).upper().strip()
-                
+
                 # Detectar cabecera
-                if not resultado['cabecera']:
-                    if ("CABECERA" in sheet_upper and "PEDIDO" in sheet_upper) or \
-                       sheet_upper == "CABECERA_PEDIDO" or \
-                       sheet_upper == "CABECERA PEDIDO":
-                        resultado['cabecera'] = str(sheet_name)
-                
+                if not resultado['cabecera'] and (
+                    ("CABECERA" in sheet_upper and "PEDIDO" in sheet_upper)
+                    or sheet_upper == "CABECERA_PEDIDO"
+                    or sheet_upper == "CABECERA PEDIDO"
+                ):
+                    resultado['cabecera'] = str(sheet_name)
+
                 # Detectar detalle
-                if not resultado['detalle']:
-                    if ("DETALLE" in sheet_upper and ("ARTICULO" in sheet_upper or "ARTÍCULO" in sheet_upper)) or \
-                       sheet_upper == "DETALLE_ARTICULO" or \
-                       sheet_upper == "DETALLE ARTICULO":
-                        resultado['detalle'] = str(sheet_name)
-                
+                if not resultado['detalle'] and (
+                    ("DETALLE" in sheet_upper and ("ARTICULO" in sheet_upper or "ARTÍCULO" in sheet_upper))
+                    or sheet_upper == "DETALLE_ARTICULO"
+                    or sheet_upper == "DETALLE ARTICULO"
+                ):
+                    resultado['detalle'] = str(sheet_name)
+
                 # Detectar movimiento (v1.0)
-                if not resultado['movimiento']:
-                    if sheet_upper == "MOVIMIENTO":
-                        resultado['movimiento'] = str(sheet_name)
-                
+                if not resultado['movimiento'] and sheet_upper == "MOVIMIENTO":
+                    resultado['movimiento'] = str(sheet_name)
+
                 # Detectar tiendas (v1.0)
-                if not resultado['tiendas']:
-                    if sheet_upper == "TIENDAS":
-                        resultado['tiendas'] = str(sheet_name)
+                if not resultado['tiendas'] and sheet_upper == "TIENDAS":
+                    resultado['tiendas'] = str(sheet_name)
             
             return resultado
         except Exception as e:

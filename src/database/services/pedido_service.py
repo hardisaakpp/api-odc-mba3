@@ -20,7 +20,7 @@ from src.exceptions import BusinessException
 from ..connection import get_db_connection_context
 from ..repositories.pedido_repository import PedidoRepository
 from ..pedido_estados import ESTADO_BORRADOR, ESTADO_NUEVO_PEDIDO
-from .pedido_validator import PedidoValidator, ValidationSeverity
+from .pedido_validator import PedidoValidator
 from .pedido_parser import PedidoParser
 from .pedido_consolidator import PedidoConsolidator
 from .pedido_type_converter import PedidoTypeConverter
@@ -135,8 +135,7 @@ class PedidoService:
         return self.parser.parsear_excel_pedido(
             file_content=file_content,
             hoja_cabecera=hoja_cabecera,
-            hoja_detalle=hoja_detalle,
-            es_formato_nuevo_v1_0=True
+            hoja_detalle=hoja_detalle
         )
     
     def _normalizar_cabecera_para_bd(self, cabecera_parseada: Dict[str, Any], filename: str, usuario_id: Optional[str] = None) -> Dict[str, Any]:
@@ -289,7 +288,7 @@ class PedidoService:
             logger.info(f"Shape del DataFrame: {df_raw.shape} (filas x columnas)")
             if len(df_raw) > 0:
                 # Mostrar primeras 10 filas y primeras 8 columnas para debug (para ver columnas E, F, G, H)
-                logger.info(f"Primeras 10 filas, primeras 8 columnas del Excel:")
+                logger.info("Primeras 10 filas, primeras 8 columnas del Excel:")
                 for i in range(min(10, len(df_raw))):
                     row_data = []
                     for j in range(min(8, len(df_raw.columns))):
@@ -412,6 +411,7 @@ class PedidoService:
                 resultado["pedido_id"] = pedido_id
                 
                 # Procesar cada artículo con sus distribuciones (orden = orden de plantilla)
+                detalles_con_tiendas: list = []
                 for orden_linea, detalle_data in enumerate(detalles_con_tiendas):
                     try:
                         detalle_data["detalle"]["orden_linea"] = orden_linea
@@ -664,8 +664,7 @@ class PedidoService:
                 resultado_parsing = self.parser.parsear_excel_pedido(
                     file_content=file_content,
                     hoja_cabecera=str(hoja_cabecera_encontrada),
-                    hoja_detalle=str(hoja_detalle_encontrada),
-                    es_formato_nuevo_v1_0=True
+                    hoja_detalle=str(hoja_detalle_encontrada)
                 )
                 
                 # ⭐ VALIDACIÓN TEMPRANA #1: Verificar número de pedido duplicado PRIMERO (antes de SAP)

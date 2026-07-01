@@ -24,18 +24,136 @@ class PedidoParserTiendas:
         """Inicializa el parser con utilidades compartidas."""
         self.utils = PedidoParserUtils()
 
+    @staticmethod
+    def _buscar_hoja_movimiento(excel_file: pd.ExcelFile) -> Optional[str]:
+        for sheet_name in excel_file.sheet_names:
+            if str(sheet_name).upper().strip() == "MOVIMIENTO":
+                return sheet_name
+        return None
+
+    @staticmethod
+    def _es_columna_codigo_producto(col_upper: str) -> bool:
+        return ("CODIGO" in col_upper and "PRODUCTO" in col_upper) or col_upper in ["PRODUCTO", "SKU", "CODIGO"]
+
+    @staticmethod
+    def _es_columna_cantidad(col_upper: str) -> bool:
+        return "CANTIDAD" in col_upper or col_upper in ["CANT", "QTY"]
+
+    @staticmethod
+    def _detectar_columnas_movimiento(df: pd.DataFrame) -> tuple:
+        col_codigo = col_tienda = col_cantidad = None
+        for col in df.columns:
+            col_upper = str(col).upper().strip()
+            if col_codigo is None and PedidoParserTiendas._es_columna_codigo_producto(col_upper):
+                col_codigo = col
+            if col_tienda is None and "TIENDA" in col_upper:
+                col_tienda = col
+            if col_cantidad is None and PedidoParserTiendas._es_columna_cantidad(col_upper):
+                col_cantidad = col
+        return col_codigo, col_tienda, col_cantidad
+
+    @staticmethod
+    def _parsear_cantidad_movimiento(
+        cantidad_raw: Any, fila_num: int, resultado: Dict[str, Any]
+    ) -> Optional[float]:
+        if cantidad_raw is None or str(cantidad_raw).strip() == "":
+            resultado["errores"].append(f"Fila {fila_num}: 'CANTIDAD' es obligatoria")
+            return None
+        try:
+            cantidad = float(str(cantidad_raw).replace(",", "."))
+            if cantidad < 0:
+                resultado["errores"].append(f"Fila {fila_num}: 'CANTIDAD' no puede ser negativa")
+                return None
+            return cantidad
+        except (ValueError, TypeError):
+            resultado["errores"].append(f"Fila {fila_num}: 'CANTIDAD' no es un número válido")
+            return None
+
+    def _validar_tienda_catalogo(
+        self,
+        tienda_codigo: str,
+        tienda_str: str,
+        catalogo_tiendas: Optional[Dict[str, Dict[str, Any]]]
+    ) -> tuple:
+        tienda_nombre = tienda_str
+        validacion_tienda: Dict[str, Any] = {"valida": True, "errores": [], "warnings": []}
+        if not catalogo_tiendas:
+            validacion_tienda["warnings"].append("No se encontró hoja 'Tiendas' para validar tiendas")
+            return tienda_codigo, tienda_nombre, validacion_tienda
+        for cod_cat, info_cat in catalogo_tiendas.items():
+            nombre_cat_upper = str(info_cat.get("nombre", "")).upper().replace(" ", "")
+            if tienda_codigo == cod_cat or tienda_codigo == nombre_cat_upper:
+                tienda_codigo = cod_cat
+                tienda_nombre = info_cat.get("nombre", tienda_str)
+                if not info_cat.get("activa", False):
+                    validacion_tienda["valida"] = False
+                    validacion_tienda["errores"].append(
+                        f"Tienda '{tienda_codigo}' ({tienda_nombre}) está INACTIVA"
+                    )
+                return tienda_codigo, tienda_nombre, validacion_tienda
+        validacion_tienda["valida"] = False
+        validacion_tienda["errores"].append(f"Tienda '{tienda_str}' no existe en el catálogo de tiendas")
+        return tienda_codigo, tienda_nombre, validacion_tienda
+
+    def _procesar_fila_movimiento(
+        self,
+        row: pd.Series,
+        fila_num: int,
+        col_codigo: str,
+        col_tienda: str,
+        col_cantidad: str,
+        catalogo_tiendas: Optional[Dict[str, Dict[str, Any]]],
+        productos_vistos: set,
+        resultado: Dict[str, Any]
+    ) -> None:
+        codigo_producto = str(row.get(col_codigo, "")).strip()
+        tienda_str = str(row.get(col_tienda, "")).strip()
+        cantidad_raw = row.get(col_cantidad)
+
+        if not codigo_producto:
+            resultado["errores"].append(f"Fila {fila_num}: 'CODIGO PRODUCTO' es obligatorio")
+            return
+        if not tienda_str:
+            resultado["errores"].append(f"Fila {fila_num}: 'TIENDAS' es obligatorio")
+            return
+
+        cantidad = self._parsear_cantidad_movimiento(cantidad_raw, fila_num, resultado)
+        if cantidad is None:
+            return
+
+        codigo_producto = codigo_producto.upper()
+        tienda_codigo = tienda_str.upper().replace(" ", "")
+        tienda_codigo, tienda_nombre, validacion_tienda = self._validar_tienda_catalogo(
+            tienda_codigo, tienda_str, catalogo_tiendas
+        )
+
+        resultado["datos"].append({
+            "codigo_producto": codigo_producto,
+            "tienda_codigo": tienda_codigo,
+            "tienda_nombre": tienda_nombre,
+            "cantidad": cantidad,
+            "fila_origen": fila_num,
+            "validacion": validacion_tienda
+        })
+        resultado["resumen"]["filas_validas"] += 1
+        resultado["resumen"]["distribuciones_totales"] += 1
+
+        if codigo_producto not in productos_vistos:
+            productos_vistos.add(codigo_producto)
+            resultado["resumen"]["productos_unicos"] += 1
+
     def leer_hoja_movimiento(
-        self, 
-        file_content: bytes, 
+        self,
+        file_content: bytes,
         catalogo_tiendas: Optional[Dict[str, Dict[str, Any]]] = None
     ) -> Dict[str, Any]:
         """
         Lee la hoja 'Movimiento' del Excel y retorna distribuciones por producto y tienda.
-        
+
         Args:
             file_content: Contenido del archivo Excel en bytes
             catalogo_tiendas: Diccionario opcional con tiendas válidas
-            
+
         Returns:
             Dict con distribuciones y resumen
         """
@@ -49,161 +167,51 @@ class PedidoParserTiendas:
             "datos": [],
             "errores": []
         }
-        
+
         try:
             excel_file = pd.ExcelFile(io.BytesIO(file_content))
-            
-            hoja_movimiento = None
-            for sheet_name in excel_file.sheet_names:
-                if str(sheet_name).upper().strip() == "MOVIMIENTO":
-                    hoja_movimiento = sheet_name
-                    break
-            
+
+            hoja_movimiento = self._buscar_hoja_movimiento(excel_file)
             if not hoja_movimiento:
                 logger.warning("⚠️ No se encontró hoja 'Movimiento' en el Excel")
                 return resultado
-            
+
             df_movimiento = pd.read_excel(
-                excel_file,
-                sheet_name=hoja_movimiento,
-                header=0,
-                keep_default_na=False
+                excel_file, sheet_name=hoja_movimiento, header=0, keep_default_na=False
             )
-            
             df_movimiento.columns = [str(col).strip() for col in df_movimiento.columns]
-            
             logger.info(f"📋 Hoja 'Movimiento' encontrada con {len(df_movimiento)} filas")
-            
-            col_codigo = None
-            col_tienda = None
-            col_cantidad = None
-            
-            for col in df_movimiento.columns:
-                col_upper = str(col).upper().strip()
-                if col_codigo is None:
-                    if "CODIGO" in col_upper and "PRODUCTO" in col_upper:
-                        col_codigo = col
-                    elif col_upper in ["PRODUCTO", "SKU", "CODIGO"]:
-                        col_codigo = col
-                
-                if col_tienda is None:
-                    if "TIENDA" in col_upper:
-                        col_tienda = col
-                
-                if col_cantidad is None:
-                    if "CANTIDAD" in col_upper or col_upper in ["CANT", "QTY"]:
-                        col_cantidad = col
-            
+
+            col_codigo, col_tienda, col_cantidad = self._detectar_columnas_movimiento(df_movimiento)
+
             if not col_codigo:
                 resultado["errores"].append("❌ No se encontró columna 'CODIGO PRODUCTO' en hoja Movimiento")
                 return resultado
-            
             if not col_tienda:
                 resultado["errores"].append("❌ No se encontró columna 'TIENDAS' en hoja Movimiento")
                 return resultado
-            
             if not col_cantidad:
                 resultado["errores"].append("❌ No se encontró columna 'CANTIDAD' en hoja Movimiento")
                 return resultado
-            
-            productos_vistos = set()
-            
+
+            productos_vistos: set = set()
             for idx, row in df_movimiento.iterrows():
                 fila_num = (int(idx) if isinstance(idx, (int, float)) else 0) + 2
                 resultado["resumen"]["filas_leidas"] += 1
-                
-                codigo_producto = str(row.get(col_codigo, "")).strip()
-                tienda_str = str(row.get(col_tienda, "")).strip()
-                cantidad_raw = row.get(col_cantidad)
-                
-                if not codigo_producto:
-                    resultado["errores"].append(f"Fila {fila_num}: 'CODIGO PRODUCTO' es obligatorio")
-                    continue
-                
-                if not tienda_str:
-                    resultado["errores"].append(f"Fila {fila_num}: 'TIENDAS' es obligatorio")
-                    continue
-                
-                if cantidad_raw is None or str(cantidad_raw).strip() == "":
-                    resultado["errores"].append(f"Fila {fila_num}: 'CANTIDAD' es obligatoria")
-                    continue
-                
-                try:
-                    cantidad = float(str(cantidad_raw).replace(",", "."))
-                    if cantidad < 0:
-                        resultado["errores"].append(f"Fila {fila_num}: 'CANTIDAD' no puede ser negativa")
-                        continue
-                except (ValueError, TypeError):
-                    resultado["errores"].append(f"Fila {fila_num}: 'CANTIDAD' no es un número válido")
-                    continue
-                
-                codigo_producto = codigo_producto.upper()
-                tienda_codigo = tienda_str.upper().replace(" ", "")
-                tienda_nombre = tienda_str
-                validacion_tienda = {"valida": True, "errores": [], "warnings": []}
-                
-                if catalogo_tiendas:
-                    tienda_encontrada = False
-                    for cod_cat, info_cat in catalogo_tiendas.items():
-                        if tienda_codigo == cod_cat:
-                            tienda_codigo = cod_cat
-                            tienda_nombre = info_cat.get("nombre", tienda_str)
-                            tienda_encontrada = True
-                            
-                            if not info_cat.get("activa", False):
-                                validacion_tienda["valida"] = False
-                                validacion_tienda["errores"].append(
-                                    f"Tienda '{tienda_codigo}' ({tienda_nombre}) está INACTIVA"
-                                )
-                            break
-                        elif tienda_codigo == str(info_cat.get("nombre", "")).upper().replace(" ", ""):
-                            tienda_codigo = cod_cat
-                            tienda_nombre = info_cat.get("nombre", tienda_str)
-                            tienda_encontrada = True
-                            
-                            if not info_cat.get("activa", False):
-                                validacion_tienda["valida"] = False
-                                validacion_tienda["errores"].append(
-                                    f"Tienda '{tienda_codigo}' ({tienda_nombre}) está INACTIVA"
-                                )
-                            break
-                    
-                    if not tienda_encontrada:
-                        validacion_tienda["valida"] = False
-                        validacion_tienda["errores"].append(
-                            f"Tienda '{tienda_str}' no existe en el catálogo de tiendas"
-                        )
-                else:
-                    validacion_tienda["warnings"].append(
-                        "No se encontró hoja 'Tiendas' para validar tiendas"
-                    )
-                
-                distribucion = {
-                    "codigo_producto": codigo_producto,
-                    "tienda_codigo": tienda_codigo,
-                    "tienda_nombre": tienda_nombre,
-                    "cantidad": cantidad,
-                    "fila_origen": fila_num,
-                    "validacion": validacion_tienda
-                }
-                
-                resultado["datos"].append(distribucion)
-                resultado["resumen"]["filas_validas"] += 1
-                resultado["resumen"]["distribuciones_totales"] += 1
-                
-                if codigo_producto not in productos_vistos:
-                    productos_vistos.add(codigo_producto)
-                    resultado["resumen"]["productos_unicos"] += 1
-            
+                self._procesar_fila_movimiento(
+                    row, fila_num, col_codigo, col_tienda, col_cantidad,
+                    catalogo_tiendas, productos_vistos, resultado
+                )
+
             logger.info(
                 f"✅ Hoja 'Movimiento' procesada: {resultado['resumen']['filas_validas']} filas válidas, "
                 f"{resultado['resumen']['productos_unicos']} productos únicos"
             )
-            
+
         except Exception as e:
             logger.error(f"❌ Error al leer hoja 'Movimiento': {e}", exc_info=True)
             resultado["errores"].append(f"Error al leer hoja 'Movimiento': {str(e)}")
-        
+
         return resultado
 
     def extraer_distribuciones_tienda(

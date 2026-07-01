@@ -5,7 +5,7 @@ Centraliza la lógica de detección de diferentes formatos de plantillas.
 
 import logging
 import pandas as pd
-from typing import Dict, Optional, Tuple
+from typing import Dict, Optional
 import io
 
 from .pedido_parser.pedido_parser_utils import normalize_column_name
@@ -49,16 +49,14 @@ class PedidoFormatDetector:
                     logger.info(f"✅ Hoja de detalle detectada (formato v1.0): '{sheet_name}'")
                 
                 # Buscar variaciones de MOVIMIENTO (nuevo formato v1.0)
-                if not resultado['movimiento']:
-                    if sheet_name_upper == "MOVIMIENTO":
-                        resultado['movimiento'] = str(sheet_name)
-                        logger.info(f"✅ Hoja de movimiento detectada: '{sheet_name}'")
-                
+                if not resultado['movimiento'] and sheet_name_upper == "MOVIMIENTO":
+                    resultado['movimiento'] = str(sheet_name)
+                    logger.info(f"✅ Hoja de movimiento detectada: '{sheet_name}'")
+
                 # Buscar variaciones de TIENDAS (nuevo formato v1.0)
-                if not resultado['tiendas']:
-                    if sheet_name_upper == "TIENDAS":
-                        resultado['tiendas'] = str(sheet_name)
-                        logger.info(f"✅ Hoja de tiendas detectada: '{sheet_name}'")
+                if not resultado['tiendas'] and sheet_name_upper == "TIENDAS":
+                    resultado['tiendas'] = str(sheet_name)
+                    logger.info(f"✅ Hoja de tiendas detectada: '{sheet_name}'")
             
             return resultado
         except Exception as e:
