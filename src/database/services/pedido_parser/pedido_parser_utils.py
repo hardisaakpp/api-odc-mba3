@@ -71,11 +71,13 @@ class PedidoParserUtils:
     # Constantes: Campos críticos de cabecera
     CAMPOS_CRITICOS_CABECERA = ["numero_pedido", "CODIGO PEDIDO", "CÓDIGO PEDIDO"]
     
+    _CLAVE_CODIGO_BARRAS = 'codigo barras'
+
     # Constantes: Mapeo de columnas de producto
     # NOTA: La columna "marca" fue eliminada de la plantilla Excel (2026-02-05)
     MAPEO_COLUMNAS_PRODUCTO = {
         'codigo producto': ('codigoproducto', 'codigo producto', 'producto', 'sku', 'codigo'),
-        'codigo barras': ('codigo de barras', 'codigo_barras', 'código de barras', 'codigo barras', 'ean'),
+        _CLAVE_CODIGO_BARRAS: ('codigo de barras', 'codigo_barras', 'código de barras', _CLAVE_CODIGO_BARRAS, 'ean'),
         'descripcion sap': ('descripcion sap', 'descripción sap', 'descripcion', 'descripción'),
         'pack': ('pack', 'unidad', 'unidad de empaque'),
         'costo sin iva': ('costo sin iva', 'costo doc sin iva', 'costo', 'precio sin iva'),
@@ -193,10 +195,45 @@ class PedidoParserUtils:
         
         return None
     
+    @staticmethod
+    def _extraer_de_serie(valor: pd.Series) -> Optional[Any]:
+        """Extrae el primer elemento de una Series; None si vacía o toda-NaN."""
+        if len(valor) == 0 or valor.isna().all():
+            return None
+        return valor.iloc[0]
+
+    @staticmethod
+    def _formatear_codigo_barras(valor: Any) -> str:
+        """Convierte valor de código de barras a string sin decimales innecesarios."""
+        if isinstance(valor, int):
+            return str(valor)
+        if isinstance(valor, float):
+            return str(int(valor)) if valor.is_integer() else str(valor).rstrip('0').rstrip('.')
+        result = str(valor).strip()
+        if result.endswith('.0'):
+            try:
+                num_val = float(result)
+                if num_val.is_integer():
+                    return str(int(num_val))
+            except (ValueError, TypeError):
+                pass
+        return result
+
+    @staticmethod
+    def _normalizar_string_numerico(str_value: str) -> str:
+        """Elimina símbolos monetarios y normaliza separador decimal."""
+        str_value = str_value.replace('$', '').replace('€', '').replace('USD', '').replace('%', '').strip()
+        str_value = ''.join(c for c in str_value if c.isdigit() or c in '.,-')
+        if ',' in str_value and '.' in str_value:
+            return str_value.replace('.', '').replace(',', '.')
+        if ',' in str_value:
+            return str_value.replace(',', '.')
+        return str_value
+
     def get_cell_value(self, row: pd.Series, column_name: str, alternative_names: Optional[List[str]] = None) -> Optional[str]:
         """
         Obtiene valor de celda como string, con búsqueda flexible de columnas.
-        
+
         Args:
             row: Serie de pandas con los datos de la fila
             column_name: Nombre principal de la columna a buscar
@@ -206,48 +243,22 @@ class PedidoParserUtils:
             names_to_try = [column_name]
             if alternative_names:
                 names_to_try.extend(alternative_names)
-            
+
             found_column = self.find_column_flexible(row, names_to_try)
-            
-            if found_column:
-                valor = row[found_column]
-                if isinstance(valor, pd.Series):
-                    if len(valor) == 0 or valor.isna().all():
-                        return None
-                    valor = valor.iloc[0] if len(valor) > 0 else None
-                if valor is None or (isinstance(valor, (float, int)) and pd.isna(valor)):
-                    return None
-                
-                is_codigo_barras = any(name.lower() in ['codigo de barras', 'codigo_barras', 'código de barras', 'codigo barras'] 
-                                      for name in names_to_try)
-                
-                if is_codigo_barras and isinstance(valor, (int, float)):
-                    try:
-                        if isinstance(valor, int):
-                            result = str(valor)
-                        elif isinstance(valor, float):
-                            if valor.is_integer():
-                                result = str(int(valor))
-                            else:
-                                result = str(valor).rstrip('0').rstrip('.')
-                        else:
-                            result = str(valor).strip()
-                    except (ValueError, TypeError, OverflowError):
-                        result = str(valor).strip()
-                else:
-                    result = str(valor).strip()
-                    
-                    if is_codigo_barras and result.endswith('.0'):
-                        try:
-                            num_val = float(result)
-                            if num_val.is_integer():
-                                result = str(int(num_val))
-                        except (ValueError, TypeError):
-                            pass
-                
-                return result if result else None
-            
-            return None
+            if not found_column:
+                return None
+
+            valor = row[found_column]
+            if isinstance(valor, pd.Series):
+                valor = self._extraer_de_serie(valor)
+            if valor is None or (isinstance(valor, (float, int)) and pd.isna(valor)):
+                return None
+
+            aliases_barras = self.MAPEO_COLUMNAS_PRODUCTO[self._CLAVE_CODIGO_BARRAS]
+            es_barras = any(n.lower() in aliases_barras for n in names_to_try)
+
+            result = self._formatear_codigo_barras(valor) if es_barras else str(valor).strip()
+            return result if result else None
         except Exception as e:
             logger.debug(f"⚠️ Error al obtener valor de celda '{column_name}': {e}")
             return None
@@ -256,7 +267,7 @@ class PedidoParserUtils:
         """
         Obtiene valor numérico de celda, manejando formatos de moneda y porcentaje.
         Usa búsqueda flexible de columnas.
-        
+
         Args:
             row: Serie de pandas con los datos de la fila
             column_name: Nombre principal de la columna a buscar
@@ -266,42 +277,22 @@ class PedidoParserUtils:
             names_to_try = [column_name]
             if alternative_names:
                 names_to_try.extend(alternative_names)
-            
+
             found_column = self.find_column_flexible(row, names_to_try)
-            
-            if found_column:
-                valor = row[found_column]
-                if isinstance(valor, pd.Series):
-                    if len(valor) == 0 or valor.isna().all():
-                        return None
-                    valor = valor.iloc[0] if len(valor) > 0 else None
-                if valor is None or (isinstance(valor, (float, int)) and pd.isna(valor)):
-                    return None
-                
-                if isinstance(valor, (int, float)):
-                    return float(valor)
-                
-                str_value = str(valor).strip()
-                if not str_value:
-                    return None
-                
-                es_porcentaje = '%' in str_value
-                
-                str_value = str_value.replace('$', '').replace('€', '').replace('USD', '').replace('%', '').strip()
-                str_value = ''.join(c for c in str_value if c.isdigit() or c in '.,-')
-                
-                if ',' in str_value and '.' in str_value:
-                    str_value = str_value.replace('.', '').replace(',', '.')
-                elif ',' in str_value:
-                    str_value = str_value.replace(',', '.')
-                
-                if not str_value:
-                    return None
-                
-                valor_numerico = float(str_value)
-                return valor_numerico
-                
-            return None
+            if not found_column:
+                return None
+
+            valor = row[found_column]
+            if isinstance(valor, pd.Series):
+                valor = self._extraer_de_serie(valor)
+            if valor is None or (isinstance(valor, (float, int)) and pd.isna(valor)):
+                return None
+
+            if isinstance(valor, (int, float)):
+                return float(valor)
+
+            str_value = self._normalizar_string_numerico(str(valor).strip())
+            return float(str_value) if str_value else None
         except (ValueError, TypeError) as e:
             logger.debug(f"⚠️ Error al convertir valor numérico de columna '{column_name}': {e}")
             return None

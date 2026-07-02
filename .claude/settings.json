@@ -7,7 +7,8 @@
       "Bash(gh pr create --title 'fix: corregir findings de SonarQube \\(CC, S1066, S1172, S1192, S1871\\)' --body ' *)",
       "PowerShell(\\(Get-Command gh -ErrorAction SilentlyContinue\\)?.Source; \\(Get-Command git -ErrorAction SilentlyContinue\\)?.Source)",
       "Bash(gh --version)",
-      "Bash(python -m ruff check --fix src/database/mappers/factura_mapper.py src/endpoints/pedidos/utils.py tests/test_services/test_pedido_validation_exporter.py)"
+      "Bash(python -m ruff check --fix src/database/mappers/factura_mapper.py src/endpoints/pedidos/utils.py tests/test_services/test_pedido_validation_exporter.py)",
+      "Bash(python -m ruff check --fix src/endpoints/pedidos/pedidos_proveedor.py)"
     ]
   }
 }

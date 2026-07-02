@@ -5,8 +5,7 @@ Soporta borrador/confirmado y es idempotente.
 """
 
 import logging
-from typing import Dict, Any, List, Optional
-from datetime import datetime
+from typing import Any, Dict, List, Optional, Tuple
 
 from ..connection import get_db_connection_context
 from ..pedido_estados import ESTADO_REDISTRIBUCION
@@ -22,79 +21,106 @@ logger = logging.getLogger(__name__)
 
 class PedidoProveedorWebService:
     """Servicio para interfaz web del proveedor."""
-    
+
     def __init__(self):
         self.proveedor_service = PedidoProveedorService()
-    
+
+    # ── helpers: obtener_formulario_proveedor ──────────────────────────────
+
+    @staticmethod
+    def _construir_mapa_respuestas(respuesta_existente: Optional[Dict]) -> Dict:
+        if not respuesta_existente:
+            return {}
+        mapa: Dict = {}
+        for dr in respuesta_existente.get("detalles", []):
+            pdid = dr.get("pedido_detalle_id")
+            if pdid:
+                mapa[pdid] = dr
+        return mapa
+
+    @staticmethod
+    def _mensaje_estado_formulario(
+        puede_responder: bool,
+        estado_pedido: str,
+        respuesta_existente: Optional[Dict],
+    ) -> Optional[str]:
+        if not puede_responder:
+            return f"El pedido está en estado '{estado_pedido}' y no puede ser modificado."
+        if not respuesta_existente:
+            return None
+        estado_resp = respuesta_existente.get("estado", "PENDIENTE_REVISION")
+        if estado_resp == "BORRADOR":
+            return "Tiene una respuesta guardada como borrador. Puede continuar editando."
+        if estado_resp == "PENDIENTE_REVISION":
+            return "Ya envió una respuesta que está pendiente de revisión. Puede crear una nueva versión."
+        if estado_resp == "APROBADA":
+            return "Ya tiene una respuesta aprobada. Puede crear una nueva versión si necesita cambios."
+        return None
+
+    @staticmethod
+    def _normalizar_fecha(fecha: Any) -> Optional[str]:
+        if not fecha:
+            return fecha
+        if hasattr(fecha, "isoformat"):
+            return fecha.isoformat()
+        if not isinstance(fecha, str):
+            return str(fecha)
+        return fecha
+
     def obtener_formulario_proveedor(self, pedido_id: str) -> Dict[str, Any]:
         """
         Obtiene los datos del pedido formateados para el formulario web.
-        
+
         Características:
         - Idempotente: muestra respuesta existente si ya respondió
         - Indica si puede responder (no está cerrado/bloqueado)
         - Incluye datos de respuesta previa si existe
-        
+
         Args:
             pedido_id: UUID del pedido
-            
+
         Returns:
             Dict con datos formateados para formulario
         """
         with get_db_connection_context() as conn:
             repo = PedidoRepository(conn)
             pedido = repo.get_pedido_completo(pedido_id)
-            
+
             if not pedido:
                 raise ValueError(f"Pedido no encontrado: {pedido_id}")
-            
+
             cabecera = pedido["cabecera"]
             detalles = pedido["detalles"]
-            
-            # Obtener respuesta existente si existe
+
             respuesta_repo = PedidoRespuestaRepository(conn)
             respuesta_existente = respuesta_repo.obtener_respuesta_activa(pedido_id)
-            
-            # Determinar si puede responder
+
             estado_pedido = cabecera.get("estado", "PENDIENTE_CONFIRMACION_PROVEEDOR")
             estados_bloqueados = [
                 "CONFIRMADO_PROVEEDOR",
                 "ORDEN_COMPRA_CREADA",
                 "ENVIADA_SAP",
                 "CERRADO",
-                "CANCELADO"
+                "CANCELADO",
             ]
             puede_responder = estado_pedido not in estados_bloqueados
-            
-            # Formatear productos para formulario
+            mapa_respuestas = self._construir_mapa_respuestas(respuesta_existente)
+
             productos_formulario = []
-            
-            # Crear mapa de respuestas existentes por pedido_detalle_id
-            mapa_respuestas = {}
-            if respuesta_existente:
-                for detalle_respuesta in respuesta_existente.get("detalles", []):
-                    pedido_detalle_id = detalle_respuesta.get("pedido_detalle_id")
-                    if pedido_detalle_id:
-                        mapa_respuestas[pedido_detalle_id] = detalle_respuesta
-            
             for detalle in detalles:
                 pedido_detalle_id = detalle["pedido_detalle_id"]
                 respuesta_detalle = mapa_respuestas.get(pedido_detalle_id, {})
-                
-                # Calcular total solicitado
                 cantidad_total = sum(t["cantidad"] for t in detalle["tiendas"])
-                
-                # Formatear tiendas
-                tiendas_formulario = []
-                for tienda in detalle["tiendas"]:
-                    tiendas_formulario.append({
-                        "tienda_id": tienda["tienda_id"],
-                        "codigo": tienda["codigo"],
-                        "nombre": tienda.get("nombre"),
-                        "cantidad_solicitada": tienda["cantidad"]
-                    })
-                
-                producto = {
+                tiendas_formulario = [
+                    {
+                        "tienda_id": t["tienda_id"],
+                        "codigo": t["codigo"],
+                        "nombre": t.get("nombre"),
+                        "cantidad_solicitada": t["cantidad"],
+                    }
+                    for t in detalle["tiendas"]
+                ]
+                productos_formulario.append({
                     "pedido_detalle_id": pedido_detalle_id,
                     "codigo_producto": detalle["codigo_interno"],
                     "descripcion": detalle.get("descripcion_sap"),
@@ -103,40 +129,16 @@ class PedidoProveedorWebService:
                     "costo_unitario_original": detalle.get("costo_doc_sin_iva"),
                     "descuento_original": detalle.get("descuento_1"),
                     "tiendas": tiendas_formulario,
-                    # Datos de respuesta existente (si hay)
                     "cantidad_confirmada_total": respuesta_detalle.get("cantidad_confirmada_total"),
                     "costo_unitario_ajustado": respuesta_detalle.get("costo_doc_sin_iva_ajustado"),
                     "descuento_ajustado": respuesta_detalle.get("descuento_1_ajustado"),
-                    "observaciones": respuesta_detalle.get("observaciones")
-                }
-                
-                productos_formulario.append(producto)
-            
-            # Mensaje de estado
-            mensaje_estado = None
-            if not puede_responder:
-                mensaje_estado = f"El pedido está en estado '{estado_pedido}' y no puede ser modificado."
-            elif respuesta_existente:
-                estado_resp = respuesta_existente.get("estado", "PENDIENTE_REVISION")
-                if estado_resp == "BORRADOR":
-                    mensaje_estado = "Tiene una respuesta guardada como borrador. Puede continuar editando."
-                elif estado_resp == "PENDIENTE_REVISION":
-                    mensaje_estado = "Ya envió una respuesta que está pendiente de revisión. Puede crear una nueva versión."
-                elif estado_resp == "APROBADA":
-                    mensaje_estado = "Ya tiene una respuesta aprobada. Puede crear una nueva versión si necesita cambios."
-            
-            # Manejar fecha_pedido (puede venir como string ISO o como date)
-            fecha_pedido = cabecera.get("fecha_pedido")
-            if fecha_pedido:
-                if hasattr(fecha_pedido, 'isoformat'):
-                    fecha_pedido = fecha_pedido.isoformat()
-                elif not isinstance(fecha_pedido, str):
-                    fecha_pedido = str(fecha_pedido)
-            
+                    "observaciones": respuesta_detalle.get("observaciones"),
+                })
+
             return {
                 "pedido_id": pedido_id,
                 "numero_pedido": cabecera.get("numero_pedido"),
-                "fecha_pedido": fecha_pedido,
+                "fecha_pedido": self._normalizar_fecha(cabecera.get("fecha_pedido")),
                 "fecha_entrega": cabecera.get("fecha_entrega"),
                 "proveedor_nombre": cabecera.get("proveedor_nombre"),
                 "estado_pedido": estado_pedido,
@@ -146,112 +148,109 @@ class PedidoProveedorWebService:
                 "version_respuesta": respuesta_existente.get("version") if respuesta_existente else None,
                 "estado_respuesta": respuesta_existente.get("estado") if respuesta_existente else None,
                 "productos": productos_formulario,
-                "mensaje_estado": mensaje_estado
+                "mensaje_estado": self._mensaje_estado_formulario(
+                    puede_responder, estado_pedido, respuesta_existente
+                ),
             }
-    
+
+    # ── helpers: procesar_respuesta_proveedor_web ─────────────────────────
+
+    @staticmethod
+    def _convertir_productos_a_respuestas(
+        productos: List[Dict[str, Any]],
+        mapa_productos: Dict[str, Any],
+    ) -> Tuple[List, List]:
+        respuestas_cantidades: List[Dict] = []
+        respuestas_precios: List[Dict] = []
+        for producto_resp in productos:
+            codigo_producto = producto_resp.get("codigo_producto")
+            if codigo_producto not in mapa_productos:
+                logger.warning(f"Producto {codigo_producto} no encontrado en pedido, omitiendo")
+                continue
+            pedido_detalle_id = producto_resp.get("pedido_detalle_id")
+            producto_info = mapa_productos[codigo_producto]
+            respuestas_cantidades.append({
+                "pedido_detalle_id": pedido_detalle_id,
+                "codigo_producto": codigo_producto,
+                "cantidad_solicitada_total": producto_info["cantidad_solicitada_total"],
+                "cantidad_confirmada_total": producto_resp.get("cantidad_confirmada_total", 0),
+                "observaciones": producto_resp.get("observaciones"),
+            })
+            costo_ajustado = producto_resp.get("costo_unitario_ajustado")
+            if costo_ajustado is not None:
+                respuestas_precios.append({
+                    "pedido_detalle_id": pedido_detalle_id,
+                    "codigo_producto": codigo_producto,
+                    "costo_doc_sin_iva_original": producto_info["costo_original"],
+                    "costo_doc_sin_iva_ajustado": costo_ajustado,
+                    "descuento_1_original": producto_info["descuento_original"],
+                    "descuento_1_ajustado": producto_resp.get("descuento_ajustado"),
+                    "observaciones_precio": None,
+                })
+        return respuestas_cantidades, respuestas_precios
+
     def procesar_respuesta_proveedor_web(
         self,
         pedido_id: str,
         productos: List[Dict[str, Any]],
         observaciones_generales: Optional[str] = None,
         estado: str = "borrador",
-        usuario_id: Optional[str] = None
+        usuario_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Procesa la respuesta del proveedor desde el formulario web.
-        
+
         Reutiliza validaciones de PedidoProveedorService.
         Soporta guardar como borrador o confirmado.
-        
+
         Args:
             pedido_id: UUID del pedido
             productos: Lista de productos con respuestas
             observaciones_generales: Observaciones generales
             estado: 'borrador' o 'confirmado'
             usuario_id: User ID del usuario (opcional, para auditoría)
-            
+
         Returns:
             Dict con resultado del procesamiento
         """
         with get_db_connection_context() as conn:
-            # Obtener pedido completo para validación
             repo = PedidoRepository(conn)
             pedido = repo.get_pedido_completo(pedido_id)
-            
+
             if not pedido:
                 raise ValueError(f"Pedido no encontrado: {pedido_id}")
-            
-            # Verificar que puede responder
+
             estado_pedido = pedido["cabecera"].get("estado", "PENDIENTE_CONFIRMACION_PROVEEDOR")
             estados_bloqueados = [
                 "CONFIRMADO_PROVEEDOR",
                 "ORDEN_COMPRA_CREADA",
                 "ENVIADA_SAP",
                 "CERRADO",
-                "CANCELADO"
+                "CANCELADO",
             ]
             if estado_pedido in estados_bloqueados:
                 raise ValueError(f"El pedido está en estado '{estado_pedido}' y no puede ser modificado")
-            
-            # Convertir productos a formato de validación
-            respuestas_cantidades = []
-            respuestas_precios = []
-            
-            # Crear mapa de productos del pedido
-            mapa_productos = {}
-            for detalle in pedido["detalles"]:
-                codigo = detalle["codigo_interno"]
-                mapa_productos[codigo] = {
+
+            mapa_productos = {
+                detalle["codigo_interno"]: {
                     "pedido_detalle_id": detalle["pedido_detalle_id"],
                     "cantidad_solicitada_total": sum(t["cantidad"] for t in detalle["tiendas"]),
                     "costo_original": detalle.get("costo_doc_sin_iva"),
-                    "descuento_original": detalle.get("descuento_1")
+                    "descuento_original": detalle.get("descuento_1"),
                 }
-            
-            for producto_resp in productos:
-                pedido_detalle_id = producto_resp.get("pedido_detalle_id")
-                codigo_producto = producto_resp.get("codigo_producto")
-                cantidad_confirmada = producto_resp.get("cantidad_confirmada_total", 0)
-                
-                # Validar que el producto existe en el pedido
-                if codigo_producto not in mapa_productos:
-                    logger.warning(f"Producto {codigo_producto} no encontrado en pedido, omitiendo")
-                    continue
-                
-                producto_info = mapa_productos[codigo_producto]
-                
-                # Agregar a respuestas de cantidades
-                respuestas_cantidades.append({
-                    "pedido_detalle_id": pedido_detalle_id,
-                    "codigo_producto": codigo_producto,
-                    "cantidad_solicitada_total": producto_info["cantidad_solicitada_total"],
-                    "cantidad_confirmada_total": cantidad_confirmada,
-                    "observaciones": producto_resp.get("observaciones")
-                })
-                
-                # Agregar a respuestas de precios si hay ajustes
-                costo_ajustado = producto_resp.get("costo_unitario_ajustado")
-                descuento_ajustado = producto_resp.get("descuento_ajustado")
-                
-                if costo_ajustado is not None:
-                    respuestas_precios.append({
-                        "pedido_detalle_id": pedido_detalle_id,
-                        "codigo_producto": codigo_producto,
-                        "costo_doc_sin_iva_original": producto_info["costo_original"],
-                        "costo_doc_sin_iva_ajustado": costo_ajustado,
-                        "descuento_1_original": producto_info["descuento_original"],
-                        "descuento_1_ajustado": descuento_ajustado,
-                        "observaciones_precio": None
-                    })
-            
-            # ✅ Validar usando el servicio existente
+                for detalle in pedido["detalles"]
+            }
+
+            respuestas_cantidades, respuestas_precios = self._convertir_productos_a_respuestas(
+                productos, mapa_productos
+            )
+
             validacion = self.proveedor_service.validar_respuesta_proveedor(
                 pedido=pedido,
                 respuestas_cantidades=respuestas_cantidades,
-                respuestas_precios=respuestas_precios
+                respuestas_precios=respuestas_precios,
             )
-            
-            # Si es confirmado, debe pasar validación estricta
+
             if estado == "confirmado" and not validacion["valido"]:
                 return {
                     "status": "validation_error",
@@ -259,34 +258,25 @@ class PedidoProveedorWebService:
                     "validacion": validacion,
                     "errores": validacion["errores"],
                     "warnings": validacion["warnings"],
-                    "pedido_id": pedido_id
+                    "pedido_id": pedido_id,
                 }
-            
-            # Guardar respuesta
+
             respuesta_repo = PedidoRespuestaRepository(conn)
-            
-            # Si es borrador, buscar si existe uno previo para actualizar
             respuesta_id = None
             if estado == "borrador":
                 respuesta_existente = respuesta_repo.obtener_respuesta_activa(pedido_id)
                 if respuesta_existente and respuesta_existente.get("estado") == "BORRADOR":
                     respuesta_id = respuesta_existente.get("respuesta_id")
-                    # Actualizar respuesta existente (eliminar detalles anteriores y crear nuevos)
-                    # Por simplicidad, creamos nueva versión siempre
-                    # TODO: Implementar actualización de borrador si es necesario
-            
-            # Crear nueva respuesta (o nueva versión)
+
             if not respuesta_id:
                 respuesta_id = respuesta_repo.crear_respuesta_proveedor(
                     pedido_id=pedido_id,
                     usuario_id=usuario_id,
-                    observaciones_generales=observaciones_generales
+                    observaciones_generales=observaciones_generales,
                 )
-            
-            # Determinar estado de la respuesta
+
             estado_respuesta = "BORRADOR" if estado == "borrador" else "PENDIENTE_REVISION"
-            
-            # Actualizar estado de la respuesta si es necesario
+
             if respuesta_id:
                 cursor = conn.cursor()
                 try:
@@ -304,19 +294,17 @@ class PedidoProveedorWebService:
                     raise
                 finally:
                     cursor.close()
-            
-            # Guardar detalles
+
             resultado_guardado = respuesta_repo.guardar_respuesta_detalles(
                 respuesta_id=respuesta_id,
                 respuestas_cantidades=respuestas_cantidades,
-                respuestas_precios=respuestas_precios
+                respuestas_precios=respuestas_precios,
             )
-            
-            # Si es confirmado, actualizar estado del pedido a REDISTRIBUCION (flujo unificado con confirmar para redistribución)
+
             if estado == "confirmado":
                 audit = AuditContext(usuario=usuario_id, origen=ORIGEN_WEB)
                 repo.update_estado(pedido_id, ESTADO_REDISTRIBUCION, audit_context=audit)
-            
+
             return {
                 "status": "success",
                 "message": f"Respuesta del proveedor guardada como {estado}",
@@ -325,314 +313,574 @@ class PedidoProveedorWebService:
                 "cantidades_guardadas": resultado_guardado["cantidades_guardadas"],
                 "precios_guardados": resultado_guardado["precios_guardados"],
                 "pedido_id": pedido_id,
-                "estado_guardado": estado_respuesta
+                "estado_guardado": estado_respuesta,
             }
-    
+
+    # ── helpers: crear_respuesta_desde_pedido ─────────────────────────────
+
+    @staticmethod
+    def _validar_fecha_entrega(pedido: Dict, pedido_id: str) -> None:
+        fecha_entrega = pedido.get("cabecera", {}).get("fecha_entrega", "")
+        if fecha_entrega and str(fecha_entrega).strip().upper() == "INMEDIATO":
+            logger.warning(
+                f"Pedido {pedido_id} tiene fecha de entrega INMEDIATO, no se puede confirmar sin fecha real"
+            )
+            raise ValueError(
+                "No se puede confirmar un pedido con fecha de entrega INMEDIATO. "
+                "Por favor, seleccione una fecha de entrega antes de confirmar."
+            )
+
+    @staticmethod
+    def _leer_total_desde_bd(
+        conn: Any,
+        pedido_detalle_id: str,
+        detalle: Dict,
+    ) -> Tuple[Optional[float], bool]:
+        cursor = conn.cursor()
+        try:
+            cursor.execute("""
+                SELECT
+                    total,
+                    ISNULL(total_modificado_manual, 0) AS total_modificado_manual
+                FROM pedido_detalle
+                WHERE pedido_detalle_id = ?
+            """, (pedido_detalle_id,))
+            row = cursor.fetchone()
+            if row:
+                return (float(row[0]) if row[0] is not None else None), bool(row[1])
+            logger.warning(
+                f"No se pudo leer total desde BD para {pedido_detalle_id}, usando valor del detalle"
+            )
+            return detalle.get("total"), detalle.get("total_modificado_manual", False)
+        except Exception as e:
+            logger.warning(
+                f"Error al leer total desde BD para {pedido_detalle_id}: {e}, usando valor del detalle"
+            )
+            return detalle.get("total"), detalle.get("total_modificado_manual", False)
+        finally:
+            cursor.close()
+
+    @staticmethod
+    def _calcular_cantidad_solicitada(
+        tiendas: List,
+        total_value: Optional[float],
+        pedido_detalle_id: str,
+    ) -> float:
+        if tiendas:
+            return sum(
+                float(t.get("cantidad", 0)) if t.get("cantidad") is not None else 0
+                for t in tiendas
+            )
+        if total_value is not None:
+            try:
+                cantidad: float = float(total_value)
+            except (ValueError, TypeError):
+                cantidad = 0.0
+        else:
+            cantidad = 0.0
+        logger.debug(
+            f"Detalle {pedido_detalle_id} sin tiendas, usando total del detalle como cantidad solicitada: {cantidad}"
+        )
+        return cantidad
+
+    @staticmethod
+    def _validar_total_modificado_manual(
+        codigo_producto: str,
+        pedido_detalle_id: str,
+        cantidad_confirmada_total: float,
+        cantidad_solicitada_total: float,
+    ) -> None:
+        if cantidad_confirmada_total < 0:
+            error_msg = (
+                f"El producto {codigo_producto} (ID: {pedido_detalle_id}) "
+                f"fue modificado manualmente por EL RAYO pero el total es negativo ({cantidad_confirmada_total}). "
+                f"El total debe ser mayor o igual a 0. Por favor, verifique el valor antes de confirmar."
+            )
+            logger.error(f"❌ {error_msg}")
+            raise ValueError(error_msg)
+        if cantidad_confirmada_total == 0:
+            logger.info(
+                f"✅ Producto {codigo_producto} (ID: {pedido_detalle_id}): "
+                f"EL RAYO modificó manualmente el total a 0. "
+                f"Esto es válido para la lógica del negocio. "
+                f"Se procesará con cantidad_confirmada_total = 0."
+            )
+        else:
+            logger.info(
+                f"✅ Producto {codigo_producto} (ID: {pedido_detalle_id}): "
+                f"Usando total modificado por EL RAYO: {cantidad_confirmada_total} "
+                f"(cantidad solicitada original: {cantidad_solicitada_total})"
+            )
+
+    @staticmethod
+    def _log_cantidad_sin_modificar(
+        codigo_producto: str,
+        pedido_detalle_id: str,
+        cantidad_confirmada_total: float,
+        cantidad_solicitada_total: float,
+    ) -> None:
+        if cantidad_confirmada_total != cantidad_solicitada_total:
+            logger.info(
+                f"ℹ️ Producto {codigo_producto} (ID: {pedido_detalle_id}): "
+                f"Total ({cantidad_confirmada_total}) difiere de cantidad solicitada ({cantidad_solicitada_total}), "
+                f"pero no fue marcado como modificado manualmente."
+            )
+        else:
+            logger.debug(
+                f"Producto {codigo_producto} (ID: {pedido_detalle_id}): "
+                f"Total coincide con cantidad solicitada: {cantidad_confirmada_total}"
+            )
+
+    def _calcular_cantidad_confirmada(
+        self,
+        codigo_producto: str,
+        pedido_detalle_id: str,
+        total_value: Optional[float],
+        total_modificado_manual: bool,
+        cantidad_solicitada_total: float,
+    ) -> float:
+        if total_value is None:
+            if total_modificado_manual:
+                error_msg = (
+                    f"El producto {codigo_producto} (ID: {pedido_detalle_id}) "
+                    f"fue marcado como modificado manualmente por EL RAYO pero el total es None. "
+                    f"Por favor, verifique que el total tenga un valor antes de confirmar."
+                )
+                logger.error(f"❌ {error_msg}")
+                raise ValueError(error_msg)
+            logger.warning(
+                f"⚠️ Producto {codigo_producto} (ID: {pedido_detalle_id}): "
+                f"Total no disponible (None), usando cantidad solicitada como fallback: {cantidad_solicitada_total}"
+            )
+            return cantidad_solicitada_total
+        try:
+            cantidad_confirmada_total = float(total_value)
+            if total_modificado_manual:
+                self._validar_total_modificado_manual(
+                    codigo_producto, pedido_detalle_id,
+                    cantidad_confirmada_total, cantidad_solicitada_total,
+                )
+            else:
+                self._log_cantidad_sin_modificar(
+                    codigo_producto, pedido_detalle_id,
+                    cantidad_confirmada_total, cantidad_solicitada_total,
+                )
+            return cantidad_confirmada_total
+        except (ValueError, TypeError) as e:
+            logger.warning(
+                f"⚠️ Error al convertir total a entero para {codigo_producto} (ID: {pedido_detalle_id}): {e}. "
+                f"Usando cantidad solicitada como fallback: {cantidad_solicitada_total}"
+            )
+            return cantidad_solicitada_total
+
+    def _convertir_detalles_a_respuestas(
+        self,
+        conn: Any,
+        pedido_id: str,
+        detalles: List[Dict],
+    ) -> Tuple[List, List]:
+        respuestas_cantidades: List[Dict] = []
+        respuestas_precios: List[Dict] = []
+        for detalle in detalles:
+            pedido_detalle_id = detalle.get("pedido_detalle_id")
+            codigo_producto = detalle.get("codigo_interno")
+            if not pedido_detalle_id:
+                logger.warning("Detalle sin pedido_detalle_id, omitiendo")
+                continue
+            if not codigo_producto:
+                logger.warning(f"Detalle {pedido_detalle_id} sin codigo_interno, usando 'SIN_CODIGO'")
+                codigo_producto = "SIN_CODIGO"
+            total_value, total_modificado_manual = self._leer_total_desde_bd(conn, pedido_detalle_id, detalle)
+            cantidad_solicitada_total = self._calcular_cantidad_solicitada(
+                detalle.get("tiendas", []), total_value, pedido_detalle_id
+            )
+            cantidad_confirmada_total = self._calcular_cantidad_confirmada(
+                codigo_producto, pedido_detalle_id,
+                total_value, total_modificado_manual, cantidad_solicitada_total,
+            )
+            costo_original = detalle.get("costo_doc_sin_iva")
+            costo_ajustado = costo_original
+            descuento_original = detalle.get("descuento_1")
+            descuento_ajustado = descuento_original
+            respuestas_cantidades.append({
+                "pedido_detalle_id": pedido_detalle_id,
+                "codigo_producto": codigo_producto,
+                "cantidad_solicitada_total": cantidad_solicitada_total,
+                "cantidad_confirmada_total": cantidad_confirmada_total,
+                "observaciones": None,
+            })
+            if costo_original is not None:
+                respuestas_precios.append({
+                    "pedido_detalle_id": pedido_detalle_id,
+                    "codigo_producto": codigo_producto,
+                    "costo_doc_sin_iva_original": costo_original,
+                    "costo_doc_sin_iva_ajustado": costo_ajustado,
+                    "descuento_1_original": descuento_original,
+                    "descuento_1_ajustado": descuento_ajustado,
+                    "observaciones_precio": None,
+                })
+        return respuestas_cantidades, respuestas_precios
+
+    def _persistir_respuesta(
+        self,
+        conn: Any,
+        respuesta_repo: Any,
+        pedido_id: str,
+        respuesta_id: Optional[str],
+        ya_existia_respuesta: bool,
+        usuario_id: Optional[str],
+        observaciones_generales: Optional[str],
+        respuestas_cantidades: List,
+        respuestas_precios: List,
+    ) -> Tuple[str, Dict]:
+        if not respuesta_id:
+            respuesta_id = respuesta_repo.crear_respuesta_proveedor(
+                pedido_id=pedido_id,
+                usuario_id=usuario_id,
+                observaciones_generales=observaciones_generales,
+            )
+        else:
+            cursor = conn.cursor()
+            try:
+                cursor.execute("""
+                    UPDATE pedido_respuesta_proveedor
+                    SET observaciones_generales = ?,
+                        updated_at = ?
+                    WHERE respuesta_id = ?
+                """, (observaciones_generales, ahora_naive(), respuesta_id))
+                conn.commit()
+            except Exception as e:
+                conn.rollback()
+                logger.error(f"Error al actualizar observaciones de respuesta: {e}")
+                raise
+            finally:
+                cursor.close()
+
+        if not ya_existia_respuesta:
+            cursor = conn.cursor()
+            try:
+                cursor.execute("""
+                    UPDATE pedido_respuesta_proveedor
+                    SET estado = 'PENDIENTE_REVISION',
+                        observaciones_generales = ?,
+                        updated_at = ?
+                    WHERE respuesta_id = ?
+                """, (observaciones_generales, ahora_naive(), respuesta_id))
+                conn.commit()
+            except Exception as e:
+                conn.rollback()
+                logger.error(f"Error al actualizar estado de respuesta: {e}")
+                raise
+            finally:
+                cursor.close()
+
+        if not ya_existia_respuesta:
+            resultado_guardado = respuesta_repo.guardar_respuesta_detalles(
+                respuesta_id=respuesta_id,
+                respuestas_cantidades=respuestas_cantidades,
+                respuestas_precios=respuestas_precios,
+            )
+        else:
+            respuesta_repo.eliminar_detalles_por_respuesta_id(respuesta_id)
+            resultado_guardado = respuesta_repo.guardar_respuesta_detalles(
+                respuesta_id=respuesta_id,
+                respuestas_cantidades=respuestas_cantidades,
+                respuestas_precios=respuestas_precios,
+            )
+            logger.info(
+                f"Respuesta ya existía; detalles reemplazados con valores actuales del pedido "
+                f"({resultado_guardado.get('cantidades_guardadas', 0)} cantidades, incl. decimales)"
+            )
+
+        return respuesta_id, resultado_guardado
+
+    @staticmethod
+    def _detectar_cambio_numerico(anterior: Optional[float], actual: Optional[float]) -> bool:
+        if anterior is None and actual is None:
+            return False
+        if anterior is None or actual is None:
+            return True
+        return abs(float(anterior) - float(actual)) > 0.01
+
+    @staticmethod
+    def _cargar_detalles_bd(conn: Any, pedido_id: str) -> Dict:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT
+                pedido_detalle_id,
+                codigo_interno,
+                costo_doc_sin_iva,
+                total,
+                comentario,
+                ISNULL(costo_modificado_manual, 0)     AS costo_modificado_manual,
+                ISNULL(total_modificado_manual, 0)     AS total_modificado_manual,
+                ISNULL(comentario_modificado_manual, 0) AS comentario_modificado_manual
+            FROM pedido_detalle
+            WHERE pedido_id = ?
+        """, (pedido_id,))
+        detalles_bd: Dict = {}
+        for row in cursor.fetchall():
+            detalles_bd[row[0]] = {
+                "pedido_detalle_id": str(row[0]),
+                "codigo_interno": row[1],
+                "costo_doc_sin_iva": float(row[2]) if row[2] is not None else None,
+                "total": float(row[3]) if row[3] is not None else None,
+                "comentario": row[4],
+                "costo_modificado_manual": bool(row[5]),
+                "total_modificado_manual": bool(row[6]),
+                "comentario_modificado_manual": bool(row[7]),
+            }
+        cursor.close()
+        return detalles_bd
+
+    @staticmethod
+    def _cargar_valores_anteriores(
+        confirmacion_repo: Any,
+        pedido_id: str,
+    ) -> Tuple[List, Dict]:
+        confirmaciones_previas = confirmacion_repo.obtener_confirmaciones_por_pedido(pedido_id, limit=1)
+        valores_anteriores: Dict = {}
+        if confirmaciones_previas:
+            ultima = confirmacion_repo.obtener_confirmacion(confirmaciones_previas[0]["confirmacion_id"])
+            if ultima and ultima.get("detalles"):
+                for dc in ultima["detalles"]:
+                    pdid = dc["pedido_detalle_id"]
+                    valores_anteriores[pdid] = {
+                        "costo": dc.get("costo_nuevo"),
+                        "total": dc.get("total_nuevo"),
+                        "comentario": dc.get("comentario_nuevo"),
+                    }
+        return confirmaciones_previas, valores_anteriores
+
+    def _detectar_cambios(
+        self,
+        detalles_bd: Dict,
+        valores_anteriores: Dict,
+    ) -> Tuple[Dict, bool]:
+        detalles_con_cambios: Dict = {}
+        hay_cambios = False
+        for pedido_detalle_id, detalle_bd in detalles_bd.items():
+            if not (
+                detalle_bd["costo_modificado_manual"]
+                or detalle_bd["total_modificado_manual"]
+                or detalle_bd["comentario_modificado_manual"]
+            ):
+                continue
+            valores_ant = valores_anteriores.get(pedido_detalle_id, {})
+            cambio_costo = self._detectar_cambio_numerico(
+                valores_ant.get("costo"), detalle_bd["costo_doc_sin_iva"]
+            )
+            cambio_total = self._detectar_cambio_numerico(
+                valores_ant.get("total"), detalle_bd["total"]
+            )
+            cambio_comentario = (detalle_bd["comentario"] or "") != (valores_ant.get("comentario") or "")
+            if cambio_costo or cambio_total or cambio_comentario:
+                hay_cambios = True
+                detalles_con_cambios[pedido_detalle_id] = {
+                    "detalle_bd": detalle_bd,
+                    "valores_anteriores": valores_ant,
+                    "cambio_costo": cambio_costo,
+                    "cambio_total": cambio_total,
+                    "cambio_comentario": cambio_comentario,
+                }
+        return detalles_con_cambios, hay_cambios
+
+    @staticmethod
+    def _aplicar_valores_anteriores(
+        valores_ant: Dict,
+        detalle_bd: Dict,
+    ) -> Tuple[Any, Any, Any]:
+        costo = valores_ant.get("costo")
+        if costo is None:
+            costo = detalle_bd["costo_doc_sin_iva"]
+        total = valores_ant.get("total")
+        if total is None:
+            total = detalle_bd["total"]
+        comentario = valores_ant.get("comentario")
+        if comentario is None:
+            comentario = detalle_bd["comentario"]
+        return costo, total, comentario
+
+    @staticmethod
+    def _actualizar_resumen_cambios(
+        resumen_cambios: Dict,
+        info_cambio: Dict,
+        pedido_detalle_id: Any,
+        codigo_interno: str,
+    ) -> None:
+        if info_cambio["cambio_costo"]:
+            resumen_cambios["cambios_costo"] += 1
+        if info_cambio["cambio_total"]:
+            resumen_cambios["cambios_total"] += 1
+        if info_cambio["cambio_comentario"]:
+            resumen_cambios["cambios_comentario"] += 1
+        resumen_cambios["detalles"].append({
+            "pedido_detalle_id": pedido_detalle_id,
+            "codigo_producto": codigo_interno,
+            "cambio_costo": info_cambio["cambio_costo"],
+            "cambio_total": info_cambio["cambio_total"],
+            "cambio_comentario": info_cambio["cambio_comentario"],
+        })
+
+    @staticmethod
+    def _registrar_detalles_confirmacion(
+        confirmacion_repo: Any,
+        confirmacion_id: str,
+        detalles_con_cambios: Dict,
+    ) -> Tuple[int, Dict]:
+        resumen_cambios: Dict = {
+            "cambios_costo": 0, "cambios_total": 0, "cambios_comentario": 0, "detalles": []
+        }
+        detalles_modificados_count = 0
+        for pedido_detalle_id, info_cambio in detalles_con_cambios.items():
+            detalle_bd = info_cambio["detalle_bd"]
+            costo_anterior, total_anterior, comentario_anterior = (
+                PedidoProveedorWebService._aplicar_valores_anteriores(
+                    info_cambio["valores_anteriores"], detalle_bd
+                )
+            )
+            detalles_modificados_count += 1
+            confirmacion_repo.agregar_detalle_confirmacion(
+                confirmacion_id=confirmacion_id,
+                pedido_detalle_id=pedido_detalle_id,
+                costo_anterior=costo_anterior,
+                costo_nuevo=detalle_bd["costo_doc_sin_iva"],
+                total_anterior=total_anterior,
+                total_nuevo=detalle_bd["total"],
+                comentario_anterior=comentario_anterior,
+                comentario_nuevo=detalle_bd["comentario"],
+                codigo_producto=detalle_bd["codigo_interno"],
+            )
+            PedidoProveedorWebService._actualizar_resumen_cambios(
+                resumen_cambios, info_cambio, pedido_detalle_id, detalle_bd["codigo_interno"]
+            )
+        return detalles_modificados_count, resumen_cambios
+
+    def _registrar_confirmacion_rayo(
+        self,
+        conn: Any,
+        confirmacion_repo: Any,
+        pedido_id: str,
+        respuesta_id: str,
+        usuario_id: Optional[str],
+        observaciones_generales: Optional[str],
+    ) -> Tuple[bool, List]:
+        hay_cambios = False
+        confirmaciones_previas: List = []
+        try:
+            detalles_bd = self._cargar_detalles_bd(conn, pedido_id)
+            confirmaciones_previas, valores_anteriores = self._cargar_valores_anteriores(
+                confirmacion_repo, pedido_id
+            )
+            detalles_con_cambios, hay_cambios = self._detectar_cambios(detalles_bd, valores_anteriores)
+
+            if hay_cambios or not confirmaciones_previas:
+                confirmacion_id = confirmacion_repo.crear_confirmacion(
+                    pedido_id=pedido_id,
+                    respuesta_id=respuesta_id,
+                    usuario_id=usuario_id or "SISTEMA",
+                    observaciones_generales=observaciones_generales,
+                )
+                detalles_modificados_count, resumen_cambios = self._registrar_detalles_confirmacion(
+                    confirmacion_repo, confirmacion_id, detalles_con_cambios
+                )
+                confirmacion_repo.actualizar_resumen_confirmacion(
+                    confirmacion_id=confirmacion_id,
+                    total_detalles_modificados=detalles_modificados_count,
+                    resumen_cambios=resumen_cambios,
+                )
+                logger.info(
+                    f"✅ Confirmación de EL RAYO registrada: {confirmacion_id} "
+                    f"({detalles_modificados_count} detalles modificados)"
+                )
+            else:
+                logger.info("ℹ️ No se registró nueva confirmación: no hay cambios desde la última confirmación")
+        except Exception as e:
+            logger.error(f"⚠️ Error al registrar confirmación de EL RAYO (no crítico): {e}", exc_info=True)
+            hay_cambios = False
+        return hay_cambios, confirmaciones_previas
+
     def crear_respuesta_desde_pedido(
         self,
         pedido_id: str,
         usuario_id: Optional[str] = None,
-        observaciones_generales: Optional[str] = None
+        observaciones_generales: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Crea automáticamente una respuesta del proveedor desde los detalles del pedido.
-        
+
         Este método se usa cuando EL RAYO ha editado directamente los campos del pedido
         (total y costo_doc_sin_iva) y necesita generar la respuesta automáticamente.
-        
+
         Args:
             pedido_id: UUID del pedido
             usuario_id: User ID del usuario (opcional, para auditoría)
             observaciones_generales: Observaciones generales (opcional)
-            
+
         Returns:
             Dict con resultado del procesamiento incluyendo respuesta_id
         """
         with get_db_connection_context() as conn:
-            # Obtener pedido completo
             repo = PedidoRepository(conn)
             pedido = repo.get_pedido_completo(pedido_id)
-            
+
             if not pedido:
                 logger.error(f"Pedido {pedido_id} no encontrado")
                 raise ValueError(f"Pedido no encontrado: {pedido_id}")
-            
+
             logger.debug(f"Pedido {pedido_id} encontrado con {len(pedido.get('detalles', []))} detalles")
-            
-            # Validar que pedidos INMEDIATO tengan una fecha de entrega real antes de confirmar
-            fecha_entrega = pedido.get("cabecera", {}).get("fecha_entrega", "")
-            if fecha_entrega and str(fecha_entrega).strip().upper() == "INMEDIATO":
-                logger.warning(f"Pedido {pedido_id} tiene fecha de entrega INMEDIATO, no se puede confirmar sin fecha real")
-                raise ValueError(
-                    "No se puede confirmar un pedido con fecha de entrega INMEDIATO. "
-                    "Por favor, seleccione una fecha de entrega antes de confirmar."
-                )
-            
-            # Verificar si ya existe una respuesta activa
+            self._validar_fecha_entrega(pedido, pedido_id)
+
             respuesta_repo = PedidoRespuestaRepository(conn)
             respuesta_existente = respuesta_repo.obtener_respuesta_activa(pedido_id)
-            
+
             respuesta_id = None
             ya_existia_respuesta = False
-            
             if respuesta_existente:
-                # Si ya existe una respuesta, usar la existente
                 respuesta_id = respuesta_existente["cabecera"]["respuesta_id"]
                 ya_existia_respuesta = True
-                logger.info(f"Ya existe respuesta {respuesta_id} para pedido {pedido_id}, se usará para la confirmación")
-            
-            # Validar que el pedido tenga detalles
+                logger.info(
+                    f"Ya existe respuesta {respuesta_id} para pedido {pedido_id}, "
+                    f"se usará para la confirmación"
+                )
+
             detalles = pedido.get("detalles", [])
-            if not detalles or len(detalles) == 0:
+            if not detalles:
                 logger.error(f"Pedido {pedido_id} no tiene detalles")
                 raise ValueError(f"El pedido {pedido_id} no tiene detalles")
-            
+
             logger.debug(f"Procesando {len(detalles)} detalles del pedido {pedido_id}")
-            
-            # Convertir detalles del pedido a formato de respuesta
-            respuestas_cantidades = []
-            respuestas_precios = []
-            
-            for detalle in pedido["detalles"]:
-                pedido_detalle_id = detalle.get("pedido_detalle_id")
-                codigo_producto = detalle.get("codigo_interno")
-                
-                # Validar campos requeridos
-                if not pedido_detalle_id:
-                    logger.warning(f"Detalle sin pedido_detalle_id, omitiendo")
-                    continue
-                
-                if not codigo_producto:
-                    logger.warning(f"Detalle {pedido_detalle_id} sin codigo_interno, usando 'SIN_CODIGO'")
-                    codigo_producto = "SIN_CODIGO"
-                
-                # ⭐ MEJORADO: Leer total directamente desde BD para asegurar valor más reciente
-                # y verificar si fue modificado manualmente por EL RAYO
-                cursor = conn.cursor()
-                try:
-                    cursor.execute("""
-                        SELECT 
-                            total,
-                            ISNULL(total_modificado_manual, 0) AS total_modificado_manual
-                        FROM pedido_detalle
-                        WHERE pedido_detalle_id = ?
-                    """, (pedido_detalle_id,))
-                    row = cursor.fetchone()
-                    
-                    if row:
-                        total_value = float(row[0]) if row[0] is not None else None
-                        total_modificado_manual = bool(row[1])
-                    else:
-                        total_value = detalle.get("total")
-                        total_modificado_manual = detalle.get("total_modificado_manual", False)
-                        logger.warning(f"No se pudo leer total desde BD para {pedido_detalle_id}, usando valor del detalle")
-                except Exception as e:
-                    logger.warning(f"Error al leer total desde BD para {pedido_detalle_id}: {e}, usando valor del detalle")
-                    total_value = detalle.get("total")
-                    total_modificado_manual = detalle.get("total_modificado_manual", False)
-                finally:
-                    cursor.close()
-                
-                # Obtener cantidad solicitada: desde tiendas si hay, si no desde total del detalle
-                # Permite decimales (ej. 0.5) sin truncar a entero
-                tiendas = detalle.get("tiendas", [])
-                if tiendas:
-                    cantidad_solicitada_total = sum(
-                        float(t.get("cantidad", 0)) if t.get("cantidad") is not None else 0
-                        for t in tiendas
-                    )
-                else:
-                    # Detalle sin distribución por tienda: usar total del detalle (permite crear respuesta igualmente)
-                    if total_value is not None:
-                        try:
-                            cantidad_solicitada_total = float(total_value)
-                        except (ValueError, TypeError):
-                            cantidad_solicitada_total = 0.0
-                    else:
-                        cantidad_solicitada_total = 0.0
-                    logger.debug(
-                        f"Detalle {pedido_detalle_id} sin tiendas, usando total del detalle como cantidad solicitada: {cantidad_solicitada_total}"
-                    )
-                
-                # ⭐ MEJORADO: Obtener cantidad confirmada desde el campo "total" del detalle
-                # NOTA: En el frontend, cuando EL RAYO edita, el campo "total" se usa para la cantidad confirmada
-                # El valor 0 es válido; se permiten decimales (ej. 0.5) sin truncar a entero
-                if total_value is not None:
-                    try:
-                        cantidad_confirmada_total = float(total_value)
-                        
-                        # ⭐ VALIDACIÓN: Si EL RAYO modificó manualmente el total, validar explícitamente
-                        if total_modificado_manual:
-                            if cantidad_confirmada_total < 0:
-                                error_msg = (
-                                    f"El producto {codigo_producto} (ID: {pedido_detalle_id}) "
-                                    f"fue modificado manualmente por EL RAYO pero el total es negativo ({cantidad_confirmada_total}). "
-                                    f"El total debe ser mayor o igual a 0. Por favor, verifique el valor antes de confirmar."
-                                )
-                                logger.error(f"❌ {error_msg}")
-                                raise ValueError(error_msg)
-                            
-                            # ⭐ VALIDACIÓN ESPECÍFICA: Si total_modificado_manual es True y el valor es 0, registrar explícitamente
-                            if cantidad_confirmada_total == 0:
-                                logger.info(
-                                    f"✅ Producto {codigo_producto} (ID: {pedido_detalle_id}): "
-                                    f"EL RAYO modificó manualmente el total a 0. "
-                                    f"Esto es válido para la lógica del negocio. "
-                                    f"Se procesará con cantidad_confirmada_total = 0."
-                                )
-                            else:
-                                logger.info(
-                                    f"✅ Producto {codigo_producto} (ID: {pedido_detalle_id}): "
-                                    f"Usando total modificado por EL RAYO: {cantidad_confirmada_total} "
-                                    f"(cantidad solicitada original: {cantidad_solicitada_total})"
-                                )
-                        else:
-                            # Si no fue modificado manualmente, usar el valor tal cual
-                            if cantidad_confirmada_total != cantidad_solicitada_total:
-                                logger.info(
-                                    f"ℹ️ Producto {codigo_producto} (ID: {pedido_detalle_id}): "
-                                    f"Total ({cantidad_confirmada_total}) difiere de cantidad solicitada ({cantidad_solicitada_total}), "
-                                    f"pero no fue marcado como modificado manualmente."
-                                )
-                            else:
-                                logger.debug(
-                                    f"Producto {codigo_producto} (ID: {pedido_detalle_id}): "
-                                    f"Total coincide con cantidad solicitada: {cantidad_confirmada_total}"
-                                )
-                    except (ValueError, TypeError) as e:
-                        logger.warning(
-                            f"⚠️ Error al convertir total a entero para {codigo_producto} (ID: {pedido_detalle_id}): {e}. "
-                            f"Usando cantidad solicitada como fallback: {cantidad_solicitada_total}"
-                        )
-                        cantidad_confirmada_total = cantidad_solicitada_total
-                else:
-                    # Si total es None, usar cantidad solicitada
-                    if total_modificado_manual:
-                        error_msg = (
-                            f"El producto {codigo_producto} (ID: {pedido_detalle_id}) "
-                            f"fue marcado como modificado manualmente por EL RAYO pero el total es None. "
-                            f"Por favor, verifique que el total tenga un valor antes de confirmar."
-                        )
-                        logger.error(f"❌ {error_msg}")
-                        raise ValueError(error_msg)
-                    
-                    logger.warning(
-                        f"⚠️ Producto {codigo_producto} (ID: {pedido_detalle_id}): "
-                        f"Total no disponible (None), usando cantidad solicitada como fallback: {cantidad_solicitada_total}"
-                    )
-                    cantidad_confirmada_total = cantidad_solicitada_total
-                
-                # Obtener costos originales y ajustados
-                costo_original = detalle.get("costo_doc_sin_iva")
-                costo_ajustado = detalle.get("costo_doc_sin_iva")  # El costo ajustado es el mismo que el original si no se modificó
-                
-                descuento_original = detalle.get("descuento_1")
-                descuento_ajustado = detalle.get("descuento_1")
-                
-                # Agregar a respuestas de cantidades
-                respuestas_cantidades.append({
-                    "pedido_detalle_id": pedido_detalle_id,
-                    "codigo_producto": codigo_producto,
-                    "cantidad_solicitada_total": cantidad_solicitada_total,
-                    "cantidad_confirmada_total": cantidad_confirmada_total,
-                    "observaciones": None
-                })
-                
-                # Agregar a respuestas de precios si hay costos
-                if costo_original is not None:
-                    respuestas_precios.append({
-                        "pedido_detalle_id": pedido_detalle_id,
-                        "codigo_producto": codigo_producto,
-                        "costo_doc_sin_iva_original": costo_original,
-                        "costo_doc_sin_iva_ajustado": costo_ajustado,
-                        "descuento_1_original": descuento_original,
-                        "descuento_1_ajustado": descuento_ajustado,
-                        "observaciones_precio": None
-                    })
-            
-            # Validar que haya al menos una respuesta
+            respuestas_cantidades, respuestas_precios = self._convertir_detalles_a_respuestas(
+                conn, pedido_id, detalles
+            )
+
             if not respuestas_cantidades:
-                logger.error(f"No se pudo crear ninguna respuesta para pedido {pedido_id}: el pedido no tiene detalles válidos")
-                raise ValueError(f"No se pudo crear ninguna respuesta: el pedido no tiene detalles válidos")
-            
-            logger.debug(f"Se crearon {len(respuestas_cantidades)} respuestas de cantidades y {len(respuestas_precios)} respuestas de precios")
-            
-            # Validar usando el servicio existente
+                logger.error(
+                    f"No se pudo crear ninguna respuesta para pedido {pedido_id}: "
+                    f"el pedido no tiene detalles válidos"
+                )
+                raise ValueError("No se pudo crear ninguna respuesta: el pedido no tiene detalles válidos")
+
+            logger.debug(
+                f"Se crearon {len(respuestas_cantidades)} respuestas de cantidades "
+                f"y {len(respuestas_precios)} respuestas de precios"
+            )
+
             try:
                 validacion = self.proveedor_service.validar_respuesta_proveedor(
                     pedido=pedido,
                     respuestas_cantidades=respuestas_cantidades,
-                    respuestas_precios=respuestas_precios
+                    respuestas_precios=respuestas_precios,
                 )
             except Exception as e:
                 logger.error(f"Error en validación de respuesta: {e}", exc_info=True)
                 raise ValueError(f"Error al validar respuesta: {str(e)}")
-            
-            # Crear respuesta solo si no existe
-            if not respuesta_id:
-                respuesta_id = respuesta_repo.crear_respuesta_proveedor(
-                    pedido_id=pedido_id,
-                    usuario_id=usuario_id,
-                    observaciones_generales=observaciones_generales
-                )
-            else:
-                # Actualizar observaciones si cambió
-                cursor = conn.cursor()
-                try:
-                    cursor.execute("""
-                        UPDATE pedido_respuesta_proveedor
-                        SET observaciones_generales = ?,
-                            updated_at = ?
-                        WHERE respuesta_id = ?
-                    """, (observaciones_generales, ahora_naive(), respuesta_id))
-                    conn.commit()
-                except Exception as e:
-                    conn.rollback()
-                    logger.error(f"Error al actualizar observaciones de respuesta: {e}")
-                    raise
-                finally:
-                    cursor.close()
-            
-            # Actualizar estado a PENDIENTE_REVISION (listo para procesar) solo si no existía
-            if not ya_existia_respuesta:
-                cursor = conn.cursor()
-                try:
-                    cursor.execute("""
-                        UPDATE pedido_respuesta_proveedor
-                        SET estado = 'PENDIENTE_REVISION',
-                            observaciones_generales = ?,
-                            updated_at = ?
-                        WHERE respuesta_id = ?
-                    """, (observaciones_generales, ahora_naive(), respuesta_id))
-                    conn.commit()
-                except Exception as e:
-                    conn.rollback()
-                    logger.error(f"Error al actualizar estado de respuesta: {e}")
-                    raise
-                finally:
-                    cursor.close()
-            
-            # Guardar detalles: si no existía respuesta, INSERT; si ya existía, reemplazar con valores actuales
-            # (para que cantidad_confirmada_total refleje los TOTAL actuales del pedido, incl. decimales)
-            if not ya_existia_respuesta:
-                resultado_guardado = respuesta_repo.guardar_respuesta_detalles(
-                    respuesta_id=respuesta_id,
-                    respuestas_cantidades=respuestas_cantidades,
-                    respuestas_precios=respuestas_precios
-                )
-            else:
-                respuesta_repo.eliminar_detalles_por_respuesta_id(respuesta_id)
-                resultado_guardado = respuesta_repo.guardar_respuesta_detalles(
-                    respuesta_id=respuesta_id,
-                    respuestas_cantidades=respuestas_cantidades,
-                    respuestas_precios=respuestas_precios
-                )
-                logger.info(
-                    f"Respuesta ya existía; detalles reemplazados con valores actuales del pedido "
-                    f"({resultado_guardado.get('cantidades_guardadas', 0)} cantidades, incl. decimales)"
-                )
-            
-            # Actualizar estado del pedido a REDISTRIBUCION (flujo unificado: confirmar respuesta EL RAYO = ir a redistribución)
+
+            respuesta_id, resultado_guardado = self._persistir_respuesta(
+                conn, respuesta_repo, pedido_id, respuesta_id, ya_existia_respuesta,
+                usuario_id, observaciones_generales, respuestas_cantidades, respuestas_precios,
+            )
+
             estado_id_actual = pedido["cabecera"].get("estado_id")
             try:
                 estado_id_actual = int(estado_id_actual) if estado_id_actual is not None else None
@@ -641,196 +889,12 @@ class PedidoProveedorWebService:
             if estado_id_actual != ESTADO_REDISTRIBUCION:
                 audit = AuditContext(usuario=usuario_id, origen=ORIGEN_WEB)
                 repo.update_estado(pedido_id, ESTADO_REDISTRIBUCION, audit_context=audit)
-            
-            # ✅ REGISTRAR CONFIRMACIÓN DE EL RAYO
-            # Obtener valores actuales desde la BD para registrar el historial completo
+
             confirmacion_repo = PedidoConfirmacionRayoRepository(conn)
-            
-            hay_cambios = False
-            confirmaciones_previas = []
-            
-            try:
-                # Obtener valores actuales directamente desde la BD
-                cursor = conn.cursor()
-                cursor.execute("""
-                    SELECT 
-                        pedido_detalle_id,
-                        codigo_interno,
-                        costo_doc_sin_iva,
-                        total,
-                        comentario,
-                        ISNULL(costo_modificado_manual, 0) AS costo_modificado_manual,
-                        ISNULL(total_modificado_manual, 0) AS total_modificado_manual,
-                        ISNULL(comentario_modificado_manual, 0) AS comentario_modificado_manual
-                    FROM pedido_detalle
-                    WHERE pedido_id = ?
-                """, (pedido_id,))
-                
-                detalles_bd = {}
-                for row in cursor.fetchall():
-                    detalles_bd[row[0]] = {
-                        "pedido_detalle_id": str(row[0]),
-                        "codigo_interno": row[1],
-                        "costo_doc_sin_iva": float(row[2]) if row[2] is not None else None,
-                        "total": float(row[3]) if row[3] is not None else None,
-                        "comentario": row[4],
-                        "costo_modificado_manual": bool(row[5]),
-                        "total_modificado_manual": bool(row[6]),
-                        "comentario_modificado_manual": bool(row[7])
-                    }
-                
-                cursor.close()
-                
-                # Buscar confirmación previa para obtener valores anteriores y validar si hay cambios
-                confirmaciones_previas = confirmacion_repo.obtener_confirmaciones_por_pedido(pedido_id, limit=1)
-                
-                # Crear mapa de valores anteriores desde la última confirmación
-                valores_anteriores = {}
-                if confirmaciones_previas:
-                    ultima_confirmacion = confirmacion_repo.obtener_confirmacion(confirmaciones_previas[0]["confirmacion_id"])
-                    if ultima_confirmacion and ultima_confirmacion.get("detalles"):
-                        for detalle_conf in ultima_confirmacion["detalles"]:
-                            pedido_detalle_id = detalle_conf["pedido_detalle_id"]
-                            valores_anteriores[pedido_detalle_id] = {
-                                "costo": detalle_conf.get("costo_nuevo"),  # El valor anterior confirmado
-                                "total": detalle_conf.get("total_nuevo"),
-                                "comentario": detalle_conf.get("comentario_nuevo")
-                            }
-                
-                # Verificar si hay cambios comparando valores actuales con la última confirmación
-                detalles_con_cambios = {}
-                for pedido_detalle_id, detalle_bd in detalles_bd.items():
-                    # Solo verificar si hay algún campo modificado manualmente
-                    if not (detalle_bd["costo_modificado_manual"] or 
-                           detalle_bd["total_modificado_manual"] or 
-                           detalle_bd["comentario_modificado_manual"]):
-                        continue
-                    
-                    valores_ant = valores_anteriores.get(pedido_detalle_id, {})
-                    
-                    # Comparar valores actuales con los de la última confirmación
-                    costo_actual = detalle_bd["costo_doc_sin_iva"]
-                    total_actual = detalle_bd["total"]
-                    comentario_actual = detalle_bd["comentario"] or ""
-                    
-                    costo_anterior_conf = valores_ant.get("costo")
-                    total_anterior_conf = valores_ant.get("total")
-                    comentario_anterior_conf = valores_ant.get("comentario") or ""
-                    
-                    # Verificar si hay cambios
-                    # Para costo y total: comparar valores numéricos con tolerancia
-                    if costo_anterior_conf is None and costo_actual is None:
-                        cambio_costo = False
-                    elif costo_anterior_conf is None or costo_actual is None:
-                        cambio_costo = True
-                    else:
-                        cambio_costo = abs(float(costo_anterior_conf) - float(costo_actual)) > 0.01
-                    
-                    if total_anterior_conf is None and total_actual is None:
-                        cambio_total = False
-                    elif total_anterior_conf is None or total_actual is None:
-                        cambio_total = True
-                    else:
-                        cambio_total = abs(float(total_anterior_conf) - float(total_actual)) > 0.01
-                    
-                    cambio_comentario = comentario_actual != comentario_anterior_conf
-                    
-                    if cambio_costo or cambio_total or cambio_comentario:
-                        hay_cambios = True
-                        detalles_con_cambios[pedido_detalle_id] = {
-                            "detalle_bd": detalle_bd,
-                            "valores_anteriores": valores_ant,
-                            "cambio_costo": cambio_costo,
-                            "cambio_total": cambio_total,
-                            "cambio_comentario": cambio_comentario
-                        }
-                
-                # Solo crear confirmación si hay cambios o si no existe confirmación previa
-                if hay_cambios or not confirmaciones_previas:
-                    # Crear registro de confirmación
-                    confirmacion_id = confirmacion_repo.crear_confirmacion(
-                        pedido_id=pedido_id,
-                        respuesta_id=respuesta_id,
-                        usuario_id=usuario_id or "SISTEMA",
-                        observaciones_generales=observaciones_generales
-                    )
-                    
-                    # Contar detalles modificados
-                    detalles_modificados_count = 0
-                    resumen_cambios = {
-                        "cambios_costo": 0,
-                        "cambios_total": 0,
-                        "cambios_comentario": 0,
-                        "detalles": []
-                    }
-                    
-                    # Agregar detalles de confirmación
-                    for pedido_detalle_id, info_cambio in detalles_con_cambios.items():
-                        detalle_bd = info_cambio["detalle_bd"]
-                        valores_ant = info_cambio["valores_anteriores"]
-                        
-                        detalles_modificados_count += 1
-                        
-                        # Obtener valores anteriores
-                        costo_anterior = valores_ant.get("costo")
-                        total_anterior = valores_ant.get("total")
-                        comentario_anterior = valores_ant.get("comentario")
-                        
-                        # Si no hay valores anteriores de confirmación previa, usar valores actuales
-                        # (indica que esta es la primera confirmación)
-                        if costo_anterior is None:
-                            costo_anterior = detalle_bd["costo_doc_sin_iva"]
-                        if total_anterior is None:
-                            total_anterior = detalle_bd["total"]
-                        if comentario_anterior is None:
-                            comentario_anterior = detalle_bd["comentario"]
-                        
-                        # Agregar detalle de confirmación
-                        confirmacion_repo.agregar_detalle_confirmacion(
-                            confirmacion_id=confirmacion_id,
-                            pedido_detalle_id=pedido_detalle_id,
-                            costo_anterior=costo_anterior,
-                            costo_nuevo=detalle_bd["costo_doc_sin_iva"],
-                            total_anterior=total_anterior,
-                            total_nuevo=detalle_bd["total"],
-                            comentario_anterior=comentario_anterior,
-                            comentario_nuevo=detalle_bd["comentario"],
-                            codigo_producto=detalle_bd["codigo_interno"]
-                        )
-                        
-                        # Actualizar resumen
-                        if info_cambio["cambio_costo"]:
-                            resumen_cambios["cambios_costo"] += 1
-                        if info_cambio["cambio_total"]:
-                            resumen_cambios["cambios_total"] += 1
-                        if info_cambio["cambio_comentario"]:
-                            resumen_cambios["cambios_comentario"] += 1
-                        
-                        resumen_cambios["detalles"].append({
-                            "pedido_detalle_id": pedido_detalle_id,
-                            "codigo_producto": detalle_bd["codigo_interno"],
-                            "cambio_costo": info_cambio["cambio_costo"],
-                            "cambio_total": info_cambio["cambio_total"],
-                            "cambio_comentario": info_cambio["cambio_comentario"]
-                        })
-                    
-                    # Actualizar resumen de confirmación
-                    confirmacion_repo.actualizar_resumen_confirmacion(
-                        confirmacion_id=confirmacion_id,
-                        total_detalles_modificados=detalles_modificados_count,
-                        resumen_cambios=resumen_cambios
-                    )
-                    
-                    logger.info(f"✅ Confirmación de EL RAYO registrada: {confirmacion_id} ({detalles_modificados_count} detalles modificados)")
-                else:
-                    logger.info(f"ℹ️ No se registró nueva confirmación: no hay cambios desde la última confirmación")
-                
-            except Exception as e:
-                # No fallar si no se puede registrar la confirmación, solo loggear
-                logger.error(f"⚠️ Error al registrar confirmación de EL RAYO (no crítico): {e}", exc_info=True)
-                hay_cambios = False  # En caso de error, asumir que no hay cambios
-            
-            # Determinar mensaje según si existía respuesta y si se registró confirmación
+            hay_cambios, confirmaciones_previas = self._registrar_confirmacion_rayo(
+                conn, confirmacion_repo, pedido_id, respuesta_id, usuario_id, observaciones_generales
+            )
+
             if ya_existia_respuesta:
                 if hay_cambios or not confirmaciones_previas:
                     message = "Confirmación registrada exitosamente (respuesta ya existía)"
@@ -838,7 +902,7 @@ class PedidoProveedorWebService:
                     message = "No se registró nueva confirmación: no hay cambios desde la última confirmación"
             else:
                 message = "Respuesta del proveedor creada automáticamente desde el pedido"
-            
+
             return {
                 "status": "success",
                 "message": message,
@@ -849,5 +913,5 @@ class PedidoProveedorWebService:
                 "pedido_id": pedido_id,
                 "estado_guardado": "CONFIRMADO",
                 "ya_existia": ya_existia_respuesta,
-                "confirmacion_registrada": hay_cambios or not confirmaciones_previas
+                "confirmacion_registrada": hay_cambios or not confirmaciones_previas,
             }

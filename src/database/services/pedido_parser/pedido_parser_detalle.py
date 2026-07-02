@@ -225,7 +225,7 @@ class PedidoParserDetalle:
         return columnas_producto
 
     def _buscar_bodega_por_codigo(
-        self, col_name: str, col_idx: int, codigos_columnas: Dict[int, str]
+        self, col_idx: int, codigos_columnas: Dict[int, str]
     ) -> Optional[str]:
         if col_idx not in codigos_columnas:
             return None
@@ -272,7 +272,7 @@ class PedidoParserDetalle:
                 continue
             col_name = df_detalle.columns[col_idx]
             col_upper = str(col_name).upper().strip()
-            clave = self._buscar_bodega_por_codigo(col_name, col_idx, codigos_columnas)
+            clave = self._buscar_bodega_por_codigo(col_idx, codigos_columnas)
             if clave is None:
                 clave = self._buscar_bodega_por_nombre(col_name, col_upper, col_idx)
             if clave is not None:

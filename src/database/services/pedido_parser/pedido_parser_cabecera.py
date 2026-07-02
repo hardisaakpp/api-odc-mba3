@@ -117,6 +117,23 @@ class PedidoParserCabecera:
             return col_campo_idx, col_valor_idx, 1
         return 0, 1, 0
 
+    def _procesar_fila_vertical(
+        self,
+        df: "pd.DataFrame",
+        idx: int,
+        col_campo_idx: int,
+        col_valor_idx: int,
+        cabecera: Dict[str, Any],
+    ) -> None:
+        """Procesa una fila del formato vertical y registra el campo si es válido."""
+        campo_raw = df.iloc[idx, col_campo_idx] if col_campo_idx < len(df.columns) else None
+        valor_raw = df.iloc[idx, col_valor_idx] if col_valor_idx < len(df.columns) else None
+        if campo_raw is not None and not pd.isna(campo_raw):
+            campo = str(campo_raw).strip()
+            valor = str(valor_raw).strip() if valor_raw is not None and not pd.isna(valor_raw) else None
+            if campo and valor:
+                self._registrar_campo(cabecera, campo, valor)
+
     def _procesar_formato_vertical(self, df: pd.DataFrame) -> Dict[str, Any]:
         cabecera: Dict[str, Any] = {}
         logger.info("🔍 Procesando formato VERTICAL (campo|valor)")
@@ -125,13 +142,7 @@ class PedidoParserCabecera:
         col_campo_idx, col_valor_idx, start_row = self._detectar_columnas_verticales(df)
         logger.info(f"   Usando columnas: Campo={col_campo_idx}, Valor={col_valor_idx}, Start row={start_row}")
         for idx in range(start_row, len(df)):
-            campo_raw = df.iloc[idx, col_campo_idx] if col_campo_idx < len(df.columns) else None
-            valor_raw = df.iloc[idx, col_valor_idx] if col_valor_idx < len(df.columns) else None
-            if campo_raw is not None and not pd.isna(campo_raw):
-                campo = str(campo_raw).strip()
-                valor = str(valor_raw).strip() if valor_raw is not None and not pd.isna(valor_raw) else None
-                if campo and valor:
-                    self._registrar_campo(cabecera, campo, valor)
+            self._procesar_fila_vertical(df, idx, col_campo_idx, col_valor_idx, cabecera)
         return cabecera
 
     # ========== Interfaz pública ==========

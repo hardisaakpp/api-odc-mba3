@@ -302,130 +302,138 @@ class PedidoParserTiendas:
 
         return distribuciones
 
+    @staticmethod
+    def _normalizar_encabezado_tiendas(text: str) -> str:
+        """Normaliza un encabezado de columna eliminando tildes, espacios y guiones."""
+        t = normalize_column_name(text)
+        t = ''.join(c for c in unicodedata.normalize('NFD', t) if unicodedata.category(c) != 'Mn')
+        return t.replace(' ', '').replace('-', '')
+
+    @staticmethod
+    def _encontrar_hoja_tiendas(workbook: Any) -> Optional[str]:
+        """Retorna el nombre de la hoja 'Tiendas' (case-insensitive) o None si no existe."""
+        for name in workbook.sheetnames:
+            if name.lower() == "tiendas":
+                return name
+        return None
+
+    @staticmethod
+    def _leer_headers_tiendas(ws: Any) -> Dict[int, str]:
+        """Construye un dict {col_idx: header_normalizado} de la primera fila."""
+        headers: Dict[int, str] = {}
+        for col_idx, cell in enumerate(ws[1]):
+            if cell.value:
+                headers[col_idx] = PedidoParserTiendas._normalizar_encabezado_tiendas(str(cell.value))
+        return headers
+
+    @staticmethod
+    def _detectar_columnas_tiendas(headers: Dict[int, str]) -> tuple:
+        """Detecta los índices de columna para código, nombre y activa."""
+        codigo_candidates = {"idtienda", "codigo", "codigo_tienda", "codigotienda", "code"}
+        nombre_candidates = {"nombretienda", "nombre", "tienda", "nombredetienda"}
+        activa_candidates = {"activo", "activa", "active", "estado"}
+        col_codigo = col_nombre = col_activa = None
+        for col_idx, header in headers.items():
+            if header in codigo_candidates or any(h in header for h in codigo_candidates):
+                col_codigo = col_idx
+            elif header in nombre_candidates or any(h in header for h in nombre_candidates):
+                col_nombre = col_idx
+            elif header in activa_candidates or any(h in header for h in activa_candidates):
+                col_activa = col_idx
+        return col_codigo, col_nombre, col_activa
+
+    @staticmethod
+    def _validar_sincronizacion_tiendas(ws: Any, col_codigo: int, col_nombre: int) -> None:
+        """Lanza ValueError si alguna fila tiene código sin nombre o viceversa."""
+        filas_desincronizadas = []
+        for fila_idx in range(2, ws.max_row + 1):
+            codigo_bruto = ws.cell(row=fila_idx, column=(col_codigo + 1)).value
+            nombre_bruto = ws.cell(row=fila_idx, column=(col_nombre + 1)).value if col_nombre is not None else None
+            has_codigo = bool(codigo_bruto is not None and str(codigo_bruto).strip())
+            has_nombre = bool(nombre_bruto is not None and str(nombre_bruto).strip())
+            if has_codigo != has_nombre:
+                filas_desincronizadas.append(fila_idx)
+        if filas_desincronizadas:
+            filas_str = ", ".join(str(f) for f in filas_desincronizadas)
+            raise ValueError(
+                f"Error de sincronización entre ID TIENDA y NOMBRE TIENDA. "
+                f"Filas problemáticas: {filas_str}. "
+                f"Si hay información en la columna ID TIENDA debe haber en NOMBRE TIENDA y viceversa."
+            )
+
+    @staticmethod
+    def _normalizar_activa_tienda(activa_bruto: Any) -> bool:
+        """Convierte el valor crudo del campo activa a bool."""
+        if activa_bruto is not None:
+            activa_str = normalize_column_name(activa_bruto)
+            if activa_str in ("no", "false", "0", "f"):
+                return False
+            elif activa_str in ("si", "yes", "true", "1", "v"):
+                return True
+        return True
+
+    def _procesar_fila_tienda(
+        self,
+        ws: Any,
+        fila_idx: int,
+        col_codigo: int,
+        col_nombre: int,
+        col_activa: int,
+    ) -> Optional[Dict[str, Any]]:
+        """Procesa una fila de datos y retorna la entrada del catálogo o None si debe omitirse."""
+        codigo_bruto = ws.cell(row=fila_idx, column=(col_codigo + 1)).value
+        nombre_bruto = ws.cell(row=fila_idx, column=(col_nombre + 1)).value if col_nombre is not None else None
+        activa_bruto = ws.cell(row=fila_idx, column=(col_activa + 1)).value if col_activa is not None else True
+        has_codigo = bool(codigo_bruto is not None and str(codigo_bruto).strip())
+        has_nombre = bool(nombre_bruto is not None and str(nombre_bruto).strip())
+        if not has_codigo or not has_nombre:
+            return None
+        codigo_normalizado = str(codigo_bruto).strip().upper()
+        if not re.match(self.utils.PATRON_CODIGO_VALIDO, codigo_normalizado):
+            logger.warning(f"⚠️ Fila {fila_idx}: Código '{codigo_normalizado}' contiene caracteres inválidos")
+            return None
+        nombre_normalizado = str(nombre_bruto).strip() if nombre_bruto else codigo_normalizado
+        return {
+            "codigo": codigo_normalizado,
+            "nombre": nombre_normalizado,
+            "activa": PedidoParserTiendas._normalizar_activa_tienda(activa_bruto),
+            "codigo_original": codigo_bruto,
+            "fila_origen": fila_idx,
+        }
+
     def leer_hoja_tiendas(self, file_content: bytes) -> Dict[str, Dict]:
         """
         Lee la hoja "Tiendas" y retorna catálogo NORMALIZADO.
-        
+
         Args:
             file_content: Contenido del archivo Excel en bytes
-            
+
         Returns:
             Dict con catálogo de tiendas normalizado
         """
         import openpyxl
-        
+
         try:
             workbook = openpyxl.load_workbook(io.BytesIO(file_content), data_only=True)
-            
-            sheet_name = None
-            for name in workbook.sheetnames:
-                if name.lower() == "tiendas":
-                    sheet_name = name
-                    break
-            
+            sheet_name = PedidoParserTiendas._encontrar_hoja_tiendas(workbook)
             if not sheet_name:
                 logger.warning("⚠️ Hoja 'Tiendas' no encontrada en Excel")
                 return {}
-            
             ws = workbook[sheet_name]
-            catalogo = {}
-            
-            def _normalize_header(text: str) -> str:
-                t = normalize_column_name(text)
-                t = ''.join(
-                    c for c in unicodedata.normalize('NFD', t)
-                    if unicodedata.category(c) != 'Mn'
-                )
-                t = t.replace(' ', '').replace('-', '')
-                return t
-
-            headers = {}
-            for col_idx, cell in enumerate(ws[1]):
-                if cell.value:
-                    header_normalized = _normalize_header(str(cell.value))
-                    headers[col_idx] = header_normalized
-            
-            col_codigo = None
-            col_nombre = None
-            col_activa = None
-            
-            codigo_candidates = {"idtienda", "codigo", "codigo_tienda", "codigotienda", "code"}
-            nombre_candidates = {"nombretienda", "nombre", "tienda", "nombredetienda"}
-            activa_candidates = {"activo", "activa", "active", "estado"}
-
-            for col_idx, header in headers.items():
-                if header in codigo_candidates or any(h in header for h in codigo_candidates):
-                    col_codigo = col_idx
-                elif header in nombre_candidates or any(h in header for h in nombre_candidates):
-                    col_nombre = col_idx
-                elif header in activa_candidates or any(h in header for h in activa_candidates):
-                    col_activa = col_idx
-            
+            headers = PedidoParserTiendas._leer_headers_tiendas(ws)
+            col_codigo, col_nombre, col_activa = PedidoParserTiendas._detectar_columnas_tiendas(headers)
             if col_codigo is None or col_nombre is None or col_activa is None:
                 logger.warning("⚠️ Columnas requeridas no encontradas en hoja 'Tiendas'")
                 return {}
-            
-            # Validación de sincronización: ID TIENDA ↔ NOMBRE TIENDA
-            filas_desincronizadas = []
+            PedidoParserTiendas._validar_sincronizacion_tiendas(ws, col_codigo, col_nombre)
+            catalogo: Dict[str, Dict] = {}
             for fila_idx in range(2, ws.max_row + 1):
-                codigo_bruto = ws.cell(row=fila_idx, column=(col_codigo + 1)).value
-                nombre_bruto = ws.cell(row=fila_idx, column=(col_nombre + 1)).value if col_nombre is not None else None
-                
-                has_codigo = bool(codigo_bruto is not None and str(codigo_bruto).strip())
-                has_nombre = bool(nombre_bruto is not None and str(nombre_bruto).strip())
-                
-                # Si tiene uno pero no el otro, es error de sincronización
-                if has_codigo != has_nombre:
-                    filas_desincronizadas.append(fila_idx)
-            
-            if filas_desincronizadas:
-                filas_str = ", ".join(str(f) for f in filas_desincronizadas)
-                raise ValueError(
-                    f"Error de sincronización entre ID TIENDA y NOMBRE TIENDA. "
-                    f"Filas problemáticas: {filas_str}. "
-                    f"Si hay información en la columna ID TIENDA debe haber en NOMBRE TIENDA y viceversa."
-                )
-            
-            for fila_idx in range(2, ws.max_row + 1):
-                codigo_bruto = ws.cell(row=fila_idx, column=(col_codigo + 1)).value
-                nombre_bruto = ws.cell(row=fila_idx, column=(col_nombre + 1)).value if col_nombre is not None else None
-                activa_bruto = ws.cell(row=fila_idx, column=(col_activa + 1)).value if col_activa is not None else True
-                
-                has_codigo = bool(codigo_bruto is not None and str(codigo_bruto).strip())
-                has_nombre = bool(nombre_bruto is not None and str(nombre_bruto).strip())
-                
-                if not has_codigo or not has_nombre:
-                    continue
-                
-                codigo_normalizado = str(codigo_bruto).strip().upper()
-                
-                if not re.match(self.utils.PATRON_CODIGO_VALIDO, codigo_normalizado):
-                    logger.warning(f"⚠️ Fila {fila_idx}: Código '{codigo_normalizado}' contiene caracteres inválidos")
-                    continue
-                
-                nombre_normalizado = str(nombre_bruto).strip() if nombre_bruto else codigo_normalizado
-                
-                activa_normalizada = True
-                if activa_bruto is not None:
-                    activa_str = normalize_column_name(activa_bruto)
-                    if activa_str in ("no", "false", "0", "f"):
-                        activa_normalizada = False
-                    elif activa_str in ("si", "yes", "true", "1", "v"):
-                        activa_normalizada = True
-                
-                catalogo[codigo_normalizado] = {
-                    "codigo": codigo_normalizado,
-                    "nombre": nombre_normalizado,
-                    "activa": activa_normalizada,
-                    "codigo_original": codigo_bruto,
-                    "fila_origen": fila_idx
-                }
-            
+                entrada = self._procesar_fila_tienda(ws, fila_idx, col_codigo, col_nombre, col_activa)
+                if entrada:
+                    catalogo[entrada["codigo"]] = entrada
             logger.info(f"✅ Catálogo de tiendas cargado: {len(catalogo)} tiendas")
             return catalogo
-            
         except ValueError:
-            # Re-raise ValueError (validaciones de negocio como sincronización ID/NOMBRE)
             raise
         except Exception as e:
             logger.error(f"❌ Error al leer hoja 'Tiendas': {e}", exc_info=True)

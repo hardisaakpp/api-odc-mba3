@@ -17,10 +17,29 @@ class PedidoFormatHandler:
     """Detecta y maneja diferentes formatos de Excel para pedidos."""
     
     @staticmethod
+    def _detectar_tipo_hoja(sheet_upper: str) -> Optional[str]:
+        """Retorna la clave del resultado ('cabecera', 'detalle', etc.) para un nombre de hoja, o None."""
+        if (
+            ("CABECERA" in sheet_upper and "PEDIDO" in sheet_upper)
+            or sheet_upper in ("CABECERA_PEDIDO", "CABECERA PEDIDO")
+        ):
+            return 'cabecera'
+        if (
+            ("DETALLE" in sheet_upper and ("ARTICULO" in sheet_upper or "ARTÍCULO" in sheet_upper))
+            or sheet_upper in ("DETALLE_ARTICULO", "DETALLE ARTICULO")
+        ):
+            return 'detalle'
+        if sheet_upper == "MOVIMIENTO":
+            return 'movimiento'
+        if sheet_upper == "TIENDAS":
+            return 'tiendas'
+        return None
+
+    @staticmethod
     def detectar_hojas_excel(file_content: bytes) -> Dict[str, Optional[str]]:
         """
         Detecta las hojas disponibles en un archivo Excel.
-        
+
         Retorna dict con claves:
         - 'cabecera': Nombre de hoja CABECERA_PEDIDO
         - 'detalle': Nombre de hoja DETALLE_ARTICULO
@@ -35,36 +54,12 @@ class PedidoFormatHandler:
                 'movimiento': None,
                 'tiendas': None
             }
-            
             logger.info(f"Hojas encontradas: {excel_file.sheet_names}")
-            
             for sheet_name in excel_file.sheet_names:
                 sheet_upper = str(sheet_name).upper().strip()
-
-                # Detectar cabecera
-                if not resultado['cabecera'] and (
-                    ("CABECERA" in sheet_upper and "PEDIDO" in sheet_upper)
-                    or sheet_upper == "CABECERA_PEDIDO"
-                    or sheet_upper == "CABECERA PEDIDO"
-                ):
-                    resultado['cabecera'] = str(sheet_name)
-
-                # Detectar detalle
-                if not resultado['detalle'] and (
-                    ("DETALLE" in sheet_upper and ("ARTICULO" in sheet_upper or "ARTÍCULO" in sheet_upper))
-                    or sheet_upper == "DETALLE_ARTICULO"
-                    or sheet_upper == "DETALLE ARTICULO"
-                ):
-                    resultado['detalle'] = str(sheet_name)
-
-                # Detectar movimiento (v1.0)
-                if not resultado['movimiento'] and sheet_upper == "MOVIMIENTO":
-                    resultado['movimiento'] = str(sheet_name)
-
-                # Detectar tiendas (v1.0)
-                if not resultado['tiendas'] and sheet_upper == "TIENDAS":
-                    resultado['tiendas'] = str(sheet_name)
-            
+                tipo = PedidoFormatHandler._detectar_tipo_hoja(sheet_upper)
+                if tipo and not resultado[tipo]:
+                    resultado[tipo] = str(sheet_name)
             return resultado
         except Exception as e:
             logger.error(f"Error detectando hojas Excel: {e}")
