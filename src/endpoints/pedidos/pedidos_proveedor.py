@@ -4,7 +4,7 @@ Endpoints de gestión de respuestas de proveedores.
 
 import logging
 from typing import Dict
-from fastapi import FastAPI, UploadFile, File, Depends, HTTPException, Path, Body, status
+from fastapi import FastAPI, UploadFile, File, Depends, HTTPException, Path, Body
 from fastapi.responses import JSONResponse
 
 from src.security.jwt_auth import verify_jwt_token, require_permission, require_any_permission
@@ -47,7 +47,6 @@ def register_proveedor_endpoints(app: FastAPI):
             resultado = service.importar_respuesta_proveedor(
                 pedido_id=pedido_id,
                 file_content=content,
-                filename=file.filename or "respuesta.xlsx",
                 usuario_id=usuario_id
             )
             
@@ -261,9 +260,9 @@ def register_proveedor_endpoints(app: FastAPI):
                             if email_enviado:
                                 logger.info(f"📧 Email de confirmación de El Rayo enviado a {destino_log} (Pedido: {numero_pedido})")
                             else:
-                                logger.warning(f"⚠️ No se pudo enviar email de confirmación de El Rayo (no crítico)")
+                                logger.warning("⚠️ No se pudo enviar email de confirmación de El Rayo (no crítico)")
                         else:
-                            logger.warning(f"⚠️ No se pudo obtener información del pedido para enviar notificación (no crítico)")
+                            logger.warning("⚠️ No se pudo obtener información del pedido para enviar notificación (no crítico)")
                 except Exception as e:
                     # NO fallar el proceso si el email falla
                     logger.warning(f"⚠️ Error al enviar email de confirmación de El Rayo (no crítico): {e}")
