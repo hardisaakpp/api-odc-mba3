@@ -32,9 +32,7 @@ def register_odc_endpoints(app: FastAPI):
         """
         try:
             from src.database.services.pedido_oc_service import PedidoOCService
-            
-            user_id = user.get("sub") or user.get("user_id")
-            
+
             # Detectar si es UUID o numero_pedido
             uuid_pattern = re.compile(r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$')
             es_uuid = uuid_pattern.match(identificador.strip()) is not None
@@ -65,7 +63,7 @@ def register_odc_endpoints(app: FastAPI):
             # Crear OC usando el pedido_id real
             service = PedidoOCService()
             resultado = service.crear_oc_desde_pedido_confirmado(
-                pedido_id=pedido_id_real, usuario_id=user_id)
+                pedido_id=pedido_id_real)
             
             return {"status": "success", "message": "Orden de compra creada exitosamente", **resultado}
             

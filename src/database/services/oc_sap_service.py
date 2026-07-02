@@ -618,6 +618,34 @@ class OCSAPService:
             result["inventory_transfer_requests_error"] = str(e)
 
     @staticmethod
+    def _log_fallo_itr(pedido_id: str, resultado_transferencias: Dict[str, Any]) -> None:
+        """Registra en log el detalle del fallo de Inventory Transfer Requests."""
+        error_type = resultado_transferencias.get("error_type", "desconocido")
+        error_msg = resultado_transferencias.get("error")
+        if not error_msg:
+            resultados_st = resultado_transferencias.get("resultados", [])
+            errores_individuales = [
+                f"{r.get('tienda_codigo', 'N/A')}: {r.get('error', 'Sin detalle')}"
+                for r in resultados_st
+                if not r.get("success") and r.get("error")
+            ]
+            error_msg = "; ".join(errores_individuales) if errores_individuales else "Error desconocido al crear Solicitudes de Transferencia"
+        if error_type == "datos_maestros":
+            logger.warning(
+                f"⚠️ Inventory Transfer Requests NO creados para pedido {pedido_id}: "
+                f"validación de datos maestros fallida - {error_msg}"
+            )
+        elif error_type == "stock_insuficiente":
+            logger.warning(
+                f"⚠️ Inventory Transfer Requests NO creados para pedido {pedido_id}: "
+                f"validación de stock fallida - {error_msg}"
+            )
+        else:
+            logger.warning(
+                f"⚠️ Inventory Transfer Requests NO creados para pedido {pedido_id}: {error_msg}"
+            )
+
+    @staticmethod
     def _crear_solicitudes_transferencia_oc(
         oc_id: str,
         oc_cabecera: Dict[str, Any],
@@ -656,34 +684,35 @@ class OCSAPService:
                         f"{'; '.join(resultado_transferencias['warnings'])}"
                     )
             else:
-                error_type = resultado_transferencias.get("error_type", "desconocido")
-                error_msg = resultado_transferencias.get("error")
-                if not error_msg:
-                    resultados_st = resultado_transferencias.get("resultados", [])
-                    errores_individuales = [
-                        f"{r.get('tienda_codigo', 'N/A')}: {r.get('error', 'Sin detalle')}"
-                        for r in resultados_st
-                        if not r.get("success") and r.get("error")
-                    ]
-                    error_msg = "; ".join(errores_individuales) if errores_individuales else "Error desconocido al crear Solicitudes de Transferencia"
-                if error_type == "datos_maestros":
-                    logger.warning(
-                        f"⚠️ Inventory Transfer Requests NO creados para pedido {pedido_id}: "
-                        f"validación de datos maestros fallida - {error_msg}"
-                    )
-                elif error_type == "stock_insuficiente":
-                    logger.warning(
-                        f"⚠️ Inventory Transfer Requests NO creados para pedido {pedido_id}: "
-                        f"validación de stock fallida - {error_msg}"
-                    )
-                else:
-                    logger.warning(
-                        f"⚠️ Inventory Transfer Requests NO creados para pedido {pedido_id}: {error_msg}"
-                    )
+                OCSAPService._log_fallo_itr(pedido_id, resultado_transferencias)
             result["solicitudes_transferencia"] = resultado_transferencias
         except Exception as e:
             logger.warning(f"⚠️ Error al crear Solicitudes de Transferencia (no crítico): {e}")
             result["solicitudes_transferencia_error"] = str(e)
+
+    @staticmethod
+    def _obtener_numero_pedido_para_notif(pedido_id: str, conn: Any) -> Optional[str]:
+        """Obtiene el número de pedido para notificaciones; retorna None si falla."""
+        try:
+            from ..repositories.pedido_repository import PedidoRepository
+            pedido_repo_temp = PedidoRepository(conn)
+            pedido_data = pedido_repo_temp.get_pedido_completo(pedido_id)
+            if pedido_data and pedido_data.get("cabecera"):
+                return pedido_data["cabecera"].get("numero_pedido")
+        except Exception:
+            pass
+        return None
+
+    @staticmethod
+    def _detectar_error_en_st(result: Dict[str, Any]) -> bool:
+        """Retorna True si el resultado del ST contiene un error."""
+        if result.get("solicitudes_transferencia_error"):
+            return True
+        resultado_st = result.get("solicitudes_transferencia")
+        if isinstance(resultado_st, dict):
+            transferencias_errores = int(resultado_st.get("transferencias_errores", 0) or 0)
+            return transferencias_errores > 0 or not bool(resultado_st.get("success"))
+        return False
 
     @staticmethod
     def _notificar_resultado_oc_st(
@@ -698,26 +727,11 @@ class OCSAPService:
         """Notifica errores de ODC/ST a técnicos y persiste snapshot del envío."""
         try:
             from src.utils.email_notifier import send_oc_st_error_notification_tecnicos
-            from ..repositories.pedido_repository import PedidoRepository
             from ..repositories.envio_odc_sap_repository import EnvioODCSAPRepository
 
-            pedido_numero = None
-            try:
-                pedido_repo_temp = PedidoRepository(oc_repo.conn)
-                pedido_data = pedido_repo_temp.get_pedido_completo(pedido_id)
-                if pedido_data and pedido_data.get("cabecera"):
-                    pedido_numero = pedido_data["cabecera"].get("numero_pedido")
-            except Exception:
-                pass
-
+            pedido_numero = OCSAPService._obtener_numero_pedido_para_notif(pedido_id, oc_repo.conn)
             resultado_transferencias_notif = result.get("solicitudes_transferencia")
-            hay_error_st = False
-            if result.get("solicitudes_transferencia_error"):
-                hay_error_st = True
-            elif isinstance(resultado_transferencias_notif, dict):
-                transferencias_errores = int(resultado_transferencias_notif.get("transferencias_errores", 0) or 0)
-                st_success = bool(resultado_transferencias_notif.get("success"))
-                hay_error_st = transferencias_errores > 0 or not st_success
+            hay_error_st = OCSAPService._detectar_error_en_st(result)
 
             if hay_error_st:
                 email_enviado = send_oc_st_error_notification_tecnicos(

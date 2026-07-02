@@ -326,7 +326,6 @@ class PedidoOCService:
     def crear_oc_desde_pedido_confirmado(
         self,
         pedido_id: str,
-        usuario_id: Optional[str] = None,
         upsert: bool = True
     ) -> Dict[str, Any]:
         """
@@ -337,7 +336,6 @@ class PedidoOCService:
 
         Args:
             pedido_id: UUID del pedido
-            usuario_id: User ID del usuario que crea la OC (opcional, para auditoría)
             upsert: Si True, actualiza si existe; si False, inserta siempre
 
         Returns:

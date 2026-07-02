@@ -339,6 +339,27 @@ class ProductoMBA3StagingRepository:
         finally:
             cursor.close()
     
+    def _buscar_por_normalizado(self, cursor: Any, resultado: Dict[str, bool]) -> None:
+        """Completa `resultado` buscando por product_id_normalizado los códigos aún no encontrados."""
+        from src.utils import normalizar_codigo_producto
+        codigos_no_encontrados = [c for c, existe in resultado.items() if not existe]
+        if not codigos_no_encontrados:
+            return
+        codigos_normalizados = [normalizar_codigo_producto(c) for c in codigos_no_encontrados]
+        placeholders_norm = ','.join('?' * len(codigos_normalizados))
+        cursor.execute(f"""
+            SELECT product_id_normalizado
+            FROM producto_mba3_staging
+            WHERE product_id_normalizado IN ({placeholders_norm})
+        """, codigos_normalizados)
+        normalizado_a_original = {
+            normalizar_codigo_producto(c): c for c in codigos_no_encontrados
+        }
+        for row in cursor.fetchall():
+            codigo_norm = str(row[0])
+            if codigo_norm in normalizado_a_original:
+                resultado[normalizado_a_original[codigo_norm]] = True
+
     def validar_codigos_existen(
         self,
         codigos: List[str],
@@ -346,73 +367,43 @@ class ProductoMBA3StagingRepository:
     ) -> Dict[str, bool]:
         """
         Valida si los códigos de producto existen en el catálogo.
-        
+
         Puede buscar por código exacto o por código normalizado.
-        
+
         Args:
             codigos: Lista de códigos de producto a validar
             usar_normalizado: Si True, busca también por código normalizado (más flexible)
-            
+
         Returns:
             Dict con formato: {codigo: existe}
         """
         if not codigos:
             return {}
-        
+
         cursor = self.conn.cursor()
         resultado = {}
-        
+
         try:
-            # Inicializar todos como no encontrados
             for codigo in codigos:
                 resultado[codigo.upper()] = False
-            
-            # Buscar por código exacto
+
             placeholders = ','.join('?' * len(codigos))
             cursor.execute(f"""
                 SELECT product_id
                 FROM producto_mba3_staging
                 WHERE product_id IN ({placeholders})
             """, codigos)
-            
-            # Marcar los encontrados
+
             for row in cursor.fetchall():
                 codigo_encontrado = str(row[0]).upper()
                 if codigo_encontrado in resultado:
                     resultado[codigo_encontrado] = True
-            
-            # Si se permite búsqueda normalizada, buscar también por product_id_normalizado
-            if usar_normalizado:
-                from src.utils import normalizar_codigo_producto
 
-                # Buscar por código normalizado (solo los que no se encontraron antes)
-                codigos_no_encontrados = [c for c, existe in resultado.items() if not existe]
-                if codigos_no_encontrados:
-                    codigos_normalizados_no_encontrados = [
-                        normalizar_codigo_producto(c) for c in codigos_no_encontrados
-                    ]
-                    
-                    placeholders_norm = ','.join('?' * len(codigos_normalizados_no_encontrados))
-                    cursor.execute(f"""
-                        SELECT product_id_normalizado
-                        FROM producto_mba3_staging
-                        WHERE product_id_normalizado IN ({placeholders_norm})
-                    """, codigos_normalizados_no_encontrados)
-                    
-                    # Crear mapa de normalizados a originales
-                    normalizado_a_original = {
-                        normalizar_codigo_producto(c): c for c in codigos_no_encontrados
-                    }
-                    
-                    # Marcar los encontrados por normalizado
-                    for row in cursor.fetchall():
-                        codigo_norm_encontrado = str(row[0])
-                        if codigo_norm_encontrado in normalizado_a_original:
-                            codigo_original = normalizado_a_original[codigo_norm_encontrado]
-                            resultado[codigo_original] = True
-            
+            if usar_normalizado:
+                self._buscar_por_normalizado(cursor, resultado)
+
             return resultado
-            
+
         except Exception as e:
             logger.error(f"❌ Error al validar códigos de productos: {e}", exc_info=True)
             raise

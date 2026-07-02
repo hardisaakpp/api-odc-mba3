@@ -200,8 +200,7 @@ def _ejecutar_proceso_completo_sync(
 
             service = PedidoOCService()
             resultado_oc = service.crear_oc_desde_pedido_confirmado(
-                pedido_id=pedido_id,
-                usuario_id=user_id
+                pedido_id=pedido_id
             )
 
             oc_id = resultado_oc.get("oc_id")

@@ -214,79 +214,92 @@ class PedidoParserTiendas:
 
         return resultado
 
+    def _validar_tienda_codigo(
+        self,
+        tienda_codigo: str,
+        catalogo_tiendas: Optional[Dict[str, Dict[str, Any]]]
+    ) -> tuple:
+        validacion: Dict[str, Any] = {"valida": True, "errores": [], "warnings": []}
+        if not catalogo_tiendas:
+            validacion["warnings"].append("No se encontró hoja 'Tiendas' para validar el código")
+            return tienda_codigo, validacion
+        if tienda_codigo not in catalogo_tiendas:
+            validacion["valida"] = False
+            validacion["errores"].append(
+                f"Código de tienda '{tienda_codigo}' no existe en hoja 'Tiendas'"
+            )
+            return tienda_codigo, validacion
+        tienda_info = catalogo_tiendas[tienda_codigo]
+        tienda_nombre = tienda_info.get("nombre", tienda_codigo)
+        if not tienda_info.get("activa", False):
+            validacion["valida"] = False
+            validacion["errores"].append(
+                f"Tienda '{tienda_codigo}' ({tienda_nombre}) está INACTIVA"
+            )
+        return tienda_nombre, validacion
+
+    def _construir_distribucion_columna(
+        self,
+        col_name: str,
+        col_upper: str,
+        es_codigo_tienda: bool,
+        cantidad_val: float,
+        catalogo_tiendas: Optional[Dict[str, Dict[str, Any]]]
+    ) -> Dict[str, Any]:
+        if es_codigo_tienda:
+            tienda_nombre, validacion = self._validar_tienda_codigo(col_upper, catalogo_tiendas)
+            return {
+                "tienda_codigo": col_upper,
+                "tienda_nombre": tienda_nombre,
+                "cantidad": cantidad_val,
+                "validacion": validacion
+            }
+        nombre_tienda = col_name[len(self.utils.PREFIJO_TIENDA_ANTIGUO):].strip()
+        return {
+            "tienda_codigo": nombre_tienda.upper(),
+            "tienda_nombre": nombre_tienda.title(),
+            "cantidad": cantidad_val,
+            "validacion": {"valida": True, "errores": [], "warnings": []}
+        }
+
     def extraer_distribuciones_tienda(
-        self, 
-        row: pd.Series, 
+        self,
+        row: pd.Series,
         columnas: List[str],
         catalogo_tiendas: Optional[Dict[str, Dict[str, Any]]] = None
     ) -> List[Dict[str, Any]]:
         """
         Extrae distribuciones por tienda desde las columnas del Excel.
-        
+
         Args:
             row: Fila de datos con las cantidades
             columnas: Lista de nombres de columnas
             catalogo_tiendas: Diccionario opcional con tiendas válidas
-            
+
         Returns:
             Lista de distribuciones
         """
         distribuciones = []
-        
+
         for col_name in columnas:
             col_lower = normalize_column_name(col_name)
             col_upper = str(col_name).upper().strip()
-            
+
             es_codigo_tienda = bool(re.match(self.utils.PATRON_CODIGO_TIENDA, col_upper))
             es_formato_antiguo = col_lower.startswith(self.utils.PREFIJO_TIENDA_ANTIGUO)
-            
-            if es_codigo_tienda or es_formato_antiguo:
-                cantidad = self.utils.get_numeric_value(row, col_name)
-                
-                if cantidad is not None and cantidad >= 0:
-                    cantidad_val = float(cantidad) if not isinstance(cantidad, float) else cantidad
-                    
-                    if es_codigo_tienda:
-                        tienda_codigo = col_upper
-                        validacion_tienda = {"valida": True, "errores": [], "warnings": []}
-                        
-                        if catalogo_tiendas:
-                            if tienda_codigo not in catalogo_tiendas:
-                                validacion_tienda["valida"] = False
-                                validacion_tienda["errores"].append(
-                                    f"Código de tienda '{tienda_codigo}' no existe en hoja 'Tiendas'"
-                                )
-                                tienda_nombre = tienda_codigo
-                            else:
-                                tienda_info = catalogo_tiendas[tienda_codigo]
-                                tienda_nombre = tienda_info.get("nombre", tienda_codigo)
-                                
-                                if not tienda_info.get("activa", False):
-                                    validacion_tienda["valida"] = False
-                                    validacion_tienda["errores"].append(
-                                        f"Tienda '{tienda_codigo}' ({tienda_nombre}) está INACTIVA"
-                                    )
-                        else:
-                            tienda_nombre = tienda_codigo
-                            validacion_tienda["warnings"].append(
-                                "No se encontró hoja 'Tiendas' para validar el código"
-                            )
-                        
-                        distribuciones.append({
-                            "tienda_codigo": tienda_codigo,
-                            "tienda_nombre": tienda_nombre,
-                            "cantidad": cantidad_val,
-                            "validacion": validacion_tienda
-                        })
-                    else:
-                        nombre_tienda = col_name[len(self.utils.PREFIJO_TIENDA_ANTIGUO):].strip()
-                        distribuciones.append({
-                            "tienda_codigo": nombre_tienda.upper(),
-                            "tienda_nombre": nombre_tienda.title(),
-                            "cantidad": cantidad_val,
-                            "validacion": {"valida": True, "errores": [], "warnings": []}
-                        })
-        
+
+            if not (es_codigo_tienda or es_formato_antiguo):
+                continue
+
+            cantidad = self.utils.get_numeric_value(row, col_name)
+            if cantidad is None or cantidad < 0:
+                continue
+
+            cantidad_val = float(cantidad) if not isinstance(cantidad, float) else cantidad
+            distribuciones.append(
+                self._construir_distribucion_columna(col_name, col_upper, es_codigo_tienda, cantidad_val, catalogo_tiendas)
+            )
+
         return distribuciones
 
     def leer_hoja_tiendas(self, file_content: bytes) -> Dict[str, Dict]:
