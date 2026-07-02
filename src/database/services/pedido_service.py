@@ -35,6 +35,10 @@ from src.config import ENABLE_SAP_QUERIES
 
 logger = logging.getLogger(__name__)
 
+_MSG_STORAGE_DESHABILITADO = "SQL Server storage está deshabilitado"
+_PATRON_NUM_PEDIDO = "número de pedido"
+_PATRON_YA_EXISTE = "ya existe"
+
 # Parámetros por defecto para validación de pedidos (Ecuador: IVA 15%, formato estándar)
 DEFAULT_PEDIDO_VALIDATOR_KWARGS = {
     "max_cantidad_por_tienda": 10000,
@@ -81,7 +85,6 @@ class PedidoService:
         file_content: bytes,
         hoja_cabecera: str = "cabecera",
         hoja_detalle: str = "detalle",
-        es_formato_nuevo_v1_0: bool = True
     ) -> Dict[str, Any]:
         """
         Parsea un archivo Excel de pedido en formato v1.0.
@@ -97,8 +100,7 @@ class PedidoService:
             file_content: Contenido del archivo Excel en bytes
             hoja_cabecera: Nombre de la hoja de cabecera (default: "cabecera")
             hoja_detalle: Nombre de la hoja de detalle (default: "detalle")
-            es_formato_nuevo_v1_0: Si True, usa el nuevo formato v1.0 (default: True)
-            
+
         Returns:
             Dict con estructura:
             {
@@ -146,6 +148,28 @@ class PedidoService:
             usuario_id=usuario_id
         )
     
+    @staticmethod
+    def _enriquecer_detalles_codigo(
+        detalles: List[Dict[str, Any]],
+        indices: List[int],
+        sap_info: Dict[str, Any],
+        codigo: str,
+    ) -> int:
+        item_name = sap_info.get("ItemName")
+        pack_sap = sap_info.get("U_IXX_PACK")
+        enriquecidos = 0
+        for idx in indices:
+            detalle = detalles[idx]["detalle"]
+            if item_name and not detalle.get("descripcion_sap"):
+                detalle["descripcion_sap"] = item_name
+                enriquecidos += 1
+                logger.debug(f"✅ Enriquecido descripcion_sap para {codigo}: {item_name[:50]}")
+            if pack_sap and not detalle.get("pack"):
+                detalle["pack"] = pack_sap
+                enriquecidos += 1
+                logger.debug(f"✅ Enriquecido pack para {codigo}: {pack_sap}")
+        return enriquecidos
+
     def _enriquecer_detalles_con_sap(
         self,
         detalles_con_tiendas: List[Dict[str, Any]]
@@ -219,27 +243,41 @@ class PedidoService:
                 logger.debug(f"⚠️ No se encontró información SAP para {codigo_normalized}")
                 continue
             
-            item_name = sap_info.get("ItemName")
-            pack_sap = sap_info.get("U_IXX_PACK")
-            
-            # Enriquecer cada detalle que usa este código
-            for idx in indices:
-                detalle = detalles_enriquecidos[idx]["detalle"]
-                
-                # Solo rellenar si está vacío (no sobrescribir valores existentes)
-                if item_name and not detalle.get("descripcion_sap"):
-                    detalle["descripcion_sap"] = item_name
-                    productos_enriquecidos += 1
-                    logger.debug(f"✅ Enriquecido descripcion_sap para {codigo_normalized}: {item_name[:50]}")
-                
-                if pack_sap and not detalle.get("pack"):
-                    detalle["pack"] = pack_sap
-                    productos_enriquecidos += 1
-                    logger.debug(f"✅ Enriquecido pack para {codigo_normalized}: {pack_sap}")
+            productos_enriquecidos += self._enriquecer_detalles_codigo(
+                detalles_enriquecidos, indices, sap_info, codigo_normalized
+            )
         
         logger.info(f"✅ Enriquecidos {productos_enriquecidos} campos desde SAP")
         return detalles_enriquecidos
     
+    @staticmethod
+    def _log_debug_filas_excel(df: "pd.DataFrame") -> None:
+        logger.info(f"Shape del DataFrame: {df.shape} (filas x columnas)")
+        if len(df) == 0:
+            return
+        logger.info("Primeras 10 filas, primeras 8 columnas del Excel:")
+        for i in range(min(10, len(df))):
+            row_data = []
+            for j in range(min(8, len(df.columns))):
+                val = df.iloc[i, j]
+                row_data.append("(vacío)" if pd.isna(val) else str(val)[:50])
+            logger.info(f"  Fila {i}: {row_data}")
+
+    @staticmethod
+    def _normalizar_fecha_cabecera(fecha_raw: Any) -> Any:
+        if not fecha_raw:
+            return None
+        try:
+            if isinstance(fecha_raw, datetime):
+                return fecha_raw.date()
+            if isinstance(fecha_raw, date):
+                return fecha_raw
+            if isinstance(fecha_raw, str):
+                return pd.to_datetime(fecha_raw, dayfirst=True).date()
+        except Exception as e:
+            logger.warning(f"⚠️ Error al parsear fecha_pedido: {e}")
+        return None
+
     def procesar_archivo_excel(
         self,
         file_content: bytes,
@@ -267,7 +305,7 @@ class PedidoService:
         if not ENABLE_SQL_SERVER_STORAGE:
             return {
                 "status": "error",
-                "message": "SQL Server storage está deshabilitado"
+                "message": _MSG_STORAGE_DESHABILITADO
             }
         
         resultado = {
@@ -285,19 +323,7 @@ class PedidoService:
             df_raw = cast(pd.DataFrame, df_raw_result)
             
             # Log para debug: mostrar primeras filas del Excel
-            logger.info(f"Shape del DataFrame: {df_raw.shape} (filas x columnas)")
-            if len(df_raw) > 0:
-                # Mostrar primeras 10 filas y primeras 8 columnas para debug (para ver columnas E, F, G, H)
-                logger.info("Primeras 10 filas, primeras 8 columnas del Excel:")
-                for i in range(min(10, len(df_raw))):
-                    row_data = []
-                    for j in range(min(8, len(df_raw.columns))):
-                        val = df_raw.iloc[i, j]
-                        if pd.isna(val):
-                            row_data.append("(vacío)")
-                        else:
-                            row_data.append(str(val)[:50])  # Limitar a 50 caracteres
-                    logger.info(f"  Fila {i}: {row_data}")
+            self._log_debug_filas_excel(df_raw)
             
             # Paso 1: Extraer cabecera usando método que soporta formato horizontal y vertical
             try:
@@ -363,18 +389,7 @@ class PedidoService:
                     )
                 
                 # Convertir fecha_pedido a DATE si es posible
-                if cabecera["fecha_pedido"]:
-                    try:
-                        if isinstance(cabecera["fecha_pedido"], datetime):
-                            cabecera["fecha_pedido"] = cabecera["fecha_pedido"].date()
-                        elif isinstance(cabecera["fecha_pedido"], date):
-                            # Ya es date, no hacer nada
-                            pass
-                        elif isinstance(cabecera["fecha_pedido"], str):
-                            cabecera["fecha_pedido"] = pd.to_datetime(cabecera["fecha_pedido"], dayfirst=True).date()
-                    except Exception as e:
-                        logger.warning(f"⚠️ Error al parsear fecha_pedido: {e}")
-                        cabecera["fecha_pedido"] = None
+                cabecera["fecha_pedido"] = self._normalizar_fecha_cabecera(cabecera.get("fecha_pedido"))
                         
             except ValueError as e:
                 # Error de validación (ej: numero_pedido no encontrado)
@@ -383,87 +398,12 @@ class PedidoService:
                 logger.error(f"❌ Error al parsear cabecera: {e}", exc_info=True)
                 raise ValueError(f"Error al extraer cabecera del Excel: {str(e)}")
             
-            # Paso 2: Este método (procesar_archivo_excel) está deprecado
-            # Se debe usar validar_y_procesar_archivo_excel en su lugar
+            # Este método está deprecado. Usar validar_y_procesar_archivo_excel en su lugar.
             raise ValueError(
                 "El método procesar_archivo_excel está deprecado. "
                 "Use validar_y_procesar_archivo_excel en su lugar, que soporta el nuevo formato v1.0."
             )
-            
-            # Paso 3: Guardar en base de datos (en transacción)
-            with get_db_connection_context() as conn:
-                repository = PedidoRepository(conn)
-                
-                # Insertar cabecera
-                try:
-                    pedido_id = repository.insert_cabecera(cabecera)
-                except ValueError as e:
-                    # Detectar específicamente el error de número de pedido duplicado
-                    error_msg = str(e)
-                    if "número de pedido" in error_msg.lower() and "ya existe" in error_msg.lower():
-                        logger.warning(f"⚠️ Intento de crear pedido con número duplicado: {error_msg}")
-                        resultado["status"] = "error"
-                        resultado["errores"].append(error_msg)
-                        resultado["error_tipo"] = "numero_pedido_duplicado"
-                        return resultado
-                    # Otros ValueError se propagan
-                    raise
-                resultado["pedido_id"] = pedido_id
-                
-                # Procesar cada artículo con sus distribuciones (orden = orden de plantilla)
-                detalles_con_tiendas: list = []
-                for orden_linea, detalle_data in enumerate(detalles_con_tiendas):
-                    try:
-                        detalle_data["detalle"]["orden_linea"] = orden_linea
-                        # Insertar detalle (artículo)
-                        # NOTA: subtotal y total se guardan tal cual vienen, sin recalcular
-                        pedido_detalle_id = repository.insert_detalle(
-                            pedido_id=pedido_id,
-                            datos_detalle=detalle_data["detalle"]
-                        )
-                        resultado["articulos_cargados"] += 1
-                        
-                        # Procesar distribuciones por tienda
-                        if detalle_data.get("distribuciones"):
-                            distribuciones = []
-                            for dist in detalle_data["distribuciones"]:
-                                tienda_codigo = dist.get("tienda_codigo")
-                                cantidad = dist.get("cantidad")
-                                
-                                if tienda_codigo and cantidad is not None and cantidad >= 0:
-                                    # Obtener o crear tienda
-                                    tienda_id = repository.get_or_create_tienda(
-                                        codigo=tienda_codigo,
-                                        nombre=dist.get("tienda_nombre")
-                                    )
-                                    distribuciones.append({
-                                        "tienda_id": tienda_id,
-                                        "cantidad": cantidad,
-                                        "fila_origen": dist.get("fila_origen"),
-                                        "es_bodega": dist.get("es_bodega", False)  # ⭐ NUEVO: Pasar flag de bodega
-                                    })
-                            
-                            if distribuciones:
-                                distribuciones_insertadas = repository.insert_detalle_tiendas(
-                                    pedido_detalle_id=pedido_detalle_id,
-                                    distribuciones=distribuciones
-                                )
-                                resultado["distribuciones_cargadas"] += distribuciones_insertadas
-                                
-                    except Exception as e:
-                        error_msg = f"Error al procesar artículo {detalle_data.get('detalle', {}).get('codigo_interno')}: {str(e)}"
-                        logger.warning(f"⚠️ {error_msg}")
-                        resultado["errores"].append(error_msg)
-                        continue
-            
-            logger.info(
-                f"✅ Plantilla procesada exitosamente: {filename} "
-                f"(pedido_id: {pedido_id}, artículos: {resultado['articulos_cargados']}, "
-                f"distribuciones: {resultado['distribuciones_cargadas']})"
-            )
-            
-            return resultado
-            
+
         except Exception as e:
             logger.error(f"❌ Error al procesar plantilla Excel: {e}", exc_info=True)
             resultado["status"] = "error"
@@ -475,23 +415,19 @@ class PedidoService:
         self,
         detalles_con_tiendas: List[Dict[str, Any]],
         correcciones: Dict[str, str]
-    ) -> List[Dict[str, Any]]:
+    ) -> int:
         """
-        Aplica correcciones de códigos de producto en memoria.
-        
-        Reemplaza los códigos originales del Excel por los códigos SAP corregidos
-        antes de validar contra SAP. Esto permite que el usuario seleccione sugerencias
-        SAP sin necesidad de modificar el archivo Excel.
-        
+        Aplica correcciones de códigos de producto en memoria (mutación in-place).
+
         Args:
             detalles_con_tiendas: Lista de detalles con productos y distribuciones
             correcciones: Diccionario {codigo_original: codigo_sap_corregido}
-            
+
         Returns:
-            Lista de detalles con códigos corregidos aplicados
+            Número de correcciones aplicadas
         """
         if not correcciones:
-            return detalles_con_tiendas
+            return 0
         
         correcciones_aplicadas = 0
         
@@ -520,37 +456,28 @@ class PedidoService:
         logger.info(
             f"📋 [CORRECCIONES] Total de códigos corregidos: {correcciones_aplicadas} de {len(correcciones)}"
         )
-        
-        return detalles_con_tiendas
-    
+        return correcciones_aplicadas
+
     def _detectar_y_procesar_formato_excel(
         self,
         file_content: bytes,
         resultado: Dict[str, Any],
     ) -> bool:
         """
-        Detecta el formato del Excel y lo procesa. 
-        Retorna True si éxito, False si error (resultado actualizado con errores).
+        Detecta el formato del Excel y actualiza resultado["formato_detectado"].
+        Retorna True si es formato v1.0, False si es formato legacy sin hojas requeridas.
         """
-        # Usar el detector de formatos
         hojas = self.format_detector.detectar_hojas(file_content)
         formato = self.format_detector.detectar_formato(hojas)
-        
-        # Formato de 2 hojas v1.0 (ÚNICO FORMATO SOPORTADO)
+
         if formato == 'dos_hojas_nuevo_v1_0':
             logger.info("📋 Detectado formato v1.0 (2 hojas)")
             resultado["formato_detectado"] = "dos_hojas_nuevo_v1_0"
-            # El procesamiento de 2 hojas se maneja en validar_y_procesar_archivo_excel
-            # Este método solo valida, no procesa completamente
             return True
-        
-        # Otros formatos: dos hojas o simple (legacy)
+
         logger.info("📋 Detectado formato legacy (dos hojas o simple)")
         resultado["formato_detectado"] = "dos_hojas_simple" if hojas['cabecera'] and hojas['detalle'] else "simple"
-        
-        # [Aquí va la lógica legacy - simplificada para brevedad]
-        # Para este refactor, solo retornamos éxito si se procesa sin excepciones
-        return True
+        return hojas['cabecera'] is not None and hojas['detalle'] is not None
     
     def _procesar_formato_dos_hojas_o_simple(
         self,
@@ -585,8 +512,6 @@ class PedidoService:
         tiendas_permitidas: Optional[List[str]] = None,
         bloquea_con_errores: bool = True,
         validar_sap: bool = True,
-        sap_obligatorio: bool = True,
-        modo_tiendas: str = "validar_estricto",
         correcciones_codigos: Optional[Dict[str, str]] = None
     ) -> Dict[str, Any]:
         """
@@ -610,7 +535,7 @@ class PedidoService:
         if not ENABLE_SQL_SERVER_STORAGE:
             return {
                 "status": "error",
-                "message": "SQL Server storage está deshabilitado"
+                "message": _MSG_STORAGE_DESHABILITADO
             }
         
         resultado = {
@@ -1181,7 +1106,7 @@ class PedidoService:
             Dict con resultado completo incluyendo validaciones y consolidación
         """
         if not ENABLE_SQL_SERVER_STORAGE:
-            return {"status": "error", "message": "SQL Server storage está deshabilitado"}
+            return {"status": "error", "message": _MSG_STORAGE_DESHABILITADO}
         
         resultado = {
             "status": "success",
@@ -1543,7 +1468,7 @@ class PedidoService:
         except ValueError as e:
             # Detectar específicamente el error de número de pedido duplicado
             error_msg = str(e)
-            if "número de pedido" in error_msg.lower() and "ya existe" in error_msg.lower():
+            if _PATRON_NUM_PEDIDO in error_msg.lower() and _PATRON_YA_EXISTE in error_msg.lower():
                 numero_pedido = cabecera.get("numero_pedido")
                 logger.warning(f"⚠️ Intento de crear pedido con número duplicado: {numero_pedido}")
                 resultado["status"] = "error"
@@ -1595,7 +1520,7 @@ class PedidoService:
             except ValueError as e:
                 # Detectar específicamente el error de número de pedido duplicado
                 error_msg = str(e)
-                if "número de pedido" in error_msg.lower() and "ya existe" in error_msg.lower():
+                if _PATRON_NUM_PEDIDO in error_msg.lower() and _PATRON_YA_EXISTE in error_msg.lower():
                     numero_pedido = cabecera.get("numero_pedido")
                     logger.warning(f"⚠️ Intento de crear pedido con número duplicado: {numero_pedido}")
                     

@@ -83,7 +83,6 @@ def procesar_plantilla_upload(
             validar_antes_de_guardar=validar,
             bloquea_con_errores=bloquea_con_errores,
             tiendas_permitidas=None,
-            modo_tiendas=modo_tiendas,
             correcciones_codigos=correcciones_codigos
         )
 
