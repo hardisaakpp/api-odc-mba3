@@ -526,15 +526,7 @@ class PedidoService:
     def _detectar_y_procesar_formato_excel(
         self,
         file_content: bytes,
-        filename: str,
-        usuario_id: Optional[str],
         resultado: Dict[str, Any],
-        validar_antes_de_guardar: bool,
-        tiendas_permitidas: Optional[List[str]],
-        bloquea_con_errores: bool,
-        validar_sap: bool,
-        sap_obligatorio: bool,
-        modo_tiendas: str
     ) -> bool:
         """
         Detecta el formato del Excel y lo procesa. 
