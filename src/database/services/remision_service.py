@@ -79,6 +79,45 @@ def save_mba3_remision(
     return result
 
 
+def _normalizar_remisiones(mba3_json_result: Any) -> Optional[List[Dict[str, Any]]]:
+    """Convierte la entrada en lista de remisiones; retorna None si el formato no es soportado."""
+    if isinstance(mba3_json_result, list):
+        return mba3_json_result
+    if isinstance(mba3_json_result, dict):
+        return [mba3_json_result]
+    return None
+
+
+def _procesar_remision_individual(
+    repository: RemisionRepository,
+    remision: Dict[str, Any],
+    idx: int,
+    stats: Dict[str, Any],
+    upsert: bool,
+    continue_on_error: bool
+) -> None:
+    """Procesa una remisión y actualiza las estadísticas en stats."""
+    try:
+        result = save_mba3_remision(repository, remision, upsert=upsert)
+        if result["status"] == "success":
+            if result.get("cabecera_actualizada"):
+                stats["remisiones_actualizadas"] += 1
+            else:
+                stats["remisiones_guardadas"] += 1
+        else:
+            stats["remisiones_error"] += 1
+            stats["errors"].extend(result["errors"])
+            if not continue_on_error:
+                raise ValueError(f"Error al guardar remisión: {result['errors']}")
+    except Exception as e:
+        error_msg = f"Error al procesar remisión {idx}: {str(e)}"
+        logger.error(f"❌ {error_msg}")
+        stats["remisiones_error"] += 1
+        stats["errors"].append(error_msg)
+        if not continue_on_error:
+            raise
+
+
 def save_mba3_remisiones_to_sql_server(
     mba3_json_result: Any,
     upsert: bool = False,
@@ -86,14 +125,14 @@ def save_mba3_remisiones_to_sql_server(
 ) -> Dict[str, Any]:
     """
     Guarda el resultado JSON de remisiones de MBA3 en SQL Server.
-    
+
     Esta función es el punto de entrada principal para guardar remisiones de MBA3.
-    
+
     Args:
         mba3_json_result: Resultado JSON de MBA3 (puede ser list o dict)
         upsert: Si True, actualiza si existe; si False, inserta siempre
         continue_on_error: Si True, continúa procesando aunque falle una remisión
-        
+
     Returns:
         Dict con estadísticas de la operación
     """
@@ -103,7 +142,7 @@ def save_mba3_remisiones_to_sql_server(
             "status": "disabled",
             "message": "SQL Server storage is disabled"
         }
-    
+
     stats = {
         "status": "success",
         "total_remisiones": 0,
@@ -112,10 +151,9 @@ def save_mba3_remisiones_to_sql_server(
         "remisiones_error": 0,
         "errors": []
     }
-    
+
     conn = None
     try:
-        # Conectar a SQL Server
         try:
             conn = get_db_connection()
             repository = RemisionRepository(conn)
@@ -130,57 +168,28 @@ def save_mba3_remisiones_to_sql_server(
                 "remisiones_error": 0,
                 "errors": [f"Error de conexión: {str(conn_error)}"]
             }
-        
-        # Procesar según el tipo de resultado
-        remisiones = []
-        if isinstance(mba3_json_result, list):
-            remisiones = mba3_json_result
-        elif isinstance(mba3_json_result, dict):
-            remisiones = [mba3_json_result]
-        else:
+
+        remisiones = _normalizar_remisiones(mba3_json_result)
+        if remisiones is None:
             logger.error(f"❌ Formato de resultado no soportado: {type(mba3_json_result)}")
             return {
                 "status": "error",
                 "message": f"Formato no soportado: {type(mba3_json_result)}"
             }
-        
+
         stats["total_remisiones"] = len(remisiones)
         logger.info(f"📦 Procesando {stats['total_remisiones']} remisión(es)...")
-        
-        # Procesar cada remisión
+
         for idx, remision in enumerate(remisiones, 1):
-            try:
-                result = save_mba3_remision(repository, remision, upsert=upsert)
-                
-                if result["status"] == "success":
-                    if result.get("cabecera_actualizada"):
-                        stats["remisiones_actualizadas"] += 1
-                    else:
-                        stats["remisiones_guardadas"] += 1
-                else:
-                    stats["remisiones_error"] += 1
-                    stats["errors"].extend(result["errors"])
-                    
-                    if not continue_on_error:
-                        raise Exception(f"Error al guardar remisión: {result['errors']}")
-                
-            except Exception as e:
-                error_msg = f"Error al procesar remisión {idx}: {str(e)}"
-                logger.error(f"❌ {error_msg}")
-                stats["remisiones_error"] += 1
-                stats["errors"].append(error_msg)
-                
-                if not continue_on_error:
-                    raise
-        
+            _procesar_remision_individual(repository, remision, idx, stats, upsert, continue_on_error)
+
         logger.info(
             f"✅ Proceso completado: {stats['remisiones_guardadas']} guardadas, "
             f"{stats['remisiones_actualizadas']} actualizadas, "
             f"{stats['remisiones_error']} errores"
         )
-        
         return stats
-        
+
     except Exception as e:
         logger.error(f"❌ Error general al guardar remisiones: {e}", exc_info=True)
         stats["status"] = "error"
