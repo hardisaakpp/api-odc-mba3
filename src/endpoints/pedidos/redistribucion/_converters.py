@@ -19,16 +19,10 @@ def enriquecer_distribucion_tiendas_con_nombre(
         return []
     result: List[DistribucionTiendaFrontend] = []
     for d in distribucion_tiendas:
-        if hasattr(d, "tienda_codigo"):
-            codigo = (getattr(d, "tienda_codigo") or "").strip()
-            nombre = (getattr(d, "tienda_nombre") or "").strip()
-            cantidad = getattr(d, "cantidad", 0)
-            es_bodega = getattr(d, "es_bodega", False)
-        else:
-            codigo = (d.get("tienda_codigo") or "").strip()
-            nombre = (d.get("tienda_nombre") or "").strip()
-            cantidad = d.get("cantidad", 0)
-            es_bodega = d.get("es_bodega", False)
+        codigo = (_get_tienda_value(d, "tienda_codigo") or "").strip()
+        nombre = (_get_tienda_value(d, "tienda_nombre") or "").strip()
+        cantidad = _get_tienda_value(d, "cantidad", 0)
+        es_bodega = _get_tienda_value(d, "es_bodega", False)
         if not nombre and codigo and getattr(tienda_repo, "get_nombre_by_codigo", None):
             nombre = tienda_repo.get_nombre_by_codigo(codigo) or ""
         result.append(
