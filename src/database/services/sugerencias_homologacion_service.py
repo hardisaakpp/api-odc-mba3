@@ -235,6 +235,53 @@ class SugerenciasHomologacionService:
         # Retornar sugerencias del sistema actual (sin fuzzy)
         return sugerencias_actuales
     
+    def _calcular_score_reglas_sap(
+        self,
+        nombre_mba3: str,
+        codigo_normalizado_mba3: str,
+        prefijo_mba3: str,
+        todos_numeros_mba3: set,
+        codigo_sap: str,
+        nombre_sap: str
+    ) -> Tuple[float, List[str]]:
+        """Calcula score y motivos (REGLAS A-D) para un par MBA3/SAP."""
+        score = 0.0
+        motivos: List[str] = []
+
+        codigo_normalizado_sap = self.normalizar_codigo_avanzado(codigo_sap)
+        prefijo_sap = self.extraer_prefijo(codigo_sap)
+        numeros_sap = self.extraer_bloques_numericos(codigo_sap)
+        numeros_nombre_sap = self.extraer_bloques_numericos(nombre_sap)
+        todos_numeros_sap = set(numeros_sap + numeros_nombre_sap)
+
+        if codigo_normalizado_mba3 == codigo_normalizado_sap:
+            score += self.PESO_CODIGO_NORMALIZADO_IGUAL
+            motivos.append("Código normalizado idéntico")
+
+        numeros_comunes = todos_numeros_mba3.intersection(todos_numeros_sap)
+        tiene_coincidencia_numerica = bool(numeros_comunes)
+        if numeros_comunes:
+            numero_mas_largo = max(numeros_comunes, key=len)
+            score += self.PESO_CONTENCION_NUMERICA
+            motivos.append(f"Coincidencia por referencia numérica {numero_mas_largo}")
+
+        if prefijo_mba3 and prefijo_sap and prefijo_mba3 == prefijo_sap:
+            if tiene_coincidencia_numerica:
+                score += self.PESO_PREFIJO_COMPARTIDO
+                motivos.append(f"Prefijo compartido: {prefijo_mba3}")
+            else:
+                similitud_nombre, _ = self.calcular_similitud_nombre(nombre_mba3, nombre_sap)
+                if similitud_nombre > 0:
+                    score += self.PESO_PREFIJO_COMPARTIDO
+                    motivos.append(f"Prefijo compartido: {prefijo_mba3}")
+
+        similitud_nombre, motivos_nombre = self.calcular_similitud_nombre(nombre_mba3, nombre_sap)
+        if similitud_nombre > 0:
+            score += similitud_nombre
+            motivos.extend(motivos_nombre)
+
+        return score, motivos
+
     def _buscar_sugerencias_sistema_actual(
         self,
         producto_mba3: Dict[str, Any],
@@ -286,68 +333,17 @@ class SugerenciasHomologacionService:
             if not codigo_sap:
                 continue
             
-            # Normalización y extracción de características del producto SAP
-            codigo_normalizado_sap = self.normalizar_codigo_avanzado(codigo_sap)
-            prefijo_sap = self.extraer_prefijo(codigo_sap)
-            numeros_sap = self.extraer_bloques_numericos(codigo_sap)
-            numeros_nombre_sap = self.extraer_bloques_numericos(nombre_sap)
-            todos_numeros_sap = set(numeros_sap + numeros_nombre_sap)
-            
-            # Calcular score y motivos
-            score = 0.0
-            motivos = []
-            tiene_coincidencia_numerica = False
-            tiene_similitud_nombre = False
-            
-            # REGLA A: Código normalizado igual
-            if codigo_normalizado_mba3 == codigo_normalizado_sap:
-                score += self.PESO_CODIGO_NORMALIZADO_IGUAL
-                motivos.append("Código normalizado idéntico")
-            
-            # REGLA C: Contención numérica (calcular primero para usar en prefijo)
-            numeros_en_sap = todos_numeros_sap
-            numeros_comunes = todos_numeros_mba3.intersection(numeros_en_sap)
-            
-            if numeros_comunes:
-                tiene_coincidencia_numerica = True
-                # Priorizar números más largos
-                numero_mas_largo = max(numeros_comunes, key=len)
-                score += self.PESO_CONTENCION_NUMERICA
-                motivos.append(f"Coincidencia por referencia numérica {numero_mas_largo}")
-            
-            # REGLA B: Prefijo compartido (solo si hay coincidencia numérica o similitud nombre)
-            if prefijo_mba3 and prefijo_sap and prefijo_mba3 == prefijo_sap:
-                # Verificar si hay coincidencia numérica o similitud de nombre
-                if tiene_coincidencia_numerica:
-                    score += self.PESO_PREFIJO_COMPARTIDO
-                    motivos.append(f"Prefijo compartido: {prefijo_mba3}")
-                else:
-                    # Verificar similitud de nombre antes de agregar prefijo
-                    similitud_nombre, _ = self.calcular_similitud_nombre(nombre_mba3, nombre_sap)
-                    if similitud_nombre > 0:
-                        tiene_similitud_nombre = True
-                        score += self.PESO_PREFIJO_COMPARTIDO
-                        motivos.append(f"Prefijo compartido: {prefijo_mba3}")
-            
-            # REGLA D: Similitud de nombre
-            similitud_nombre, motivos_nombre = self.calcular_similitud_nombre(nombre_mba3, nombre_sap)
-            if similitud_nombre > 0:
-                tiene_similitud_nombre = True
-                score += similitud_nombre
-                motivos.extend(motivos_nombre)
-            
-            # Solo agregar si supera umbral mínimo
+            score, motivos = self._calcular_score_reglas_sap(
+                nombre_mba3, codigo_normalizado_mba3, prefijo_mba3, todos_numeros_mba3,
+                codigo_sap, nombre_sap
+            )
             if score >= self.MIN_SCORE_SUGERENCIA:
-                # Normalizar score
-                score_normalizado = self.normalizar_score(score)
-                score_original = round(score, 2)  # Mantener score original para referencia
-                
                 sugerencias.append({
                     "codigo_sap": codigo_sap,
                     "nombre_sap": nombre_sap,
                     "pack_sap": producto_sap.get("pack", ""),
-                    "score": score_normalizado,  # Score normalizado 0-1 para frontend
-                    "score_original": score_original,  # Score original para debugging
+                    "score": self.normalizar_score(score),
+                    "score_original": round(score, 2),
                     "motivos": motivos
                 })
         
@@ -355,6 +351,41 @@ class SugerenciasHomologacionService:
         sugerencias.sort(key=lambda x: x["score"], reverse=True)
         return sugerencias[:self.MAX_SUGERENCIAS_POR_PRODUCTO]
     
+    def _calcular_score_fuzzy_sap(
+        self,
+        codigo_mba3: str,
+        nombre_mba3: str,
+        codigo_sap: str,
+        nombre_sap: str
+    ) -> Optional[Tuple[float, List[str]]]:
+        """Calcula score fuzzy para un par MBA3/SAP; retorna None si no supera el umbral."""
+        ratio_codigo = fuzz.ratio(codigo_mba3.upper(), codigo_sap.upper())
+        partial_ratio_codigo = fuzz.partial_ratio(codigo_mba3.upper(), codigo_sap.upper())
+        token_sort_ratio = fuzz.token_sort_ratio(codigo_mba3.upper(), codigo_sap.upper())
+
+        ratio_nombre = 0.0
+        if nombre_mba3 and nombre_sap:
+            ratio_nombre = fuzz.ratio(nombre_mba3.upper(), nombre_sap.upper())
+
+        score_codigo = max(ratio_codigo, partial_ratio_codigo, token_sort_ratio) / 100.0
+        score_nombre = ratio_nombre / 100.0
+        score_fuzzy = (score_codigo * 0.7) + (score_nombre * 0.3)
+
+        if score_fuzzy < self.UMBRAL_FUZZY_MATCHING:
+            return None
+
+        motivos: List[str] = []
+        if ratio_codigo >= 85:
+            motivos.append(f"Similitud de código: {ratio_codigo:.0f}%")
+        if partial_ratio_codigo >= 85 and partial_ratio_codigo != ratio_codigo:
+            motivos.append(f"Similitud parcial: {partial_ratio_codigo:.0f}%")
+        if ratio_nombre >= 70:
+            motivos.append(f"Similitud de nombre: {ratio_nombre:.0f}%")
+        if not motivos:
+            motivos.append(f"Similitud fuzzy: {score_fuzzy*100:.0f}%")
+
+        return score_fuzzy, motivos
+
     def _buscar_con_fuzzy_matching(
         self,
         producto_mba3: Dict[str, Any],
@@ -402,43 +433,14 @@ class SugerenciasHomologacionService:
             if not codigo_sap:
                 continue
             
-            # Fuzzy matching en código (prioritario)
-            ratio_codigo = fuzz.ratio(codigo_mba3.upper(), codigo_sap.upper())
-            partial_ratio_codigo = fuzz.partial_ratio(codigo_mba3.upper(), codigo_sap.upper())
-            token_sort_ratio = fuzz.token_sort_ratio(codigo_mba3.upper(), codigo_sap.upper())
-            
-            # Fuzzy matching en nombre (si existe)
-            ratio_nombre = 0.0
-            if nombre_mba3 and nombre_sap:
-                ratio_nombre = fuzz.ratio(nombre_mba3.upper(), nombre_sap.upper())
-            
-            # Score combinado (priorizar código sobre nombre)
-            # Usar el máximo de los ratios de código para capturar diferentes tipos de similitud
-            score_codigo = max(ratio_codigo, partial_ratio_codigo, token_sort_ratio) / 100.0
-            score_nombre = ratio_nombre / 100.0
-            
-            # Score final: 70% código, 30% nombre
-            score_fuzzy = (score_codigo * 0.7) + (score_nombre * 0.3)
-            
-            # Solo incluir si supera umbral alto (0.85) para evitar falsos positivos
-            if score_fuzzy >= self.UMBRAL_FUZZY_MATCHING:
-                motivos = []
-                if ratio_codigo >= 85:
-                    motivos.append(f"Similitud de código: {ratio_codigo:.0f}%")
-                if partial_ratio_codigo >= 85 and partial_ratio_codigo != ratio_codigo:
-                    motivos.append(f"Similitud parcial: {partial_ratio_codigo:.0f}%")
-                if ratio_nombre >= 70:
-                    motivos.append(f"Similitud de nombre: {ratio_nombre:.0f}%")
-                
-                # Si no hay motivos específicos, usar genérico
-                if not motivos:
-                    motivos.append(f"Similitud fuzzy: {score_fuzzy*100:.0f}%")
-                
+            resultado = self._calcular_score_fuzzy_sap(codigo_mba3, nombre_mba3, codigo_sap, nombre_sap)
+            if resultado is not None:
+                score_fuzzy, motivos = resultado
                 sugerencias_fuzzy.append({
                     "codigo_sap": codigo_sap,
                     "nombre_sap": nombre_sap,
                     "pack_sap": producto_sap.get("pack", ""),
-                    "score": score_fuzzy,  # Ya está en rango 0-1
+                    "score": score_fuzzy,
                     "score_original": round(score_fuzzy, 2),
                     "motivos": motivos
                 })
