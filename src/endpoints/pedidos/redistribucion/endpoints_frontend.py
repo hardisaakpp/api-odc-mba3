@@ -6,7 +6,6 @@ from typing import Dict, Optional
 
 from fastapi import FastAPI, Depends, HTTPException, Path, Query, Body, status, Request
 from fastapi.responses import StreamingResponse
-from datetime import datetime
 
 from src.utils.timezone import ahora_naive
 
@@ -140,7 +139,7 @@ def register_frontend_endpoints(app: FastAPI):
                     if email_enviado:
                         logger.info(f"📧 Email de confirmación de redistribución enviado a El Rayo (Pedido: {numero_pedido})")
                     else:
-                        logger.warning(f"⚠️ No se pudo enviar email de confirmación de redistribución (no crítico)")
+                        logger.warning("⚠️ No se pudo enviar email de confirmación de redistribución (no crítico)")
                 except Exception as e:
                     logger.warning(f"⚠️ Error al enviar email de confirmación de redistribución (no crítico): {e}")
 
@@ -180,7 +179,7 @@ def register_frontend_endpoints(app: FastAPI):
             with get_db_connection_context() as conn:
                 repo_pedido = PedidoRepository(conn)
 
-                pedido_data = obtener_pedido_o_404(repo_pedido, numero_pedido, es_numero=True)
+                obtener_pedido_o_404(repo_pedido, numero_pedido, es_numero=True)
 
                 ajustes_ajustados = []
 
