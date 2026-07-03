@@ -4,8 +4,7 @@ Implementa las reglas de negocio estrictas para la redistribución.
 """
 
 import logging
-from typing import Dict, Any, List, Optional, Tuple
-from decimal import Decimal
+from typing import Dict, Any, List, Tuple
 
 from src.database.pedido_estados import ESTADO_REDISTRIBUCION, estado_id_desde_legacy
 
@@ -23,7 +22,7 @@ class RedistribucionValidator:
     ) -> Tuple[bool, List[str]]:
         """
         Valida una redistribución completa según las reglas de negocio.
-        
+
         Args:
             pedido_data: Datos completos del pedido (con detalles y tiendas)
             productos_redistribucion: Lista de productos con redistribuciones
@@ -34,48 +33,62 @@ class RedistribucionValidator:
                         "cantidad_confirmada_total": 80
                     }
                 }
-        
+
         Returns:
             Tuple (es_valido, lista_errores)
         """
-        errores = []
-        
-        # Validación 1: No valores negativos y deben ser enteros
+        errores: List[str] = []
+        errores.extend(RedistribucionValidator._validar_cantidades_distribuciones(productos_redistribucion))
+        errores.extend(RedistribucionValidator._validar_totales_vs_confirmados(productos_redistribucion, respuestas_proveedor))
+        errores.extend(RedistribucionValidator._validar_tiendas_pertenecen_al_pedido(pedido_data, productos_redistribucion))
+        errores.extend(RedistribucionValidator._validar_sin_duplicados_tiendas(productos_redistribucion))
+        errores.extend(RedistribucionValidator._validar_estado_pedido(pedido_data))
+        errores.extend(RedistribucionValidator._validar_bodegas_no_negativas(pedido_data, productos_redistribucion))
+
+        es_valido = len(errores) == 0
+        if not es_valido:
+            logger.warning(f"⚠️ Validación de redistribución falló: {len(errores)} errores")
+            for error in errores:
+                logger.warning(f"  - {error}")
+        return es_valido, errores
+
+    @staticmethod
+    def _validar_cantidades_distribuciones(
+        productos_redistribucion: List[Dict[str, Any]]
+    ) -> List[str]:
+        """Validación 1: cantidades no negativas y dentro del rango permitido (acepta decimales)."""
+        errores: List[str] = []
         for producto in productos_redistribucion:
             pedido_detalle_id = producto["pedido_detalle_id"]
             for distribucion in producto["distribuciones"]:
                 cantidad_asignada = distribucion["cantidad_asignada"]
-                
-                # Validar que no sea negativo
+                tienda_id = distribucion["tienda_id"]
                 if cantidad_asignada < 0:
                     errores.append(
                         f"Producto {pedido_detalle_id}: cantidad_asignada no puede ser negativa "
-                        f"(tienda {distribucion['tienda_id']}: {cantidad_asignada})"
+                        f"(tienda {tienda_id}: {cantidad_asignada})"
                     )
-
                 # Acepta decimales (ej. 0.5, 1.25); alineado con frontend y AjusteDetalle/DistribucionTiendaFrontend (float).
-
-                # Validar rango razonable (máximo 1,000,000 unidades por tienda)
                 if cantidad_asignada > 1000000:
                     errores.append(
                         f"Producto {pedido_detalle_id}: cantidad_asignada excede el límite máximo "
-                        f"(tienda {distribucion['tienda_id']}: {cantidad_asignada}). Máximo permitido: 1,000,000"
+                        f"(tienda {tienda_id}: {cantidad_asignada}). Máximo permitido: 1,000,000"
                     )
-        
-        # Validación 2: La suma de cantidades asignadas debe ser igual a la cantidad confirmada por el proveedor
-        # Esta validación garantiza consistencia entre backend y frontend (el botón Confirmar Redistribución
-        # solo se habilita cuando la diferencia es 0 para cada producto).
+        return errores
+
+    @staticmethod
+    def _validar_totales_vs_confirmados(
+        productos_redistribucion: List[Dict[str, Any]],
+        respuestas_proveedor: Dict[str, Dict[str, Any]]
+    ) -> List[str]:
+        """Validación 2: suma de cantidades asignadas == cantidad confirmada por proveedor."""
+        _tol = 1e-6
+        errores: List[str] = []
         for producto in productos_redistribucion:
             pedido_detalle_id = producto["pedido_detalle_id"]
-            cantidad_asignada_total = sum(
-                d["cantidad_asignada"] for d in producto["distribuciones"]
-            )
-            
+            cantidad_asignada_total = sum(d["cantidad_asignada"] for d in producto["distribuciones"])
             respuesta = respuestas_proveedor.get(pedido_detalle_id, {})
             cantidad_confirmada_total = respuesta.get("cantidad_confirmada_total", 0)
-            
-            # Validar que la suma de cantidades asignadas sea igual a la cantidad confirmada (acepta decimales, ej. 0.5)
-            _tol = 1e-6
             if abs(float(cantidad_asignada_total) - float(cantidad_confirmada_total)) > _tol:
                 diferencia = cantidad_confirmada_total - cantidad_asignada_total
                 errores.append(
@@ -83,120 +96,128 @@ class RedistribucionValidator:
                     f"no coincide con la cantidad confirmada por el proveedor ({cantidad_confirmada_total}). "
                     f"Diferencia: {diferencia}"
                 )
-            
-            # Validar que la cantidad confirmada sea válida
             if cantidad_confirmada_total < 0:
                 errores.append(
                     f"Producto {pedido_detalle_id}: La cantidad confirmada no puede ser negativa "
                     f"({cantidad_confirmada_total})"
                 )
-        
-        # Validación 3: Todas las tiendas pertenecen al pedido
-        # Obtener tiendas válidas del pedido
-        tiendas_validas = set()
+        return errores
+
+    @staticmethod
+    def _validar_tiendas_pertenecen_al_pedido(
+        pedido_data: Dict[str, Any],
+        productos_redistribucion: List[Dict[str, Any]]
+    ) -> List[str]:
+        """Validación 3: todos los productos existen en el pedido y sus tiendas pertenecen a él."""
+        errores: List[str] = []
+        tiendas_validas: set = set()
         for detalle in pedido_data.get("detalles", []):
             for tienda in detalle.get("tiendas", []):
                 tiendas_validas.add(tienda["tienda_id"])
-        
+
         for producto in productos_redistribucion:
             pedido_detalle_id = producto["pedido_detalle_id"]
-            
-            # Verificar que el producto existe en el pedido
             producto_existe = any(
-                d["pedido_detalle_id"] == pedido_detalle_id 
+                d["pedido_detalle_id"] == pedido_detalle_id
                 for d in pedido_data.get("detalles", [])
             )
-            
             if not producto_existe:
-                errores.append(
-                    f"Producto {pedido_detalle_id}: No existe en el pedido"
-                )
+                errores.append(f"Producto {pedido_detalle_id}: No existe en el pedido")
                 continue
-            
-            # Verificar que todas las tiendas de la redistribución pertenecen al pedido
             for distribucion in producto["distribuciones"]:
                 tienda_id = distribucion["tienda_id"]
                 if tienda_id not in tiendas_validas:
                     errores.append(
                         f"Producto {pedido_detalle_id}: Tienda {tienda_id} no pertenece al pedido"
                     )
-        
-        # Validación 4: No duplicados de tienda por producto y validar formato de tienda_id
+        return errores
+
+    @staticmethod
+    def _validar_sin_duplicados_tiendas(
+        productos_redistribucion: List[Dict[str, Any]]
+    ) -> List[str]:
+        """Validación 4: tienda_id no vacío y sin duplicados por producto."""
+        errores: List[str] = []
         for producto in productos_redistribucion:
             pedido_detalle_id = producto["pedido_detalle_id"]
-            tiendas_vistas = set()
+            tiendas_vistas: set = set()
             for distribucion in producto["distribuciones"]:
                 tienda_id = distribucion["tienda_id"]
-                
-                # Validar formato de tienda_id (debe ser UUID válido o string no vacío)
                 if not tienda_id or not isinstance(tienda_id, str) or len(tienda_id.strip()) == 0:
                     errores.append(
                         f"Producto {pedido_detalle_id}: Tienda ID inválido o vacío en la redistribución"
                     )
                     continue
-                
-                # Validar duplicados
                 if tienda_id in tiendas_vistas:
                     errores.append(
                         f"Producto {pedido_detalle_id}: Tienda {tienda_id} duplicada en la redistribución"
                     )
                 tiendas_vistas.add(tienda_id)
-        
-        # Validación 5: Solo el estado REDISTRIBUCION (CONFIRMADO POR EL RAYO) permite confirmar redistribución
-        # Nota: Si el pedido está en este estado, la respuesta del proveedor ya existe (validación implícita)
+        return errores
+
+    @staticmethod
+    def _validar_estado_pedido(pedido_data: Dict[str, Any]) -> List[str]:
+        """Validación 5: el pedido debe estar en estado REDISTRIBUCION (CONFIRMADO POR EL RAYO)."""
         cabecera = pedido_data.get("cabecera", {})
         estado_id = cabecera.get("estado_id")
         if estado_id is None:
             estado_id = estado_id_desde_legacy(cabecera.get("estado"))
         estado_nombre = cabecera.get("estado_nombre") or cabecera.get("estado") or "N/A"
         if estado_id != ESTADO_REDISTRIBUCION:
-            errores.append(
+            return [
                 f"El estado del pedido ({estado_nombre}) no permite confirmar redistribución. "
                 "Solo se permite en estado CONFIRMADO POR EL RAYO."
-            )
-        
-        # Validación 6: Validar bodegas - las bodegas no pueden quedar negativas
-        # Cuando se redistribuye desde bodega a tiendas, la bodega debe tener suficiente inventario
-        # Para esto necesitamos obtener información de bodegas del pedido original
+            ]
+        return []
+
+    @staticmethod
+    def _bodegas_de_detalle(detalle: Dict[str, Any]) -> Dict[str, Any]:
+        """Retorna mapa {tienda_id: cantidad} de las tiendas marcadas como bodega en un detalle."""
+        return {
+            tienda["tienda_id"]: tienda.get("cantidad", 0)
+            for tienda in detalle.get("tiendas", [])
+            if tienda.get("es_bodega", False)
+        }
+
+    @staticmethod
+    def _validar_bodegas_producto(
+        pedido_detalle_id: str,
+        bodegas_originales: Dict[str, Any],
+        producto_redistribucion: Dict[str, Any]
+    ) -> List[str]:
+        """Valida que ninguna bodega quede con cantidad negativa para un producto."""
+        errores: List[str] = []
+        for distribucion in producto_redistribucion["distribuciones"]:
+            tienda_id = distribucion["tienda_id"]
+            if tienda_id in bodegas_originales:
+                cantidad_asignada = distribucion["cantidad_asignada"]
+                # La validación 1 ya cubre negativos en general; aquí damos mensaje específico de bodega.
+                if cantidad_asignada < 0:
+                    errores.append(
+                        f"Producto {pedido_detalle_id}: La bodega {tienda_id} no puede tener cantidad negativa "
+                        f"(cantidad asignada: {cantidad_asignada})"
+                    )
+        return errores
+
+    @staticmethod
+    def _validar_bodegas_no_negativas(
+        pedido_data: Dict[str, Any],
+        productos_redistribucion: List[Dict[str, Any]]
+    ) -> List[str]:
+        """Validación 6: las bodegas no pueden quedar con cantidad negativa tras la redistribución."""
+        errores: List[str] = []
         for detalle in pedido_data.get("detalles", []):
             pedido_detalle_id = detalle.get("pedido_detalle_id")
-            
-            # Buscar si este producto tiene redistribución
             producto_redistribucion = next(
                 (p for p in productos_redistribucion if p["pedido_detalle_id"] == pedido_detalle_id),
                 None
             )
-            
             if producto_redistribucion:
-                # Obtener bodegas originales de este producto
-                bodegas_originales = {}
-                for tienda in detalle.get("tiendas", []):
-                    if tienda.get("es_bodega", False):
-                        bodegas_originales[tienda["tienda_id"]] = tienda.get("cantidad", 0)
-                
-                # Verificar que las bodegas en la redistribución no queden negativas
-                for distribucion in producto_redistribucion["distribuciones"]:
-                    tienda_id = distribucion["tienda_id"]
-                    
-                    # Si esta tienda es una bodega, verificar que la cantidad no sea negativa
-                    if tienda_id in bodegas_originales:
-                        cantidad_asignada = distribucion["cantidad_asignada"]
-                        # Ya validamos que no sea negativa en la validación 1,
-                        # pero aquí podemos dar un mensaje más específico si es bodega
-                        if cantidad_asignada < 0:
-                            errores.append(
-                                f"Producto {pedido_detalle_id}: La bodega {tienda_id} no puede tener cantidad negativa "
-                                f"(cantidad asignada: {cantidad_asignada})"
-                            )
-        
-        es_valido = len(errores) == 0
-        
-        if not es_valido:
-            logger.warning(f"⚠️ Validación de redistribución falló: {len(errores)} errores")
-            for error in errores:
-                logger.warning(f"  - {error}")
-        
-        return es_valido, errores
+                bodegas_originales = RedistribucionValidator._bodegas_de_detalle(detalle)
+                errores.extend(RedistribucionValidator._validar_bodegas_producto(
+                    pedido_detalle_id, bodegas_originales, producto_redistribucion
+                ))
+        return errores
     
     @staticmethod
     def validar_confirmacion_redistribucion(
