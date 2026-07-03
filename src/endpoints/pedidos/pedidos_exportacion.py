@@ -6,8 +6,6 @@ import io
 import logging
 import uuid
 from typing import Dict
-from datetime import datetime
-
 from src.utils.timezone import ahora_naive
 from fastapi import FastAPI, Depends, HTTPException, Path, Query, status
 from fastapi.responses import Response
@@ -18,6 +16,8 @@ from src.database.pedido_estados import ESTADO_GESTIONAR_PEDIDO
 from src.security.jwt_auth import verify_jwt_token, require_permission, require_any_permission
 
 logger = logging.getLogger(__name__)
+
+_PERM_ODCSAP_VIEW = 'odcsap.view'
 
 
 def register_exportacion_endpoints(app: FastAPI):
@@ -80,7 +80,7 @@ def register_exportacion_endpoints(app: FastAPI):
         consolidado: bool = Query(False, description="Si True, consolida cantidades por producto; si False, una línea por tienda/sucursal"),
         incluir_encabezado: bool = Query(True, description="Incluir las 19 líneas de encabezado del formato MBA"),
         user: Dict = Depends(verify_jwt_token),
-        _: None = Depends(require_permission('odcsap.view'))
+        _: None = Depends(require_permission(_PERM_ODCSAP_VIEW))
     ):
         """
         Exporta un pedido en formato plano (.txt) para importar en MBA.
@@ -203,7 +203,7 @@ def register_exportacion_endpoints(app: FastAPI):
     async def descargar_pedido(
         pedido_id: str = Path(..., description="UUID del pedido"),
         user: Dict = Depends(verify_jwt_token),
-        _: None = Depends(require_any_permission(['mabel.view', 'odcsap.view']))
+        _: None = Depends(require_any_permission(['mabel.view', _PERM_ODCSAP_VIEW]))
     ):
         """
         Descarga un pedido como archivo Excel con el formato de "Descargar Pedido".
@@ -500,7 +500,7 @@ def register_exportacion_endpoints(app: FastAPI):
     async def descargar_pedido_original(
         pedido_id: str = Path(..., description="UUID del pedido"),
         user: Dict = Depends(verify_jwt_token),
-        _: None = Depends(require_any_permission(['mabel.view', 'odcsap.view']))
+        _: None = Depends(require_any_permission(['mabel.view', _PERM_ODCSAP_VIEW]))
     ):
         """
         Descarga el pedido **con los valores originales** (antes de ediciones).
