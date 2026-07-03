@@ -27,6 +27,27 @@ from .utils import get_user_id
 
 logger = logging.getLogger(__name__)
 
+_PERM_MABEL = 'mabel.view'
+_PERM_ODCSAP = 'odcsap.view'
+_PERMS_LISTADO = [_PERM_MABEL, _PERM_ODCSAP]
+
+
+class _Paginacion:
+    """Agrupa los parámetros de paginación para reducir la aridad de los endpoints."""
+    def __init__(
+        self,
+        limit: Optional[int] = Query(None, description="Límite de registros por página"),
+        offset: Optional[int] = Query(None, description="Offset para paginación"),
+        page: Optional[int] = Query(1, ge=1, description="Número de página (1-based, alternativa a offset)"),
+        page_size: Optional[int] = Query(10, ge=1, le=100, description="Tamaño de página (snake_case)"),
+        page_size_camel: Optional[int] = Query(None, alias="pageSize", ge=1, le=100, description="Tamaño de página (camelCase)"),
+    ):
+        self.limit = limit
+        self.offset = offset
+        self.page = page
+        self.page_size = page_size
+        self.page_size_camel = page_size_camel
+
 
 async def _listar_pedidos_handler(
     estado: Optional[str],
@@ -39,7 +60,7 @@ async def _listar_pedidos_handler(
     offset: Optional[int],
     page: Optional[int],
     page_size: Optional[int],
-    pageSize: Optional[int],
+    page_size_camel: Optional[int],
     solo_redistribucion: Optional[str],
     solo_pendientes_accion: Optional[str],
 ):
@@ -52,7 +73,7 @@ async def _listar_pedidos_handler(
             solo_pendientes_accion is not None
             and str(solo_pendientes_accion).lower() in ("true", "1")
         )
-        size = pageSize if pageSize is not None else page_size
+        size = page_size_camel if page_size_camel is not None else page_size
         if limit is not None:
             use_limit, use_offset = limit, offset or 0
         else:
@@ -100,7 +121,7 @@ async def _listar_pedidos_handler(
 async def _listar_pedidos_confirmados_handler(
     page: Optional[int],
     page_size: Optional[int],
-    pageSize: Optional[int],
+    page_size_camel: Optional[int],
     limit: Optional[int],
     offset: Optional[int],
     fecha_desde: Optional[str],
@@ -110,7 +131,7 @@ async def _listar_pedidos_confirmados_handler(
     creado_por: Optional[str],
 ):
     try:
-        size = pageSize if pageSize is not None else page_size
+        size = page_size_camel if page_size_camel is not None else page_size
         if limit is not None:
             use_limit, use_offset = limit, offset or 0
         else:
@@ -179,8 +200,8 @@ async def _get_ultimo_pedido_redistribucion_handler(
 ):
     try:
         permissions = user.get("permissions") or []
-        has_odcsap = "odcsap.view" in permissions
-        has_mabel = "mabel.view" in permissions
+        has_odcsap = _PERM_ODCSAP in permissions
+        has_mabel = _PERM_MABEL in permissions
         if has_odcsap and not has_mabel:
             user_id = None
         else:
@@ -278,11 +299,7 @@ def register_pedidos_listado_endpoints(app: FastAPI):
         proveedor_nombre: Optional[str] = Query(None, description="Buscar por nombre de proveedor (parcial)"),
         numero_pedido: Optional[str] = Query(None, description="Buscar por número de pedido (parcial)"),
         creado_por: Optional[str] = Query(None, description="Filtrar por usuario que creó el pedido"),
-        limit: Optional[int] = Query(None, description="Límite de registros por página"),
-        offset: Optional[int] = Query(None, description="Offset para paginación"),
-        page: Optional[int] = Query(1, ge=1, description="Número de página (1-based, alternativa a offset)"),
-        page_size: Optional[int] = Query(10, ge=1, le=100, description="Tamaño de página (snake_case)"),
-        pageSize: Optional[int] = Query(None, ge=1, le=100, description="Tamaño de página (camelCase)"),
+        paginacion: _Paginacion = Depends(_Paginacion),
         solo_redistribucion: Optional[str] = Query(
             None,
             description="Si 'true', solo pedidos aptos para redistribución (estado >= CONFIRMADO POR EL RAYO, excluye CANCELADO y CANCELADO POR EL RAYO)"
@@ -292,7 +309,7 @@ def register_pedidos_listado_endpoints(app: FastAPI):
             description="Si 'true', solo pedidos que requieren acción (pendiente confirmación / respuesta proveedor / confirmado proveedor)"
         ),
         user: Dict = Depends(verify_jwt_token),
-        _: None = Depends(require_any_permission(['odcsap.view', 'mabel.view']))
+        _: None = Depends(require_any_permission(_PERMS_LISTADO))
     ):
         """
         Lista pedidos con filtros y paginación.
@@ -355,11 +372,11 @@ def register_pedidos_listado_endpoints(app: FastAPI):
             proveedor_nombre=proveedor_nombre,
             numero_pedido=numero_pedido,
             creado_por=creado_por,
-            limit=limit,
-            offset=offset,
-            page=page,
-            page_size=page_size,
-            pageSize=pageSize,
+            limit=paginacion.limit,
+            offset=paginacion.offset,
+            page=paginacion.page,
+            page_size=paginacion.page_size,
+            page_size_camel=paginacion.page_size_camel,
             solo_redistribucion=solo_redistribucion,
             solo_pendientes_accion=solo_pendientes_accion,
         )
@@ -368,7 +385,7 @@ def register_pedidos_listado_endpoints(app: FastAPI):
     async def listar_pedidos_confirmados(
         page: Optional[int] = Query(1, ge=1, description="Número de página (1-based)"),
         page_size: Optional[int] = Query(10, ge=1, le=100, description="Tamaño de página (snake_case)"),
-        pageSize: Optional[int] = Query(None, ge=1, le=100, description="Tamaño de página (camelCase, alias de page_size)"),
+        page_size_camel: Optional[int] = Query(None, alias="pageSize", ge=1, le=100, description="Tamaño de página (camelCase, alias de page_size)"),
         limit: Optional[int] = Query(None, description="Límite de registros (alternativa a page_size)"),
         offset: Optional[int] = Query(None, description="Offset (alternativa a page)"),
         fecha_desde: Optional[str] = Query(None, description="Filtrar desde fecha (YYYY-MM-DD)"),
@@ -381,7 +398,7 @@ def register_pedidos_listado_endpoints(app: FastAPI):
             description="Si 'true', solo pedidos con redistribución ya confirmada (estado CONFIRMADO REDISTRIBUCION)"
         ),
         user: Dict = Depends(verify_jwt_token),
-        _: None = Depends(require_any_permission(['odcsap.view', 'mabel.view']))
+        _: None = Depends(require_any_permission(_PERMS_LISTADO))
     ):
         """
         Lista pedidos para la pantalla Revisar Redistribución, ordenados por creado_en DESC.
@@ -404,7 +421,7 @@ def register_pedidos_listado_endpoints(app: FastAPI):
         return await _listar_pedidos_confirmados_handler(
             page=page,
             page_size=page_size,
-            pageSize=pageSize,
+            page_size_camel=page_size_camel,
             limit=limit,
             offset=offset,
             fecha_desde=fecha_desde,
@@ -421,7 +438,7 @@ def register_pedidos_listado_endpoints(app: FastAPI):
             description="Si true, último pedido apto para redistribución del usuario; si false, último en todo el sistema"
         ),
         user: Dict = Depends(verify_jwt_token),
-        _: None = Depends(require_any_permission(['odcsap.view', 'mabel.view']))
+        _: None = Depends(require_any_permission(_PERMS_LISTADO))
     ):
         """
         Obtiene el último pedido para la pantalla Revisar Redistribución.
@@ -464,7 +481,7 @@ def register_pedidos_listado_endpoints(app: FastAPI):
             ),
         ),
         user: Dict = Depends(verify_jwt_token),
-        _: None = Depends(require_any_permission(['odcsap.view', 'mabel.view']))
+        _: None = Depends(require_any_permission(_PERMS_LISTADO))
     ):
         """
         Devuelve la lista de estados de pedido disponibles para el dropdown
@@ -510,7 +527,7 @@ def register_pedidos_listado_endpoints(app: FastAPI):
     @app.get("/api/pedidos/existe", tags=["Pedidos"])
     async def verificar_pedidos_existen(
         user: Dict = Depends(verify_jwt_token),
-        _: None = Depends(require_any_permission(['odcsap.view', 'mabel.view']))
+        _: None = Depends(require_any_permission(_PERMS_LISTADO))
     ):
         """
         Verifica si existe al menos un pedido guardado en la base de datos.
