@@ -14,6 +14,9 @@ from src.security.jwt_auth import verify_jwt_token
 
 logger = logging.getLogger(__name__)
 
+_PERM_MABEL = "mabel.view"
+_PERM_ODCSAP = "odcsap.view"
+
 # Exportar función principal para el linter
 __all__ = ["register_auth_endpoints"]
 
@@ -50,21 +53,21 @@ def _map_permissions_to_capabilities(permissions: list, roles: list) -> Dict[str
     # Mapeo de permisos a capabilities (Core: odcsap.view = EL RAYO, mabel.view = MABEL TRADING)
     capabilities = {
         # MABEL: Subir plantillas Excel.
-        "can_upload_templates": is_admin or has_perm('mabel.view'),
-        "can_cargar_plantilla_excel": is_admin or has_perm('mabel.view'),
+        "can_upload_templates": is_admin or has_perm(_PERM_MABEL),
+        "can_cargar_plantilla_excel": is_admin or has_perm(_PERM_MABEL),
         # Ver plantillas/pedidos: cualquiera de los dos módulos.
-        "can_view_templates": is_admin or has_perm('mabel.view') or has_perm('odcsap.view'),
+        "can_view_templates": is_admin or has_perm(_PERM_MABEL) or has_perm(_PERM_ODCSAP),
         # Operar pedidos (redistribuir, exportar, Descargar para MBA): cualquiera.
-        "can_operate_pedidos": is_admin or has_perm('mabel.view') or has_perm('odcsap.view'),
+        "can_operate_pedidos": is_admin or has_perm(_PERM_MABEL) or has_perm(_PERM_ODCSAP),
         "can_view_odc_sap": has_perm('odc.view'),
-        "can_manage_order": has_perm('odcsap.view'),
-        "can_view_order_list": has_perm('odcsap.view'),
-        "mabel_view": has_perm('mabel.view'),
+        "can_manage_order": has_perm(_PERM_ODCSAP),
+        "can_view_order_list": has_perm(_PERM_ODCSAP),
+        "mabel_view": has_perm(_PERM_MABEL),
         "can_view_odc": is_admin,
-        "can_review_pedido": is_admin or has_perm('mabel.view') or has_perm('odcsap.view'),
-        "can_confirm_pedido": is_admin or has_perm('mabel.view') or has_perm('odcsap.view'),
+        "can_review_pedido": is_admin or has_perm(_PERM_MABEL) or has_perm(_PERM_ODCSAP),
+        "can_confirm_pedido": is_admin or has_perm(_PERM_MABEL) or has_perm(_PERM_ODCSAP),
         # Ver/gestionar archivos Excel originales (Listado Pedidos Originales)
-        "can_view_plantillas_originales": is_admin or has_perm('mabel.view') or has_perm('odcsap.view'),
+        "can_view_plantillas_originales": is_admin or has_perm(_PERM_MABEL) or has_perm(_PERM_ODCSAP),
     }
     
     # Logging de debug solo en desarrollo
@@ -75,6 +78,41 @@ def _map_permissions_to_capabilities(permissions: list, roles: list) -> Dict[str
         logger.debug(f"🔍 [CAPABILITIES] Capabilities mapeadas: {capabilities}")
     
     return capabilities
+
+
+def _build_user_info(user: Dict[str, Any], roles: list, permissions: list) -> Dict[str, Any]:
+    """Construye el dict user_info para la respuesta exitosa."""
+    username_val = user.get("username") or user.get("userName")
+    return {
+        "id": user.get("id"),
+        "username": username_val,
+        "userName": username_val,
+        "email": user.get("email"),
+        "fullName": user.get("fullName") or username_val or "",
+        "roles": roles,
+        "permissions": permissions,
+    }
+
+
+def _build_error_response(user: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """Construye respuesta mínima de error para no romper el frontend."""
+    err_roles = user.get("roles", []) if user else []
+    err_perms = user.get("permissions", []) if user else []
+    err_username = (user.get("username") or user.get("userName")) if user else None
+    return {
+        "user": {
+            "id": user.get("id") if user else None,
+            "username": err_username,
+            "userName": err_username,
+            "email": user.get("email") if user else None,
+            "fullName": (user.get("fullName") or err_username or "") if user else "",
+            "roles": err_roles,
+            "permissions": err_perms,
+        },
+        "roles": err_roles,
+        "permissions": err_perms,
+        "capabilities": {},
+    }
 
 
 def register_auth_endpoints(app: FastAPI):
@@ -188,16 +226,7 @@ def register_auth_endpoints(app: FastAPI):
 
             # user_info: compatible con Core (userName, fullName) y con permisos/roles dentro de user
             # para que el frontend que usa data.user?.permissions y data.capabilities funcione sin cambios
-            username_val = user.get("username") or user.get("userName")
-            user_info = {
-                "id": user.get("id"),
-                "username": username_val,
-                "userName": username_val,
-                "email": user.get("email"),
-                "fullName": user.get("fullName") or username_val or "",
-                "roles": roles,
-                "permissions": permissions,
-            }
+            user_info = _build_user_info(user, roles, permissions)
 
             # Construir respuesta - SIEMPRE incluir capabilities (Opción A: requerido por el frontend)
             response_data = {
@@ -227,22 +256,6 @@ def register_auth_endpoints(app: FastAPI):
         except Exception as e:
             logger.error(f"❌ [AUTH/ME] Error al obtener información del usuario: {e}", exc_info=True)
             # En caso de error, devolver respuesta con capabilities vacías para no romper el frontend
-            err_roles = user.get("roles", []) if user else []
-            err_perms = user.get("permissions", []) if user else []
-            err_username = (user.get("username") or user.get("userName")) if user else None
-            error_response = {
-                "user": {
-                    "id": user.get("id") if user else None,
-                    "username": err_username,
-                    "userName": err_username,
-                    "email": user.get("email") if user else None,
-                    "fullName": (user.get("fullName") or err_username or "") if user else "",
-                    "roles": err_roles,
-                    "permissions": err_perms,
-                },
-                "roles": err_roles,
-                "permissions": err_perms,
-                "capabilities": {},
-            }
+            error_response = _build_error_response(user)
             logger.warning("⚠️ [AUTH/ME] Devolviendo respuesta con capabilities vacías debido a error")
             return JSONResponse(status_code=200, content=error_response)
