@@ -90,6 +90,40 @@ def _sap_b1_error_code_retry_policy(code: Optional[int]) -> Optional[bool]:
     return None
 
 
+def _es_error_transporte(err: str, err_l: str) -> bool:
+    """True si el mensaje de error apunta a un problema de red/TLS/timeout (sin status HTTP)."""
+    if err.startswith("Error de conexión:"):
+        return True
+    if "no se pudo establecer conexión" in err_l:
+        return True
+    if "timeout" in err_l:
+        return True
+    if "timed out" in err_l:
+        return True
+    if "connection" in err_l:
+        return True
+    if "ssl" in err_l:
+        return True
+    if "tls" in err_l:
+        return True
+    # Errores inesperados sin status (p.ej. bugs / parseo): evitar reintentos ciegos
+    return False
+
+
+def _http_status_should_retry(status_code: Any) -> bool:
+    """Política de reintento basada en el código HTTP de respuesta de SAP Service Layer."""
+    if status_code in (408, 425, 429) or 500 <= int(status_code) <= 599:
+        return True
+    # 401/403: requieren acción (credenciales/permisos), no backoff ciego
+    if status_code in (401, 403):
+        return False
+    # 404: problema de endpoint/versionado; esperar no lo resuelve
+    if status_code == 404:
+        return False
+    # Resto de 4xx: asumir validación/datos
+    return False
+
+
 def sap_service_layer_result_should_retry(response: Any) -> bool:
     """
     Heurística conservadora para decidir si un fallo de SAP Service Layer
@@ -131,42 +165,9 @@ def sap_service_layer_result_should_retry(response: Any) -> bool:
 
     status_code = response.get("status_code")
     if status_code is None:
-        # Errores típicos de transporte / TLS / timeouts del cliente
-        if err.startswith("Error de conexión:"):
-            return True
-        if "no se pudo establecer conexión" in err_l:
-            return True
-        if "timeout" in err_l:
-            return True
-        if "timed out" in err_l:
-            return True
-        if "connection" in err_l:
-            return True
-        if "ssl" in err_l:
-            return True
-        if "tls" in err_l:
-            return True
-        # Errores inesperados sin status (p.ej. bugs / parseo): evitar duplicados
-        if err.startswith("Error inesperado:"):
-            return False
-        return False
+        return _es_error_transporte(err, err_l)
 
-    if status_code in (408, 425, 429) or 500 <= int(status_code) <= 599:
-        return True
-
-    # 401/403 normalmente requieren acción (credenciales/permisos), no backoff ciego
-    if status_code in (401, 403):
-        return False
-
-    # 404 puede ser endpoint/versionado; tampoco suele arreglarse con esperar
-    if status_code == 404:
-        return False
-
-    # Resto de 4xx: asumir validación/datos (no reintentar)
-    if 400 <= int(status_code) <= 499:
-        return False
-
-    return False
+    return _http_status_should_retry(status_code)
 
 
 def retry_operation(
