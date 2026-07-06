@@ -129,25 +129,31 @@ def get_user_id_or_username(user: Dict) -> str:
     )
 
 
-async def _get_all_preferences(user: Dict):
+async def _get_all_preferences(user: Dict) -> AllPreferencesResponse:
     logger.info("🔍 GET /api/users/preferences: Iniciado")
     logger.debug(f"   User object keys: {list(user.keys()) if user else 'None'}")
+
     try:
         user_id = get_user_id_or_username(user)
         logger.debug(f"   User ID obtenido: {user_id}")
     except HTTPException as e:
         logger.error(f"❌ Error al obtener user_id: {e.detail}")
         raise
+
     conn = None
     try:
         conn = get_db_connection()
         repository = UserPreferencesRepository(conn)
         all_prefs = repository.get_all_preferences(user_id)
+
+        # Convertir a DTOs
         preferences_dict = {
             table_id: TablePreferencesDto(**prefs)
             for table_id, prefs in all_prefs.items()
         }
+
         return AllPreferencesResponse(preferences=preferences_dict)
+
     except HTTPException:
         raise
     except Exception as e:
@@ -161,26 +167,30 @@ async def _get_all_preferences(user: Dict):
             conn.close()
 
 
-async def _get_sidebar_preferences(user: Dict):
+async def _get_sidebar_preferences(user: Dict) -> SidebarPreferencesResponse:
     logger.info("🔍 GET /api/users/preferences/sidebar: Iniciado")
     logger.debug(f"   User object keys: {list(user.keys()) if user else 'None'}")
+
     try:
         user_id = get_user_id_or_username(user)
         logger.debug(f"   User ID obtenido: {user_id}")
     except HTTPException as e:
         logger.error(f"❌ Error al obtener user_id: {e.detail}")
         raise
+
     conn = None
     try:
         conn = get_db_connection()
         repository = UserPreferencesRepository(conn)
         preferences = repository.get_sidebar_preferences(user_id)
+
         if preferences:
             return SidebarPreferencesResponse(
                 preferences=SidebarPreferencesDto(**preferences)
             )
         else:
             return SidebarPreferencesResponse(preferences=None)
+
     except HTTPException:
         raise
     except Exception as e:
@@ -199,12 +209,14 @@ async def _save_sidebar_preferences(request_body: SaveSidebarPreferencesRequest,
     logger.debug(f"   User object keys: {list(user.keys()) if user else 'None'}")
     logger.debug(f"   Request body type: {type(request_body)}")
     logger.debug(f"   Request body: {request_body}")
+
     try:
         user_id = get_user_id_or_username(user)
         logger.debug(f"   User ID obtenido: {user_id}")
     except HTTPException as e:
         logger.error(f"❌ Error al obtener user_id: {e.detail}")
         raise
+
     # Validar datos - el model_validator ya normalizó y validó los datos
     # preferences debería ser un SidebarPreferencesDto después de la validación
     if isinstance(request_body.preferences, SidebarPreferencesDto):
@@ -223,19 +235,24 @@ async def _save_sidebar_preferences(request_body: SaveSidebarPreferencesRequest,
             status_code=400,
             detail="Se requiere 'preferences.collapsed' o 'collapsed' en el request"
         )
+
     logger.debug(f"   Collapsed value: {prefs.collapsed} (type: {type(prefs.collapsed)})")
+
     try:
         # Usar context manager para garantizar transacción y cierre de conexión
         with get_db_connection_context() as conn:
             repository = UserPreferencesRepository(conn)
+
             repository.save_sidebar_preferences(
                 user_id,
                 prefs.model_dump(exclude_none=True)
             )
+
             return {
                 "success": True,
                 "message": "Preferencias del sidebar guardadas correctamente"
             }
+
     except HTTPException:
         raise
     except Exception as e:
@@ -246,20 +263,23 @@ async def _save_sidebar_preferences(request_body: SaveSidebarPreferencesRequest,
         )
 
 
-async def _get_table_preferences(table_id: str, user: Dict):
+async def _get_table_preferences(table_id: str, user: Dict) -> PreferencesResponse:
     logger.info(f"🔍 GET /api/users/preferences/{table_id}: Iniciado")
     logger.debug(f"   User object keys: {list(user.keys()) if user else 'None'}")
+
     try:
         user_id = get_user_id_or_username(user)
         logger.debug(f"   User ID obtenido: {user_id}")
     except HTTPException as e:
         logger.error(f"❌ Error al obtener user_id: {e.detail}")
         raise
+
     conn = None
     try:
         conn = get_db_connection()
         repository = UserPreferencesRepository(conn)
         preferences = repository.get_table_preferences(user_id, table_id)
+
         if preferences:
             logger.debug(f"✅ Preferencias encontradas para usuario {user_id}, tabla {table_id}")
             return PreferencesResponse(
@@ -268,6 +288,7 @@ async def _get_table_preferences(table_id: str, user: Dict):
         else:
             logger.debug(f"ℹ️ No se encontraron preferencias para usuario {user_id}, tabla {table_id}")
             return PreferencesResponse(preferences=None)
+
     except HTTPException:
         raise
     except ValueError as ve:
@@ -294,12 +315,14 @@ async def _save_table_preferences(table_id: str, request_body: SavePreferencesRe
     logger.debug(f"   User object keys: {list(user.keys()) if user else 'None'}")
     logger.debug(f"   Request body type: {type(request_body)}")
     logger.debug(f"   Request body: {request_body}")
+
     try:
         user_id = get_user_id_or_username(user)
         logger.debug(f"   User ID obtenido: {user_id}")
     except HTTPException as e:
         logger.error(f"❌ Error al obtener user_id: {e.detail}")
         raise
+
     # Validar datos - verificar que request_body y preferences existan
     if not request_body:
         logger.error("❌ Request body es None o vacío")
@@ -307,14 +330,17 @@ async def _save_table_preferences(table_id: str, request_body: SavePreferencesRe
             status_code=400,
             detail="Request body es requerido"
         )
+
     if not hasattr(request_body, 'preferences') or request_body.preferences is None:
         logger.error("❌ Request body no contiene 'preferences'")
         raise HTTPException(
             status_code=400,
             detail="El campo 'preferences' es requerido en el request body"
         )
+
     prefs = request_body.preferences
     logger.debug(f"   Preferences recibidas: visibleColumns={prefs.visibleColumns if prefs else None}, columnOrder={prefs.columnOrder if prefs else None}")
+
     # Validar que visibleColumns y columnOrder existan y no estén vacíos
     if not hasattr(prefs, 'visibleColumns') or prefs.visibleColumns is None:
         logger.warning("⚠️ visibleColumns es None o no existe")
@@ -322,49 +348,63 @@ async def _save_table_preferences(table_id: str, request_body: SavePreferencesRe
             status_code=400,
             detail="visibleColumns es requerido y no puede ser None"
         )
+
     if not hasattr(prefs, 'columnOrder') or prefs.columnOrder is None:
         logger.warning("⚠️ columnOrder es None o no existe")
         raise HTTPException(
             status_code=400,
             detail="columnOrder es requerido y no puede ser None"
         )
+
     if not isinstance(prefs.visibleColumns, list):
         logger.warning(f"⚠️ visibleColumns no es una lista: {type(prefs.visibleColumns)}")
         raise HTTPException(
             status_code=400,
             detail=f"visibleColumns debe ser una lista, recibido: {type(prefs.visibleColumns).__name__}"
         )
+
     if not isinstance(prefs.columnOrder, list):
         logger.warning(f"⚠️ columnOrder no es una lista: {type(prefs.columnOrder)}")
         raise HTTPException(
             status_code=400,
             detail=f"columnOrder debe ser una lista, recibido: {type(prefs.columnOrder).__name__}"
         )
+
     if len(prefs.visibleColumns) == 0:
         logger.warning("⚠️ Intento de guardar preferencias con visibleColumns vacío")
         raise HTTPException(
             status_code=400,
             detail="Debe haber al menos una columna visible"
         )
+
     if len(prefs.columnOrder) == 0:
         logger.warning("⚠️ Intento de guardar preferencias con columnOrder vacío")
         raise HTTPException(
             status_code=400,
             detail="Debe haber al menos una columna en columnOrder"
         )
+
     try:
         # Usar context manager para garantizar transacción y cierre de conexión
         with get_db_connection_context() as conn:
             repository = UserPreferencesRepository(conn)
+
             # Convertir a dict para el repositorio
             prefs_dict = prefs.model_dump(exclude_none=True)
             logger.debug(f"   Preferences dict: {prefs_dict}")
-            repository.save_table_preferences(user_id, table_id, prefs_dict)
+
+            repository.save_table_preferences(
+                user_id,
+                table_id,
+                prefs_dict
+            )
+
             logger.info(f"✅ Preferencias guardadas exitosamente para usuario {user_id}, tabla {table_id}")
             return {
                 "success": True,
                 "message": "Preferencias guardadas correctamente"
             }
+
     except HTTPException:
         raise
     except ValueError as ve:
@@ -386,26 +426,31 @@ async def _save_table_preferences(table_id: str, request_body: SavePreferencesRe
 async def _delete_table_preferences(table_id: str, user: Dict):
     logger.info(f"🔍 DELETE /api/users/preferences/{table_id}: Iniciado")
     logger.debug(f"   User object keys: {list(user.keys()) if user else 'None'}")
+
     try:
         user_id = get_user_id_or_username(user)
         logger.debug(f"   User ID obtenido: {user_id}")
     except HTTPException as e:
         logger.error(f"❌ Error al obtener user_id: {e.detail}")
         raise
+
     try:
         # Usar context manager para garantizar transacción y cierre de conexión
         with get_db_connection_context() as conn:
             repository = UserPreferencesRepository(conn)
             deleted = repository.delete_table_preferences(user_id, table_id)
+
             if not deleted:
                 raise HTTPException(
                     status_code=404,
                     detail=f"No se encontraron preferencias para la tabla {table_id}"
                 )
+
             return {
                 "success": True,
                 "message": "Preferencias eliminadas correctamente"
             }
+
     except HTTPException:
         raise
     except Exception as e:
@@ -562,6 +607,7 @@ def register_user_preferences_endpoints(app: FastAPI):
         }
         ```
         """
+        validate_table_id(table_id)
         return await _get_table_preferences(table_id, user)
 
     @app.post("/api/users/preferences/{table_id}",
@@ -602,6 +648,7 @@ def register_user_preferences_endpoints(app: FastAPI):
         }
         ```
         """
+        validate_table_id(table_id)
         return await _save_table_preferences(table_id, request_body, user)
 
     @app.delete("/api/users/preferences/{table_id}",
@@ -628,4 +675,5 @@ def register_user_preferences_endpoints(app: FastAPI):
         }
         ```
         """
+        validate_table_id(table_id)
         return await _delete_table_preferences(table_id, user)

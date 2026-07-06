@@ -165,11 +165,11 @@ class FileStorageService:
         )
         
         # Estructura de carpetas
-        año = timestamp.strftime("%Y")
+        anio = timestamp.strftime("%Y")
         mes = timestamp.strftime("%m")
         ts = timestamp.strftime("%Y%m%d_%H%M%S")
-        
-        path = f"plantillas/{año}/{mes}/{pedido_id}/{ts}_{nombre_seguro}"
+
+        path = f"plantillas/{anio}/{mes}/{pedido_id}/{ts}_{nombre_seguro}"
         return path
 
     def _generar_storage_path_temporal(
