@@ -104,11 +104,164 @@ class PedidoValidator:
         """
         return self.cabecera_validator.validar(cabecera, row_number)
 
+    def _validar_codigo_interno(
+        self, detalle: Dict[str, Any], row_number: int
+    ) -> List[ValidationIssue]:
+        codigo_interno = detalle.get("codigo_interno")
+        if not codigo_interno or not str(codigo_interno).strip():
+            return [ValidationIssue(
+                row_number=row_number,
+                field="codigo_interno",
+                severity=ValidationSeverity.ERROR,
+                message="El código interno del producto es obligatorio",
+                value=codigo_interno,
+            )]
+        codigo_str = str(codigo_interno).strip()
+        if not self.codigo_producto_pattern.match(codigo_str):
+            return [ValidationIssue(
+                row_number=row_number,
+                field="codigo_interno",
+                severity=ValidationSeverity.ERROR,
+                message="El código interno contiene caracteres no permitidos. Solo se permiten letras, números, guiones, puntos y espacios",
+                value=codigo_str,
+            )]
+        return []
+
+    def _aplicar_validacion_parser_tienda(
+        self, validacion_tienda: dict, tienda_codigo_str: str, row_number: int
+    ) -> List[ValidationIssue]:
+        issues: List[ValidationIssue] = []
+        for error_msg in validacion_tienda.get("errores", []):
+            issues.append(ValidationIssue(
+                row_number=row_number,
+                field="tienda_codigo",
+                severity=ValidationSeverity.ERROR,
+                message=error_msg,
+                value=tienda_codigo_str,
+            ))
+        for warning_msg in validacion_tienda.get("warnings", []):
+            issues.append(ValidationIssue(
+                row_number=row_number,
+                field="tienda_codigo",
+                severity=ValidationSeverity.WARNING,
+                message=warning_msg,
+                value=tienda_codigo_str,
+            ))
+        return issues
+
+    def _validar_tienda_distribucion(
+        self, dist: Dict[str, Any], row_number: int, tiendas_usadas: set
+    ) -> List[ValidationIssue]:
+        tienda_codigo = dist.get("tienda_codigo")
+        validacion_tienda = dist.get("validacion", {})
+        if not tienda_codigo or not str(tienda_codigo).strip():
+            return [ValidationIssue(
+                row_number=row_number,
+                field="tienda_codigo",
+                severity=ValidationSeverity.ERROR,
+                message="El código de tienda es obligatorio en la distribución",
+                value=tienda_codigo,
+            )]
+        tienda_codigo_str = str(tienda_codigo).strip().upper()
+        issues: List[ValidationIssue] = []
+        if validacion_tienda:
+            issues.extend(self._aplicar_validacion_parser_tienda(validacion_tienda, tienda_codigo_str, row_number))
+        if self.tiendas_permitidas and tienda_codigo_str not in self.tiendas_permitidas:
+            issues.append(ValidationIssue(
+                row_number=row_number,
+                field="tienda_codigo",
+                severity=ValidationSeverity.ERROR,
+                message=f"La tienda '{tienda_codigo_str}' no está en la lista de tiendas permitidas",
+                value=tienda_codigo_str,
+            ))
+        if tienda_codigo_str in tiendas_usadas:
+            issues.append(ValidationIssue(
+                row_number=row_number,
+                field="tienda_codigo",
+                severity=ValidationSeverity.ERROR,
+                message=f"La tienda '{tienda_codigo_str}' está duplicada para este producto. Use una sola distribución por tienda",
+                value=tienda_codigo_str,
+            ))
+        tiendas_usadas.add(tienda_codigo_str)
+        return issues
+
+    def _validar_cantidad_distribucion(
+        self, cantidad: Any, tienda_codigo: Any, row_number: int
+    ) -> tuple:
+        """Retorna (issues, cantidad_valida). cantidad_valida es 0.0 si la cantidad es inválida."""
+        if cantidad is None:
+            return [ValidationIssue(
+                row_number=row_number,
+                field="cantidad",
+                severity=ValidationSeverity.ERROR,
+                message="La cantidad es obligatoria",
+                value=None,
+            )], 0.0
+        try:
+            cantidad_val = float(cantidad)
+            if cantidad_val < 0:
+                return [ValidationIssue(
+                    row_number=row_number,
+                    field="cantidad",
+                    severity=ValidationSeverity.ERROR,
+                    message=f"La cantidad no puede ser negativa. Valor recibido: {cantidad}",
+                    value=cantidad,
+                )], 0.0
+            issues: List[ValidationIssue] = []
+            if self.max_cantidad_por_tienda and cantidad_val > self.max_cantidad_por_tienda:
+                issues.append(ValidationIssue(
+                    row_number=row_number,
+                    field="cantidad",
+                    severity=ValidationSeverity.WARNING,
+                    message=f"La cantidad para la tienda '{tienda_codigo}' ({cantidad_val}) excede el límite razonable por tienda ({self.max_cantidad_por_tienda})",
+                    value=cantidad_val,
+                ))
+            return issues, cantidad_val
+        except (ValueError, TypeError):
+            return [ValidationIssue(
+                row_number=row_number,
+                field="cantidad",
+                severity=ValidationSeverity.ERROR,
+                message=f"La cantidad debe ser un número válido. Valor recibido: {cantidad}",
+                value=cantidad,
+            )], 0.0
+
+    def _validar_distribuciones(
+        self, distribuciones: List[Dict[str, Any]], row_number: int
+    ) -> List[ValidationIssue]:
+        if not distribuciones:
+            return [ValidationIssue(
+                row_number=row_number,
+                field="distribuciones",
+                severity=ValidationSeverity.ERROR,
+                message="El producto debe tener al menos una distribución por tienda",
+                value=None,
+            )]
+        issues: List[ValidationIssue] = []
+        cantidad_total = 0.0
+        tiendas_usadas: set = set()
+        for dist in distribuciones:
+            issues.extend(self._validar_tienda_distribucion(dist, row_number, tiendas_usadas))
+            cantidad_issues, cantidad_val = self._validar_cantidad_distribucion(
+                dist.get("cantidad"), dist.get("tienda_codigo"), row_number
+            )
+            issues.extend(cantidad_issues)
+            cantidad_total += cantidad_val
+        if cantidad_total > 0 and self.max_cantidad_total and cantidad_total > self.max_cantidad_total:
+            issues.append(ValidationIssue(
+                row_number=row_number,
+                field="cantidad_total",
+                severity=ValidationSeverity.WARNING,
+                message=f"La cantidad total ({cantidad_total}) excede el límite razonable ({self.max_cantidad_total})",
+                value=cantidad_total,
+            ))
+        return issues
+
     def validar_detalle(
         self,
         detalle: Dict[str, Any],
         distribuciones: List[Dict[str, Any]],
-        row_number: int
+        row_number: int,
     ) -> List[ValidationIssue]:
         """
         Valida un detalle (producto) con sus distribuciones por tienda.
@@ -122,160 +275,10 @@ class PedidoValidator:
             Lista de issues de validación
         """
         issues = []
-
-        # Validar código interno (catálogo)
-        codigo_interno = detalle.get("codigo_interno")
-        if not codigo_interno or not str(codigo_interno).strip():
-            issues.append(ValidationIssue(
-                row_number=row_number,
-                field="codigo_interno",
-                severity=ValidationSeverity.ERROR,
-                message="El código interno del producto es obligatorio",
-                value=codigo_interno
-            ))
-        else:
-            codigo_str = str(codigo_interno).strip()
-            # Validar caracteres válidos
-            if not self.codigo_producto_pattern.match(codigo_str):
-                issues.append(ValidationIssue(
-                    row_number=row_number,
-                    field="codigo_interno",
-                    severity=ValidationSeverity.ERROR,
-                    message="El código interno contiene caracteres no permitidos. Solo se permiten letras, números, guiones, puntos y espacios",
-                    value=codigo_str
-                ))
-
-        # Validar distribuciones por tienda
-        if not distribuciones:
-            issues.append(ValidationIssue(
-                row_number=row_number,
-                field="distribuciones",
-                severity=ValidationSeverity.ERROR,
-                message="El producto debe tener al menos una distribución por tienda",
-                value=None
-            ))
-        else:
-            # Calcular cantidad total
-            cantidad_total = 0
-            tiendas_usadas = set()
-
-            for dist in distribuciones:
-                tienda_codigo = dist.get("tienda_codigo")
-                cantidad = dist.get("cantidad")
-                validacion_tienda = dist.get("validacion", {})
-
-                # Validar tienda
-                if not tienda_codigo or not str(tienda_codigo).strip():
-                    issues.append(ValidationIssue(
-                        row_number=row_number,
-                        field="tienda_codigo",
-                        severity=ValidationSeverity.ERROR,
-                        message="El código de tienda es obligatorio en la distribución",
-                        value=tienda_codigo
-                    ))
-                else:
-                    tienda_codigo_str = str(tienda_codigo).strip().upper()
-
-                    # Procesar validaciones del parser (hoja Tiendas)
-                    if validacion_tienda:
-                        # Agregar errores de validación del parser
-                        for error_msg in validacion_tienda.get("errores", []):
-                            issues.append(ValidationIssue(
-                                row_number=row_number,
-                                field="tienda_codigo",
-                                severity=ValidationSeverity.ERROR,
-                                message=error_msg,
-                                value=tienda_codigo_str
-                            ))
-
-                        # Agregar warnings de validación del parser
-                        for warning_msg in validacion_tienda.get("warnings", []):
-                            issues.append(ValidationIssue(
-                                row_number=row_number,
-                                field="tienda_codigo",
-                                severity=ValidationSeverity.WARNING,
-                                message=warning_msg,
-                                value=tienda_codigo_str
-                            ))
-
-                    # Validar que la tienda esté en la lista permitida (si se especifica)
-                    if self.tiendas_permitidas and tienda_codigo_str not in self.tiendas_permitidas:
-                        issues.append(ValidationIssue(
-                            row_number=row_number,
-                            field="tienda_codigo",
-                            severity=ValidationSeverity.ERROR,
-                            message=f"La tienda '{tienda_codigo_str}' no está en la lista de tiendas permitidas",
-                            value=tienda_codigo_str
-                        ))
-
-                    # Detectar duplicados (misma tienda repetida)
-                    if tienda_codigo_str in tiendas_usadas:
-                        issues.append(ValidationIssue(
-                            row_number=row_number,
-                            field="tienda_codigo",
-                            severity=ValidationSeverity.ERROR,
-                            message=f"La tienda '{tienda_codigo_str}' está duplicada para este producto. Use una sola distribución por tienda",
-                            value=tienda_codigo_str
-                        ))
-                    tiendas_usadas.add(tienda_codigo_str)
-
-                # Validar cantidad (acepta enteros y decimales)
-                if cantidad is None:
-                    issues.append(ValidationIssue(
-                        row_number=row_number,
-                        field="cantidad",
-                        severity=ValidationSeverity.ERROR,
-                        message="La cantidad es obligatoria",
-                        value=None
-                    ))
-                else:
-                    try:
-                        cantidad_val = float(cantidad)
-                        if cantidad_val < 0:
-                            issues.append(ValidationIssue(
-                                row_number=row_number,
-                                field="cantidad",
-                                severity=ValidationSeverity.ERROR,
-                                message=f"La cantidad no puede ser negativa. Valor recibido: {cantidad}",
-                                value=cantidad
-                            ))
-                        else:
-                            cantidad_total += cantidad_val
-
-                            # Validar límite por tienda
-                            if self.max_cantidad_por_tienda and cantidad_val > self.max_cantidad_por_tienda:
-                                issues.append(ValidationIssue(
-                                    row_number=row_number,
-                                    field="cantidad",
-                                    severity=ValidationSeverity.WARNING,
-                                    message=f"La cantidad para la tienda '{tienda_codigo}' ({cantidad_val}) excede el límite razonable por tienda ({self.max_cantidad_por_tienda})",
-                                    value=cantidad_val
-                                ))
-                    except (ValueError, TypeError):
-                        issues.append(ValidationIssue(
-                            row_number=row_number,
-                            field="cantidad",
-                            severity=ValidationSeverity.ERROR,
-                            message=f"La cantidad debe ser un número válido. Valor recibido: {cantidad}",
-                            value=cantidad
-                        ))
-
-            # Validar cantidad total
-            if cantidad_total > 0:
-                if self.max_cantidad_total and cantidad_total > self.max_cantidad_total:
-                    issues.append(ValidationIssue(
-                        row_number=row_number,
-                        field="cantidad_total",
-                        severity=ValidationSeverity.WARNING,
-                        message=f"La cantidad total ({cantidad_total}) excede el límite razonable ({self.max_cantidad_total})",
-                        value=cantidad_total
-                    ))
-
-        # Validar precios e impuestos (reglas regionales)
+        issues.extend(self._validar_codigo_interno(detalle, row_number))
+        issues.extend(self._validar_distribuciones(distribuciones, row_number))
         if self.validar_precios:
-            precio_issues = self._validar_precios_impuestos(detalle, row_number)
-            issues.extend(precio_issues)
-        
+            issues.extend(self._validar_precios_impuestos(detalle, row_number))
         return issues
     
     def _validar_precios_impuestos(
