@@ -10,6 +10,10 @@ Referencia: Guía de Buenas Prácticas - Sección 4 (Prácticas API y Backend)
 from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, Field
 
+_DESC_MENSAJE_ERROR = "Mensaje de error"
+_DESC_TIPO_ERROR = "Tipo de error"
+_ERR_INTERNO_SERVIDOR = "Error interno del servidor"
+
 
 # ============================================================================
 # Modelos de Error
@@ -18,14 +22,14 @@ from pydantic import BaseModel, Field
 class ValidationErrorDetail(BaseModel):
     """Detalle de un error de validación de Pydantic."""
     loc: List[str] = Field(..., description="Ubicación del error (ej: ['body', 'campo'])")
-    msg: str = Field(..., description="Mensaje de error")
-    type: str = Field(..., description="Tipo de error")
+    msg: str = Field(..., description=_DESC_MENSAJE_ERROR)
+    type: str = Field(..., description=_DESC_TIPO_ERROR)
 
 
 class ValidationErrorResponse(BaseModel):
     """Respuesta de error de validación (422)."""
-    error: str = Field(default="Error de validación del request", description="Mensaje de error")
-    type: str = Field(default="validation_error", description="Tipo de error")
+    error: str = Field(default="Error de validación del request", description=_DESC_MENSAJE_ERROR)
+    type: str = Field(default="validation_error", description=_DESC_TIPO_ERROR)
     details: List[ValidationErrorDetail] = Field(..., description="Detalles de los errores")
     body_received: Optional[str] = Field(None, description="Primeros 200 caracteres del body recibido")
 
@@ -48,8 +52,8 @@ class ValidationErrorResponse(BaseModel):
 
 class HTTPErrorResponse(BaseModel):
     """Respuesta de error HTTP genérico (401, 403, 404, etc.)."""
-    error: str = Field(..., description="Mensaje de error")
-    type: str = Field(default="http_exception", description="Tipo de error")
+    error: str = Field(..., description=_DESC_MENSAJE_ERROR)
+    type: str = Field(default="http_exception", description=_DESC_TIPO_ERROR)
     status_code: int = Field(..., description="Código HTTP del error")
 
     class Config:
@@ -65,7 +69,7 @@ class HTTPErrorResponse(BaseModel):
 class BusinessErrorResponse(BaseModel):
     """Respuesta de error de negocio (400)."""
     error: str = Field(..., description="Mensaje de error legible")
-    type: str = Field(default="business_exception", description="Tipo de error")
+    type: str = Field(default="business_exception", description=_DESC_TIPO_ERROR)
     error_code: str = Field(..., description="Código de error para identificación programática")
     status_code: int = Field(default=400, description="Código HTTP")
     data: Optional[Dict[str, Any]] = Field(None, description="Datos adicionales del error")
@@ -87,14 +91,14 @@ class BusinessErrorResponse(BaseModel):
 
 class InternalErrorResponse(BaseModel):
     """Respuesta de error interno del servidor (500)."""
-    error: str = Field(default="Error interno del servidor", description="Mensaje de error")
-    type: str = Field(default="internal_server_error", description="Tipo de error")
+    error: str = Field(default=_ERR_INTERNO_SERVIDOR, description=_DESC_MENSAJE_ERROR)
+    type: str = Field(default="internal_server_error", description=_DESC_TIPO_ERROR)
     detail: Optional[str] = Field(None, description="Detalles (solo en modo DEBUG)")
 
     class Config:
         json_schema_extra = {
             "example": {
-                "error": "Error interno del servidor",
+                "error": _ERR_INTERNO_SERVIDOR,
                 "type": "internal_server_error",
                 "detail": None
             }
@@ -103,8 +107,8 @@ class InternalErrorResponse(BaseModel):
 
 class ServiceUnavailableResponse(BaseModel):
     """Respuesta de servicio no disponible (503)."""
-    error: str = Field(..., description="Mensaje de error")
-    type: str = Field(default="mba3_connection_error", description="Tipo de error")
+    error: str = Field(..., description=_DESC_MENSAJE_ERROR)
+    type: str = Field(default="mba3_connection_error", description=_DESC_TIPO_ERROR)
 
     class Config:
         json_schema_extra = {
@@ -117,8 +121,8 @@ class ServiceUnavailableResponse(BaseModel):
 
 class RateLimitResponse(BaseModel):
     """Respuesta de límite de rate excedido (429)."""
-    error: str = Field(default="Rate limit exceeded", description="Mensaje de error")
-    type: str = Field(default="rate_limit_exceeded", description="Tipo de error")
+    error: str = Field(default="Rate limit exceeded", description=_DESC_MENSAJE_ERROR)
+    type: str = Field(default="rate_limit_exceeded", description=_DESC_TIPO_ERROR)
     retry_after: int = Field(..., description="Segundos hasta poder reintentar")
 
     class Config:
@@ -163,7 +167,7 @@ COMMON_RESPONSES = {
     },
     500: {
         "model": InternalErrorResponse,
-        "description": "Error interno del servidor"
+        "description": _ERR_INTERNO_SERVIDOR
     },
     503: {
         "model": ServiceUnavailableResponse,

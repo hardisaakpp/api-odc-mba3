@@ -12,6 +12,24 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 
 from src.utils.timezone import ahora_naive
 
+_DESC_SKU_SAP = "SKU en SAP"
+_DESC_NOMBRE_PRODUCTO_SAP = "Nombre del producto en SAP"
+_DESC_UNIDAD_SAP = "Unidad de medida en SAP"
+_DESC_SUBTOTAL_SAP = "Subtotal en SAP"
+_DESC_ESTADO_RESPUESTA = "Estado de la respuesta"
+_DESC_CODIGO_PRODUCTO = "Código del producto"
+_DESC_DESCRIPCION_PRODUCTO = "Descripción del producto"
+_DESC_MENSAJE_DESCRIPTIVO = "Mensaje descriptivo"
+_DESC_ESTADO_OPERACION = "Estado de la operación"
+_DESC_UUID_DETALLE_PEDIDO = "UUID del detalle del pedido"
+_DESC_NUMERO_PEDIDO = "Número del pedido"
+_DESC_UUID_PEDIDO = "UUID del pedido"
+_DESC_UUID_TIENDA = "UUID de la tienda"
+_DESC_MENSAJE_CONFIRMACION = "Mensaje de confirmación"
+_EX_CODIGO_BCO = "R225.1012.BCO"
+_EX_DESCRIPCION = "Producto ejemplo"
+_EX_TIENDA_1 = "Tienda 1"
+
 
 class QueryRequest(BaseModel):
     """Modelo para recibir consultas SQL."""
@@ -305,12 +323,12 @@ class SkuHomologacion(BaseModel):
     total_linea_mba3: Optional[float] = Field(None, description="Total de la línea desde MBA3")
     
     # Datos de SAP (pueden ser null)
-    sku_sap: Optional[str] = Field(None, description="SKU en SAP")
-    nombre_producto_sap: Optional[str] = Field(None, description="Nombre del producto en SAP")
+    sku_sap: Optional[str] = Field(None, description=_DESC_SKU_SAP)
+    nombre_producto_sap: Optional[str] = Field(None, description=_DESC_NOMBRE_PRODUCTO_SAP)
     precio_unitario_sap: Optional[float] = Field(None, description="Precio unitario en SAP")
     cantidad_pack_sap: Optional[float] = Field(None, description="Cantidad por pack en SAP")
-    unidad_sap: Optional[str] = Field(None, description="Unidad de medida en SAP")
-    subtotal_sap: Optional[float] = Field(None, description="Subtotal en SAP")
+    unidad_sap: Optional[str] = Field(None, description=_DESC_UNIDAD_SAP)
+    subtotal_sap: Optional[float] = Field(None, description=_DESC_SUBTOTAL_SAP)
     
     # Estado y flags
     estado: str = Field(..., description="Estado de la homologación (PENDIENTE, HOMOLOGADO, ERROR)")
@@ -364,12 +382,12 @@ class HomologacionSkuCreateRequest(BaseModel):
     total_linea_mba3: Optional[float] = Field(None, description="Total de la línea desde MBA3")
     
     # Datos de SAP (opcionales)
-    sku_sap: Optional[str] = Field(None, description="SKU en SAP")
-    nombre_producto_sap: Optional[str] = Field(None, description="Nombre del producto en SAP")
+    sku_sap: Optional[str] = Field(None, description=_DESC_SKU_SAP)
+    nombre_producto_sap: Optional[str] = Field(None, description=_DESC_NOMBRE_PRODUCTO_SAP)
     precio_unitario_sap: Optional[float] = Field(None, ge=0, description="Precio unitario en SAP (>= 0)")
     cantidad_pack_sap: Optional[float] = Field(None, ge=0, description="Cantidad por pack en SAP (>= 0)")
-    unidad_sap: Optional[str] = Field(None, description="Unidad de medida en SAP")
-    subtotal_sap: Optional[float] = Field(None, description="Subtotal en SAP")
+    unidad_sap: Optional[str] = Field(None, description=_DESC_UNIDAD_SAP)
+    subtotal_sap: Optional[float] = Field(None, description=_DESC_SUBTOTAL_SAP)
     
     # Estado (opcional, default PENDIENTE)
     estado: Optional[str] = Field(None, description="Estado (PENDIENTE, HOMOLOGADO, ERROR)")
@@ -407,12 +425,12 @@ class HomologacionSkuCreateRequest(BaseModel):
 class HomologacionSkuUpdateRequest(BaseModel):
     """Modelo para actualizar una homologación SKU."""
     
-    sku_sap: Optional[str] = Field(None, description="SKU en SAP")
-    nombre_producto_sap: Optional[str] = Field(None, description="Nombre del producto en SAP")
+    sku_sap: Optional[str] = Field(None, description=_DESC_SKU_SAP)
+    nombre_producto_sap: Optional[str] = Field(None, description=_DESC_NOMBRE_PRODUCTO_SAP)
     precio_unitario_sap: Optional[float] = Field(None, ge=0, description="Precio unitario en SAP (>= 0)")
     cantidad_pack_sap: Optional[float] = Field(None, ge=0, description="Cantidad por pack en SAP (>= 0)")
-    unidad_sap: Optional[str] = Field(None, description="Unidad de medida en SAP")
-    subtotal_sap: Optional[float] = Field(None, description="Subtotal en SAP")
+    unidad_sap: Optional[str] = Field(None, description=_DESC_UNIDAD_SAP)
+    subtotal_sap: Optional[float] = Field(None, description=_DESC_SUBTOTAL_SAP)
     estado: Optional[str] = Field(None, description="Estado (PENDIENTE, HOMOLOGADO, ERROR)")
     
     @field_validator('estado')
@@ -475,7 +493,7 @@ class HomologacionSkuBulkUpdateRequest(BaseModel):
 class HomologacionesSkuListResponse(BaseModel):
     """Modelo de respuesta para listar homologaciones."""
     
-    status: str = Field(..., description="Estado de la respuesta")
+    status: str = Field(..., description=_DESC_ESTADO_RESPUESTA)
     data: List[SkuHomologacion] = Field(..., description="Lista de homologaciones")
     metadata: Dict[str, Any] = Field(..., description="Metadatos y estadísticas")
     total: int = Field(..., description="Total de registros")
@@ -487,7 +505,7 @@ class HomologacionesSkuListResponse(BaseModel):
 class HomologacionSkuResponse(BaseModel):
     """Modelo de respuesta para una homologación individual."""
     
-    status: str = Field(..., description="Estado de la respuesta")
+    status: str = Field(..., description=_DESC_ESTADO_RESPUESTA)
     data: Optional[SkuHomologacion] = Field(None, description="Datos de la homologación")
     message: Optional[str] = Field(None, description="Mensaje adicional")
 
@@ -495,14 +513,14 @@ class HomologacionSkuResponse(BaseModel):
 class HomologacionSkuBulkUpdateResponse(BaseModel):
     """Modelo de respuesta para actualización masiva."""
     
-    status: str = Field(..., description="Estado de la respuesta")
+    status: str = Field(..., description=_DESC_ESTADO_RESPUESTA)
     data: Dict[str, Any] = Field(..., description="Resultados de la actualización")
 
 
 class HomologacionSkuSincronizarResponse(BaseModel):
     """Modelo de respuesta para sincronización."""
     
-    status: str = Field(..., description="Estado de la respuesta")
+    status: str = Field(..., description=_DESC_ESTADO_RESPUESTA)
     data: Dict[str, Any] = Field(..., description="Resultados de la sincronización")
 
 
@@ -521,7 +539,7 @@ class ProductoRespuesta(BaseModel):
     """Modelo para respuesta de un producto del proveedor."""
     
     pedido_detalle_id: str = Field(..., description="ID del detalle del pedido")
-    codigo_producto: str = Field(..., description="Código del producto")
+    codigo_producto: str = Field(..., description=_DESC_CODIGO_PRODUCTO)
     cantidad_confirmada_total: int = Field(..., ge=0, description="Cantidad confirmada total (consolidado por producto)")
     costo_unitario_ajustado: Optional[float] = Field(None, ge=0, description="Costo unitario ajustado (opcional)")
     descuento_ajustado: Optional[float] = Field(None, ge=0, le=100, description="Descuento % ajustado (opcional, 0-100)")
@@ -615,7 +633,7 @@ class RespuestaProveedorResponse(BaseModel):
     """Modelo de respuesta para el POST de respuesta del proveedor."""
     
     status: str = Field(..., description="Estado del procesamiento: 'success', 'validation_error', 'error'")
-    message: str = Field(..., description="Mensaje descriptivo")
+    message: str = Field(..., description=_DESC_MENSAJE_DESCRIPTIVO)
     respuesta_id: Optional[str] = None
     validacion: Dict[str, Any] = Field(..., description="Resultado de validaciones")
     cantidades_guardadas: Optional[int] = None
@@ -666,7 +684,7 @@ class ActualizarComentarioRequest(BaseModel):
 class ColumnaModificadaItem(BaseModel):
     """Modelo para un item de modificación de columna."""
     
-    pedido_detalle_id: str = Field(..., description="UUID del detalle del pedido")
+    pedido_detalle_id: str = Field(..., description=_DESC_UUID_DETALLE_PEDIDO)
     columna_key: str = Field(..., description="Clave de la columna modificada (costo_doc_sin_iva, total, comentario)")
     
     class Config:
@@ -681,7 +699,7 @@ class ColumnaModificadaItem(BaseModel):
 class GuardarModificacionesColumnasRequest(BaseModel):
     """Modelo para el request de guardar modificaciones de columnas."""
     
-    numero_pedido: str = Field(..., description="Número del pedido")
+    numero_pedido: str = Field(..., description=_DESC_NUMERO_PEDIDO)
     modificaciones: List[ColumnaModificadaItem] = Field(..., description="Lista de modificaciones de columnas")
     
     class Config:
@@ -705,16 +723,16 @@ class GuardarModificacionesColumnasRequest(BaseModel):
 class GuardarModificacionesColumnasResponse(BaseModel):
     """Modelo para la respuesta de guardar modificaciones de columnas."""
     
-    status: str = Field(default="success", description="Estado de la operación")
-    message: str = Field(..., description="Mensaje descriptivo")
-    numero_pedido: str = Field(..., description="Número del pedido")
+    status: str = Field(default="success", description=_DESC_ESTADO_OPERACION)
+    message: str = Field(..., description=_DESC_MENSAJE_DESCRIPTIVO)
+    numero_pedido: str = Field(..., description=_DESC_NUMERO_PEDIDO)
     modificaciones_guardadas: int = Field(..., description="Número de modificaciones guardadas")
 
 
 class ModificacionColumnaItem(BaseModel):
     """Modelo para un item de modificación obtenido."""
     
-    pedido_detalle_id: str = Field(..., description="UUID del detalle del pedido")
+    pedido_detalle_id: str = Field(..., description=_DESC_UUID_DETALLE_PEDIDO)
     columna_key: str = Field(..., description="Clave de la columna modificada")
     modificado_por: Optional[str] = Field(None, description="Usuario que realizó la modificación")
     fecha_modificacion: str = Field(..., description="Fecha de modificación (ISO 8601)")
@@ -723,8 +741,8 @@ class ModificacionColumnaItem(BaseModel):
 class ObtenerModificacionesColumnasResponse(BaseModel):
     """Modelo para la respuesta de obtener modificaciones de columnas."""
     
-    status: str = Field(default="success", description="Estado de la operación")
-    numero_pedido: str = Field(..., description="Número del pedido")
+    status: str = Field(default="success", description=_DESC_ESTADO_OPERACION)
+    numero_pedido: str = Field(..., description=_DESC_NUMERO_PEDIDO)
     modificaciones: List[ModificacionColumnaItem] = Field(default_factory=list, description="Lista de modificaciones")
 
 
@@ -753,7 +771,7 @@ class NotificarConfirmacionRequest(BaseModel):
 class DistribucionTiendaItem(BaseModel):
     """Modelo para un item de redistribución por tienda."""
     
-    tienda_id: str = Field(..., description="UUID de la tienda")
+    tienda_id: str = Field(..., description=_DESC_UUID_TIENDA)
     cantidad_asignada: int = Field(..., ge=0, description="Cantidad asignada a esta tienda (debe ser >= 0)")
     
     class Config:
@@ -810,8 +828,8 @@ class DistribucionConfirmadaItem(BaseModel):
     """Modelo para un item de distribución confirmada."""
     
     id: str = Field(..., description="UUID de la distribución confirmada")
-    pedido_detalle_id: str = Field(..., description="UUID del detalle del pedido")
-    tienda_id: str = Field(..., description="UUID de la tienda")
+    pedido_detalle_id: str = Field(..., description=_DESC_UUID_DETALLE_PEDIDO)
+    tienda_id: str = Field(..., description=_DESC_UUID_TIENDA)
     tienda_codigo: Optional[str] = Field(None, description="Código de la tienda")
     tienda_nombre: Optional[str] = Field(None, description="Nombre de la tienda")
     cantidad_solicitada: float = Field(..., ge=0, description="Cantidad (p. ej. docenas, puede ser fraccionaria)")
@@ -830,7 +848,7 @@ class DistribucionConfirmadaItem(BaseModel):
 class DistribucionProductoResponse(BaseModel):
     """Modelo para la distribución de un producto."""
     
-    pedido_detalle_id: str = Field(..., description="UUID del detalle del pedido")
+    pedido_detalle_id: str = Field(..., description=_DESC_UUID_DETALLE_PEDIDO)
     codigo_interno: Optional[str] = None
     descripcion_sap: Optional[str] = None
     cantidad_solicitada_total: float = Field(..., ge=0, description="Cantidad total (p. ej. docenas, puede ser fraccionaria)")
@@ -842,8 +860,8 @@ class DistribucionProductoResponse(BaseModel):
 class DistribucionPedidoResponse(BaseModel):
     """Modelo para la respuesta de obtener distribución de un pedido."""
     
-    pedido_id: str = Field(..., description="UUID del pedido")
-    numero_pedido: str = Field(..., description="Número del pedido")
+    pedido_id: str = Field(..., description=_DESC_UUID_PEDIDO)
+    numero_pedido: str = Field(..., description=_DESC_NUMERO_PEDIDO)
     version_actual: int = Field(
         ...,
         ge=0,
@@ -860,7 +878,7 @@ class DistribucionPedidoResponse(BaseModel):
 class DiferenciaProductoItem(BaseModel):
     """Modelo para diferencia de un producto."""
     
-    pedido_detalle_id: str = Field(..., description="UUID del detalle del pedido")
+    pedido_detalle_id: str = Field(..., description=_DESC_UUID_DETALLE_PEDIDO)
     codigo_interno: Optional[str] = None
     descripcion_sap: Optional[str] = None
     cantidad_solicitada: float = Field(..., ge=0, description="Cantidad (p. ej. docenas, puede ser fraccionaria)")
@@ -877,7 +895,7 @@ class DiferenciaProductoItem(BaseModel):
 class DiferenciaTiendaItem(BaseModel):
     """Modelo para diferencia por tienda."""
     
-    tienda_id: str = Field(..., description="UUID de la tienda")
+    tienda_id: str = Field(..., description=_DESC_UUID_TIENDA)
     tienda_codigo: Optional[str] = None
     tienda_nombre: Optional[str] = None
     cantidad_solicitada: float = Field(..., ge=0)
@@ -889,8 +907,8 @@ class DiferenciaTiendaItem(BaseModel):
 class ReporteDiferenciasResponse(BaseModel):
     """Modelo para el reporte de diferencias."""
     
-    pedido_id: str = Field(..., description="UUID del pedido")
-    numero_pedido: str = Field(..., description="Número del pedido")
+    pedido_id: str = Field(..., description=_DESC_UUID_PEDIDO)
+    numero_pedido: str = Field(..., description=_DESC_NUMERO_PEDIDO)
     version: int = Field(..., ge=1)
     fecha_generacion: datetime = Field(default_factory=ahora_naive)
     
@@ -929,13 +947,13 @@ class ConfirmarRedistribucionRequest(BaseModel):
 class ConfirmarRedistribucionResponse(BaseModel):
     """Modelo para la respuesta de confirmar redistribución."""
     
-    pedido_id: str = Field(..., description="UUID del pedido")
-    numero_pedido: str = Field(..., description="Número del pedido")
+    pedido_id: str = Field(..., description=_DESC_UUID_PEDIDO)
+    numero_pedido: str = Field(..., description=_DESC_NUMERO_PEDIDO)
     version_confirmada: int = Field(..., ge=1)
     estado_anterior: str
     estado_nuevo: str
     fecha_confirmacion: datetime = Field(default_factory=ahora_naive)
-    mensaje: str = Field(..., description="Mensaje de confirmación")
+    mensaje: str = Field(..., description=_DESC_MENSAJE_CONFIRMACION)
 
 
 # ============================================================================
@@ -964,8 +982,8 @@ class DistribucionTiendaFrontend(BaseModel):
 class AjusteDetalle(BaseModel):
     """Modelo para ajuste de un producto (compatible con frontend AjusteDetalle). Acepta decimales (ej. 0.5)."""
     
-    codigo_producto: str = Field(..., description="Código del producto")
-    descripcion: str = Field(..., description="Descripción del producto")
+    codigo_producto: str = Field(..., description=_DESC_CODIGO_PRODUCTO)
+    descripcion: str = Field(..., description=_DESC_DESCRIPCION_PRODUCTO)
     cantidad_solicitada: float = Field(..., ge=0, description="Cantidad solicitada original (acepta decimales)")
     cantidad_confirmada: float = Field(..., ge=0, description="Cantidad confirmada por el proveedor (acepta decimales)")
     cantidad_ajustada: float = Field(..., ge=0, description="Cantidad ajustada/redistribuida (acepta decimales)")
@@ -980,13 +998,13 @@ class AjusteDetalle(BaseModel):
     class Config:
         json_schema_extra = {
             "example": {
-                "codigo_producto": "R225.1012.BCO",
-                "descripcion": "Producto ejemplo",
+                "codigo_producto": _EX_CODIGO_BCO,
+                "descripcion": _EX_DESCRIPCION,
                 "cantidad_solicitada": 100,
                 "cantidad_confirmada": 80,
                 "cantidad_ajustada": 75,
                 "distribucion_tiendas": [
-                    {"tienda_codigo": "T001", "tienda_nombre": "Tienda 1", "cantidad": 50},
+                    {"tienda_codigo": "T001", "tienda_nombre": _EX_TIENDA_1, "cantidad": 50},
                     {"tienda_codigo": "T002", "tienda_nombre": "Tienda 2", "cantidad": 25}
                 ],
                 "costo_original": 25.50,
@@ -1006,13 +1024,13 @@ class RedistribucionConfirmarRequest(BaseModel):
             "example": {
                 "ajustes_detalle": [
                     {
-                        "codigo_producto": "R225.1012.BCO",
-                        "descripcion": "Producto ejemplo",
+                        "codigo_producto": _EX_CODIGO_BCO,
+                        "descripcion": _EX_DESCRIPCION,
                         "cantidad_solicitada": 100,
                         "cantidad_confirmada": 80,
                         "cantidad_ajustada": 75,
                         "distribucion_tiendas": [
-                            {"tienda_codigo": "T001", "tienda_nombre": "Tienda 1", "cantidad": 50},
+                            {"tienda_codigo": "T001", "tienda_nombre": _EX_TIENDA_1, "cantidad": 50},
                             {"tienda_codigo": "T002", "tienda_nombre": "Tienda 2", "cantidad": 25}
                         ],
                         "costo_original": 25.50,
@@ -1045,8 +1063,8 @@ class ConfirmacionRayoDetalleItem(BaseModel):
     """Modelo para un detalle de confirmación de EL RAYO."""
     
     confirmacion_detalle_id: str = Field(..., description="UUID del detalle de confirmación")
-    pedido_detalle_id: str = Field(..., description="UUID del detalle del pedido")
-    codigo_producto: Optional[str] = Field(None, description="Código del producto")
+    pedido_detalle_id: str = Field(..., description=_DESC_UUID_DETALLE_PEDIDO)
+    codigo_producto: Optional[str] = Field(None, description=_DESC_CODIGO_PRODUCTO)
     
     # Valores anteriores
     costo_anterior: Optional[float] = None
@@ -1068,7 +1086,7 @@ class ConfirmacionRayoItem(BaseModel):
     """Modelo para una confirmación de EL RAYO."""
     
     confirmacion_id: str = Field(..., description="UUID de la confirmación")
-    pedido_id: str = Field(..., description="UUID del pedido")
+    pedido_id: str = Field(..., description=_DESC_UUID_PEDIDO)
     respuesta_id: Optional[str] = Field(None, description="UUID de la respuesta del proveedor")
     confirmado_por: str = Field(..., description="User ID de EL RAYO")
     fecha_confirmacion: str = Field(..., description="Fecha y hora de confirmación (ISO8601)")
@@ -1081,8 +1099,8 @@ class ConfirmacionRayoItem(BaseModel):
 class ConfirmacionRayoListResponse(BaseModel):
     """Modelo para la respuesta de obtener historial de confirmaciones."""
     
-    pedido_id: str = Field(..., description="UUID del pedido")
-    numero_pedido: Optional[str] = Field(None, description="Número del pedido")
+    pedido_id: str = Field(..., description=_DESC_UUID_PEDIDO)
+    numero_pedido: Optional[str] = Field(None, description=_DESC_NUMERO_PEDIDO)
     total_confirmaciones: int = Field(..., ge=0, description="Total de confirmaciones")
     confirmaciones: List[ConfirmacionRayoItem] = Field(default_factory=list, description="Lista de confirmaciones")
 
@@ -1097,9 +1115,9 @@ class ConfirmarRedistribucionResponseFrontend(BaseModel):
     """Modelo para respuesta de confirmar redistribución (compatible con frontend)."""
     
     status: str = Field(default="success")
-    message: str = Field(..., description="Mensaje de confirmación")
-    pedido_id: str = Field(..., description="UUID del pedido")
-    numero_pedido: str = Field(..., description="Número del pedido")
+    message: str = Field(..., description=_DESC_MENSAJE_CONFIRMACION)
+    pedido_id: str = Field(..., description=_DESC_UUID_PEDIDO)
+    numero_pedido: str = Field(..., description=_DESC_NUMERO_PEDIDO)
     redistribucion_id: Optional[str] = Field(None, description="ID de la redistribución (si aplica)")
     fecha_confirmacion: datetime = Field(default_factory=ahora_naive)
     resumen: ResumenConfirmacion
@@ -1116,13 +1134,13 @@ class GuardarBorradorRequest(BaseModel):
             "example": {
                 "ajustes_detalle": [
                     {
-                        "codigo_producto": "R225.1012.BCO",
-                        "descripcion": "Producto ejemplo",
+                        "codigo_producto": _EX_CODIGO_BCO,
+                        "descripcion": _EX_DESCRIPCION,
                         "cantidad_solicitada": 100,
                         "cantidad_confirmada": 80,
                         "cantidad_ajustada": 75,
                         "distribucion_tiendas": [
-                            {"tienda_codigo": "T001", "tienda_nombre": "Tienda 1", "cantidad": 50}
+                            {"tienda_codigo": "T001", "tienda_nombre": _EX_TIENDA_1, "cantidad": 50}
                         ],
                         "costo_original": 25.50,
                         "costo_ajustado": 25.50,
@@ -1137,9 +1155,9 @@ class GuardarBorradorResponse(BaseModel):
     """Modelo para respuesta de guardar borrador."""
     
     status: str = Field(default="success")
-    message: str = Field(..., description="Mensaje de confirmación")
-    pedido_id: str = Field(..., description="UUID del pedido")
-    numero_pedido: str = Field(..., description="Número del pedido")
+    message: str = Field(..., description=_DESC_MENSAJE_CONFIRMACION)
+    pedido_id: str = Field(..., description=_DESC_UUID_PEDIDO)
+    numero_pedido: str = Field(..., description=_DESC_NUMERO_PEDIDO)
     fecha_guardado: datetime = Field(default_factory=ahora_naive)
 
 
@@ -1166,9 +1184,9 @@ class ProductoSAPProcesamientoItem(BaseModel):
     """Modelo para un producto procesado con SAP."""
 
     procesamiento_detalle_id: str = Field(..., description="UUID del procesamiento")
-    pedido_detalle_id: str = Field(..., description="UUID del detalle del pedido")
+    pedido_detalle_id: str = Field(..., description=_DESC_UUID_DETALLE_PEDIDO)
     codigo_interno: str = Field(..., description="Código interno del producto")
-    descripcion_producto: Optional[str] = Field(None, description="Descripción del producto")
+    descripcion_producto: Optional[str] = Field(None, description=_DESC_DESCRIPCION_PRODUCTO)
     item_code_sap: Optional[str] = Field(None, description="ItemCode de SAP")
     pack_sap: Optional[str] = Field(None, description="Pack SAP (X1, X2, X3, etc.)")
     unidad_conversion: Optional[float] = Field(None, description="Factor de conversión")
@@ -1209,8 +1227,8 @@ class ProcesamientoSAPResponse(BaseModel):
     """Modelo para respuesta de procesamiento SAP de un pedido."""
     
     status: str = Field(default="success")
-    pedido_id: str = Field(..., description="UUID del pedido")
-    numero_pedido: Optional[str] = Field(None, description="Número del pedido")
+    pedido_id: str = Field(..., description=_DESC_UUID_PEDIDO)
+    numero_pedido: Optional[str] = Field(None, description=_DESC_NUMERO_PEDIDO)
     productos: List[ProductoSAPProcesamientoItem] = Field(default_factory=list, description="Lista de productos procesados")
     estadisticas: EstadisticasProcesamientoSAP = Field(..., description="Estadísticas del procesamiento")
     fecha_procesamiento: Optional[datetime] = Field(None, description="Fecha del último procesamiento")
@@ -1241,7 +1259,7 @@ class ArticuloRequest(BaseModel):
     """Modelo para un artículo del pedido."""
     
     codigo_interno: str = Field(..., description="Código del producto (SKU)")
-    descripcion_sap: Optional[str] = Field(None, description="Descripción del producto")
+    descripcion_sap: Optional[str] = Field(None, description=_DESC_DESCRIPCION_PRODUCTO)
     marca: Optional[str] = Field(None, description="Marca del producto")
     codigo_barras: Optional[str] = Field(None, description="Código de barras")
     pack: Optional[str] = Field(None, description="Tipo de empaque/pack")
@@ -1257,7 +1275,7 @@ class ArticuloRequest(BaseModel):
     class Config:
         json_schema_extra = {
             "example": {
-                "codigo_interno": "R225.1012.BCO",
+                "codigo_interno": _EX_CODIGO_BCO,
                 "descripcion_sap": "MEDIA TOBILLERA",
                 "marca": "ROLAND",
                 "costo_doc_sin_iva": 5.65,
@@ -1313,7 +1331,7 @@ class CrearPedidoRequest(BaseModel):
                 "origen_traslado": "RL-CD",
                 "articulos": [
                     {
-                        "codigo_interno": "R225.1012.BCO",
+                        "codigo_interno": _EX_CODIGO_BCO,
                         "descripcion_sap": "MEDIA TOBILLERA",
                         "marca": "ROLAND",
                         "costo_doc_sin_iva": 5.65,
@@ -1378,8 +1396,8 @@ class ModificarPedidoCabeceraRequest(BaseModel):
 class ModificarPedidoCabeceraResponse(BaseModel):
     """Modelo para respuesta de modificación de cabecera de pedido."""
     
-    status: str = Field(default="success", description="Estado de la operación")
-    message: str = Field(..., description="Mensaje descriptivo")
+    status: str = Field(default="success", description=_DESC_ESTADO_OPERACION)
+    message: str = Field(..., description=_DESC_MENSAJE_DESCRIPTIVO)
     pedido_id: str = Field(..., description="UUID del pedido modificado")
     campos_modificados: List[str] = Field(default_factory=list, description="Lista de campos que fueron modificados")
 
@@ -1431,7 +1449,7 @@ class ProcesoCompletoSAPResponse(BaseModel):
     
     # Información del pedido
     pedido_id: str = Field(..., description="UUID del pedido procesado")
-    numero_pedido: str = Field(..., description="Número del pedido")
+    numero_pedido: str = Field(..., description=_DESC_NUMERO_PEDIDO)
     
     # Paso 1: Redistribución
     redistribucion: Optional[dict] = Field(None, description="Resultado de la confirmación de redistribución")
