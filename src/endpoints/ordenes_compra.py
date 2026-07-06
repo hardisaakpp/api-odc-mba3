@@ -1386,13 +1386,11 @@ def register_ordenes_compra_endpoints(app: FastAPI):
                     from src.utils.odc_pdf_generator import generar_odc_pdf
                     
                     doc_num = oc_cabecera.get("numero_oc_sap")
-                    doc_entry = oc_cabecera.get("doc_entry")
-                    
+
                     pdf_bytes = generar_odc_pdf(
                         oc_cabecera=oc_cabecera,
                         oc_detalles=oc_detalles,
                         doc_num=doc_num,
-                        doc_entry=doc_entry,
                         pedido_info=pedido_info,
                     )
                     

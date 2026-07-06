@@ -31,7 +31,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from reportlab.lib import colors
-from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_RIGHT
+from reportlab.lib.enums import TA_CENTER, TA_RIGHT
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import cm, mm
@@ -296,7 +296,6 @@ def _get_styles() -> Dict[str, ParagraphStyle]:
 
 def _build_header_info(
     oc_cabecera: Dict[str, Any],
-    doc_num: Optional[int],
     pedido_info: Optional[Dict[str, Any]],
     styles: Dict[str, ParagraphStyle],
 ) -> Table:
@@ -308,7 +307,6 @@ def _build_header_info(
     fecha_hora_generacion = oc_cabecera.get("fecha_procesado") or oc_cabecera.get("created_at")
 
     # Datos del pedido (si existen)
-    proveedor_nombre = "N/A"
     forma_pago = "N/A"
     fecha_entrega = "N/A"
 
@@ -583,7 +581,6 @@ def generar_odc_pdf(
     oc_cabecera: Dict[str, Any],
     oc_detalles: List[Dict[str, Any]],
     doc_num: Optional[int] = None,
-    doc_entry: Optional[int] = None,
     pedido_info: Optional[Dict[str, Any]] = None,
     descuento_pct: float = 0.0,
 ) -> bytes:
@@ -597,7 +594,6 @@ def generar_odc_pdf(
             - codigo_barras: Código de barras del producto
             - descripcion / nombre_producto / descripcion_sap: Descripción
         doc_num: Número de documento SAP (DocNum).
-        doc_entry: Entry de documento SAP (DocEntry).
         pedido_info: Información adicional del pedido (opcional).
             - proveedor_nombre: Razón social del proveedor
             - forma_pago: Plazo/forma de pago
@@ -639,7 +635,7 @@ def generar_odc_pdf(
         elements.append(Spacer(1, 4 * mm))
 
         # ── 2. Información de cabecera (proveedor | comprador) ───────────
-        header_table = _build_header_info(oc_cabecera, doc_num, pedido_info, styles)
+        header_table = _build_header_info(oc_cabecera, pedido_info, styles)
         elements.append(header_table)
         elements.append(Spacer(1, 6 * mm))
 

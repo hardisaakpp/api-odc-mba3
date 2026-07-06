@@ -223,7 +223,6 @@ def _generate_odc_pdf_attachment(oc_cabecera, oc_detalles, doc_num, doc_entry, n
             oc_cabecera=oc_cabecera,
             oc_detalles=oc_detalles,
             doc_num=doc_num,
-            doc_entry=doc_entry,
             pedido_info=pedido_info,
         )
         pdf_attachment = MIMEBase("application", "pdf")
