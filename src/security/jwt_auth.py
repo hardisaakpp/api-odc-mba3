@@ -135,6 +135,13 @@ _ROLE_PERMISSIONS: Dict[str, List[str]] = {
 }
 
 
+def _append_permission_value(container: list, value: Any) -> None:
+    if isinstance(value, list):
+        container.extend(value)
+    elif isinstance(value, str):
+        container.append(value)
+
+
 def _extract_permissions(data: Dict[str, Any]) -> list:
     """
     Extrae permisos del token JWT.
@@ -156,19 +163,12 @@ def _extract_permissions(data: Dict[str, Any]) -> list:
     # Primero buscar en claves específicas
     for key in permission_keys:
         if key in data:
-            value = data[key]
-            if isinstance(value, list):
-                permissions.extend(value)
-            elif isinstance(value, str):
-                permissions.append(value)
+            _append_permission_value(permissions, data[key])
 
     # También buscar en cualquier clave que contenga 'permission' (case insensitive)
     for key, value in data.items():
         if 'permission' in key.lower() and key not in permission_keys:
-            if isinstance(value, list):
-                permissions.extend(value)
-            elif isinstance(value, str):
-                permissions.append(value)
+            _append_permission_value(permissions, value)
 
     # Si el JWT no trae permisos explícitos, derivarlos desde los roles
     if not permissions:
@@ -183,13 +183,54 @@ def _extract_permissions(data: Dict[str, Any]) -> list:
     return list(set(permissions))
 
 
+def _verificar_permiso(
+    user: Dict[str, Any],
+    permission_key: str,
+    legacy_permission: Optional[str],
+) -> None:
+    permissions = user.get('permissions', [])
+    roles = user.get('roles', [])
+    username = user.get('username', 'unknown')
+
+    # ✅ Permitir acceso automático a usuarios con rol 'Admin'
+    is_admin = 'Admin' in roles or 'Admin' in permissions
+    if is_admin:
+        return
+
+    # Verificar permiso específico primero
+    has_specific = permission_key in permissions
+
+    # Si no tiene el específico y hay legacy, verificar legacy
+    has_legacy = False
+    if not has_specific and legacy_permission:
+        has_legacy = legacy_permission in permissions
+        if has_legacy:
+            logger.warning(
+                f"⚠️ [BACKWARD COMPAT] Usuario {username} tiene permiso legacy '{legacy_permission}' "
+                f"pero no tiene '{permission_key}'. Considerar migrar permisos en el Core."
+            )
+
+    if not (has_specific or has_legacy):
+        logger.warning(
+            f"❌ Permiso denegado: usuario {username} "
+            f"intentó acceder sin permiso '{permission_key}'"
+            + (f" ni '{legacy_permission}'" if legacy_permission else "")
+        )
+        if ENVIRONMENT == "development":
+            logger.debug(f"🔍 [DEBUG PERMISSION] Permisos disponibles: {permissions}")
+        raise HTTPException(
+            status_code=403,
+            detail=f"Permiso denegado: se requiere '{permission_key}'. Permisos disponibles: {permissions}"
+        )
+
+
 def require_permission(permission_key: str, legacy_permission: Optional[str] = None):
     """
     Dependency factory para validar permisos específicos.
-    
+
     Soporta backward compatibility: si el usuario no tiene el permiso específico,
     puede usar un permiso legacy (temporal durante la transición).
-    
+
     Uso:
         @app.get("/endpoint")
         async def my_endpoint(
@@ -197,11 +238,11 @@ def require_permission(permission_key: str, legacy_permission: Optional[str] = N
             _: None = Depends(require_permission('mabel.view'))
         ):
             ...
-    
+
     Args:
         permission_key: Clave del permiso requerido (específico)
         legacy_permission: Permiso legacy para backward compatibility (opcional)
-        
+
     Returns:
         Dependency que valida el permiso
     """
@@ -214,42 +255,8 @@ def require_permission(permission_key: str, legacy_permission: Optional[str] = N
                 status_code=401,
                 detail="Autenticación requerida"
             )
-        
-        permissions = user.get('permissions', [])
-        roles = user.get('roles', [])
-        username = user.get('username', 'unknown')
-        
-        # ✅ Permitir acceso automático a usuarios con rol 'Admin'
-        is_admin = 'Admin' in roles or 'Admin' in permissions
-        if is_admin:
-            return
-        
-        # Verificar permiso específico primero
-        has_specific = permission_key in permissions
-        
-        # Si no tiene el específico y hay legacy, verificar legacy
-        has_legacy = False
-        if not has_specific and legacy_permission:
-            has_legacy = legacy_permission in permissions
-            if has_legacy:
-                logger.warning(
-                    f"⚠️ [BACKWARD COMPAT] Usuario {username} tiene permiso legacy '{legacy_permission}' "
-                    f"pero no tiene '{permission_key}'. Considerar migrar permisos en el Core."
-                )
-        
-        if not (has_specific or has_legacy):
-            logger.warning(
-                f"❌ Permiso denegado: usuario {username} "
-                f"intentó acceder sin permiso '{permission_key}'"
-                + (f" ni '{legacy_permission}'" if legacy_permission else "")
-            )
-            if ENVIRONMENT == "development":
-                logger.debug(f"🔍 [DEBUG PERMISSION] Permisos disponibles: {permissions}")
-            raise HTTPException(
-                status_code=403,
-                detail=f"Permiso denegado: se requiere '{permission_key}'. Permisos disponibles: {permissions}"
-            )
-    
+        _verificar_permiso(user, permission_key, legacy_permission)
+
     return permission_checker
 
 
