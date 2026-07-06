@@ -28,7 +28,7 @@ def _log_tipo_resultado(result) -> None:
         logger.warning(f"⚠️ Tipo inesperado: {type(result)}")
 
 
-def _normalizar_a_lista(result) -> list:
+def _obtener_facturas_desde_result(result) -> list:
     if isinstance(result, list):
         return result
     if isinstance(result, dict):
@@ -36,91 +36,80 @@ def _normalizar_a_lista(result) -> list:
     return []
 
 
-def _procesar_factura_a_oc(factura: dict, despacho_repo, oc_repo) -> tuple:
-    """(None, None) = omitir; (True, dict) = éxito; (False, dict) = error."""
+def _procesar_factura_oc(factura, despacho_repo, oc_repo):
+    if not isinstance(factura, dict):
+        return None
     codigo_factura = factura.get("CODIGO_FACTURA")
     if not codigo_factura:
-        return None, None
+        return None
     despacho_id = despacho_repo.find_by_codigo_factura(codigo_factura)
     if not despacho_id:
         logger.warning(f"⚠️ No se encontró despacho_id para factura: {codigo_factura}")
-        return None, None
+        return None
     try:
         oc_resultado = copy_despacho_to_orden_compra(
             despacho_repo=despacho_repo,
             oc_repo=oc_repo,
             despacho_id=despacho_id,
-            upsert=True
+            upsert=True,
         )
         if oc_resultado:
-            oc_id = oc_resultado.get("oc_id")
             accion = "actualizada" if oc_resultado.get("cabecera_actualizada") else "creada"
-            logger.info(f"   ✅ OC {accion}: {oc_id} (estado: PENDIENTE)")
-            return True, {
+            logger.info(f"   ✅ OC {accion}: {oc_resultado.get('oc_id')} (estado: PENDIENTE)")
+            return {
                 "despacho_id": despacho_id,
-                "oc_id": oc_id,
+                "oc_id": oc_resultado.get("oc_id"),
                 "proveedor": oc_resultado.get("proveedor"),
                 "detalles_insertados": oc_resultado.get("detalles_insertados", 0),
                 "accion": accion,
-                "estado": "PENDIENTE"
+                "estado": "PENDIENTE",
             }
         logger.warning(f"⚠️ No se pudo crear/actualizar OC para despacho: {despacho_id}")
-        return False, {"despacho_id": despacho_id, "error": "No se pudo crear/actualizar OC"}
+        return {"despacho_id": despacho_id, "error": "No se pudo crear/actualizar OC"}
     except Exception as oc_error:
         logger.error(f"❌ Error al copiar despacho {despacho_id} a OC: {oc_error}")
-        return False, {"despacho_id": despacho_id, "error": str(oc_error)}
+        return {"despacho_id": despacho_id, "error": str(oc_error)}
 
 
-def _copiar_despachos_a_oc(result) -> dict:
-    logger.info("=" * 70)
-    logger.info("🔄 PROCESANDO: Copiando despachos a orden de compra...")
-    logger.info("=" * 70)
-
+def _copiar_despachos_a_ordenes_compra(result) -> dict:
     conn = get_db_connection()
     despacho_repo = DespachoRepository(conn)
     oc_repo = OrdenCompraRepository(conn)
-    facturas = _normalizar_a_lista(result)
-
+    facturas = _obtener_facturas_desde_result(result)
     oc_resultados = []
     oc_exitosas = 0
     oc_errores = 0
-
     for factura in facturas:
-        if not isinstance(factura, dict):
+        item = _procesar_factura_oc(factura, despacho_repo, oc_repo)
+        if item is None:
             continue
-        exito, resultado_item = _procesar_factura_a_oc(factura, despacho_repo, oc_repo)
-        if exito is None:
-            continue
-        oc_resultados.append(resultado_item)
-        if exito:
-            oc_exitosas += 1
-        else:
+        oc_resultados.append(item)
+        if "error" in item:
             oc_errores += 1
-
+        else:
+            oc_exitosas += 1
     conn.close()
-
     logger.info("=" * 70)
     logger.info("✅ PROCESO COMPLETO:")
     logger.info(f"   OCs creadas: {oc_exitosas}")
     logger.info(f"   Errores: {oc_errores}")
     logger.info("   Estado de OCs creadas: PENDIENTE (listas para enviar a SAP)")
     logger.info("=" * 70)
-
     return {
         "status": "success" if oc_errores == 0 else "partial",
         "oc_creadas": oc_exitosas,
         "oc_errores": oc_errores,
         "total_procesadas": len(oc_resultados),
-        "detalles": oc_resultados
+        "detalles": oc_resultados,
     }
 
 
-def _construir_headers_respuesta(query_predefinida, source, save_status, oc_status) -> dict:
+def _construir_headers_prueba(query_predefinida: str, source: str, save_status, oc_status) -> dict:
     headers = {
         "X-Query": query_predefinida[:100],
         "X-Source": source,
         "X-Method": "GET",
-        "X-Predefined": "true"
+        "X-Predefined": "true",
     }
     if save_status:
         headers["X-Saved-To-DB"] = save_status.get("status", "unknown")
@@ -133,6 +122,69 @@ def _construir_headers_respuesta(query_predefinida, source, save_status, oc_stat
     return headers
 
 
+async def _ejecutar_pruebas(request: Request, user: dict) -> JSONResponse:
+    query_predefinida = MBA3_QUERY_PREDEFINIDA
+    source = get_source_from_headers(request)
+    username = user.get('username', 'unknown') if user else 'unknown'
+    logger.info(f"🔍 Ejecutando consulta de pruebas (usuario: {username}, fuente: {source})")
+    try:
+        result = MBA3Service.execute_query(query_predefinida)
+        _log_tipo_resultado(result)
+        save_status = MBA3Service.save_to_database(result, upsert=True)
+        oc_status = None
+        if save_status and save_status.get("status") in ["success", "partial"]:
+            try:
+                logger.info("=" * 70)
+                logger.info("🔄 PROCESANDO: Copiando despachos a orden de compra...")
+                logger.info("=" * 70)
+                oc_status = _copiar_despachos_a_ordenes_compra(result)
+            except Exception as e:
+                logger.error(f"❌ Error al procesar copia a ODC: {e}", exc_info=True)
+                oc_status = {"status": "error", "message": str(e), "oc_creadas": 0, "oc_errores": 0}
+        headers = _construir_headers_prueba(query_predefinida, source, save_status, oc_status)
+        response_content = {
+            "data": result,
+            "metadata": {
+                "query": query_predefinida,
+                "save_status": save_status,
+                "oc_status": oc_status,
+            },
+        }
+        return JSONResponse(status_code=200, content=response_content, headers=headers)
+    except MBA3ConnectionError as e:
+        logger.error(f"❌ Error de conexión con MBA3: {e}", exc_info=True)
+        return JSONResponse(
+            status_code=503,
+            content={
+                "status": "error",
+                "message": "No se pudo conectar al servidor MBA3",
+                "detail": str(e),
+                "type": "connection_error",
+                "hint": "Verifica que el servidor MBA3 esté disponible y accesible. Revisa la configuración de MBA3_BASE_URL en tu archivo .env",
+            },
+        )
+    except MBA3QueryError as e:
+        logger.error(f"❌ Error al ejecutar consulta en MBA3: {e}", exc_info=True)
+        return JSONResponse(
+            status_code=500,
+            content={
+                "status": "error",
+                "message": "Error al ejecutar consulta en MBA3",
+                "detail": str(e),
+                "type": "query_error",
+            },
+        )
+    except Exception as e:
+        logger.error(f"❌ Error al ejecutar consulta predefinida: {e}", exc_info=True)
+        return JSONResponse(
+            status_code=500,
+            content={
+                "status": "error",
+                "message": f"Error al ejecutar consulta predefinida: {str(e)}",
+            },
+        )
+
+
 def register_pruebas_endpoints(app: FastAPI):
     """
     Registra los endpoints de pruebas en la aplicación FastAPI.
@@ -140,7 +192,6 @@ def register_pruebas_endpoints(app: FastAPI):
     Args:
         app: Instancia de FastAPI
     """
-
     @app.get("/pruebas", tags=["Pruebas"])
     async def ejecutar_pruebas(
         request: Request,
@@ -193,65 +244,4 @@ def register_pruebas_endpoints(app: FastAPI):
         Returns:
             JSON con datos de MBA3 y metadata del proceso completo
         """
-        query_predefinida = MBA3_QUERY_PREDEFINIDA
-        source = get_source_from_headers(request)
-        username = user.get('username', 'unknown') if user else 'unknown'
-        logger.info(f"🔍 Ejecutando consulta de pruebas (usuario: {username}, fuente: {source})")
-
-        try:
-            result = MBA3Service.execute_query(query_predefinida)
-            _log_tipo_resultado(result)
-
-            save_status = MBA3Service.save_to_database(result, upsert=True)
-
-            oc_status = None
-            if save_status and save_status.get("status") in ["success", "partial"]:
-                try:
-                    oc_status = _copiar_despachos_a_oc(result)
-                except Exception as e:
-                    logger.error(f"❌ Error al procesar copia a ODC: {e}", exc_info=True)
-                    oc_status = {"status": "error", "message": str(e), "oc_creadas": 0, "oc_errores": 0}
-
-            headers = _construir_headers_respuesta(query_predefinida, source, save_status, oc_status)
-            response_content = {
-                "data": result,
-                "metadata": {
-                    "query": query_predefinida,
-                    "save_status": save_status,
-                    "oc_status": oc_status
-                }
-            }
-            return JSONResponse(status_code=200, content=response_content, headers=headers)
-
-        except MBA3ConnectionError as e:
-            logger.error(f"❌ Error de conexión con MBA3: {e}", exc_info=True)
-            return JSONResponse(
-                status_code=503,
-                content={
-                    "status": "error",
-                    "message": "No se pudo conectar al servidor MBA3",
-                    "detail": str(e),
-                    "type": "connection_error",
-                    "hint": "Verifica que el servidor MBA3 esté disponible y accesible. Revisa la configuración de MBA3_BASE_URL en tu archivo .env"
-                }
-            )
-        except MBA3QueryError as e:
-            logger.error(f"❌ Error al ejecutar consulta en MBA3: {e}", exc_info=True)
-            return JSONResponse(
-                status_code=500,
-                content={
-                    "status": "error",
-                    "message": "Error al ejecutar consulta en MBA3",
-                    "detail": str(e),
-                    "type": "query_error"
-                }
-            )
-        except Exception as e:
-            logger.error(f"❌ Error al ejecutar consulta predefinida: {e}", exc_info=True)
-            return JSONResponse(
-                status_code=500,
-                content={
-                    "status": "error",
-                    "message": f"Error al ejecutar consulta predefinida: {str(e)}"
-                }
-            )
+        return await _ejecutar_pruebas(request, user)
