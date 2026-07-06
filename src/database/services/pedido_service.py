@@ -1021,22 +1021,19 @@ class PedidoService:
     ) -> Dict[str, Any]:
         """
         Crea un pedido manualmente desde datos JSON (HU-01 - Carga por Pantalla).
-        
-        Este método permite crear pedidos directamente desde la interfaz web
-        sin necesidad de subir un archivo Excel.
-        
+
         Args:
             datos_pedido: Diccionario con datos del pedido (del request JSON)
             usuario_id: ID del usuario que crea el pedido
             validar_productos: Si True, valida que productos existan
             validar_tiendas: Si True, valida que tiendas existan y estén activas
-            
+
         Returns:
             Dict con resultado completo incluyendo validaciones y consolidación
         """
         if not ENABLE_SQL_SERVER_STORAGE:
             return {"status": "error", "message": _MSG_STORAGE_DESHABILITADO}
-        
+
         resultado = {
             "status": "success",
             "pedido_id": None,
@@ -1051,351 +1048,28 @@ class PedidoService:
             "distribuciones_cargadas": 0,
             "errores": []
         }
-        
+
         try:
-            # Preparar cabecera
-            cabecera = {
-                "numero_pedido": datos_pedido.get("numero_pedido"),
-                "fecha_pedido": datos_pedido.get("fecha_pedido"),
-                "fecha_entrega": datos_pedido.get("fecha_entrega"),
-                "forma_pago": datos_pedido.get("forma_pago"),
-                "mensaje": datos_pedido.get("mensaje"),
-                "proveedor_nombre": datos_pedido.get("proveedor_nombre"),
-                "comprador_nombre": datos_pedido.get("comprador_nombre"),
-                "comprador_codigo": datos_pedido.get("comprador_codigo"),
-                "origen_traslado": datos_pedido.get("origen_traslado"),
-                "serie": datos_pedido.get("serie"),
-                "archivo_nombre": "CREACION_MANUAL",
-                "creado_por": usuario_id,
-                "estado_id": 1
-            }
-            
-            # Convertir artículos a formato interno
+            cabecera = self._construir_cabecera_manual(datos_pedido, usuario_id)
             articulos = datos_pedido.get("articulos", [])
             if not articulos:
                 resultado["status"] = "error"
                 resultado["errores"].append("No se encontraron artículos")
                 return resultado
-            
-            detalles_con_tiendas = []
-            for articulo in articulos:
-                # Mapear TODOS los campos del artículo, incluyendo campos opcionales
-                # Esto asegura que cualquier campo enviado desde el frontend se guarde en la BD
-                # Usar .get() con valor por defecto None para campos opcionales
-                detalle = {
-                    "codigo_interno": articulo.get("codigo_interno"),
-                    "descripcion_sap": articulo.get("descripcion_sap"),
-                    "marca": articulo.get("marca"),
-                    "codigo_barras": articulo.get("codigo_barras"),
-                    "pack": articulo.get("pack"),
-                    "costo_doc_sin_iva": articulo.get("costo_doc_sin_iva"),
-                    "descuento_1": articulo.get("descuento_1"),
-                    "pvp": articulo.get("pvp"),
-                    "subtotal": articulo.get("subtotal"),
-                    "total": articulo.get("total"),
-                    "comentario": articulo.get("comentario")  # Campo comentario si existe en el request
-                }
-                
-                # Log para debugging: ver qué campos se están mapeando
-                logger.debug(f"📦 Mapeando artículo: codigo_interno={detalle['codigo_interno']}, "
-                           f"descripcion_sap={detalle.get('descripcion_sap')}, "
-                           f"marca={detalle.get('marca')}, "
-                           f"costo_doc_sin_iva={detalle.get('costo_doc_sin_iva')}, "
-                           f"pvp={detalle.get('pvp')}, "
-                           f"comentario={detalle.get('comentario')}")
-                
-                distribuciones = []
-                for dist in articulo.get("distribuciones", []):
-                    distribuciones.append({
-                        "tienda_codigo": dist.get("tienda_codigo"),
-                        "tienda_nombre": dist.get("tienda_nombre"),
-                        "cantidad": dist.get("cantidad")
-                    })
-                
-                detalles_con_tiendas.append({
-                    "detalle": detalle,
-                    "distribuciones": distribuciones
-                })
-            
-            # ✅ Enriquecer detalles con información de SAP (ItemName y U_IXX_PACK)
+            detalles_con_tiendas = self._construir_detalles_desde_articulos(articulos)
             detalles_con_tiendas = self._enriquecer_detalles_con_sap(detalles_con_tiendas)
-            
-            # ✅ VALIDACIÓN TEMPRANA: Verificar número de pedido duplicado ANTES de validaciones SAP costosas
-            numero_pedido = cabecera.get("numero_pedido")
-            if numero_pedido:
-                with get_db_connection_context() as conn_check:
-                    from ..repositories.pedido_repository import PedidoRepository
-                    repo_check = PedidoRepository(conn_check)
-                    
-                    if repo_check.existe_numero_pedido(numero_pedido):
-                        logger.warning(f"⚠️ [VALIDACIÓN TEMPRANA - MANUAL] Número de pedido duplicado detectado: '{numero_pedido}'")
-                        resultado["status"] = "error"
-                        resultado["errores"].append(f"El número de pedido '{numero_pedido}' ya existe en el sistema")
-                        resultado["error_tipo"] = "numero_pedido_duplicado"
-                        # Agregar datos estructurados
-                        resultado["validacion_numero_pedido"] = {
-                            "numero_pedido": numero_pedido,
-                            "duplicado": True,
-                            "mensaje": f"El número de pedido '{numero_pedido}' ya fue utilizado anteriormente"
-                        }
-                        return resultado
-                    else:
-                        logger.info(f"✅ [VALIDACIÓN TEMPRANA - MANUAL] Número de pedido '{numero_pedido}' disponible")
-            
-            # Validar productos y tiendas
+            if self._es_numero_pedido_duplicado_manual(cabecera, resultado):
+                return resultado
             with get_db_connection_context() as conn:
-                validator = PedidoValidator()
-                
-                codigos_productos = list(set([
-                    det.get("detalle", {}).get("codigo_interno")
-                    for det in detalles_con_tiendas
-                    if det.get("detalle", {}).get("codigo_interno")
-                ]))
-                codigos_tiendas = list(set([
-                    dist.get("tienda_codigo")
-                    for det in detalles_con_tiendas
-                    for dist in det.get("distribuciones", [])
-                    if dist.get("tienda_codigo")
-                ]))
-                
-                # ✅ VALIDACIÓN SAP OBLIGATORIA (PRIMERO - fuente de verdad)
-                # Validar productos, tiendas y bodegas contra SAP antes que cualquier otra validación
-                
-                # Extraer códigos de bodegas de las distribuciones (es_bodega=True)
-                codigos_bodegas_set = set()
-                for det in detalles_con_tiendas:
-                    distribuciones = det.get("distribuciones", [])
-                    for dist in distribuciones:
-                        if dist.get("es_bodega", False):
-                            tienda_codigo = dist.get("tienda_codigo")
-                            if tienda_codigo:
-                                codigos_bodegas_set.add(tienda_codigo.strip())
-                origen_traslado = cabecera.get("origen_traslado")
-                if origen_traslado and origen_traslado.strip():
-                    codigos_bodegas_set.add(origen_traslado.strip())
-                codigos_bodegas = list(codigos_bodegas_set)
-                
-                # 1. VALIDAR PRODUCTOS CONTRA SAP (OBLIGATORIO)
-                if codigos_productos:
-                    logger.info(f"🔍 [SAP PRIMERO] Validando {len(codigos_productos)} códigos de producto contra SAP")
-                    validacion_sap_productos = self.sap_validator_helper.validar_productos_sap(
-                        codigos_productos=codigos_productos,
-                        resultado=resultado,
-                        usar_cache=True,
-                        sap_obligatorio=True  # OBLIGATORIO: SAP es fuente de verdad
-                    )
-                    
-                    if validacion_sap_productos is None or not validacion_sap_productos.get("todos_validos", False):
-                        no_encontrados = validacion_sap_productos.get("no_encontrados", []) if validacion_sap_productos else []
-                        errores = validacion_sap_productos.get("errores", []) if validacion_sap_productos else []
-                        
-                        # Asegurar que son listas
-                        if isinstance(no_encontrados, int):
-                            no_encontrados = []
-                        if isinstance(errores, int):
-                            errores = []
-                        
-                        # Mensaje simple - el frontend construirá el mensaje detallado
-                        mensaje_error = "Existen códigos de producto no válidos en SAP"
-                        
-                        # Log detallado para debugging (solo en backend)
-                        log_detalle = f"Productos no encontrados ({len(no_encontrados)}): {', '.join(no_encontrados[:10])}"
-                        if len(no_encontrados) > 10:
-                            log_detalle += f" y {len(no_encontrados) - 10} más"
-                        if errores:
-                            log_detalle += f" | Errores ({len(errores)}): {', '.join(errores[:5])}"
-                            if len(errores) > 5:
-                                log_detalle += f" y {len(errores) - 5} más"
-                        logger.warning(f"⚠️ Validación SAP productos falló: {log_detalle}")
-                        
-                        resultado["status"] = "validation_error"
-                        resultado["errores"].append(mensaje_error)
-                        resultado["validacion"]["productos"] = {
-                            "no_encontrados": no_encontrados,
-                            "errores": errores,
-                            "validos": validacion_sap_productos.get("validos", []) if validacion_sap_productos else []
-                        }
-                        return resultado
-                    
-                    resultado["validacion"]["productos_sap"] = {
-                        "validos": validacion_sap_productos.get("validos", []),
-                        "no_encontrados": validacion_sap_productos.get("no_encontrados", []),
-                        "errores": validacion_sap_productos.get("errores", []),
-                        "todos_validos": validacion_sap_productos.get("todos_validos", False)
-                    }
-                
-                # 2. VALIDAR TIENDAS CONTRA SAP (OBLIGATORIO)
-                if codigos_tiendas:
-                    logger.info(f"🔍 [SAP PRIMERO] Validando {len(codigos_tiendas)} códigos de tienda contra SAP")
-                    validacion_tiendas_sap = self.sap_validator_helper.validar_tiendas_sap(
-                        codigos_tiendas=codigos_tiendas,
-                        resultado=resultado,
-                        sap_obligatorio=True  # OBLIGATORIO: SAP es fuente de verdad
-                    )
-                    
-                    if not validacion_tiendas_sap.get("todas_validas", False):
-                        no_encontradas = validacion_tiendas_sap.get("no_encontradas", [])
-                        errores_sap = validacion_tiendas_sap.get("errores", [])
-                        
-                        # Asegurar que son listas
-                        if isinstance(no_encontradas, int):
-                            no_encontradas = []
-                        if isinstance(errores_sap, int):
-                            errores_sap = []
-                        
-                        # Mensaje simple - el frontend construirá el mensaje detallado
-                        mensaje_error = "Existen códigos de tienda/bodega no válidos en SAP"
-                        
-                        # Log detallado para debugging (solo en backend)
-                        log_detalle = f"Tiendas no encontradas ({len(no_encontradas)}): {', '.join(no_encontradas[:10])}"
-                        if len(no_encontradas) > 10:
-                            log_detalle += f" y {len(no_encontradas) - 10} más"
-                        if errores_sap:
-                            log_detalle += f" | Errores ({len(errores_sap)}): {', '.join(errores_sap[:5])}"
-                            if len(errores_sap) > 5:
-                                log_detalle += f" y {len(errores_sap) - 5} más"
-                        logger.warning(f"⚠️ Validación SAP tiendas falló: {log_detalle}")
-                        
-                        resultado["status"] = "validation_error"
-                        resultado["errores"].append(mensaje_error)
-                        resultado["validacion"]["tiendas"] = {
-                            "no_encontradas": no_encontradas,
-                            "errores": errores_sap,
-                            "validas": validacion_tiendas_sap.get("validas", [])
-                        }
-                        return resultado
-                    
-                    resultado["validacion"]["tiendas_sap"] = {
-                        "validas": validacion_tiendas_sap.get("validas", []),
-                        "no_encontradas": validacion_tiendas_sap.get("no_encontradas", []),
-                        "errores": validacion_tiendas_sap.get("errores", []),
-                        "todas_validas": validacion_tiendas_sap.get("todas_validas", False)
-                    }
-                
-                # 3. VALIDAR BODEGAS CONTRA SAP (OBLIGATORIO)
-                if codigos_bodegas:
-                    logger.info(f"🔍 [SAP PRIMERO] Validando {len(codigos_bodegas)} códigos de bodega contra SAP")
-                    validacion_bodegas_sap = validator.validar_bodegas_existen_en_sap(
-                        codigos_bodegas=codigos_bodegas,
-                        sap_obligatorio=True  # OBLIGATORIO: SAP es fuente de verdad
-                    )
-                    
-                    if not validacion_bodegas_sap.get("todas_validas", False):
-                        no_encontradas = validacion_bodegas_sap.get("no_encontradas", [])
-                        errores = validacion_bodegas_sap.get("errores", [])
-                        
-                        # Asegurar que son listas
-                        if isinstance(no_encontradas, int):
-                            no_encontradas = []
-                        if isinstance(errores, int):
-                            errores = []
-                        
-                        # Mensaje simple - el frontend construirá el mensaje detallado
-                        mensaje_error = "Existen códigos de bodega no válidos en SAP"
-                        
-                        # Log detallado para debugging (solo en backend)
-                        log_detalle = f"Bodegas no encontradas ({len(no_encontradas)}): {', '.join(no_encontradas[:10])}"
-                        if len(no_encontradas) > 10:
-                            log_detalle += f" y {len(no_encontradas) - 10} más"
-                        if errores:
-                            log_detalle += f" | Errores ({len(errores)}): {', '.join(errores[:5])}"
-                            if len(errores) > 5:
-                                log_detalle += f" y {len(errores) - 5} más"
-                        logger.warning(f"⚠️ Validación SAP bodegas falló: {log_detalle}")
-                        
-                        resultado["status"] = "validation_error"
-                        resultado["errores"].append(mensaje_error)
-                        resultado["validacion"]["bodegas"] = {
-                            "no_encontradas": no_encontradas,
-                            "errores": errores,
-                            "validas": validacion_bodegas_sap.get("validas", [])
-                        }
-                        return resultado
-                    
-                    resultado["validacion"]["bodegas_sap"] = {
-                        "validas": validacion_bodegas_sap.get("validas", []),
-                        "no_encontradas": validacion_bodegas_sap.get("no_encontradas", []),
-                        "errores": validacion_bodegas_sap.get("errores", []),
-                        "todas_validas": validacion_bodegas_sap.get("todas_validas", False)
-                    }
-                
-                # ✅ Validaciones locales (opcionales - solo informativas, no bloquean)
-                # NOTA: Estas validaciones son solo informativas porque SAP es la fuente de verdad
-                if validar_productos and codigos_productos:
-                    validacion_productos_local = validator.validar_productos_existen(codigos_productos, conn)
-                    resultado["validacion"]["productos"] = validacion_productos_local
-                    # No bloquear - SAP ya validó
-                
-                if validar_tiendas and codigos_tiendas:
-                    validacion_tiendas_local = validator.validar_tiendas_existen(codigos_tiendas, conn)
-                    resultado["validacion"]["tiendas"] = validacion_tiendas_local
-                    # No bloquear - SAP ya validó
-                
-                validacion_cantidades = validator.validar_pedido_completo(cabecera, detalles_con_tiendas, es_formato_simple=False)
-                resultado["validacion"]["cantidades"] = {
-                    "valid": validacion_cantidades["valid"],
-                    "errors": validacion_cantidades["errors"],
-                    "warnings": validacion_cantidades["warnings"],
-                    "total_issues": validacion_cantidades["total_issues"]
-                }
-                
-                if not validacion_cantidades["valid"]:
-                    resultado["status"] = "validation_error"
+                if self._validar_todo_manual(conn, cabecera, detalles_con_tiendas, validar_productos, validar_tiendas, resultado):
                     return resultado
-                
-                # ✅ Verificar si hay errores de validación antes de crear el pedido
-                # Si hay errores (SAP, productos o tiendas), no crear el pedido
-                if resultado.get("errores") and len(resultado["errores"]) > 0:
-                    resultado["status"] = "validation_error"
-                    logger.warning(f"⚠️ Errores de validación detectados: {resultado['errores']}. No se creará el pedido.")
-                    return resultado
-                
                 consolidacion = self.consolidator.consolidar_pedido_por_producto(detalles_con_tiendas)
                 resultado["consolidacion"] = consolidacion["resumen"]
-                
-                # Construir audit_context con fallback si no se proporcionó
-                from src.utils.audit_context import ensure_audit_context
-                audit = ensure_audit_context(audit_context)
-                
-                repository = PedidoRepository(conn)
-                pedido_id = repository.insert_cabecera(cabecera, audit_context=audit)
-                resultado["pedido_id"] = pedido_id
-                resultado["numero_pedido"] = cabecera.get("numero_pedido")  # ⭐ Agregado para redirección del frontend
-                resultado["estado_id"] = 1
-                resultado["estado_nombre"] = "BORRADOR"
-                resultado["estado"] = "BORRADOR"  # compat API
-                
-                for orden_linea, detalle_data in enumerate(detalles_con_tiendas):
-                    try:
-                        detalle_data["detalle"]["orden_linea"] = orden_linea
-                        pedido_detalle_id = repository.insert_detalle(pedido_id, detalle_data["detalle"], audit_context=audit)
-                        resultado["articulos_cargados"] += 1
-                        if detalle_data.get("distribuciones"):
-                            distribuciones = []
-                            for dist in detalle_data["distribuciones"]:
-                                tienda_codigo = dist.get("tienda_codigo")
-                                cantidad = dist.get("cantidad")
-                                if tienda_codigo and cantidad is not None and cantidad >= 0:
-                                    tienda_id = repository.get_or_create_tienda(
-                                        codigo=tienda_codigo,
-                                        nombre=dist.get("tienda_nombre")
-                                    )
-                                    distribuciones.append({
-                                        "tienda_id": tienda_id,
-                                        "cantidad": float(cantidad),
-                                        "es_bodega": dist.get("es_bodega", False)  # ⭐ NUEVO: Preservar flag de bodega
-                                    })
-                            if distribuciones:
-                                resultado["distribuciones_cargadas"] += repository.insert_detalle_tiendas(pedido_detalle_id, distribuciones, audit_context=audit)
-                    except Exception as e:
-                        logger.warning(f"⚠️ Error procesando artículo: {e}")
-                        resultado["errores"].append(str(e))
-            
+                self._insertar_pedido_manual(conn, cabecera, detalles_con_tiendas, resultado, audit_context)
             logger.info(f"✅ Pedido manual creado: {resultado['pedido_id']} - {cabecera.get('numero_pedido')}")
             return resultado
-            
+
         except ValueError as e:
-            # Detectar específicamente el error de número de pedido duplicado
             error_msg = str(e)
             if _PATRON_NUM_PEDIDO in error_msg.lower() and _PATRON_YA_EXISTE in error_msg.lower():
                 numero_pedido = cabecera.get("numero_pedido")
@@ -1403,14 +1077,12 @@ class PedidoService:
                 resultado["status"] = "error"
                 resultado["errores"].append(f"El número de pedido '{numero_pedido}' ya existe en el sistema")
                 resultado["error_tipo"] = "numero_pedido_duplicado"
-                # ✅ Agregar datos estructurados para el frontend (consistente con validaciones SAP)
                 resultado["validacion_numero_pedido"] = {
                     "numero_pedido": numero_pedido,
                     "duplicado": True,
                     "mensaje": f"El número de pedido '{numero_pedido}' ya fue utilizado anteriormente"
                 }
                 return resultado
-            # Otros ValueError se propagan como error genérico
             logger.error(f"❌ Error de validación al crear pedido manual: {e}", exc_info=True)
             resultado["status"] = "error"
             resultado["errores"].append(str(e))
@@ -1420,7 +1092,325 @@ class PedidoService:
             resultado["status"] = "error"
             resultado["errores"].append(str(e))
             return resultado
-    
+
+    def _construir_cabecera_manual(self, datos_pedido: Dict[str, Any], usuario_id: Optional[str]) -> Dict[str, Any]:
+        return {
+            "numero_pedido": datos_pedido.get("numero_pedido"),
+            "fecha_pedido": datos_pedido.get("fecha_pedido"),
+            "fecha_entrega": datos_pedido.get("fecha_entrega"),
+            "forma_pago": datos_pedido.get("forma_pago"),
+            "mensaje": datos_pedido.get("mensaje"),
+            "proveedor_nombre": datos_pedido.get("proveedor_nombre"),
+            "comprador_nombre": datos_pedido.get("comprador_nombre"),
+            "comprador_codigo": datos_pedido.get("comprador_codigo"),
+            "origen_traslado": datos_pedido.get("origen_traslado"),
+            "serie": datos_pedido.get("serie"),
+            "archivo_nombre": "CREACION_MANUAL",
+            "creado_por": usuario_id,
+            "estado_id": 1
+        }
+
+    def _construir_detalles_desde_articulos(self, articulos: List[Dict]) -> List[Dict]:
+        detalles_con_tiendas = []
+        for articulo in articulos:
+            detalle = {
+                "codigo_interno": articulo.get("codigo_interno"),
+                "descripcion_sap": articulo.get("descripcion_sap"),
+                "marca": articulo.get("marca"),
+                "codigo_barras": articulo.get("codigo_barras"),
+                "pack": articulo.get("pack"),
+                "costo_doc_sin_iva": articulo.get("costo_doc_sin_iva"),
+                "descuento_1": articulo.get("descuento_1"),
+                "pvp": articulo.get("pvp"),
+                "subtotal": articulo.get("subtotal"),
+                "total": articulo.get("total"),
+                "comentario": articulo.get("comentario")
+            }
+            logger.debug(
+                f"📦 Mapeando artículo: codigo_interno={detalle['codigo_interno']}, "
+                f"descripcion_sap={detalle.get('descripcion_sap')}, "
+                f"marca={detalle.get('marca')}, "
+                f"costo_doc_sin_iva={detalle.get('costo_doc_sin_iva')}, "
+                f"pvp={detalle.get('pvp')}, "
+                f"comentario={detalle.get('comentario')}"
+            )
+            distribuciones = []
+            for dist in articulo.get("distribuciones", []):
+                distribuciones.append({
+                    "tienda_codigo": dist.get("tienda_codigo"),
+                    "tienda_nombre": dist.get("tienda_nombre"),
+                    "cantidad": dist.get("cantidad")
+                })
+            detalles_con_tiendas.append({"detalle": detalle, "distribuciones": distribuciones})
+        return detalles_con_tiendas
+
+    def _es_numero_pedido_duplicado_manual(self, cabecera: Dict[str, Any], resultado: Dict[str, Any]) -> bool:
+        numero_pedido = cabecera.get("numero_pedido")
+        if not numero_pedido:
+            return False
+        with get_db_connection_context() as conn_check:
+            repo_check = PedidoRepository(conn_check)
+            if repo_check.existe_numero_pedido(numero_pedido):
+                logger.warning(f"⚠️ [VALIDACIÓN TEMPRANA - MANUAL] Número de pedido duplicado detectado: '{numero_pedido}'")
+                resultado["status"] = "error"
+                resultado["errores"].append(f"El número de pedido '{numero_pedido}' ya existe en el sistema")
+                resultado["error_tipo"] = "numero_pedido_duplicado"
+                resultado["validacion_numero_pedido"] = {
+                    "numero_pedido": numero_pedido,
+                    "duplicado": True,
+                    "mensaje": f"El número de pedido '{numero_pedido}' ya fue utilizado anteriormente"
+                }
+                return True
+            else:
+                logger.info(f"✅ [VALIDACIÓN TEMPRANA - MANUAL] Número de pedido '{numero_pedido}' disponible")
+                return False
+
+    def _validar_todo_manual(
+        self,
+        conn: Any,
+        cabecera: Dict[str, Any],
+        detalles_con_tiendas: List[Dict],
+        validar_productos: bool,
+        validar_tiendas: bool,
+        resultado: Dict[str, Any]
+    ) -> bool:
+        validator = PedidoValidator()
+        codigos_productos = list(set([
+            det.get("detalle", {}).get("codigo_interno")
+            for det in detalles_con_tiendas
+            if det.get("detalle", {}).get("codigo_interno")
+        ]))
+        codigos_tiendas = list(set([
+            dist.get("tienda_codigo")
+            for det in detalles_con_tiendas
+            for dist in det.get("distribuciones", [])
+            if dist.get("tienda_codigo")
+        ]))
+        codigos_bodegas = self._extraer_codigos_bodegas_manual(cabecera, detalles_con_tiendas)
+        if codigos_productos and self._validar_productos_sap_manual(codigos_productos, resultado):
+            return True
+        if codigos_tiendas and self._validar_tiendas_sap_manual(codigos_tiendas, resultado):
+            return True
+        if codigos_bodegas and self._validar_bodegas_sap_manual(codigos_bodegas, validator, resultado):
+            return True
+        if validar_productos and codigos_productos:
+            resultado["validacion"]["productos"] = validator.validar_productos_existen(codigos_productos, conn)
+        if validar_tiendas and codigos_tiendas:
+            resultado["validacion"]["tiendas"] = validator.validar_tiendas_existen(codigos_tiendas, conn)
+        validacion_cantidades = validator.validar_pedido_completo(cabecera, detalles_con_tiendas, es_formato_simple=False)
+        resultado["validacion"]["cantidades"] = {
+            "valid": validacion_cantidades["valid"],
+            "errors": validacion_cantidades["errors"],
+            "warnings": validacion_cantidades["warnings"],
+            "total_issues": validacion_cantidades["total_issues"]
+        }
+        if not validacion_cantidades["valid"]:
+            resultado["status"] = "validation_error"
+            return True
+        if resultado.get("errores") and len(resultado["errores"]) > 0:
+            resultado["status"] = "validation_error"
+            logger.warning(f"⚠️ Errores de validación detectados: {resultado['errores']}. No se creará el pedido.")
+            return True
+        return False
+
+    def _extraer_codigos_bodegas_manual(
+        self,
+        cabecera: Dict[str, Any],
+        detalles_con_tiendas: List[Dict]
+    ) -> List[str]:
+        codigos_bodegas_set: set = set()
+        for det in detalles_con_tiendas:
+            for dist in det.get("distribuciones", []):
+                if dist.get("es_bodega", False):
+                    tienda_codigo = dist.get("tienda_codigo")
+                    if tienda_codigo:
+                        codigos_bodegas_set.add(tienda_codigo.strip())
+        origen_traslado = cabecera.get("origen_traslado")
+        if origen_traslado and origen_traslado.strip():
+            codigos_bodegas_set.add(origen_traslado.strip())
+        return list(codigos_bodegas_set)
+
+    def _validar_productos_sap_manual(self, codigos_productos: List[str], resultado: Dict[str, Any]) -> bool:
+        logger.info(f"🔍 [SAP PRIMERO] Validando {len(codigos_productos)} códigos de producto contra SAP")
+        validacion_sap_productos = self.sap_validator_helper.validar_productos_sap(
+            codigos_productos=codigos_productos,
+            resultado=resultado,
+            usar_cache=True,
+            sap_obligatorio=True
+        )
+        if validacion_sap_productos is None or not validacion_sap_productos.get("todos_validos", False):
+            no_encontrados = (validacion_sap_productos or {}).get("no_encontrados", [])
+            errores = (validacion_sap_productos or {}).get("errores", [])
+            if isinstance(no_encontrados, int):
+                no_encontrados = []
+            if isinstance(errores, int):
+                errores = []
+            log_detalle = f"Productos no encontrados ({len(no_encontrados)}): {', '.join(no_encontrados[:10])}"
+            if len(no_encontrados) > 10:
+                log_detalle += f" y {len(no_encontrados) - 10} más"
+            if errores:
+                log_detalle += f" | Errores ({len(errores)}): {', '.join(errores[:5])}"
+                if len(errores) > 5:
+                    log_detalle += f" y {len(errores) - 5} más"
+            logger.warning(f"⚠️ Validación SAP productos falló: {log_detalle}")
+            resultado["status"] = "validation_error"
+            resultado["errores"].append("Existen códigos de producto no válidos en SAP")
+            resultado["validacion"]["productos"] = {
+                "no_encontrados": no_encontrados,
+                "errores": errores,
+                "validos": (validacion_sap_productos or {}).get("validos", [])
+            }
+            return True
+        resultado["validacion"]["productos_sap"] = {
+            "validos": validacion_sap_productos.get("validos", []),
+            "no_encontrados": validacion_sap_productos.get("no_encontrados", []),
+            "errores": validacion_sap_productos.get("errores", []),
+            "todos_validos": validacion_sap_productos.get("todos_validos", False)
+        }
+        return False
+
+    def _validar_tiendas_sap_manual(self, codigos_tiendas: List[str], resultado: Dict[str, Any]) -> bool:
+        logger.info(f"🔍 [SAP PRIMERO] Validando {len(codigos_tiendas)} códigos de tienda contra SAP")
+        validacion_tiendas_sap = self.sap_validator_helper.validar_tiendas_sap(
+            codigos_tiendas=codigos_tiendas,
+            resultado=resultado,
+            sap_obligatorio=True
+        )
+        if not validacion_tiendas_sap.get("todas_validas", False):
+            no_encontradas = (validacion_tiendas_sap or {}).get("no_encontradas", [])
+            errores_sap = (validacion_tiendas_sap or {}).get("errores", [])
+            if isinstance(no_encontradas, int):
+                no_encontradas = []
+            if isinstance(errores_sap, int):
+                errores_sap = []
+            log_detalle = f"Tiendas no encontradas ({len(no_encontradas)}): {', '.join(no_encontradas[:10])}"
+            if len(no_encontradas) > 10:
+                log_detalle += f" y {len(no_encontradas) - 10} más"
+            if errores_sap:
+                log_detalle += f" | Errores ({len(errores_sap)}): {', '.join(errores_sap[:5])}"
+                if len(errores_sap) > 5:
+                    log_detalle += f" y {len(errores_sap) - 5} más"
+            logger.warning(f"⚠️ Validación SAP tiendas falló: {log_detalle}")
+            resultado["status"] = "validation_error"
+            resultado["errores"].append("Existen códigos de tienda/bodega no válidos en SAP")
+            resultado["validacion"]["tiendas"] = {
+                "no_encontradas": no_encontradas,
+                "errores": errores_sap,
+                "validas": validacion_tiendas_sap.get("validas", [])
+            }
+            return True
+        resultado["validacion"]["tiendas_sap"] = {
+            "validas": validacion_tiendas_sap.get("validas", []),
+            "no_encontradas": validacion_tiendas_sap.get("no_encontradas", []),
+            "errores": validacion_tiendas_sap.get("errores", []),
+            "todas_validas": validacion_tiendas_sap.get("todas_validas", False)
+        }
+        return False
+
+    def _validar_bodegas_sap_manual(
+        self,
+        codigos_bodegas: List[str],
+        validator: Any,
+        resultado: Dict[str, Any]
+    ) -> bool:
+        logger.info(f"🔍 [SAP PRIMERO] Validando {len(codigos_bodegas)} códigos de bodega contra SAP")
+        validacion_bodegas_sap = validator.validar_bodegas_existen_en_sap(
+            codigos_bodegas=codigos_bodegas,
+            sap_obligatorio=True
+        )
+        if not validacion_bodegas_sap.get("todas_validas", False):
+            no_encontradas = (validacion_bodegas_sap or {}).get("no_encontradas", [])
+            errores = (validacion_bodegas_sap or {}).get("errores", [])
+            if isinstance(no_encontradas, int):
+                no_encontradas = []
+            if isinstance(errores, int):
+                errores = []
+            log_detalle = f"Bodegas no encontradas ({len(no_encontradas)}): {', '.join(no_encontradas[:10])}"
+            if len(no_encontradas) > 10:
+                log_detalle += f" y {len(no_encontradas) - 10} más"
+            if errores:
+                log_detalle += f" | Errores ({len(errores)}): {', '.join(errores[:5])}"
+                if len(errores) > 5:
+                    log_detalle += f" y {len(errores) - 5} más"
+            logger.warning(f"⚠️ Validación SAP bodegas falló: {log_detalle}")
+            resultado["status"] = "validation_error"
+            resultado["errores"].append("Existen códigos de bodega no válidos en SAP")
+            resultado["validacion"]["bodegas"] = {
+                "no_encontradas": no_encontradas,
+                "errores": errores,
+                "validas": validacion_bodegas_sap.get("validas", [])
+            }
+            return True
+        resultado["validacion"]["bodegas_sap"] = {
+            "validas": validacion_bodegas_sap.get("validas", []),
+            "no_encontradas": validacion_bodegas_sap.get("no_encontradas", []),
+            "errores": validacion_bodegas_sap.get("errores", []),
+            "todas_validas": validacion_bodegas_sap.get("todas_validas", False)
+        }
+        return False
+
+    def _insertar_pedido_manual(
+        self,
+        conn: Any,
+        cabecera: Dict[str, Any],
+        detalles_con_tiendas: List[Dict],
+        resultado: Dict[str, Any],
+        audit_context: Optional["AuditContext"]
+    ) -> None:
+        from src.utils.audit_context import ensure_audit_context
+        audit = ensure_audit_context(audit_context)
+        repository = PedidoRepository(conn)
+        pedido_id = repository.insert_cabecera(cabecera, audit_context=audit)
+        resultado["pedido_id"] = pedido_id
+        resultado["numero_pedido"] = cabecera.get("numero_pedido")
+        resultado["estado_id"] = 1
+        resultado["estado_nombre"] = "BORRADOR"
+        resultado["estado"] = "BORRADOR"
+        for orden_linea, detalle_data in enumerate(detalles_con_tiendas):
+            self._insertar_un_detalle_manual(repository, pedido_id, orden_linea, detalle_data, resultado, audit)
+
+    def _insertar_un_detalle_manual(
+        self,
+        repository: Any,
+        pedido_id: Any,
+        orden_linea: int,
+        detalle_data: Dict,
+        resultado: Dict[str, Any],
+        audit: Any
+    ) -> None:
+        try:
+            detalle_data["detalle"]["orden_linea"] = orden_linea
+            pedido_detalle_id = repository.insert_detalle(pedido_id, detalle_data["detalle"], audit_context=audit)
+            resultado["articulos_cargados"] += 1
+            if detalle_data.get("distribuciones"):
+                distribuciones = self._construir_distribuciones_manual_lista(
+                    repository, detalle_data["distribuciones"]
+                )
+                if distribuciones:
+                    resultado["distribuciones_cargadas"] += repository.insert_detalle_tiendas(
+                        pedido_detalle_id, distribuciones, audit_context=audit
+                    )
+        except Exception as e:
+            logger.warning(f"⚠️ Error procesando artículo: {e}")
+            resultado["errores"].append(str(e))
+
+    def _construir_distribuciones_manual_lista(self, repository: Any, distribuciones_raw: List[Dict]) -> List[Dict]:
+        distribuciones = []
+        for dist in distribuciones_raw:
+            tienda_codigo = dist.get("tienda_codigo")
+            cantidad = dist.get("cantidad")
+            if tienda_codigo and cantidad is not None and cantidad >= 0:
+                tienda_id = repository.get_or_create_tienda(
+                    codigo=tienda_codigo,
+                    nombre=dist.get("tienda_nombre")
+                )
+                distribuciones.append({
+                    "tienda_id": tienda_id,
+                    "cantidad": float(cantidad),
+                    "es_bodega": dist.get("es_bodega", False)
+                })
+        return distribuciones
+
     def _persistir_pedido(
         self,
         cabecera: Dict[str, Any],
@@ -1431,7 +1421,7 @@ class PedidoService:
     ) -> None:
         """
         Persiste un pedido en la base de datos.
-        
+
         Args:
             cabecera: Datos de cabecera del pedido
             detalles_con_tiendas: Lista de detalles con distribuciones
@@ -1439,129 +1429,145 @@ class PedidoService:
             validar_sap: Si True, filtra productos no validados en SAP
             validacion_sap: Resultado de validación SAP (opcional)
         """
-        # Persistir siempre que se invoque: ya se pasó validación SAP y hay cabecera/detalles.
-        # Si status es validation_error, igual se guarda para que sync/async devuelvan pedido_id y conteos.
-        # ✅ FILTRAR productos no validados en SAP (si se validó SAP)
         with get_db_connection_context() as conn:
             repository = PedidoRepository(conn)
-            try:
-                pedido_id = repository.insert_cabecera(cabecera)
-            except ValueError as e:
-                # Detectar específicamente el error de número de pedido duplicado
-                error_msg = str(e)
-                if _PATRON_NUM_PEDIDO in error_msg.lower() and _PATRON_YA_EXISTE in error_msg.lower():
-                    numero_pedido = cabecera.get("numero_pedido")
-                    logger.warning(f"⚠️ Intento de crear pedido con número duplicado: {numero_pedido}")
-                    
-                    # ✅ Lanzar BusinessException con datos estructurados (consistente con validaciones SAP)
-                    raise BusinessException(
-                        message=f"El número de pedido '{numero_pedido}' ya existe en el sistema",
-                        error_code="NUMERO_PEDIDO_DUPLICADO",
-                        data={
-                            "numero_pedido": numero_pedido,
-                            "validacion": {
-                                "numero_pedido": {
-                                    "duplicado": True,
-                                    "mensaje": f"El número de pedido '{numero_pedido}' ya fue utilizado anteriormente"
-                                }
+            pedido_id = self._insertar_cabecera_verificando_duplicado(repository, cabecera)
+            resultado["pedido_id"] = pedido_id
+            resultado["numero_pedido"] = cabecera.get("numero_pedido")
+            codigos_validos_sap, info_sap_por_codigo = self._construir_info_sap_por_codigo(validacion_sap)
+            for orden_linea, detalle_data in enumerate(detalles_con_tiendas):
+                detalle_data["detalle"]["orden_linea"] = orden_linea
+                codigo_interno = detalle_data.get("detalle", {}).get("codigo_interno")
+                if self._debe_omitir_detalle_sap(validar_sap, validacion_sap, codigo_interno, codigos_validos_sap):
+                    logger.warning(
+                        f"⚠️ Producto '{codigo_interno}' no validado en SAP, "
+                        f"no se persistirá en pedido_detalle"
+                    )
+                    resultado["errores"].append(f"Producto '{codigo_interno}' omitido: no válido en SAP")
+                    continue
+                self._persistir_un_detalle(repository, pedido_id, detalle_data, codigo_interno, info_sap_por_codigo, resultado)
+
+    def _insertar_cabecera_verificando_duplicado(self, repository: Any, cabecera: Dict[str, Any]) -> Any:
+        try:
+            return repository.insert_cabecera(cabecera)
+        except ValueError as e:
+            error_msg = str(e)
+            if _PATRON_NUM_PEDIDO in error_msg.lower() and _PATRON_YA_EXISTE in error_msg.lower():
+                numero_pedido = cabecera.get("numero_pedido")
+                logger.warning(f"⚠️ Intento de crear pedido con número duplicado: {numero_pedido}")
+                raise BusinessException(
+                    message=f"El número de pedido '{numero_pedido}' ya existe en el sistema",
+                    error_code="NUMERO_PEDIDO_DUPLICADO",
+                    data={
+                        "numero_pedido": numero_pedido,
+                        "validacion": {
+                            "numero_pedido": {
+                                "duplicado": True,
+                                "mensaje": f"El número de pedido '{numero_pedido}' ya fue utilizado anteriormente"
                             }
                         }
+                    }
+                )
+            raise
+
+    def _construir_info_sap_por_codigo(self, validacion_sap: Optional[Dict[str, Any]]) -> tuple:
+        codigos_validos_sap: set = set()
+        info_sap_por_codigo: Dict = {}
+        if not validacion_sap:
+            return codigos_validos_sap, info_sap_por_codigo
+        codigos_validos_sap = set(validacion_sap.get("validos", []))
+        for codigo, detalle in validacion_sap.get("detalle", {}).items():
+            if detalle.get("existe") and detalle.get("info"):
+                info_sap_por_codigo[codigo] = detalle["info"]
+        return codigos_validos_sap, info_sap_por_codigo
+
+    def _debe_omitir_detalle_sap(
+        self,
+        validar_sap: bool,
+        validacion_sap: Optional[Dict[str, Any]],
+        codigo_interno: Optional[str],
+        codigos_validos_sap: set
+    ) -> bool:
+        if not (validar_sap and validacion_sap):
+            return False
+        return not codigo_interno or codigo_interno not in codigos_validos_sap
+
+    def _enriquecer_detalle_con_sap_info(
+        self,
+        datos_detalle: Dict[str, Any],
+        codigo_interno: Optional[str],
+        info_sap_por_codigo: Dict
+    ) -> Dict[str, Any]:
+        if not (codigo_interno and codigo_interno in info_sap_por_codigo):
+            return datos_detalle
+        info_sap = info_sap_por_codigo[codigo_interno]
+        if info_sap.get("item_name") and not datos_detalle.get("descripcion_sap"):
+            datos_detalle["descripcion_sap"] = info_sap["item_name"]
+        if info_sap.get("pack_sap") and not datos_detalle.get("pack"):
+            datos_detalle["pack"] = info_sap["pack_sap"]
+        return datos_detalle
+
+    def _persistir_un_detalle(
+        self,
+        repository: Any,
+        pedido_id: Any,
+        detalle_data: Dict,
+        codigo_interno: Optional[str],
+        info_sap_por_codigo: Dict,
+        resultado: Dict[str, Any]
+    ) -> None:
+        try:
+            datos_detalle = self._enriquecer_detalle_con_sap_info(
+                detalle_data["detalle"].copy(), codigo_interno, info_sap_por_codigo
+            )
+            pedido_detalle_id = repository.insert_detalle(pedido_id=pedido_id, datos_detalle=datos_detalle)
+            resultado["articulos_cargados"] += 1
+            if detalle_data.get("distribuciones"):
+                distribuciones = self._construir_distribuciones_persistir(
+                    repository, detalle_data["distribuciones"], detalle_data
+                )
+                if distribuciones:
+                    resultado["distribuciones_cargadas"] += repository.insert_detalle_tiendas(
+                        pedido_detalle_id=pedido_detalle_id,
+                        distribuciones=distribuciones
                     )
-                # Otros ValueError se propagan
-                raise
-            resultado["pedido_id"] = pedido_id
-            # ⭐ Agregar numero_pedido al resultado para que el frontend pueda redirigir
-            resultado["numero_pedido"] = cabecera.get("numero_pedido")
-            
-            # Crear conjunto de códigos válidos en SAP (si se validó)
-            codigos_validos_sap = set()
-            info_sap_por_codigo = {}
-            if validacion_sap:
-                codigos_validos_sap = set(validacion_sap.get("validos", []))
-                # Guardar info SAP para usar al persistir
-                for codigo, detalle in validacion_sap.get("detalle", {}).items():
-                    if detalle.get("existe") and detalle.get("info"):
-                        info_sap_por_codigo[codigo] = detalle["info"]
-            
-            for orden_linea, detalle_data in enumerate(detalles_con_tiendas):
-                # Orden de plantilla para interfaces y Excel
-                detalle_data["detalle"]["orden_linea"] = orden_linea
-                # ✅ AJUSTE 2: NO guardar codigo_interno si no hay info SAP válida
-                codigo_interno = detalle_data.get("detalle", {}).get("codigo_interno")
-                
-                # Si se validó SAP, solo persistir productos válidos
-                if validar_sap and validacion_sap:
-                    if not codigo_interno or codigo_interno not in codigos_validos_sap:
-                        # Producto no validado o no encontrado en SAP → SKIP (no guardar)
-                        logger.warning(
-                            f"⚠️ Producto '{codigo_interno}' no validado en SAP, "
-                            f"no se persistirá en pedido_detalle"
-                        )
-                        resultado["errores"].append(
-                            f"Producto '{codigo_interno}' omitido: no válido en SAP"
-                        )
-                        continue  # ✅ NUNCA preparar detalle_preparado si no está validado
-                
-                # ✅ Producto validado (o validación SAP deshabilitada) → continuar con persistencia
-                try:
-                    # Preparar datos del detalle (incluir info SAP si está disponible)
-                    datos_detalle = detalle_data["detalle"].copy()
-                    
-                    # Si hay info SAP válida, enriquecer con datos de SAP
-                    if codigo_interno and codigo_interno in info_sap_por_codigo:
-                        info_sap = info_sap_por_codigo[codigo_interno]
-                        # Usar campos existentes de pedido_detalle para guardar info SAP
-                        if info_sap.get("item_name") and not datos_detalle.get("descripcion_sap"):
-                            datos_detalle["descripcion_sap"] = info_sap["item_name"]
-                        if info_sap.get("pack_sap") and not datos_detalle.get("pack"):
-                            datos_detalle["pack"] = info_sap["pack_sap"]
-                        # grupo_articulos no tiene campo directo, pero se puede guardar en descripcion_sap si no existe
-                    
-                    pedido_detalle_id = repository.insert_detalle(
-                        pedido_id=pedido_id,
-                        datos_detalle=datos_detalle
+        except Exception as e:
+            error_msg = f"Error al procesar artículo {detalle_data.get('detalle', {}).get('codigo_interno')}: {str(e)}"
+            logger.warning(f"⚠️ {error_msg}")
+            resultado["errores"].append(error_msg)
+
+    def _construir_distribuciones_persistir(
+        self,
+        repository: Any,
+        distribuciones_raw: List[Dict],
+        detalle_data: Dict
+    ) -> List[Dict]:
+        distribuciones = []
+        for dist in distribuciones_raw:
+            tienda_codigo = dist.get("tienda_codigo")
+            cantidad = dist.get("cantidad")
+            fila_origen = dist.get("fila_origen")
+            es_bodega = dist.get("es_bodega", False)
+            if tienda_codigo and cantidad is not None and cantidad >= 0:
+                if es_bodega:
+                    logger.info(
+                        f"📦 Procesando bodega: {tienda_codigo}, cantidad: {cantidad}, "
+                        f"producto: {detalle_data.get('detalle', {}).get('codigo_interno')}"
                     )
-                    resultado["articulos_cargados"] += 1
-                    
-                    if detalle_data.get("distribuciones"):
-                        distribuciones = []
-                        for dist in detalle_data["distribuciones"]:
-                            tienda_codigo = dist.get("tienda_codigo")
-                            cantidad = dist.get("cantidad")
-                            fila_origen = dist.get("fila_origen")  # Preservar fila origen si existe
-                            es_bodega = dist.get("es_bodega", False)
-                            
-                            if tienda_codigo and cantidad is not None and cantidad >= 0:
-                                # ⭐ LOG: Registrar bodegas para debugging
-                                if es_bodega:
-                                    logger.info(f"📦 Procesando bodega: {tienda_codigo}, cantidad: {cantidad}, producto: {detalle_data.get('detalle', {}).get('codigo_interno')}")
-                                
-                                tienda_id = repository.get_or_create_tienda(
-                                    codigo=tienda_codigo,
-                                    nombre=dist.get("tienda_nombre")
-                                )
-                                distribucion_item = {
-                                    "tienda_id": tienda_id,
-                                    "cantidad": float(cantidad),
-                                    "es_bodega": es_bodega  # ⭐ NUEVO: Preservar flag de bodega
-                                }
-                                # Agregar fila_origen si está disponible
-                                if fila_origen is not None:
-                                    distribucion_item["fila_origen"] = int(fila_origen)
-                                distribuciones.append(distribucion_item)
-                        
-                        if distribuciones:
-                            distribuciones_insertadas = repository.insert_detalle_tiendas(
-                                pedido_detalle_id=pedido_detalle_id,
-                                distribuciones=distribuciones
-                            )
-                            resultado["distribuciones_cargadas"] += distribuciones_insertadas
-                except Exception as e:
-                    error_msg = f"Error al procesar artículo {detalle_data.get('detalle', {}).get('codigo_interno')}: {str(e)}"
-                    logger.warning(f"⚠️ {error_msg}")
-                    resultado["errores"].append(error_msg)
-                    continue
-    
+                tienda_id = repository.get_or_create_tienda(
+                    codigo=tienda_codigo,
+                    nombre=dist.get("tienda_nombre")
+                )
+                distribucion_item = {
+                    "tienda_id": tienda_id,
+                    "cantidad": float(cantidad),
+                    "es_bodega": es_bodega
+                }
+                if fila_origen is not None:
+                    distribucion_item["fila_origen"] = int(fila_origen)
+                distribuciones.append(distribucion_item)
+        return distribuciones
+
     def enviar_pedido(self, pedido_id: str, usuario_id: Optional[str] = None) -> Dict[str, Any]:
         """
         Acción de negocio "Enviar": valida que el pedido esté en BORRADOR, intenta enviar correo a EL RAYO
