@@ -15,7 +15,6 @@ Según documentación técnica de MBA3:
   en todas las peticiones de los Servicios creados
 """
 import os
-import sys
 import argparse
 from src.mba3_client import MBA3Client
 from src.mba3_query_client import MBA3APIClient
@@ -57,9 +56,9 @@ def do_login():
         print("✅ LOGIN EXITOSO - JWT (sesión) obtenido")
         print("="*60)
         print(f"\nJWT: {token}")
-        print(f"\n⚠️  IMPORTANTE: Almacena este JWT para usarlo en tus peticiones.")
-        print(f"   El JWT tiene un tiempo de expiración limitado.")
-        print(f"   Si expira, deberás realizar un nuevo LOGIN.\n")
+        print("\n⚠️  IMPORTANTE: Almacena este JWT para usarlo en tus peticiones.")
+        print("   El JWT tiene un tiempo de expiración limitado.")
+        print("   Si expira, deberás realizar un nuevo LOGIN.\n")
         return token
     except Exception as e:
         print("\n" + "="*60)
@@ -140,7 +139,7 @@ def do_query(query: str | None = None):
             if isinstance(result, list):
                 print(f"Total de registros obtenidos: {len(result)}")
             elif isinstance(result, dict):
-                print(f"Datos guardados exitosamente (estructura: diccionario)")
+                print("Datos guardados exitosamente (estructura: diccionario)")
                 
         except Exception as e:
             print(f"\n[ERROR] No se pudo guardar el resultado: {e}")
