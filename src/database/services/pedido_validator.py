@@ -323,6 +323,32 @@ class PedidoValidator:
         # Reutilizar validación estándar
         return self.validar_detalle(detalle, distribuciones, row_number)
     
+    def _obtener_detalle_issues(
+        self,
+        detalle: Dict[str, Any],
+        distribuciones: List[Dict[str, Any]],
+        filas_origen: List[int],
+        es_formato_simple: bool,
+        idx: int,
+    ) -> List[ValidationIssue]:
+        if es_formato_simple:
+            return self.validar_detalle_formato_simple(detalle, distribuciones, filas_origen)
+        row_num = filas_origen[0] if filas_origen else idx
+        return self.validar_detalle(detalle, distribuciones, row_num)
+
+    def _agrupar_issues_por_fila(
+        self,
+        issues_by_row: Dict[int, List[ValidationIssue]],
+        filas_origen: List[int],
+        detalle_issues: List[ValidationIssue],
+    ) -> None:
+        if not detalle_issues:
+            return
+        for fila_origen in filas_origen:
+            if fila_origen not in issues_by_row:
+                issues_by_row[fila_origen] = []
+            issues_by_row[fila_origen].extend(detalle_issues)
+
     def validar_pedido_completo(
         self,
         cabecera: Dict[str, Any],
@@ -331,12 +357,12 @@ class PedidoValidator:
     ) -> Dict[str, Any]:
         """
         Valida un pedido completo (cabecera + todos los detalles).
-        
+
         Args:
             cabecera: Datos de cabecera
             detalles: Lista de detalles (cada uno con 'detalle' y 'distribuciones')
             es_formato_simple: Si True, usa validación específica para formato simple
-            
+
         Returns:
             Diccionario con resultado de validación:
             {
@@ -349,43 +375,28 @@ class PedidoValidator:
             }
         """
         all_issues = []
-        issues_by_row = {}
-        
-        # Validar cabecera
+        issues_by_row: Dict[int, List[ValidationIssue]] = {}
+
         cabecera_issues = self.validar_cabecera(cabecera, row_number=1)
         all_issues.extend(cabecera_issues)
         if cabecera_issues:
             issues_by_row[1] = cabecera_issues
-        
-        # Validar cada detalle (empezar desde fila 2, asumiendo fila 1 es cabecera o header)
+
         for idx, detalle_data in enumerate(detalles, start=2):
             detalle = detalle_data.get("detalle", {})
             distribuciones = detalle_data.get("distribuciones", [])
             filas_origen = detalle_data.get("filas_origen", [idx])
-            
-            if es_formato_simple:
-                detalle_issues = self.validar_detalle_formato_simple(
-                    detalle, distribuciones, filas_origen
-                )
-            else:
-                row_num = filas_origen[0] if filas_origen else idx
-                detalle_issues = self.validar_detalle(detalle, distribuciones, row_num)
-            
+            detalle_issues = self._obtener_detalle_issues(
+                detalle, distribuciones, filas_origen, es_formato_simple, idx
+            )
             all_issues.extend(detalle_issues)
-            
-            # Agrupar issues por fila de origen
-            for fila_origen in filas_origen:
-                if detalle_issues:
-                    if fila_origen not in issues_by_row:
-                        issues_by_row[fila_origen] = []
-                    issues_by_row[fila_origen].extend(detalle_issues)
-        
-        # Contar errores y advertencias
+            self._agrupar_issues_por_fila(issues_by_row, filas_origen, detalle_issues)
+
         errors = sum(1 for issue in all_issues if issue.severity == ValidationSeverity.ERROR)
         warnings = sum(1 for issue in all_issues if issue.severity == ValidationSeverity.WARNING)
-        
+
         return {
-            "valid": errors == 0,  # Válido solo si no hay errores
+            "valid": errors == 0,
             "total_issues": len(all_issues),
             "errors": errors,
             "warnings": warnings,
@@ -545,8 +556,7 @@ class PedidoValidator:
         sap_validator = PedidoSAPValidator()
         return sap_validator.validar_productos_existen_en_sap(
             codigos_productos=codigos_productos,
-            usar_cache=usar_cache,
-            sap_obligatorio=sap_obligatorio
+            sap_obligatorio=sap_obligatorio,
         )
     
     def validar_productos_existen_en_sap_con_sugerencias(
