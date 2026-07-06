@@ -23,6 +23,482 @@ from src.utils.smtp_sender import send_smtp_message
 
 logger = logging.getLogger(__name__)
 
+_MSG_EMAIL_DESHABILITADO = "⏭️ Notificaciones por email deshabilitadas"
+_DEFAULT_NOMBRE_PRODUCTO = "Sin nombre"
+_PROBLEMA_ERROR_CONSULTAR = "Error al consultar"
+_PROBLEMA_NO_EXISTE = "No existe en SAP"
+
+
+# ─── Helpers privados ────────────────────────────────────────────────────────
+
+def _filtrar_productos_a_notificar(productos, filtrar_ya_notificados, homologacion_repository):
+    if not filtrar_ya_notificados or not homologacion_repository:
+        return productos
+    try:
+        skus_ya_notificados = homologacion_repository.get_skus_ya_notificados()
+        filtrados = [p for p in productos if p.get("sku") not in skus_ya_notificados]
+        if not filtrados:
+            logger.info("⏭️ Todos los productos no homologados ya fueron notificados")
+            return []
+        logger.info(f"📧 Productos a notificar: {len(filtrados)} (filtrados: {len(skus_ya_notificados)})")
+        return filtrados
+    except Exception as e:
+        logger.warning(f"⚠️ No se pudo filtrar productos ya notificados: {e}")
+        return productos
+
+
+def _get_estadisticas_homologacion(estadisticas, n_productos):
+    if estadisticas:
+        return (
+            estadisticas.get("total_productos_mba3", 0),
+            estadisticas.get("productos_homologados", 0),
+            estadisticas.get("productos_no_homologados", 0),
+            estadisticas.get("porcentaje_homologacion", 0.0),
+        )
+    return 0, 0, n_productos, 0.0
+
+
+def _tipo_badge_homologacion(tipo_problema, badge_html_fn):
+    if tipo_problema == "mismatch":
+        return badge_html_fn("MISMATCH", "#fff3e0", "#e65100")
+    if tipo_problema == "error":
+        return badge_html_fn("Error", "#ffebee", "#c62828")
+    return badge_html_fn("No existe", "#e3f2fd", "#1565c0")
+
+
+def _build_homologacion_table_rows(productos_mostrar, badge_html_fn):
+    table_rows = []
+    for idx, producto in enumerate(productos_mostrar, 1):
+        sku = producto.get("sku", "N/A")
+        nombre = producto.get("nombre_producto", _DEFAULT_NOMBRE_PRODUCTO)
+        veces_usado = producto.get("veces_usado", 0)
+        total_docenas_val = producto.get("total_docenas", 0.0)
+        total_valor_val = producto.get("total_valor", 0.0)
+        ultima_aparicion = producto.get("ultima_aparicion", "N/A")
+        tipo_problema = producto.get("tipo_problema", "no_existe")
+        tipo_badge = _tipo_badge_homologacion(tipo_problema, badge_html_fn)
+        table_rows.append((
+            str(idx),
+            f'<strong>{sku}</strong>',
+            nombre,
+            (tipo_badge, "center"),
+            str(veces_usado),
+            f"{total_docenas_val:.2f}",
+            f"${total_valor_val:.2f}",
+            str(ultima_aparicion),
+        ))
+    return table_rows
+
+
+def _build_homologacion_resumen_items(productos_mismatch, productos_no_existen, productos_error, productos_sin_tipo, badge_html_fn):
+    items = []
+    if productos_mismatch:
+        items.append(("Mismatch (SKU ≠ ItemCode)", f'{badge_html_fn(str(len(productos_mismatch)), "#fff3e0", "#e65100")} producto(s)'))
+    if productos_no_existen:
+        items.append((_PROBLEMA_NO_EXISTE, f'{badge_html_fn(str(len(productos_no_existen)), "#e3f2fd", "#1565c0")} producto(s)'))
+    if productos_error:
+        items.append((_PROBLEMA_ERROR_CONSULTAR, f'{badge_html_fn(str(len(productos_error)), "#ffebee", "#c62828")} producto(s)'))
+    if productos_sin_tipo:
+        items.append(("Sin clasificar", f'{badge_html_fn(str(len(productos_sin_tipo)), "#f5f5f5", "#616161")} producto(s)'))
+    return items
+
+
+def _tipo_problema_desc_texto(tipo_problema, item_code_sap):
+    if tipo_problema == "mismatch":
+        return f"MISMATCH - ItemCode SAP: {item_code_sap}"
+    if tipo_problema == "error":
+        return _PROBLEMA_ERROR_CONSULTAR
+    return _PROBLEMA_NO_EXISTE
+
+
+def _tipo_problema_desc_csv(tipo_problema):
+    if tipo_problema == "mismatch":
+        return "MISMATCH"
+    if tipo_problema == "error":
+        return _PROBLEMA_ERROR_CONSULTAR
+    return _PROBLEMA_NO_EXISTE
+
+
+def _build_homologacion_body_text(productos_mostrar, productos_a_notificar, total_mba3, homologados, no_homologados, porcentaje, fecha_ejecucion):
+    body = f"""
+        Productos NO Homologados Detectados
+
+        Se han detectado productos de MBA3 que NO están homologados en SAP.
+
+        ⚠️ ACCIÓN REQUERIDA:
+        Estos productos deben ser creados en SAP con el mismo ItemCode (SKU).
+
+        Estadísticas de Homologación:
+        - Total Productos en MBA3: {total_mba3}
+        - Productos Homologados: {homologados}
+        - Productos NO Homologados: {no_homologados}
+        - Porcentaje de Homologación: {porcentaje}%
+
+        Productos que Requieren Homologación:
+        """
+    for idx, producto in enumerate(productos_mostrar, 1):
+        sku = producto.get("sku", "N/A")
+        nombre = producto.get("nombre_producto", _DEFAULT_NOMBRE_PRODUCTO)
+        veces_usado = producto.get("veces_usado", 0)
+        total_docenas = producto.get("total_docenas", 0.0)
+        total_valor = producto.get("total_valor", 0.0)
+        ultima_aparicion = producto.get("ultima_aparicion", "N/A")
+        tipo_problema = producto.get("tipo_problema", "no_existe")
+        item_code_sap = producto.get("item_code_sap")
+        problema_desc = _tipo_problema_desc_texto(tipo_problema, item_code_sap)
+        body += f"""
+        {idx}. SKU: {sku}
+           Nombre: {nombre}
+           Tipo de Problema: {problema_desc}
+           Veces Usado: {veces_usado}
+           Total Docenas: {total_docenas:.2f}
+           Total Valor: ${total_valor:.2f}
+           Última Aparición: {ultima_aparicion}
+        """
+    if len(productos_a_notificar) > 20:
+        body += f"\n        ... y {len(productos_a_notificar) - 20} producto(s) más\n"
+    body += f"""
+
+        Fecha y Hora: {fecha_ejecucion.strftime('%Y-%m-%d %H:%M:%S')}
+
+        Nota: Este es un mensaje automático del sistema de migración MBA3.
+        Se adjunta un archivo CSV con el detalle completo de todos los productos no homologados.
+        """
+    return body
+
+
+def _build_homologacion_csv(productos_a_notificar, fecha_ejecucion):
+    try:
+        csv_buffer = io.StringIO()
+        csv_writer = csv.writer(csv_buffer)
+        csv_writer.writerow([
+            'SKU', 'Nombre Producto', 'Tipo de Problema', 'ItemCode SAP',
+            'Veces Usado', 'Total Docenas', 'Total Valor',
+            'Primera Aparición', 'Última Aparición'
+        ])
+        for producto in productos_a_notificar:
+            tipo_problema = producto.get("tipo_problema", "no_existe")
+            item_code_sap = producto.get("item_code_sap", "")
+            problema_desc = _tipo_problema_desc_csv(tipo_problema)
+            csv_writer.writerow([
+                producto.get("sku", "N/A"),
+                producto.get("nombre_producto", _DEFAULT_NOMBRE_PRODUCTO),
+                problema_desc,
+                item_code_sap,
+                producto.get("veces_usado", 0),
+                f"{producto.get('total_docenas', 0.0):.2f}",
+                f"{producto.get('total_valor', 0.0):.2f}",
+                producto.get("primera_aparicion", "N/A"),
+                producto.get("ultima_aparicion", "N/A")
+            ])
+        csv_bytes = csv_buffer.getvalue().encode('utf-8-sig')
+        csv_attachment = MIMEBase('text', 'csv')
+        csv_attachment.set_payload(csv_bytes)
+        encoders.encode_base64(csv_attachment)
+        fecha_str = fecha_ejecucion.strftime('%Y%m%d_%H%M%S')
+        filename = f"productos_no_homologados_{fecha_str}.csv"
+        csv_attachment.add_header('Content-Disposition', f'attachment; filename= {filename}')
+        logger.debug(f"✅ Archivo CSV generado y adjuntado: {filename}")
+        return [csv_attachment]
+    except Exception as csv_error:
+        logger.warning(f"⚠️ Error al generar CSV adjunto: {csv_error}")
+        return []
+
+
+def _registrar_notificados(homologacion_repository, productos_a_notificar):
+    if not homologacion_repository:
+        return
+    try:
+        skus = [p.get("sku") for p in productos_a_notificar if p.get("sku")]
+        registrados = homologacion_repository.registrar_productos_notificados(skus)
+        logger.info(f"✅ Registrados {registrados} productos como notificados")
+    except Exception as e:
+        logger.warning(f"⚠️ No se pudo registrar productos notificados: {e}")
+
+
+def _generate_odc_pdf_attachment(oc_cabecera, oc_detalles, doc_num, doc_entry, numero_oc_sap, pedido_info):
+    try:
+        from src.utils.odc_pdf_generator import generar_odc_pdf
+        pdf_bytes = generar_odc_pdf(
+            oc_cabecera=oc_cabecera,
+            oc_detalles=oc_detalles,
+            doc_num=doc_num,
+            doc_entry=doc_entry,
+            pedido_info=pedido_info,
+        )
+        pdf_attachment = MIMEBase("application", "pdf")
+        pdf_attachment.set_payload(pdf_bytes)
+        encoders.encode_base64(pdf_attachment)
+        pdf_filename = f"ODC {numero_oc_sap}.pdf"
+        pdf_attachment.add_header("Content-Disposition", "attachment", filename=pdf_filename)
+        logger.info(f"📎 PDF adjunto generado: {pdf_filename} ({len(pdf_bytes):,} bytes)")
+        return pdf_attachment
+    except Exception as e:
+        logger.warning(f"⚠️ No se pudo generar PDF adjunto (se enviará email sin PDF): {e}")
+        return None
+
+
+def _build_unique_recipients(tipos):
+    seen = set()
+    recipients = []
+    for tipo in tipos:
+        for email in get_destinatarios_por_tipo(tipo):
+            e = (email or "").strip().lower()
+            if e and e not in seen:
+                seen.add(e)
+                recipients.append(email.strip())
+    return recipients
+
+
+def _extract_transferencias_data(solicitudes_transferencia):
+    if not solicitudes_transferencia:
+        return 0, 0, 0, ""
+    total = solicitudes_transferencia.get("total_tiendas", 0)
+    exitosas = solicitudes_transferencia.get("transferencias_creadas", 0)
+    fallidas = solicitudes_transferencia.get("transferencias_errores", 0)
+    lineas_texto = []
+    for resultado in solicitudes_transferencia.get("resultados", []):
+        tienda_codigo = resultado.get("tienda_codigo", "N/A")
+        tienda_nombre = resultado.get("tienda_nombre") or tienda_codigo
+        success = resultado.get("success", False)
+        doc_num_transf = resultado.get("doc_num", "N/A")
+        error = resultado.get("error")
+        doc_info = f"DocNum: {doc_num_transf}" if success else f"Error: {error or 'Desconocido'}"
+        estado_txt = "Creada" if success else "Error"
+        lineas_texto.append(f"  {tienda_codigo}\t{tienda_nombre}\t{estado_txt}\t{doc_info}")
+    return total, exitosas, fallidas, "\n".join(lineas_texto)
+
+
+def _build_filas_tabla_despacho(solicitudes_transferencia):
+    if not solicitudes_transferencia or not solicitudes_transferencia.get("resultados"):
+        return ""
+    filas = ""
+    for idx, resultado in enumerate(solicitudes_transferencia.get("resultados", [])):
+        tienda_codigo = resultado.get("tienda_codigo", "N/A")
+        tienda_nombre = resultado.get("tienda_nombre") or tienda_codigo
+        success = resultado.get("success", False)
+        doc_num_transf = resultado.get("doc_num", "N/A")
+        error = resultado.get("error")
+        bg_color = "#f8fffe" if idx % 2 == 0 else "#ffffff"
+        if success:
+            badge = '<span style="display:inline-block;background-color:#d4edda;color:#155724;padding:3px 10px;border-radius:12px;font-size:12px;font-weight:600;">Creada</span>'
+            info_html = f'<span style="font-family:Consolas,monospace;font-weight:600;color:#1a5276;">{doc_num_transf}</span>'
+        else:
+            badge = '<span style="display:inline-block;background-color:#f8d7da;color:#721c24;padding:3px 10px;border-radius:12px;font-size:12px;font-weight:600;">Error</span>'
+            info_html = f'<span style="color:#721c24;">{error or "Desconocido"}</span>'
+        filas += f'''
+                <tr style="background-color:{bg_color};">
+                    <td style="padding:12px 16px;border-bottom:1px solid #e8e8e8;font-weight:600;color:#2c3e50;">{tienda_codigo}</td>
+                    <td style="padding:12px 16px;border-bottom:1px solid #e8e8e8;color:#555;">{tienda_nombre}</td>
+                    <td style="padding:12px 16px;border-bottom:1px solid #e8e8e8;text-align:center;">{badge}</td>
+                    <td style="padding:12px 16px;border-bottom:1px solid #e8e8e8;text-align:center;">{info_html}</td>
+                </tr>'''
+    return filas
+
+
+def _build_seccion_transferencias_despacho(solicitudes, exitosas, total, fallidas, filas_tabla_html):
+    if not solicitudes:
+        return ""
+    errores_html = f'<span style="color:#dc3545;font-weight:600;margin-left:16px;">{fallidas} con error</span>' if fallidas > 0 else ""
+    seccion = f'''
+            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:24px 0;">
+                <tr>
+                    <td style="background:linear-gradient(135deg,#e8f5e9 0%,#c8e6c9 100%);border-radius:8px;padding:20px;">
+                        <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+                            <tr>
+                                <td style="font-size:16px;font-weight:700;color:#2e7d32;">
+                                    Solicitudes de Transferencia
+                                </td>
+                                <td style="text-align:right;">
+                                    <span style="display:inline-block;background-color:#2e7d32;color:#fff;padding:6px 16px;border-radius:20px;font-size:14px;font-weight:700;">{exitosas}/{total} creadas</span>
+                                    {errores_html}
+                                </td>
+                            </tr>
+                        </table>
+                    </td>
+                </tr>
+            </table>'''
+    if filas_tabla_html:
+        seccion += f'''
+            <table width="100%" cellpadding="0" cellspacing="0" style="border-radius:8px;overflow:hidden;border:1px solid #e0e0e0;margin-bottom:24px;">
+                <thead>
+                    <tr style="background:linear-gradient(135deg,#1a5276 0%,#2980b9 100%);">
+                        <th style="padding:14px 16px;text-align:left;color:#fff;font-size:13px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;">Tienda</th>
+                        <th style="padding:14px 16px;text-align:left;color:#fff;font-size:13px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;">Nombre</th>
+                        <th style="padding:14px 16px;text-align:center;color:#fff;font-size:13px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;">Estado</th>
+                        <th style="padding:14px 16px;text-align:center;color:#fff;font-size:13px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;">DocNum</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {filas_tabla_html}
+                </tbody>
+            </table>'''
+    return seccion
+
+
+def _build_pedido_html_row(pedido_numero):
+    if not pedido_numero:
+        return ""
+    return f'''
+                            <tr>
+                                <td style="padding:8px 0;color:#7f8c8d;font-size:13px;width:160px;">Pedido</td>
+                                <td style="padding:8px 0;font-weight:600;color:#2c3e50;">{pedido_numero}</td>
+                            </tr>'''
+
+
+def _build_despacho_html_body(numero_oc_sap, doc_entry, proveedor, referencia, pedido_html, seccion_transferencias_html, fecha_ejecucion):
+    return f"""<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OC y Solicitudes de Transferencia</title>
+</head>
+<body style="margin:0;padding:0;background-color:#f0f2f5;font-family:'Segoe UI',Tahoma,Geneva,Verdana,sans-serif;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color:#f0f2f5;padding:24px 0;">
+        <tr>
+            <td align="center">
+                <table role="presentation" width="640" cellpadding="0" cellspacing="0" style="max-width:640px;width:100%;background-color:#ffffff;border-radius:12px;overflow:hidden;box-shadow:0 2px 12px rgba(0,0,0,0.08);">
+                    <tr>
+                        <td style="background:linear-gradient(135deg,#1a5276 0%,#2980b9 100%);padding:32px 40px;text-align:center;">
+                            <h1 style="margin:0;color:#ffffff;font-size:22px;font-weight:700;letter-spacing:-0.3px;">
+                                OC y Solicitudes de Transferencia Generadas
+                            </h1>
+                            <p style="margin:8px 0 0;color:rgba(255,255,255,0.85);font-size:14px;">
+                                Listo para despacho y facturaci&oacute;n
+                            </p>
+                        </td>
+                    </tr>
+                    <tr>
+                        <td style="padding:32px 40px;">
+                            <p style="margin:0 0 24px;color:#2c3e50;font-size:15px;line-height:1.6;">
+                                Se ha generado exitosamente la <strong>Orden de Compra</strong> y las
+                                <strong>Solicitudes de Transferencia</strong> en SAP.
+                                Pueden proceder con el despacho y facturaci&oacute;n.
+                            </p>
+                            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:24px;">
+                                <tr>
+                                    <td style="background-color:#f8f9fa;border-radius:8px;padding:20px 24px;border-left:4px solid #2980b9;">
+                                        <h3 style="margin:0 0 12px;color:#1a5276;font-size:15px;font-weight:700;">Informaci&oacute;n de la Orden de Compra</h3>
+                                        <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+                                            <tr>
+                                                <td style="padding:8px 0;color:#7f8c8d;font-size:13px;width:160px;">N&uacute;mero OC SAP</td>
+                                                <td style="padding:8px 0;font-weight:700;color:#1a5276;font-size:18px;">{numero_oc_sap}</td>
+                                            </tr>
+                                            <tr>
+                                                <td style="padding:8px 0;color:#7f8c8d;font-size:13px;">DocEntry</td>
+                                                <td style="padding:8px 0;font-weight:600;color:#2c3e50;">{doc_entry or 'N/A'}</td>
+                                            </tr>
+                                            <tr>
+                                                <td style="padding:8px 0;color:#7f8c8d;font-size:13px;">Proveedor</td>
+                                                <td style="padding:8px 0;font-weight:600;color:#2c3e50;">{proveedor}</td>
+                                            </tr>
+                                            <tr>
+                                                <td style="padding:8px 0;color:#7f8c8d;font-size:13px;">Referencia</td>
+                                                <td style="padding:8px 0;font-weight:600;color:#2c3e50;">{referencia}</td>
+                                            </tr>{pedido_html}
+                                        </table>
+                                    </td>
+                                </tr>
+                            </table>
+                            {seccion_transferencias_html}
+                            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:24px 0;">
+                                <tr>
+                                    <td style="background-color:#fff8e1;border-radius:8px;padding:20px 24px;border-left:4px solid #f9a825;">
+                                        <h3 style="margin:0 0 8px;color:#e65100;font-size:15px;font-weight:700;">Acci&oacute;n Requerida</h3>
+                                        <p style="margin:0 0 8px;color:#5d4037;font-size:14px;line-height:1.5;">
+                                            El personal de El Rayo puede proceder con:
+                                        </p>
+                                        <table role="presentation" cellpadding="0" cellspacing="0">
+                                            <tr>
+                                                <td style="padding:4px 8px 4px 0;color:#2e7d32;font-size:14px;">&#10003;</td>
+                                                <td style="padding:4px 0;color:#5d4037;font-size:14px;">Despacho de mercader&iacute;a</td>
+                                            </tr>
+                                            <tr>
+                                                <td style="padding:4px 8px 4px 0;color:#2e7d32;font-size:14px;">&#10003;</td>
+                                                <td style="padding:4px 0;color:#5d4037;font-size:14px;">Facturaci&oacute;n correspondiente</td>
+                                            </tr>
+                                        </table>
+                                    </td>
+                                </tr>
+                            </table>
+                        </td>
+                    </tr>
+                    <tr>
+                        <td style="background-color:#f8f9fa;padding:20px 40px;text-align:center;border-top:1px solid #e8e8e8;">
+                            <p style="margin:0;color:#95a5a6;font-size:12px;">
+                                Fecha y Hora: {fecha_ejecucion.strftime('%Y-%m-%d %H:%M:%S')}
+                            </p>
+                            <p style="margin:4px 0 0;color:#bdc3c7;font-size:11px;">
+                                Mensaje autom&aacute;tico del sistema de integraci&oacute;n SAP &mdash; Mabel Trading
+                            </p>
+                        </td>
+                    </tr>
+                </table>
+            </td>
+        </tr>
+    </table>
+</body>
+</html>"""
+
+
+def _build_despacho_body_text(numero_oc_sap, doc_entry, proveedor, referencia, pedido_numero, solicitudes, exitosas, total, fallidas, detalle_texto, fecha_ejecucion):
+    seccion_st = ""
+    if solicitudes:
+        errores_line = f"- Errores: {fallidas} solicitud(es) fallaron" if fallidas > 0 else ""
+        seccion_st = f"""
+Solicitudes de Transferencia Generadas:
+- Total: {exitosas}/{total} creadas exitosamente
+{errores_line}"""
+        if detalle_texto:
+            seccion_st += f"""
+
+Detalle de Solicitudes de Transferencia:
+  Tienda\tNombre\tEstado\tDocNum
+{detalle_texto}"""
+    pedido_line = f"- Numero de Pedido: {pedido_numero}" if pedido_numero else ""
+    return f"""OC y Solicitudes de Transferencia Generadas
+{'=' * 50}
+
+Se ha generado exitosamente la Orden de Compra y las Solicitudes de Transferencia en SAP.
+Pueden proceder con el despacho y facturacion.
+
+Informacion de la Orden de Compra:
+- Numero OC SAP: {numero_oc_sap}
+- DocEntry: {doc_entry or 'N/A'}
+- Proveedor: {proveedor}
+- Referencia: {referencia}
+{pedido_line}
+{seccion_st}
+
+Accion Requerida:
+El personal de El Rayo puede proceder con:
+- Despacho de mercaderia
+- Facturacion correspondiente
+
+Fecha y Hora: {fecha_ejecucion.strftime('%Y-%m-%d %H:%M:%S')}
+Mensaje automatico del sistema de integracion SAP - Mabel Trading
+"""
+
+
+def _extract_errores_st(solicitudes_transferencia):
+    """Extrae totales y lista de errores de solicitudes de transferencia."""
+    if not solicitudes_transferencia:
+        return 0, 0, 0, []
+    total = solicitudes_transferencia.get("total_tiendas", 0)
+    exitosas = solicitudes_transferencia.get("transferencias_creadas", 0)
+    fallidas = solicitudes_transferencia.get("transferencias_errores", 0)
+    errores = []
+    if solicitudes_transferencia.get("error"):
+        errores.append(str(solicitudes_transferencia.get("error")))
+    for r in solicitudes_transferencia.get("resultados", []):
+        if not r.get("success") and r.get("error"):
+            tienda = r.get("tienda_codigo", "N/A")
+            errores.append(f"{tienda}: {r.get('error')}")
+    return total, exitosas, fallidas, errores
+
+
+# ─── Funciones públicas ───────────────────────────────────────────────────────
 
 def send_migration_notification(
     facturas_guardadas: int,
@@ -32,40 +508,40 @@ def send_migration_notification(
 ) -> bool:
     """
     Envía notificación de nuevos despachos al USUARIO DE OPERACIONES.
-    
+
     DESTINATARIO: EMAIL_TO_OPERACIONES
-    
+
     Args:
         facturas_guardadas: Número de facturas nuevas guardadas
         facturas_actualizadas: Número de facturas actualizadas
         total_detalles: Total de detalles guardados
         fecha_ejecucion: Fecha y hora de la ejecución (por defecto ahora)
-    
+
     Returns:
         True si el email se envió correctamente, False en caso contrario
     """
     if not ENABLE_EMAIL_NOTIFICATIONS:
-        logger.debug("⏭️ Notificaciones por email deshabilitadas")
+        logger.debug(_MSG_EMAIL_DESHABILITADO)
         return False
-    
+
     # Solo enviar email si hay nuevos registros
     if facturas_guardadas == 0:
         logger.debug("⏭️ No hay nuevos registros, no se envía email")
         return False
-    
+
     if not fecha_ejecucion:
         fecha_ejecucion = ahora_naive()
-    
+
     try:
         # Destinatarios: BD (notificacion_destinatarios) o fallback .env
         recipients: list[str] = get_destinatarios_por_tipo("OPERACIONES")
-        
+
         if not recipients:
             logger.warning("⚠️ No hay destinatarios de OPERACIONES configurados")
             return False
-        
+
         from src.utils.email_template import build_email, info_section, paragraph, create_email_message
-        
+
         body_html = build_email(
             title="Migraci&oacute;n Autom&aacute;tica Completada",
             subtitle="Nuevos registros migrados desde MBA3",
@@ -80,7 +556,7 @@ def send_migration_notification(
             accent="green",
             timestamp=fecha_ejecucion,
         )
-        
+
         body_text = f"""Migracion Automatica Completada
 {'=' * 40}
 
@@ -94,20 +570,19 @@ Resumen de la Migracion:
 Fecha y Hora: {fecha_ejecucion.strftime('%Y-%m-%d %H:%M:%S')}
 Mensaje automatico del sistema - Mabel Trading
 """
-        
+
         msg = create_email_message(
             subject=f"Nuevos Registros Migrados - {facturas_guardadas} factura(s) nueva(s)",
             recipients=recipients,
             body_html=body_html,
             body_text=body_text,
         )
-        
-        # Enviar email
+
         send_smtp_message(msg, recipients)
-        
+
         logger.info(f"✅ Email de notificación enviado a {', '.join(recipients)}")
         return True
-        
+
     except Exception as e:
         logger.error(f"❌ Error al enviar email de notificación: {e}", exc_info=True)
         return False
@@ -119,32 +594,32 @@ def send_error_notification(
 ) -> bool:
     """
     Envía notificación de errores al USUARIO TÉCNICO.
-    
+
     DESTINATARIO: EMAIL_TO_TECNICOS
-    
+
     Args:
         error_message: Mensaje de error
         fecha_ejecucion: Fecha y hora de la ejecución (por defecto ahora)
-    
+
     Returns:
         True si el email se envió correctamente, False en caso contrario
     """
     if not ENABLE_EMAIL_NOTIFICATIONS:
         return False
-    
+
     if not fecha_ejecucion:
         fecha_ejecucion = ahora_naive()
-    
+
     try:
         # Destinatarios: BD o fallback .env
         recipients: list[str] = get_destinatarios_por_tipo("TECNICOS")
-        
+
         if not recipients:
             logger.warning("⚠️ No hay destinatarios TÉCNICOS configurados")
             return False
-        
+
         from src.utils.email_template import build_email, info_section, warning_section, paragraph, create_email_message
-        
+
         body_html = build_email(
             title="Error en Migraci&oacute;n Autom&aacute;tica",
             subtitle="Se requiere atenci&oacute;n t&eacute;cnica",
@@ -159,7 +634,7 @@ def send_error_notification(
             accent="red",
             timestamp=fecha_ejecucion,
         )
-        
+
         body_text = f"""Error en Migracion Automatica
 {'=' * 40}
 
@@ -171,19 +646,19 @@ Detalles del Error:
 Fecha y Hora: {fecha_ejecucion.strftime('%Y-%m-%d %H:%M:%S')}
 Por favor, revisa los logs del sistema para mas informacion.
 """
-        
+
         msg = create_email_message(
             subject="Error en Migracion Automatica MBA3",
             recipients=recipients,
             body_html=body_html,
             body_text=body_text,
         )
-        
+
         send_smtp_message(msg, recipients)
-        
+
         logger.info(f"✅ Email de error enviado a {', '.join(recipients)}")
         return True
-        
+
     except Exception as e:
         logger.error(f"❌ Error al enviar email de error: {e}", exc_info=True)
         return False
@@ -198,9 +673,9 @@ def send_homologacion_notification(
 ) -> bool:
     """
     Envía notificación de productos no homologados al USUARIO DE HOMOLOGACIONES.
-    
+
     DESTINATARIO: EMAIL_TO_HOMOLOGACIONES
-    
+
     Args:
         productos_no_homologados: Lista de productos no homologados:
             [
@@ -225,177 +700,55 @@ def send_homologacion_notification(
         fecha_ejecucion: Fecha y hora de la ejecución (por defecto ahora)
         filtrar_ya_notificados: Si True, filtra productos ya notificados anteriormente
         homologacion_repository: Repository para acceder a registros de notificaciones
-    
+
     Returns:
         True si el email se envió correctamente, False en caso contrario
     """
     if not ENABLE_EMAIL_NOTIFICATIONS:
-        logger.debug("⏭️ Notificaciones por email deshabilitadas")
+        logger.debug(_MSG_EMAIL_DESHABILITADO)
         return False
-    
-    # Solo enviar email si hay productos no homologados
-    if not productos_no_homologados or len(productos_no_homologados) == 0:
+
+    if not productos_no_homologados:
         logger.debug("⏭️ No hay productos no homologados, no se envía email")
         return False
-    
+
     if not fecha_ejecucion:
         fecha_ejecucion = ahora_naive()
-    
-    # FILTRAR productos ya notificados si se solicita
-    productos_a_notificar = productos_no_homologados
-    skus_ya_notificados = set()
-    
-    if filtrar_ya_notificados and homologacion_repository:
-        try:
-            skus_ya_notificados = homologacion_repository.get_skus_ya_notificados()
-            productos_a_notificar = [
-                p for p in productos_no_homologados 
-                if p.get("sku") not in skus_ya_notificados
-            ]
-            
-            if not productos_a_notificar:
-                logger.info("⏭️ Todos los productos no homologados ya fueron notificados")
-                return False
-            
-            logger.info(f"📧 Productos a notificar: {len(productos_a_notificar)} (filtrados: {len(skus_ya_notificados)})")
-            
-        except Exception as e:
-            logger.warning(f"⚠️ No se pudo filtrar productos ya notificados: {e}")
-            # En caso de error, notificar todos
-            productos_a_notificar = productos_no_homologados
-    
+
+    productos_a_notificar = _filtrar_productos_a_notificar(
+        productos_no_homologados, filtrar_ya_notificados, homologacion_repository
+    )
+    if not productos_a_notificar:
+        return False
+
     try:
-        # Destinatarios: BD o fallback .env
         recipients: list[str] = get_destinatarios_por_tipo("HOMOLOGACIONES")
-        
+
         if not recipients:
             logger.warning("⚠️ No hay destinatarios de HOMOLOGACIONES configurados")
             return False
-        
+
         from src.utils.email_template import (
             build_email, info_section, table_section, warning_section,
             paragraph, badge_html, create_email_message,
         )
-        
-        # Preparar estadísticas
-        if estadisticas:
-            total_mba3 = estadisticas.get("total_productos_mba3", 0)
-            homologados = estadisticas.get("productos_homologados", 0)
-            no_homologados = estadisticas.get("productos_no_homologados", 0)
-            porcentaje = estadisticas.get("porcentaje_homologacion", 0.0)
-        else:
-            total_mba3 = 0
-            homologados = 0
-            no_homologados = len(productos_a_notificar)
-            porcentaje = 0.0
-        
-        # Separar productos por tipo de problema
+
+        total_mba3, homologados, no_homologados, porcentaje = _get_estadisticas_homologacion(
+            estadisticas, len(productos_a_notificar)
+        )
+
         productos_no_existen = [p for p in productos_a_notificar if p.get("tipo_problema") == "no_existe"]
         productos_mismatch = [p for p in productos_a_notificar if p.get("tipo_problema") == "mismatch"]
         productos_error = [p for p in productos_a_notificar if p.get("tipo_problema") == "error"]
         productos_sin_tipo = [p for p in productos_a_notificar if not p.get("tipo_problema")]
-        
-        # Crear tabla HTML de productos con distinción de tipo (máximo 20 para no saturar el email)
+
         productos_mostrar = productos_a_notificar[:20]
-        productos_tabla = ""
-        for idx, producto in enumerate(productos_mostrar, 1):
-            sku = producto.get("sku", "N/A")
-            nombre = producto.get("nombre_producto", "Sin nombre")
-            veces_usado = producto.get("veces_usado", 0)
-            total_docenas = producto.get("total_docenas", 0.0)
-            total_valor = producto.get("total_valor", 0.0)
-            ultima_aparicion = producto.get("ultima_aparicion", "N/A")
-            tipo_problema = producto.get("tipo_problema", "no_existe")
-            item_code_sap = producto.get("item_code_sap")
-            
-            # Determinar descripción del problema y color
-            if tipo_problema == "mismatch":
-                problema_desc = f"MISMATCH<br><small>ItemCode SAP: {item_code_sap}</small>"
-                problema_color = "#ff9800"  # Naranja
-            elif tipo_problema == "error":
-                problema_desc = "Error al consultar"
-                problema_color = "#f44336"  # Rojo
-            else:
-                problema_desc = "No existe en SAP"
-                problema_color = "#2196F3"  # Azul
-            
-            productos_tabla += f"""
-            <tr>
-                <td>{idx}</td>
-                <td><strong>{sku}</strong></td>
-                <td>{nombre}</td>
-                <td style="background-color: {problema_color}; color: white; font-weight: bold; padding: 5px; border-radius: 3px;">{problema_desc}</td>
-                <td>{veces_usado}</td>
-                <td>{total_docenas:.2f}</td>
-                <td>${total_valor:.2f}</td>
-                <td>{ultima_aparicion}</td>
-            </tr>
-            """
-        
-        if len(productos_a_notificar) > 20:
-            productos_tabla += f"""
-            <tr>
-                <td colspan="8" style="text-align: center; font-style: italic;">
-                    ... y {len(productos_a_notificar) - 20} producto(s) más
-                </td>
-            </tr>
-            """
-        
-        # Crear resumen por tipo de problema
-        resumen_tipos = ""
-        if productos_mismatch:
-            resumen_tipos += f"<li><strong style='color: #ff9800;'>Mismatch (SKU ≠ ItemCode):</strong> {len(productos_mismatch)} producto(s)</li>"
-        if productos_no_existen:
-            resumen_tipos += f"<li><strong style='color: #2196F3;'>No existe en SAP:</strong> {len(productos_no_existen)} producto(s)</li>"
-        if productos_error:
-            resumen_tipos += f"<li><strong style='color: #f44336;'>Error al consultar:</strong> {len(productos_error)} producto(s)</li>"
-        if productos_sin_tipo:
-            resumen_tipos += f"<li><strong>Sin clasificar:</strong> {len(productos_sin_tipo)} producto(s)</li>"
-        
-        # Construir filas de tabla para el template
-        table_rows = []
-        for idx, producto in enumerate(productos_mostrar, 1):
-            sku = producto.get("sku", "N/A")
-            nombre = producto.get("nombre_producto", "Sin nombre")
-            veces_usado = producto.get("veces_usado", 0)
-            total_docenas_val = producto.get("total_docenas", 0.0)
-            total_valor_val = producto.get("total_valor", 0.0)
-            ultima_aparicion = producto.get("ultima_aparicion", "N/A")
-            tipo_problema = producto.get("tipo_problema", "no_existe")
-            item_code_sap = producto.get("item_code_sap")
-            
-            if tipo_problema == "mismatch":
-                tipo_badge = badge_html("MISMATCH", "#fff3e0", "#e65100")
-            elif tipo_problema == "error":
-                tipo_badge = badge_html("Error", "#ffebee", "#c62828")
-            else:
-                tipo_badge = badge_html("No existe", "#e3f2fd", "#1565c0")
-            
-            table_rows.append((
-                str(idx),
-                f'<strong>{sku}</strong>',
-                nombre,
-                (tipo_badge, "center"),
-                str(veces_usado),
-                f"{total_docenas_val:.2f}",
-                f"${total_valor_val:.2f}",
-                str(ultima_aparicion),
-            ))
-        
+        table_rows = _build_homologacion_table_rows(productos_mostrar, badge_html)
         footer_note = f"... y {len(productos_a_notificar) - 20} producto(s) m&aacute;s" if len(productos_a_notificar) > 20 else None
-        
-        # Construir resumen HTML por tipo
-        resumen_items = []
-        if productos_mismatch:
-            resumen_items.append(("Mismatch (SKU ≠ ItemCode)", f'{badge_html(str(len(productos_mismatch)), "#fff3e0", "#e65100")} producto(s)'))
-        if productos_no_existen:
-            resumen_items.append(("No existe en SAP", f'{badge_html(str(len(productos_no_existen)), "#e3f2fd", "#1565c0")} producto(s)'))
-        if productos_error:
-            resumen_items.append(("Error al consultar", f'{badge_html(str(len(productos_error)), "#ffebee", "#c62828")} producto(s)'))
-        if productos_sin_tipo:
-            resumen_items.append(("Sin clasificar", f'{badge_html(str(len(productos_sin_tipo)), "#f5f5f5", "#616161")} producto(s)'))
-        
-        # Secciones del email
+        resumen_items = _build_homologacion_resumen_items(
+            productos_mismatch, productos_no_existen, productos_error, productos_sin_tipo, badge_html
+        )
+
         sections = [
             paragraph(f"Se han detectado <strong>{len(productos_a_notificar)}</strong> producto(s) de MBA3 que NO est&aacute;n homologados en SAP o tienen problemas de coincidencia."),
             info_section("Resumen por Tipo de Problema", resumen_items, accent="orange"),
@@ -413,7 +766,7 @@ def send_homologacion_notification(
                 ["#", "SKU", "Producto", "Problema", "Usos", "Docenas", "Valor", "&Uacute;lt. Aparici&oacute;n"],
                 table_rows, accent="orange", footer_note=footer_note),
         ]
-        
+
         body_html = build_email(
             title="Productos NO Homologados Detectados",
             subtitle=f"{len(productos_a_notificar)} producto(s) nuevos requieren atenci&oacute;n",
@@ -421,131 +774,14 @@ def send_homologacion_notification(
             accent="orange",
             timestamp=fecha_ejecucion,
         )
-        
-        # Crear cuerpo de texto plano
-        body_text = f"""
-        Productos NO Homologados Detectados
-        
-        Se han detectado productos de MBA3 que NO están homologados en SAP.
-        
-        ⚠️ ACCIÓN REQUERIDA:
-        Estos productos deben ser creados en SAP con el mismo ItemCode (SKU).
-        
-        Estadísticas de Homologación:
-        - Total Productos en MBA3: {total_mba3}
-        - Productos Homologados: {homologados}
-        - Productos NO Homologados: {no_homologados}
-        - Porcentaje de Homologación: {porcentaje}%
-        
-        Productos que Requieren Homologación:
-        """
-        
-        for idx, producto in enumerate(productos_mostrar, 1):
-            sku = producto.get("sku", "N/A")
-            nombre = producto.get("nombre_producto", "Sin nombre")
-            veces_usado = producto.get("veces_usado", 0)
-            total_docenas = producto.get("total_docenas", 0.0)
-            total_valor = producto.get("total_valor", 0.0)
-            ultima_aparicion = producto.get("ultima_aparicion", "N/A")
-            tipo_problema = producto.get("tipo_problema", "no_existe")
-            item_code_sap = producto.get("item_code_sap")
-            
-            # Determinar descripción del problema
-            if tipo_problema == "mismatch":
-                problema_desc = f"MISMATCH - ItemCode SAP: {item_code_sap}"
-            elif tipo_problema == "error":
-                problema_desc = "Error al consultar"
-            else:
-                problema_desc = "No existe en SAP"
-            
-            body_text += f"""
-        {idx}. SKU: {sku}
-           Nombre: {nombre}
-           Tipo de Problema: {problema_desc}
-           Veces Usado: {veces_usado}
-           Total Docenas: {total_docenas:.2f}
-           Total Valor: ${total_valor:.2f}
-           Última Aparición: {ultima_aparicion}
-        """
-        
-        if len(productos_a_notificar) > 20:
-            body_text += f"\n        ... y {len(productos_a_notificar) - 20} producto(s) más\n"
-        
-        body_text += f"""
-        
-        Fecha y Hora: {fecha_ejecucion.strftime('%Y-%m-%d %H:%M:%S')}
-        
-        Nota: Este es un mensaje automático del sistema de migración MBA3.
-        Se adjunta un archivo CSV con el detalle completo de todos los productos no homologados.
-        """
-        
-        # Generar archivo CSV con todos los productos
-        try:
-            csv_buffer = io.StringIO()
-            csv_writer = csv.writer(csv_buffer)
-            
-            # Escribir encabezados
-            csv_writer.writerow([
-                'SKU',
-                'Nombre Producto',
-                'Tipo de Problema',
-                'ItemCode SAP',
-                'Veces Usado',
-                'Total Docenas',
-                'Total Valor',
-                'Primera Aparición',
-                'Última Aparición'
-            ])
-            
-            # Escribir datos de todos los productos (no solo los primeros 20)
-            for producto in productos_a_notificar:
-                tipo_problema = producto.get("tipo_problema", "no_existe")
-                item_code_sap = producto.get("item_code_sap", "")
-                
-                # Determinar descripción del problema
-                if tipo_problema == "mismatch":
-                    problema_desc = "MISMATCH"
-                elif tipo_problema == "error":
-                    problema_desc = "Error al consultar"
-                else:
-                    problema_desc = "No existe en SAP"
-                
-                csv_writer.writerow([
-                    producto.get("sku", "N/A"),
-                    producto.get("nombre_producto", "Sin nombre"),
-                    problema_desc,
-                    item_code_sap,
-                    producto.get("veces_usado", 0),
-                    f"{producto.get('total_docenas', 0.0):.2f}",
-                    f"{producto.get('total_valor', 0.0):.2f}",
-                    producto.get("primera_aparicion", "N/A"),
-                    producto.get("ultima_aparicion", "N/A")
-                ])
-            
-            # Convertir a bytes para adjuntar
-            csv_bytes = csv_buffer.getvalue().encode('utf-8-sig')  # utf-8-sig para Excel
-            
-            # Crear adjunto CSV
-            csv_attachment = MIMEBase('text', 'csv')
-            csv_attachment.set_payload(csv_bytes)
-            encoders.encode_base64(csv_attachment)
-            
-            # Nombre del archivo con fecha
-            fecha_str = fecha_ejecucion.strftime('%Y%m%d_%H%M%S')
-            filename = f"productos_no_homologados_{fecha_str}.csv"
-            csv_attachment.add_header(
-                'Content-Disposition',
-                f'attachment; filename= {filename}'
-            )
-            
-            csv_attachments = [csv_attachment]
-            logger.debug(f"✅ Archivo CSV generado y adjuntado: {filename}")
-            
-        except Exception as csv_error:
-            # No fallar el envío si hay error al generar CSV
-            csv_attachments = []
-            logger.warning(f"⚠️ Error al generar CSV adjunto: {csv_error}")
-        
+
+        body_text = _build_homologacion_body_text(
+            productos_mostrar, productos_a_notificar,
+            total_mba3, homologados, no_homologados, porcentaje, fecha_ejecucion
+        )
+
+        csv_attachments = _build_homologacion_csv(productos_a_notificar, fecha_ejecucion)
+
         msg = create_email_message(
             subject=f"Productos NO Homologados Detectados - {len(productos_a_notificar)} producto(s) NUEVOS",
             recipients=recipients,
@@ -553,24 +789,16 @@ def send_homologacion_notification(
             body_text=body_text,
             attachments=csv_attachments if csv_attachments else None,
         )
-        
-        # Enviar email
+
         send_smtp_message(msg, recipients)
-        
+
         logger.info(f"✅ Email de homologación enviado a {', '.join(recipients)}")
         logger.info(f"   Productos no homologados reportados: {len(productos_a_notificar)}")
-        
-        # REGISTRAR productos notificados
-        if homologacion_repository:
-            try:
-                skus_notificados = [p.get("sku") for p in productos_a_notificar if p.get("sku")]
-                registrados = homologacion_repository.registrar_productos_notificados(skus_notificados)
-                logger.info(f"✅ Registrados {registrados} productos como notificados")
-            except Exception as e:
-                logger.warning(f"⚠️ No se pudo registrar productos notificados: {e}")
-        
+
+        _registrar_notificados(homologacion_repository, productos_a_notificar)
+
         return True
-        
+
     except Exception as e:
         logger.error(f"❌ Error al enviar email de homologación: {e}", exc_info=True)
         return False
@@ -583,30 +811,30 @@ def send_capacity_warning_notification(
 ) -> bool:
     """
     Envía notificación de advertencia de capacidad al USUARIO TÉCNICO.
-    
+
     DESTINATARIO: EMAIL_TO_TECNICOS
-    
+
     Args:
         warning_type: Tipo de advertencia ('time_limit', 'high_volume', 'high_failures')
         details: Detalles de la advertencia
         fecha_ejecucion: Fecha de ejecución
-    
+
     Returns:
         True si se envió correctamente, False en caso contrario
     """
     if not ENABLE_EMAIL_NOTIFICATIONS:
         return False
-    
+
     if not fecha_ejecucion:
         fecha_ejecucion = ahora_naive()
-    
+
     try:
         recipients: list[str] = get_destinatarios_por_tipo("TECNICOS")
-        
+
         if not recipients:
             logger.warning("⚠️ No hay destinatarios TÉCNICOS configurados")
             return False
-        
+
         # Determinar título y mensaje según el tipo
         if warning_type == 'time_limit':
             titulo = "⚠️ Advertencia: Tiempo de Ejecución Alto"
@@ -620,15 +848,14 @@ def send_capacity_warning_notification(
         else:
             titulo = "⚠️ Advertencia del Sistema"
             mensaje_principal = "Se detectó una condición de advertencia."
-        
+
         from src.utils.email_template import build_email, info_section, warning_section, paragraph, create_email_message
-        
-        # Mapear tipo de warning a color de acento
+
         accent_map = {'time_limit': 'orange', 'high_volume': 'blue', 'high_failures': 'red'}
         accent = accent_map.get(warning_type, 'orange')
-        
+
         detail_items = [(key.replace('_', ' ').title(), str(value)) for key, value in details.items()]
-        
+
         body_html = build_email(
             title=titulo,
             subtitle=mensaje_principal,
@@ -641,7 +868,7 @@ def send_capacity_warning_notification(
             accent=accent,
             timestamp=fecha_ejecucion,
         )
-        
+
         body_text = f"""{titulo}
 {'=' * 40}
 
@@ -655,19 +882,19 @@ Detalles:
 Fecha y Hora: {fecha_ejecucion.strftime('%Y-%m-%d %H:%M:%S')}
 Accion Recomendada: Revisar los logs del sistema.
 """
-        
+
         msg = create_email_message(
             subject=titulo,
             recipients=recipients,
             body_html=body_html,
             body_text=body_text,
         )
-        
+
         send_smtp_message(msg, recipients)
-        
+
         logger.info(f"✅ Email de advertencia de capacidad enviado a {', '.join(recipients)}")
         return True
-        
+
     except Exception as e:
         logger.error(f"❌ Error al enviar email de advertencia: {e}", exc_info=True)
         return False
@@ -684,9 +911,9 @@ def send_oc_to_supplier(
 ) -> bool:
     """
     Envía correo al proveedor con la ODC generada, incluyendo PDF adjunto.
-    
+
     DESTINATARIO: proveedor_email (si se proporciona) o EMAIL_TO_OPERACIONES como fallback
-    
+
     Args:
         oc_cabecera: Datos de cabecera de la orden de compra
         oc_detalles: Lista de detalles de la orden de compra.
@@ -701,52 +928,46 @@ def send_oc_to_supplier(
             - proveedor_nombre: Razón social del proveedor
             - forma_pago: Plazo/forma de pago
             - fecha_entrega: Fecha de entrega
-    
+
     Returns:
         True si el email se envió correctamente, False en caso contrario
     """
     if not ENABLE_EMAIL_NOTIFICATIONS:
-        logger.debug("⏭️ Notificaciones por email deshabilitadas")
+        logger.debug(_MSG_EMAIL_DESHABILITADO)
         return False
-    
+
     if not fecha_ejecucion:
         fecha_ejecucion = ahora_naive()
-    
+
     try:
-        # Determinar destinatario
-        recipients: list[str]
         if proveedor_email:
-            recipients = [proveedor_email.strip()]
+            recipients: list[str] = [proveedor_email.strip()]
         else:
-            # Fallback: enviar a operaciones para que lo reenvíen manualmente
             recipients = get_destinatarios_por_tipo("OPERACIONES")
             logger.warning(f"⚠️ No se proporcionó email del proveedor, enviando a operaciones: {recipients}")
-        
+
         if not recipients:
             logger.warning("⚠️ No hay destinatarios configurados")
             return False
-        
-        # Extraer información de la ODC
+
         proveedor = oc_cabecera.get("proveedor", "N/A")
         numero_oc_sap = doc_num or oc_cabecera.get("numero_oc_sap", "N/A")
         referencia = oc_cabecera.get("referencia_despacho", "N/A")
-        
+
         from src.utils.email_template import (
             build_email, info_section, table_section,
             paragraph, create_email_message,
         )
-        
-        # Calcular totales
+
         total_lineas = len(oc_detalles)
         total_cantidad = sum(d.get("cantidad_sap", 0) for d in oc_detalles)
         total_valor = sum(d.get("total_linea", 0) or 0 for d in oc_detalles)
-        
-        # Crear filas de la tabla (máximo 50)
+
         detalles_mostrar = oc_detalles[:50]
         table_rows = []
         for idx, detalle in enumerate(detalles_mostrar, 1):
             sku = detalle.get("sku_sap", "N/A")
-            nombre = detalle.get("nombre_producto", "Sin nombre")
+            nombre = detalle.get("nombre_producto", _DEFAULT_NOMBRE_PRODUCTO)
             cantidad = detalle.get("cantidad_sap", 0)
             unidad = detalle.get("unidad_sap", "N/A")
             precio_unit = detalle.get("precio_unitario", 0)
@@ -755,9 +976,9 @@ def send_oc_to_supplier(
                 str(idx), f"<strong>{sku}</strong>", nombre,
                 f"{cantidad:.2f}", unidad, f"${precio_unit:.4f}", f"${total_linea:.4f}",
             ))
-        
+
         footer_note = f"... y {len(oc_detalles) - 50} l&iacute;nea(s) m&aacute;s" if len(oc_detalles) > 50 else None
-        
+
         body_html = build_email(
             title="Orden de Compra Generada",
             subtitle=f"ODC #{numero_oc_sap}",
@@ -784,7 +1005,7 @@ def send_oc_to_supplier(
             accent="green",
             timestamp=fecha_ejecucion,
         )
-        
+
         body_text = f"""Orden de Compra Generada - ODC #{numero_oc_sap}
 {'=' * 40}
 
@@ -803,63 +1024,35 @@ Detalle:
 """
         for idx, detalle in enumerate(detalles_mostrar, 1):
             sku = detalle.get("sku_sap", "N/A")
-            nombre = detalle.get("nombre_producto", "Sin nombre")
+            nombre = detalle.get("nombre_producto", _DEFAULT_NOMBRE_PRODUCTO)
             cantidad = detalle.get("cantidad_sap", 0)
             unidad = detalle.get("unidad_sap", "N/A")
             precio_unit = detalle.get("precio_unitario", 0)
             total_linea = detalle.get("total_linea", 0)
             body_text += f"  {idx}. {sku} - {nombre} | {cantidad:.2f} {unidad} | ${precio_unit:.4f} | ${total_linea:.4f}\n"
-        
+
         if len(oc_detalles) > 50:
             body_text += f"  ... y {len(oc_detalles) - 50} linea(s) mas\n"
         body_text += f"\nFecha y Hora: {fecha_ejecucion.strftime('%Y-%m-%d %H:%M:%S')}\n"
-        
-        # ── Generar PDF adjunto ──────────────────────────────────────────
-        pdf_attachment = None
-        try:
-            from src.utils.odc_pdf_generator import generar_odc_pdf
-            
-            pdf_bytes = generar_odc_pdf(
-                oc_cabecera=oc_cabecera,
-                oc_detalles=oc_detalles,
-                doc_num=doc_num,
-                doc_entry=doc_entry,
-                pedido_info=pedido_info,
-            )
-            
-            # Crear adjunto MIME
-            pdf_attachment = MIMEBase("application", "pdf")
-            pdf_attachment.set_payload(pdf_bytes)
-            encoders.encode_base64(pdf_attachment)
-            pdf_filename = f"ODC {numero_oc_sap}.pdf"
-            pdf_attachment.add_header(
-                "Content-Disposition",
-                "attachment",
-                filename=pdf_filename,
-            )
-            logger.info(f"📎 PDF adjunto generado: {pdf_filename} ({len(pdf_bytes):,} bytes)")
-        except Exception as e:
-            # Si falla la generación del PDF, enviar el email sin adjunto
-            logger.warning(f"⚠️ No se pudo generar PDF adjunto (se enviará email sin PDF): {e}")
-            pdf_attachment = None
-        
-        attachments = [pdf_attachment] if pdf_attachment else None
-        
+
+        pdf_attachment = _generate_odc_pdf_attachment(
+            oc_cabecera, oc_detalles, doc_num, doc_entry, numero_oc_sap, pedido_info
+        )
+
         msg = create_email_message(
             subject=f"Orden de Compra Generada - ODC #{numero_oc_sap}",
             recipients=recipients,
             body_html=body_html,
             body_text=body_text,
-            attachments=attachments,
+            attachments=[pdf_attachment] if pdf_attachment else None,
         )
-        
-        # Enviar email
+
         send_smtp_message(msg, recipients)
-        
+
         pdf_status = "con PDF adjunto" if pdf_attachment else "sin PDF adjunto"
         logger.info(f"✅ Email de ODC enviado a {', '.join(recipients)} (ODC #{numero_oc_sap}) [{pdf_status}]")
         return True
-        
+
     except Exception as e:
         logger.error(f"❌ Error al enviar email de ODC al proveedor: {e}", exc_info=True)
         return False
@@ -876,11 +1069,11 @@ def send_oc_ready_for_dispatch_notification(
     """
     Envía notificación a El Rayo y a MABEL TRADING indicando que la OC y Solicitudes de Transferencia
     han sido generadas en SAP y pueden proceder con despacho y facturación.
-    
+
     HU-04: Alertar al personal de El Rayo para proceder con el despacho y facturación
-    
+
     DESTINATARIOS: OPERACIONES (El Rayo) + MABEL_TRADING
-    
+
     Args:
         oc_cabecera: Datos de cabecera de la orden de compra
         doc_num: Número de documento SAP (DocNum) de la OC
@@ -888,310 +1081,57 @@ def send_oc_ready_for_dispatch_notification(
         solicitudes_transferencia: Resultado de creación de solicitudes de transferencia (opcional)
         pedido_numero: Número de pedido relacionado (opcional)
         fecha_ejecucion: Fecha y hora de la ejecución (por defecto ahora)
-    
+
     Returns:
         True si el email se envió correctamente, False en caso contrario
     """
     if not ENABLE_EMAIL_NOTIFICATIONS:
-        logger.debug("⏭️ Notificaciones por email deshabilitadas")
+        logger.debug(_MSG_EMAIL_DESHABILITADO)
         return False
-    
+
     if not fecha_ejecucion:
         fecha_ejecucion = ahora_naive()
-    
+
     try:
-        # Destinatarios: El Rayo (OPERACIONES) + MABEL TRADING (sin duplicados)
-        operaciones: list[str] = get_destinatarios_por_tipo("OPERACIONES")
-        mabel_trading: list[str] = get_destinatarios_por_tipo("MABEL_TRADING")
-        seen: set[str] = set()
-        recipients: list[str] = []
-        for email in operaciones + mabel_trading:
-            e = (email or "").strip().lower()
-            if e and e not in seen:
-                seen.add(e)
-                recipients.append(email.strip())
-        
+        recipients = _build_unique_recipients(["OPERACIONES", "MABEL_TRADING"])
+
         if not recipients:
             logger.warning("⚠️ No hay destinatarios configurados para notificación de despacho (OPERACIONES ni MABEL_TRADING)")
             return False
-        
-        # Extraer información de la OC
+
         proveedor = oc_cabecera.get("proveedor", "N/A")
         numero_oc_sap = doc_num or oc_cabecera.get("numero_oc_sap", "N/A")
         referencia = oc_cabecera.get("referencia_despacho", "N/A")
-        
-        # Información de Solicitudes de Transferencia
-        transferencias_detalle_texto = ""
-        total_transferencias = 0
-        transferencias_exitosas = 0
-        transferencias_fallidas = 0
-        
-        if solicitudes_transferencia:
-            total_transferencias = solicitudes_transferencia.get("total_tiendas", 0)
-            transferencias_exitosas = solicitudes_transferencia.get("transferencias_creadas", 0)
-            transferencias_fallidas = solicitudes_transferencia.get("transferencias_errores", 0)
-            resultados = solicitudes_transferencia.get("resultados", [])
-            
-            # Construir tabla de transferencias (HTML y texto plano)
-            if resultados:
-                lineas_texto = []
-                for resultado in resultados:
-                    tienda_codigo = resultado.get("tienda_codigo", "N/A")
-                    tienda_nombre = resultado.get("tienda_nombre") or tienda_codigo
-                    success = resultado.get("success", False)
-                    doc_num_transf = resultado.get("doc_num", "N/A")
-                    error = resultado.get("error")
-                    
-                    doc_info = f"DocNum: {doc_num_transf}" if success else f"Error: {error or 'Desconocido'}"
-                    
-                    # Texto plano
-                    estado_txt = "Creada" if success else "Error"
-                    lineas_texto.append(f"  {tienda_codigo}\t{tienda_nombre}\t{estado_txt}\t{doc_info}")
-                
-                transferencias_detalle_texto = "\n".join(lineas_texto)
-        
-        # Crear mensaje con multipart/alternative para que el cliente prefiera HTML
+
+        total, exitosas, fallidas, detalle_texto = _extract_transferencias_data(solicitudes_transferencia)
+        filas_tabla_html = _build_filas_tabla_despacho(solicitudes_transferencia)
+        seccion_transferencias_html = _build_seccion_transferencias_despacho(
+            solicitudes_transferencia, exitosas, total, fallidas, filas_tabla_html
+        )
+        pedido_html = _build_pedido_html_row(pedido_numero)
+
+        body_html = _build_despacho_html_body(
+            numero_oc_sap, doc_entry, proveedor, referencia,
+            pedido_html, seccion_transferencias_html, fecha_ejecucion
+        )
+        body_text = _build_despacho_body_text(
+            numero_oc_sap, doc_entry, proveedor, referencia, pedido_numero,
+            solicitudes_transferencia, exitosas, total, fallidas, detalle_texto, fecha_ejecucion
+        )
+
+        # multipart/alternative para que el cliente prefiera HTML
         msg = MIMEMultipart('alternative')
         msg['From'] = EMAIL_SMTP_USER or EMAIL_FROM
         msg['To'] = ", ".join(recipients)
         msg['Subject'] = f"OC y Solicitudes de Transferencia - Listo para Despacho #{numero_oc_sap}"
-        
-        # --- Construir filas HTML de la tabla de transferencias ---
-        filas_tabla_html = ""
-        if solicitudes_transferencia and solicitudes_transferencia.get("resultados"):
-            for idx, resultado in enumerate(solicitudes_transferencia.get("resultados", [])):
-                tienda_codigo = resultado.get("tienda_codigo", "N/A")
-                tienda_nombre = resultado.get("tienda_nombre") or tienda_codigo
-                success = resultado.get("success", False)
-                doc_num_transf = resultado.get("doc_num", "N/A")
-                error = resultado.get("error")
-                
-                bg_color = "#f8fffe" if idx % 2 == 0 else "#ffffff"
-                if success:
-                    badge = '<span style="display:inline-block;background-color:#d4edda;color:#155724;padding:3px 10px;border-radius:12px;font-size:12px;font-weight:600;">Creada</span>'
-                    info_html = f'<span style="font-family:Consolas,monospace;font-weight:600;color:#1a5276;">{doc_num_transf}</span>'
-                else:
-                    badge = '<span style="display:inline-block;background-color:#f8d7da;color:#721c24;padding:3px 10px;border-radius:12px;font-size:12px;font-weight:600;">Error</span>'
-                    info_html = f'<span style="color:#721c24;">{error or "Desconocido"}</span>'
-                
-                filas_tabla_html += f'''
-                <tr style="background-color:{bg_color};">
-                    <td style="padding:12px 16px;border-bottom:1px solid #e8e8e8;font-weight:600;color:#2c3e50;">{tienda_codigo}</td>
-                    <td style="padding:12px 16px;border-bottom:1px solid #e8e8e8;color:#555;">{tienda_nombre}</td>
-                    <td style="padding:12px 16px;border-bottom:1px solid #e8e8e8;text-align:center;">{badge}</td>
-                    <td style="padding:12px 16px;border-bottom:1px solid #e8e8e8;text-align:center;">{info_html}</td>
-                </tr>'''
-        
-        # --- Sección de resumen de transferencias (HTML) ---
-        seccion_transferencias_html = ""
-        if solicitudes_transferencia:
-            errores_html = ""
-            if transferencias_fallidas > 0:
-                errores_html = f'<span style="color:#dc3545;font-weight:600;margin-left:16px;">{transferencias_fallidas} con error</span>'
-            
-            seccion_transferencias_html = f'''
-            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:24px 0;">
-                <tr>
-                    <td style="background:linear-gradient(135deg,#e8f5e9 0%,#c8e6c9 100%);border-radius:8px;padding:20px;">
-                        <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
-                            <tr>
-                                <td style="font-size:16px;font-weight:700;color:#2e7d32;">
-                                    Solicitudes de Transferencia
-                                </td>
-                                <td style="text-align:right;">
-                                    <span style="display:inline-block;background-color:#2e7d32;color:#fff;padding:6px 16px;border-radius:20px;font-size:14px;font-weight:700;">{transferencias_exitosas}/{total_transferencias} creadas</span>
-                                    {errores_html}
-                                </td>
-                            </tr>
-                        </table>
-                    </td>
-                </tr>
-            </table>'''
-            
-            if filas_tabla_html:
-                seccion_transferencias_html += f'''
-            <table width="100%" cellpadding="0" cellspacing="0" style="border-radius:8px;overflow:hidden;border:1px solid #e0e0e0;margin-bottom:24px;">
-                <thead>
-                    <tr style="background:linear-gradient(135deg,#1a5276 0%,#2980b9 100%);">
-                        <th style="padding:14px 16px;text-align:left;color:#fff;font-size:13px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;">Tienda</th>
-                        <th style="padding:14px 16px;text-align:left;color:#fff;font-size:13px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;">Nombre</th>
-                        <th style="padding:14px 16px;text-align:center;color:#fff;font-size:13px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;">Estado</th>
-                        <th style="padding:14px 16px;text-align:center;color:#fff;font-size:13px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;">DocNum</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {filas_tabla_html}
-                </tbody>
-            </table>'''
-        
-        # --- Sección de número de pedido (HTML) ---
-        pedido_html = ""
-        if pedido_numero:
-            pedido_html = f'''
-                            <tr>
-                                <td style="padding:8px 0;color:#7f8c8d;font-size:13px;width:160px;">Pedido</td>
-                                <td style="padding:8px 0;font-weight:600;color:#2c3e50;">{pedido_numero}</td>
-                            </tr>'''
-        
-        # Crear cuerpo del mensaje HTML (inline styles para compatibilidad con clientes de correo)
-        body_html = f"""<!DOCTYPE html>
-<html lang="es">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>OC y Solicitudes de Transferencia</title>
-</head>
-<body style="margin:0;padding:0;background-color:#f0f2f5;font-family:'Segoe UI',Tahoma,Geneva,Verdana,sans-serif;">
-    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color:#f0f2f5;padding:24px 0;">
-        <tr>
-            <td align="center">
-                <table role="presentation" width="640" cellpadding="0" cellspacing="0" style="max-width:640px;width:100%;background-color:#ffffff;border-radius:12px;overflow:hidden;box-shadow:0 2px 12px rgba(0,0,0,0.08);">
-                    
-                    <!-- Header -->
-                    <tr>
-                        <td style="background:linear-gradient(135deg,#1a5276 0%,#2980b9 100%);padding:32px 40px;text-align:center;">
-                            <h1 style="margin:0;color:#ffffff;font-size:22px;font-weight:700;letter-spacing:-0.3px;">
-                                OC y Solicitudes de Transferencia Generadas
-                            </h1>
-                            <p style="margin:8px 0 0;color:rgba(255,255,255,0.85);font-size:14px;">
-                                Listo para despacho y facturaci&oacute;n
-                            </p>
-                        </td>
-                    </tr>
-                    
-                    <!-- Body -->
-                    <tr>
-                        <td style="padding:32px 40px;">
-                            
-                            <!-- Mensaje principal -->
-                            <p style="margin:0 0 24px;color:#2c3e50;font-size:15px;line-height:1.6;">
-                                Se ha generado exitosamente la <strong>Orden de Compra</strong> y las 
-                                <strong>Solicitudes de Transferencia</strong> en SAP. 
-                                Pueden proceder con el despacho y facturaci&oacute;n.
-                            </p>
-                            
-                            <!-- Info OC -->
-                            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:24px;">
-                                <tr>
-                                    <td style="background-color:#f8f9fa;border-radius:8px;padding:20px 24px;border-left:4px solid #2980b9;">
-                                        <h3 style="margin:0 0 12px;color:#1a5276;font-size:15px;font-weight:700;">Informaci&oacute;n de la Orden de Compra</h3>
-                                        <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
-                                            <tr>
-                                                <td style="padding:8px 0;color:#7f8c8d;font-size:13px;width:160px;">N&uacute;mero OC SAP</td>
-                                                <td style="padding:8px 0;font-weight:700;color:#1a5276;font-size:18px;">{numero_oc_sap}</td>
-                                            </tr>
-                                            <tr>
-                                                <td style="padding:8px 0;color:#7f8c8d;font-size:13px;">DocEntry</td>
-                                                <td style="padding:8px 0;font-weight:600;color:#2c3e50;">{doc_entry or 'N/A'}</td>
-                                            </tr>
-                                            <tr>
-                                                <td style="padding:8px 0;color:#7f8c8d;font-size:13px;">Proveedor</td>
-                                                <td style="padding:8px 0;font-weight:600;color:#2c3e50;">{proveedor}</td>
-                                            </tr>
-                                            <tr>
-                                                <td style="padding:8px 0;color:#7f8c8d;font-size:13px;">Referencia</td>
-                                                <td style="padding:8px 0;font-weight:600;color:#2c3e50;">{referencia}</td>
-                                            </tr>{pedido_html}
-                                        </table>
-                                    </td>
-                                </tr>
-                            </table>
-                            
-                            <!-- Solicitudes de Transferencia -->
-                            {seccion_transferencias_html}
-                            
-                            <!-- Accion Requerida -->
-                            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:24px 0;">
-                                <tr>
-                                    <td style="background-color:#fff8e1;border-radius:8px;padding:20px 24px;border-left:4px solid #f9a825;">
-                                        <h3 style="margin:0 0 8px;color:#e65100;font-size:15px;font-weight:700;">Acci&oacute;n Requerida</h3>
-                                        <p style="margin:0 0 8px;color:#5d4037;font-size:14px;line-height:1.5;">
-                                            El personal de El Rayo puede proceder con:
-                                        </p>
-                                        <table role="presentation" cellpadding="0" cellspacing="0">
-                                            <tr>
-                                                <td style="padding:4px 8px 4px 0;color:#2e7d32;font-size:14px;">&#10003;</td>
-                                                <td style="padding:4px 0;color:#5d4037;font-size:14px;">Despacho de mercader&iacute;a</td>
-                                            </tr>
-                                            <tr>
-                                                <td style="padding:4px 8px 4px 0;color:#2e7d32;font-size:14px;">&#10003;</td>
-                                                <td style="padding:4px 0;color:#5d4037;font-size:14px;">Facturaci&oacute;n correspondiente</td>
-                                            </tr>
-                                        </table>
-                                    </td>
-                                </tr>
-                            </table>
-                            
-                        </td>
-                    </tr>
-                    
-                    <!-- Footer -->
-                    <tr>
-                        <td style="background-color:#f8f9fa;padding:20px 40px;text-align:center;border-top:1px solid #e8e8e8;">
-                            <p style="margin:0;color:#95a5a6;font-size:12px;">
-                                Fecha y Hora: {fecha_ejecucion.strftime('%Y-%m-%d %H:%M:%S')}
-                            </p>
-                            <p style="margin:4px 0 0;color:#bdc3c7;font-size:11px;">
-                                Mensaje autom&aacute;tico del sistema de integraci&oacute;n SAP &mdash; Mabel Trading
-                            </p>
-                        </td>
-                    </tr>
-                    
-                </table>
-            </td>
-        </tr>
-    </table>
-</body>
-</html>"""
-        
-        # --- Versión texto plano (fallback) ---
-        seccion_transferencias_texto = ""
-        if solicitudes_transferencia:
-            seccion_transferencias_texto = f"""
-Solicitudes de Transferencia Generadas:
-- Total: {transferencias_exitosas}/{total_transferencias} creadas exitosamente
-{f'- Errores: {transferencias_fallidas} solicitud(es) fallaron' if transferencias_fallidas > 0 else ''}"""
-            if transferencias_detalle_texto:
-                seccion_transferencias_texto += f"""
-
-Detalle de Solicitudes de Transferencia:
-  Tienda\tNombre\tEstado\tDocNum
-{transferencias_detalle_texto}"""
-        
-        body_text = f"""OC y Solicitudes de Transferencia Generadas
-{'=' * 50}
-
-Se ha generado exitosamente la Orden de Compra y las Solicitudes de Transferencia en SAP.
-Pueden proceder con el despacho y facturacion.
-
-Informacion de la Orden de Compra:
-- Numero OC SAP: {numero_oc_sap}
-- DocEntry: {doc_entry or 'N/A'}
-- Proveedor: {proveedor}
-- Referencia: {referencia}
-{f'- Numero de Pedido: {pedido_numero}' if pedido_numero else ''}
-{seccion_transferencias_texto}
-
-Accion Requerida:
-El personal de El Rayo puede proceder con:
-- Despacho de mercaderia
-- Facturacion correspondiente
-
-Fecha y Hora: {fecha_ejecucion.strftime('%Y-%m-%d %H:%M:%S')}
-Mensaje automatico del sistema de integracion SAP - Mabel Trading
-"""
-        
-        # ⭐ IMPORTANTE: Orden de attach - el último es el preferido por el cliente de correo
-        # En multipart/alternative, el cliente de correo elige el formato más rico (HTML)
         msg.attach(MIMEText(body_text, 'plain', 'utf-8'))
         msg.attach(MIMEText(body_html, 'html', 'utf-8'))
-        
-        # Enviar email
+
         send_smtp_message(msg, recipients)
-        
+
         logger.info(f"✅ Notificación de OC lista para despacho enviada a {', '.join(recipients)} (OC #{numero_oc_sap})")
         return True
-        
+
     except Exception as e:
         logger.error(f"❌ Error al enviar notificación de OC lista para despacho: {e}", exc_info=True)
         return False
@@ -1211,7 +1151,7 @@ def send_oc_st_error_notification_tecnicos(
     DESTINATARIO: TECNICOS
     """
     if not ENABLE_EMAIL_NOTIFICATIONS:
-        logger.debug("⏭️ Notificaciones por email deshabilitadas")
+        logger.debug(_MSG_EMAIL_DESHABILITADO)
         return False
 
     if not fecha_ejecucion:
@@ -1227,21 +1167,7 @@ def send_oc_st_error_notification_tecnicos(
         numero_oc_sap = doc_num or oc_cabecera.get("numero_oc_sap", "N/A")
         referencia = oc_cabecera.get("referencia_despacho", "N/A")
 
-        total_transferencias = 0
-        transferencias_exitosas = 0
-        transferencias_fallidas = 0
-        errores = []
-
-        if solicitudes_transferencia:
-            total_transferencias = solicitudes_transferencia.get("total_tiendas", 0)
-            transferencias_exitosas = solicitudes_transferencia.get("transferencias_creadas", 0)
-            transferencias_fallidas = solicitudes_transferencia.get("transferencias_errores", 0)
-            if solicitudes_transferencia.get("error"):
-                errores.append(str(solicitudes_transferencia.get("error")))
-            for r in solicitudes_transferencia.get("resultados", []):
-                if not r.get("success") and r.get("error"):
-                    tienda = r.get("tienda_codigo", "N/A")
-                    errores.append(f"{tienda}: {r.get('error')}")
+        total_transferencias, transferencias_exitosas, transferencias_fallidas, errores = _extract_errores_st(solicitudes_transferencia)
 
         from src.utils.email_template import build_email, info_section, warning_section, paragraph, create_email_message
 
@@ -1266,6 +1192,7 @@ def send_oc_st_error_notification_tecnicos(
             timestamp=fecha_ejecucion,
         )
 
+        errores_detalle = "\n- ".join(errores[:15]) if errores else "Sin detalle adicional"
         body_text = (
             f"Error en OC y Solicitudes de Transferencia\n"
             f"{'=' * 50}\n\n"
@@ -1276,7 +1203,7 @@ def send_oc_st_error_notification_tecnicos(
             f"Pedido: {pedido_numero or 'N/A'}\n"
             f"Solicitudes creadas: {transferencias_exitosas}/{total_transferencias}\n"
             f"Transferencias con error: {transferencias_fallidas}\n\n"
-            f"Detalle:\n- " + ("\n- ".join(errores[:15]) if errores else "Sin detalle adicional") + "\n\n"
+            f"Detalle:\n- {errores_detalle}\n\n"
             f"Fecha y Hora: {fecha_ejecucion.strftime('%Y-%m-%d %H:%M:%S')}\n"
             f"Mensaje automático del sistema de integración SAP - Mabel Trading\n"
         )
@@ -1310,9 +1237,9 @@ def send_plantilla_upload_notification(
 ) -> bool:
     """
     Envía notificación a El Rayo cuando se sube exitosamente una plantilla Excel.
-    
+
     DESTINATARIO: EMAIL_TO_OPERACIONES (Operaciones/Despachos - El Rayo)
-    
+
     Args:
         pedido_id: UUID del pedido creado
         numero_pedido: Número del pedido
@@ -1322,27 +1249,26 @@ def send_plantilla_upload_notification(
         distribuciones_cargadas: Cantidad de distribuciones cargadas
         formato_detectado: Formato detectado del Excel
         fecha_ejecucion: Fecha y hora de la ejecución (por defecto ahora)
-    
+
     Returns:
         True si el email se envió correctamente, False en caso contrario
     """
     if not ENABLE_EMAIL_NOTIFICATIONS:
-        logger.debug("⏭️ Notificaciones por email deshabilitadas")
+        logger.debug(_MSG_EMAIL_DESHABILITADO)
         return False
-    
+
     if not fecha_ejecucion:
         fecha_ejecucion = ahora_naive()
-    
+
     try:
-        # Destinatarios: BD o fallback .env (Operaciones/Despachos - El Rayo)
         recipients: list[str] = get_destinatarios_por_tipo("OPERACIONES")
-        
+
         if not recipients:
             logger.warning("⚠️ No hay destinatarios configurados para notificación de plantilla")
             return False
-        
+
         from src.utils.email_template import build_email, info_section, paragraph, create_email_message
-        
+
         body_html = build_email(
             title="Plantilla Excel Procesada Exitosamente",
             subtitle=f"Pedido: {numero_pedido or 'N/A'}",
@@ -1361,7 +1287,7 @@ def send_plantilla_upload_notification(
             accent="green",
             timestamp=fecha_ejecucion,
         )
-        
+
         body_text = f"""Plantilla Excel Procesada Exitosamente
 {'=' * 40}
 
@@ -1376,20 +1302,19 @@ Informacion del Pedido:
 
 Fecha y Hora: {fecha_ejecucion.strftime('%Y-%m-%d %H:%M:%S')}
 """
-        
+
         msg = create_email_message(
             subject=f"Plantilla Excel Procesada - {numero_pedido or 'N/A'}",
             recipients=recipients,
             body_html=body_html,
             body_text=body_text,
         )
-        
-        # Enviar email
+
         send_smtp_message(msg, recipients)
-        
+
         logger.info(f"✅ Notificación de plantilla procesada enviada a {', '.join(recipients)} (Pedido: {numero_pedido or pedido_id or 'N/A'})")
         return True
-        
+
     except Exception as e:
         logger.error(f"❌ Error al enviar notificación de plantilla procesada: {e}", exc_info=True)
         return False
@@ -1417,14 +1342,13 @@ def send_pedido_cancelado_notification(
         True si el email se envió correctamente, False en caso contrario
     """
     if not ENABLE_EMAIL_NOTIFICATIONS:
-        logger.debug("⏭️ Notificaciones por email deshabilitadas")
+        logger.debug(_MSG_EMAIL_DESHABILITADO)
         return False
 
     if not fecha_ejecucion:
         fecha_ejecucion = ahora_naive()
 
     try:
-        # Destinatarios: BD o fallback .env
         recipients: list[str] = get_destinatarios_por_tipo("OPERACIONES")
 
         if not recipients:
@@ -1432,7 +1356,7 @@ def send_pedido_cancelado_notification(
             return False
 
         from src.utils.email_template import build_email, info_section, paragraph, badge_html, create_email_message
-        
+
         body_html = build_email(
             title="Pedido Cancelado",
             subtitle=f"Pedido: {numero_pedido or pedido_id}",
@@ -1449,7 +1373,7 @@ def send_pedido_cancelado_notification(
             accent="red",
             timestamp=fecha_ejecucion,
         )
-        
+
         body_text = f"""Pedido Cancelado - {numero_pedido or pedido_id}
 {'=' * 40}
 
@@ -1461,7 +1385,7 @@ def send_pedido_cancelado_notification(
 
 El pedido permanece en el sistema con estado CANCELADO y no sera procesado.
 """
-        
+
         msg = create_email_message(
             subject=f"Pedido Cancelado - {numero_pedido or pedido_id}",
             recipients=recipients,
@@ -1501,14 +1425,13 @@ def send_pedido_descartado_notification(
         True si el email se envió correctamente, False en caso contrario
     """
     if not ENABLE_EMAIL_NOTIFICATIONS:
-        logger.debug("⏭️ Notificaciones por email deshabilitadas")
+        logger.debug(_MSG_EMAIL_DESHABILITADO)
         return False
 
     if not fecha_ejecucion:
         fecha_ejecucion = ahora_naive()
 
     try:
-        # Destinatarios: BD o fallback .env
         recipients: list[str] = get_destinatarios_por_tipo("OPERACIONES")
 
         if not recipients:
@@ -1516,7 +1439,7 @@ def send_pedido_descartado_notification(
             return False
 
         from src.utils.email_template import build_email, info_section, paragraph, create_email_message
-        
+
         body_html = build_email(
             title="Pedido Descartado",
             subtitle=f"Pedido: {numero_pedido or pedido_id}",
@@ -1532,7 +1455,7 @@ def send_pedido_descartado_notification(
             accent="red",
             timestamp=fecha_ejecucion,
         )
-        
+
         body_text = f"""Pedido Descartado - {numero_pedido or pedido_id}
 {'=' * 40}
 
@@ -1543,7 +1466,7 @@ def send_pedido_descartado_notification(
 
 El pedido ya no esta disponible en el sistema.
 """
-        
+
         msg = create_email_message(
             subject=f"Pedido Descartado - {numero_pedido or pedido_id}",
             recipients=recipients,
@@ -1572,9 +1495,9 @@ def send_mabel_redistribucion_confirmacion_notification(
 ) -> bool:
     """
     Envía correo a El Rayo notificando que MABEL TRADING confirmó la redistribución de un pedido.
-    
+
     DESTINATARIO: EMAIL_TO_OPERACIONES (Operaciones/Despachos - El Rayo)
-    
+
     Args:
         pedido_id: UUID del pedido
         numero_pedido: Número del pedido
@@ -1583,36 +1506,34 @@ def send_mabel_redistribucion_confirmacion_notification(
         total_productos: Total de productos redistribuidos
         total_cantidad_ajustada: Total de cantidad ajustada en la redistribución
         fecha_ejecucion: Fecha y hora de la ejecución (por defecto ahora)
-    
+
     Returns:
         True si el email se envió correctamente, False en caso contrario
     """
     if not ENABLE_EMAIL_NOTIFICATIONS:
-        logger.debug("⏭️ Notificaciones por email deshabilitadas")
+        logger.debug(_MSG_EMAIL_DESHABILITADO)
         return False
-    
+
     if not fecha_ejecucion:
         fecha_ejecucion = ahora_naive()
-    
+
     try:
-        # Destinatarios: BD o fallback .env (Operaciones/Despachos - El Rayo)
         recipients: list[str] = get_destinatarios_por_tipo("OPERACIONES")
-        
+
         if not recipients:
             logger.warning("⚠️ No hay destinatarios configurados para notificación de redistribución")
             return False
-        
-        # Construir URL del pedido
+
         import os
         base_url = os.getenv("FRONTEND_URL", "http://localhost:3000")
         numero_pedido_encoded = numero_pedido.replace(" ", "%20")
         url_pedido = f"{base_url}/mba3-consultas/pedidos/{numero_pedido_encoded}"
-        
+
         from src.utils.email_template import (
             build_email, info_section, success_badge_section,
             button_section, paragraph, badge_html, create_email_message,
         )
-        
+
         info_items = [
             ("N&uacute;mero de Pedido", numero_pedido),
             ("Pedido ID", pedido_id),
@@ -1626,7 +1547,7 @@ def send_mabel_redistribucion_confirmacion_notification(
             ("Total Cantidad Ajustada", str(total_cantidad_ajustada)),
             ("Estado", badge_html("CONFIRMADO REDISTRIBUCION", "#e8f5e9", "#2e7d32")),
         ])
-        
+
         body_html = build_email(
             title="Redistribuci&oacute;n Confirmada por MABEL TRADING",
             subtitle=f"Pedido: {numero_pedido}",
@@ -1640,15 +1561,17 @@ def send_mabel_redistribucion_confirmacion_notification(
             accent="blue",
             timestamp=fecha_ejecucion,
         )
-        
+
+        usuario_line = f"- Usuario MABEL TRADING: {usuario_mabel}" if usuario_mabel else ""
+        version_line = f"- Version Confirmada: {version_confirmada}" if version_confirmada else ""
         body_text = f"""Redistribucion Confirmada por MABEL TRADING
 {'=' * 40}
 
 Informacion del Pedido:
 - Numero de Pedido: {numero_pedido}
 - Pedido ID: {pedido_id}
-{f'- Usuario MABEL TRADING: {usuario_mabel}' if usuario_mabel else ''}
-{f'- Version Confirmada: {version_confirmada}' if version_confirmada else ''}
+{usuario_line}
+{version_line}
 - Total Productos: {total_productos}
 - Total Cantidad Ajustada: {total_cantidad_ajustada}
 - Estado: CONFIRMADO REDISTRIBUCION
@@ -1657,20 +1580,19 @@ Ver Pedido: {url_pedido}
 
 Fecha y Hora: {fecha_ejecucion.strftime('%Y-%m-%d %H:%M:%S')}
 """
-        
+
         msg = create_email_message(
             subject=f"Redistribucion Confirmada por MABEL TRADING - {numero_pedido}",
             recipients=recipients,
             body_html=body_html,
             body_text=body_text,
         )
-        
-        # Enviar email
+
         send_smtp_message(msg, recipients)
-        
+
         logger.info(f"✅ Notificación de redistribución confirmada enviada a {', '.join(recipients)} (Pedido: {numero_pedido})")
         return True
-        
+
     except Exception as e:
         logger.error(f"❌ Error al enviar notificación de redistribución confirmada: {e}", exc_info=True)
         return False
@@ -1698,14 +1620,13 @@ def send_pedido_eliminado_mabel_notification(
         True si el email se envió correctamente, False en caso contrario
     """
     if not ENABLE_EMAIL_NOTIFICATIONS:
-        logger.debug("⏭️ Notificaciones por email deshabilitadas")
+        logger.debug(_MSG_EMAIL_DESHABILITADO)
         return False
 
     if not fecha_ejecucion:
         fecha_ejecucion = ahora_naive()
 
     try:
-        # Destinatarios: BD o fallback .env (MABEL TRADING)
         recipients: list[str] = get_destinatarios_por_tipo("MABEL_TRADING")
 
         if not recipients:
@@ -1713,7 +1634,7 @@ def send_pedido_eliminado_mabel_notification(
             return False
 
         from src.utils.email_template import build_email, info_section, warning_section, paragraph, create_email_message
-        
+
         body_html = build_email(
             title="Pedido Eliminado Exitosamente",
             subtitle=f"Pedido: {numero_pedido or pedido_id}",
@@ -1731,7 +1652,7 @@ def send_pedido_eliminado_mabel_notification(
             accent="green",
             timestamp=fecha_ejecucion,
         )
-        
+
         body_text = f"""Pedido Eliminado Exitosamente - {numero_pedido or pedido_id}
 {'=' * 40}
 
@@ -1743,7 +1664,7 @@ def send_pedido_eliminado_mabel_notification(
 
 Nota: Operacion irreversible. Para crear el pedido nuevamente, cargarlo desde cero.
 """
-        
+
         msg = create_email_message(
             subject=f"Pedido Eliminado - {numero_pedido or pedido_id}",
             recipients=recipients,
@@ -1759,4 +1680,3 @@ Nota: Operacion irreversible. Para crear el pedido nuevamente, cargarlo desde ce
     except Exception as e:
         logger.error(f"❌ Error al enviar notificación de pedido eliminado a MABEL TRADING: {e}", exc_info=True)
         return False
-
