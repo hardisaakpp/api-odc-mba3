@@ -27,8 +27,6 @@ Uso:
 import os
 import logging
 import json
-from datetime import datetime
-
 from src.utils.timezone import ahora, ahora_naive
 from logging.handlers import RotatingFileHandler, TimedRotatingFileHandler
 from pathlib import Path
@@ -209,7 +207,7 @@ def setup_logging() -> None:
     business_logger.setLevel(logging.INFO)
     
     # Log de inicio
-    logging.info(f"✅ Sistema de logging configurado")
+    logging.info("✅ Sistema de logging configurado")
     logging.info(f"   📁 Directorio de logs: {LOG_DIR}")
     logging.info(f"   📝 Log general: {general_log_file}")
     logging.info(f"   ❌ Log de errores: {error_log_file}")
