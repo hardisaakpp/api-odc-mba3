@@ -5,7 +5,6 @@ Exportador de logs de validación a CSV/Excel.
 import pandas as pd
 import io
 from typing import Dict, Any
-from datetime import datetime
 
 from src.utils.timezone import ahora_naive
 
@@ -16,38 +15,39 @@ class PedidoValidationExporter:
     """Exporta logs de validación a CSV o Excel."""
     
     @staticmethod
+    def _issue_to_row(row_num: Any, issue: Any) -> dict:
+        if isinstance(issue, ValidationIssue):
+            return {
+                "Fila": row_num,
+                "Campo": issue.field,
+                "Severidad": issue.severity.value,
+                "Mensaje": issue.message,
+                "Valor": str(issue.value) if issue.value is not None else "",
+            }
+        return {
+            "Fila": row_num,
+            "Campo": issue.get("field", ""),
+            "Severidad": issue.get("severity", "UNKNOWN"),
+            "Mensaje": issue.get("message", ""),
+            "Valor": str(issue.get("value", "")) if issue.get("value") is not None else "",
+        }
+
+    @staticmethod
     def export_to_dataframe(validation_result: Dict[str, Any]) -> pd.DataFrame:
         """
         Exporta resultado de validación a DataFrame.
-        
+
         Args:
             validation_result: Resultado de validar_pedido_completo()
-            
+
         Returns:
             DataFrame con columnas: fila, campo, severidad, mensaje, valor
         """
         rows = []
-        
+
         for row_num, issues in validation_result.get("issues_by_row", {}).items():
             for issue in issues:
-                # Manejar tanto objetos ValidationIssue como dicts
-                if isinstance(issue, ValidationIssue):
-                    rows.append({
-                        "Fila": row_num,
-                        "Campo": issue.field,
-                        "Severidad": issue.severity.value,
-                        "Mensaje": issue.message,
-                        "Valor": str(issue.value) if issue.value is not None else ""
-                    })
-                else:
-                    # Si es un dict (deserializado)
-                    rows.append({
-                        "Fila": row_num,
-                        "Campo": issue.get("field", ""),
-                        "Severidad": issue.get("severity", "UNKNOWN"),
-                        "Mensaje": issue.get("message", ""),
-                        "Valor": str(issue.get("value", "")) if issue.get("value") is not None else ""
-                    })
+                rows.append(PedidoValidationExporter._issue_to_row(row_num, issue))
         
         if not rows:
             # Retornar DataFrame vacío con columnas
