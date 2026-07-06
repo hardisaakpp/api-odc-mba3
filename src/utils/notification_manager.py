@@ -28,8 +28,10 @@ from typing import Dict, List, Optional, Tuple
 logger = logging.getLogger(__name__)
 
 # Permisos que reciben notificaciones y su permiso "opuesto" (otro rol)
-NOTIFICATION_PERMISSIONS = ("odcsap.view", "mabel.view")
-OPPOSITE_PERMISSION: Dict[str, str] = {"odcsap.view": "mabel.view", "mabel.view": "odcsap.view"}
+_PERM_ODCSAP = "odcsap.view"
+_PERM_MABEL = "mabel.view"
+NOTIFICATION_PERMISSIONS = (_PERM_ODCSAP, _PERM_MABEL)
+OPPOSITE_PERMISSION: Dict[str, str] = {_PERM_ODCSAP: _PERM_MABEL, _PERM_MABEL: _PERM_ODCSAP}
 
 
 class NotificationType(str, Enum):
