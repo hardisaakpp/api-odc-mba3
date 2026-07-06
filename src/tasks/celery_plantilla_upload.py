@@ -95,37 +95,7 @@ def procesar_plantilla_upload(
             "descarga_disponible": False
         }
         if ENABLE_FILE_STORAGE and resultado.get("pedido_id"):
-            try:
-                path_final = storage.guardar_archivo(
-                    contenido=file_content,
-                    pedido_id=resultado["pedido_id"],
-                    nombre_original=filename,
-                    usuario_id=user_id
-                )
-                from src.database.connection import get_db_connection_context
-                from src.database.repositories.archivo_plantilla_repository import ArchivoPlantillaRepository
-                with get_db_connection_context() as conn:
-                    archivo_repo = ArchivoPlantillaRepository(conn)
-                    archivo_repo.crear(
-                        pedido_id=resultado["pedido_id"],
-                        nombre_original=filename,
-                        storage_path=path_final,
-                        tamano_bytes=len(file_content),
-                        subido_por=user_id
-                    )
-                logger.info(f"✅ Archivo original guardado en storage definitivo: {path_final}")
-                archivo_original = {
-                    "guardado": True,
-                    "storage_path": path_final,
-                    "descarga_disponible": True
-                }
-            except Exception as e:
-                logger.warning(f"⚠️ No se pudo guardar archivo original en storage definitivo: {e}")
-                archivo_original = {
-                    "guardado": False,
-                    "error": str(e),
-                    "descarga_disponible": False
-                }
+            archivo_original = _guardar_archivo_original(storage, file_content, resultado, filename, user_id)
 
         # Resultado para el cliente (misma forma que el upload síncrono: paridad async/sync)
         file_size = len(file_content)
@@ -189,6 +159,46 @@ def procesar_plantilla_upload(
                 logger.info(f"🗑️ Archivo temporal eliminado: {storage_path}")
         except Exception as e:
             logger.warning(f"⚠️ No se pudo eliminar archivo temporal {storage_path}: {e}")
+
+
+def _guardar_archivo_original(
+    storage,
+    file_content: bytes,
+    resultado: Dict[str, Any],
+    filename: str,
+    user_id: str,
+) -> Dict[str, Any]:
+    from src.database.connection import get_db_connection_context
+    from src.database.repositories.archivo_plantilla_repository import ArchivoPlantillaRepository
+    try:
+        path_final = storage.guardar_archivo(
+            contenido=file_content,
+            pedido_id=resultado["pedido_id"],
+            nombre_original=filename,
+            usuario_id=user_id
+        )
+        with get_db_connection_context() as conn:
+            archivo_repo = ArchivoPlantillaRepository(conn)
+            archivo_repo.crear(
+                pedido_id=resultado["pedido_id"],
+                nombre_original=filename,
+                storage_path=path_final,
+                tamano_bytes=len(file_content),
+                subido_por=user_id
+            )
+        logger.info(f"✅ Archivo original guardado en storage definitivo: {path_final}")
+        return {
+            "guardado": True,
+            "storage_path": path_final,
+            "descarga_disponible": True
+        }
+    except Exception as e:
+        logger.warning(f"⚠️ No se pudo guardar archivo original en storage definitivo: {e}")
+        return {
+            "guardado": False,
+            "error": str(e),
+            "descarga_disponible": False
+        }
 
 
 def _mensaje_respuesta(resultado: Dict[str, Any]) -> str:
