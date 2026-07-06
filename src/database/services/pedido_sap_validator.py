@@ -35,6 +35,20 @@ class PedidoSAPValidator:
         self._mba3_lookup_disable_reason: Optional[str] = None
         self._mba3_reachability_checked = False
 
+    @staticmethod
+    def _clasificar_tipo_codigo(
+        tipo: str, codigo: str,
+        validos: List, no_encontrados: List, errores: List, warnings: List
+    ) -> None:
+        if tipo == "valido":
+            validos.append(codigo)
+        elif tipo == "no_encontrado":
+            no_encontrados.append(codigo)
+        elif tipo == "error":
+            errores.append(codigo)
+        elif tipo == "warning":
+            warnings.append(codigo)
+
     def validar_productos_existen_en_sap(
         self,
         codigos_productos: List[str],
@@ -91,15 +105,7 @@ class PedidoSAPValidator:
             try:
                 tipo, det = self._procesar_un_codigo_producto(codigo, sap_service, sap_obligatorio)
                 detalle[codigo] = det
-                if tipo == "valido":
-                    validos.append(codigo)
-                elif tipo == "no_encontrado":
-                    no_encontrados.append(codigo)
-                elif tipo == "error":
-                    errores.append(codigo)
-                elif tipo == "warning":
-                    warnings.append(codigo)
-
+                self._clasificar_tipo_codigo(tipo, codigo, validos, no_encontrados, errores, warnings)
             except Exception as e:
                 logger.error(f"❌ Error inesperado al validar código {codigo} en SAP: {e}", exc_info=True)
                 severity = "ERROR" if sap_obligatorio else "WARNING"
@@ -224,15 +230,7 @@ class PedidoSAPValidator:
                     codigo, sap_service, sap_obligatorio, usar_cache, incluir_sugerencias, limite_sugerencias
                 )
                 detalle[codigo] = det
-                if tipo == "valido":
-                    validos.append(codigo)
-                elif tipo == "no_encontrado":
-                    no_encontrados.append(codigo)
-                elif tipo == "error":
-                    errores.append(codigo)
-                elif tipo == "warning":
-                    warnings.append(codigo)
-
+                self._clasificar_tipo_codigo(tipo, codigo, validos, no_encontrados, errores, warnings)
             except Exception as e:
                 logger.error(f"❌ Error inesperado al validar código {codigo} en SAP: {e}", exc_info=True)
                 severity = "ERROR" if sap_obligatorio else "WARNING"
