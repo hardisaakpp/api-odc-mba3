@@ -29,12 +29,21 @@ from src.database.repositories.notificacion_destinatario_repository import (
 
 logger = logging.getLogger(__name__)
 
+
+def _as_list(value) -> List[str]:
+    if isinstance(value, list):
+        return value
+    if value:
+        return [value]
+    return []
+
+
 # Mapeo tipo_notificacion -> callable que devuelve lista de fallback desde config
 _FALLBACK: dict[str, Callable[[], List[str]]] = {
-    "OPERACIONES": lambda: EMAIL_TO_OPERACIONES if isinstance(EMAIL_TO_OPERACIONES, list) else [EMAIL_TO_OPERACIONES] if EMAIL_TO_OPERACIONES else [],
-    "MABEL_TRADING": lambda: EMAIL_MABEL_TRADING if isinstance(EMAIL_MABEL_TRADING, list) else [EMAIL_MABEL_TRADING] if EMAIL_MABEL_TRADING else [],
-    "HOMOLOGACIONES": lambda: EMAIL_TO_HOMOLOGACIONES if isinstance(EMAIL_TO_HOMOLOGACIONES, list) else [EMAIL_TO_HOMOLOGACIONES] if EMAIL_TO_HOMOLOGACIONES else [],
-    "TECNICOS": lambda: EMAIL_TO_TECNICOS if isinstance(EMAIL_TO_TECNICOS, list) else [EMAIL_TO_TECNICOS] if EMAIL_TO_TECNICOS else [],
+    "OPERACIONES": lambda: _as_list(EMAIL_TO_OPERACIONES),
+    "MABEL_TRADING": lambda: _as_list(EMAIL_MABEL_TRADING),
+    "HOMOLOGACIONES": lambda: _as_list(EMAIL_TO_HOMOLOGACIONES),
+    "TECNICOS": lambda: _as_list(EMAIL_TO_TECNICOS),
 }
 
 
