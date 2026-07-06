@@ -59,6 +59,35 @@ def _smtp_profiles() -> list[dict[str, Optional[str | int | bool]]]:
     return profiles
 
 
+def _enviar_via_perfil(
+    profile: dict,
+    msg: Message,
+    to_addrs: list[str],
+    original_from: Optional[str],
+    relay_from: Optional[str],
+) -> None:
+    """Configura headers y envía el mensaje por el perfil dado. Lanza excepción si falla."""
+    name = str(profile["name"])
+    server_host = str(profile["server"])
+    server_port = int(profile["port"] or 25)
+
+    if name == "smtp_relay" and relay_from:
+        _replace_from_header(msg, relay_from)
+    elif original_from:
+        _replace_from_header(msg, original_from)
+
+    with smtplib.SMTP(server_host, server_port, timeout=EMAIL_SMTP_TIMEOUT) as server:
+        server.ehlo()
+        if profile["starttls"]:
+            server.starttls()
+            server.ehlo()
+        if profile["user"] and profile["password"]:
+            server.login(str(profile["user"]), str(profile["password"]))
+        server.send_message(msg, to_addrs=to_addrs)
+
+    logger.info("Email enviado via %s (%s:%s)", name, server_host, server_port)
+
+
 def send_smtp_message(msg: Message, recipients: Iterable[str]) -> bool:
     """Envia un correo usando primero SMTP autenticado y luego relay sin login."""
     to_addrs = [r for r in recipients if r]
@@ -73,23 +102,8 @@ def send_smtp_message(msg: Message, recipients: Iterable[str]) -> bool:
         name = str(profile["name"])
         server_host = str(profile["server"])
         server_port = int(profile["port"] or 25)
-
         try:
-            if name == "smtp_relay" and relay_from:
-                _replace_from_header(msg, relay_from)
-            elif original_from:
-                _replace_from_header(msg, original_from)
-
-            with smtplib.SMTP(server_host, server_port, timeout=EMAIL_SMTP_TIMEOUT) as server:
-                server.ehlo()
-                if profile["starttls"]:
-                    server.starttls()
-                    server.ehlo()
-                if profile["user"] and profile["password"]:
-                    server.login(str(profile["user"]), str(profile["password"]))
-                server.send_message(msg, to_addrs=to_addrs)
-
-            logger.info("Email enviado via %s (%s:%s)", name, server_host, server_port)
+            _enviar_via_perfil(profile, msg, to_addrs, original_from, relay_from)
             return True
         except Exception as e:
             last_error = e
