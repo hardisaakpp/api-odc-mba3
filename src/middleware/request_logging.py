@@ -34,6 +34,17 @@ MAX_BODY_LOG_SIZE = 1000  # Máximo de caracteres para loguear del body
 SENSITIVE_FIELDS = {'password', 'pwd', 'secret', 'token', 'authorization', 'api_key', 'apikey'}
 
 
+def _build_detail_message(data: dict) -> str:
+    parts = []
+    if data.get("request_body"):
+        parts.append(f"ReqBody:{data['request_body']}")
+    if data.get("response_body"):
+        parts.append(f"RespBody:{data['response_body'][:200]}")
+    if data.get("error"):
+        parts.append(f"Error:{data['error']}")
+    return " | ".join(parts) if parts else ""
+
+
 class RequestLoggingMiddleware(BaseHTTPMiddleware):
     """
     Middleware para logging completo de requests HTTP.
@@ -181,8 +192,13 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
                     audience=JWT_AUDIENCE
                 )
             except jwt.exceptions.PyJWTError:
-                # Si falla, decodificar sin validar solo para logging
-                data = jwt.decode(token, options={"verify_signature": False})
+                # Token inválido/expirado: verificar firma pero relajar exp/aud/iss (solo logging)
+                data = jwt.decode(
+                    token,
+                    JWT_SECRET,
+                    algorithms=["HS256"],
+                    options={"verify_exp": False, "verify_aud": False, "verify_iss": False},
+                )
             
             # Extraer username de los claims
             username = data.get(
@@ -352,15 +368,7 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
         log_message = " - ".join(log_parts)
         
         # Log detallado (request/response body) en nivel DEBUG
-        detail_parts = []
-        if data.get("request_body"):
-            detail_parts.append(f"ReqBody:{data['request_body']}")
-        if data.get("response_body"):
-            detail_parts.append(f"RespBody:{data['response_body'][:200]}")
-        if data.get("error"):
-            detail_parts.append(f"Error:{data['error']}")
-        
-        detail_message = " | ".join(detail_parts) if detail_parts else ""
+        detail_message = _build_detail_message(data)
         
         # Seleccionar nivel de log según código de estado
         if status_code >= 500:
