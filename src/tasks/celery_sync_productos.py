@@ -13,7 +13,6 @@ Características:
 
 import logging
 import time
-from datetime import datetime
 from celery import Task
 from celery.exceptions import SoftTimeLimitExceeded
 
@@ -30,13 +29,13 @@ class SyncProductosTask(Task):
     
     def on_failure(self, exc, task_id, args, kwargs, einfo):
         """Callback cuando la tarea falla."""
-        logger.error(f"❌ Tarea de sincronización de productos falló")
+        logger.error("❌ Tarea de sincronización de productos falló")
         logger.error(f"   Task ID: {task_id}")
         logger.error(f"   Error: {exc}", exc_info=einfo)
     
     def on_retry(self, exc, task_id, args, kwargs, einfo):
         """Callback cuando la tarea se reintenta."""
-        logger.warning(f"⚠️ Reintentando sincronización de productos...")
+        logger.warning("⚠️ Reintentando sincronización de productos...")
         logger.warning(f"   Task ID: {task_id}")
 
 
