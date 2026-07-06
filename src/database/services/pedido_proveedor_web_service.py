@@ -476,7 +476,6 @@ class PedidoProveedorWebService:
     def _convertir_detalles_a_respuestas(
         self,
         conn: Any,
-        pedido_id: str,
         detalles: List[Dict],
     ) -> Tuple[List, List]:
         respuestas_cantidades: List[Dict] = []
@@ -851,7 +850,7 @@ class PedidoProveedorWebService:
 
             logger.debug(f"Procesando {len(detalles)} detalles del pedido {pedido_id}")
             respuestas_cantidades, respuestas_precios = self._convertir_detalles_a_respuestas(
-                conn, pedido_id, detalles
+                conn, detalles
             )
 
             if not respuestas_cantidades:
