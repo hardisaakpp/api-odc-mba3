@@ -337,7 +337,7 @@ async def _handle_exportar_reporte_diferencias_excel(
 
             pedido_data = obtener_pedido_o_404(repo_pedido, pedido_id)
             diferencias = repo_dist.calcular_diferencias(pedido_id, version)
-            output = generar_excel_reporte_diferencias(diferencias, pedido_data)
+            output = generar_excel_reporte_diferencias(diferencias)
 
             numero_pedido = pedido_data["cabecera"]["numero_pedido"]
             filename = f"reporte_diferencias_{numero_pedido.replace(' ', '_')}_v{diferencias['version']}.xlsx"

@@ -10,7 +10,6 @@ from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 
 def generar_excel_reporte_diferencias(
     diferencias: Dict[str, Any],
-    pedido_data: Dict[str, Any],
 ) -> BytesIO:
     """Genera el libro Excel de reporte de diferencias."""
     output = BytesIO()
