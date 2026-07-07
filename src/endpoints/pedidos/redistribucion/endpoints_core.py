@@ -329,7 +329,6 @@ async def _handle_obtener_reporte_diferencias(
 async def _handle_exportar_reporte_diferencias_excel(
     pedido_id: str,
     version: Optional[int],
-    user: Dict,
 ) -> StreamingResponse:
     try:
         with get_db_connection_context() as conn:
@@ -421,4 +420,4 @@ def register_core_endpoints(app: FastAPI):
         _: None = Depends(require_any_permission([_PERM_MABEL_VIEW, _PERM_ODCSAP_VIEW]))
     ):
         """Exporta el reporte de diferencias a Excel."""
-        return await _handle_exportar_reporte_diferencias_excel(pedido_id, version, user)
+        return await _handle_exportar_reporte_diferencias_excel(pedido_id, version)
