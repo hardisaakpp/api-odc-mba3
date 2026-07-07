@@ -49,6 +49,9 @@ celerybeat-schedule-wal
 # Cursor IDE
 .cursor/
 
+# Claude Code (CLI)
+.claude/
+
 # GitHub Actions (repo vive en Azure DevOps, no aplica)
 .github/
 
