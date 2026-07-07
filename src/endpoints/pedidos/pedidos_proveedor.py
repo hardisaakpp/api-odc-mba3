@@ -54,7 +54,7 @@ async def _handle_cargar_respuesta_proveedor(pedido_id: str, file: UploadFile, u
         )
 
 
-async def _handle_obtener_formulario_proveedor(pedido_id: str, user: Dict):
+async def _handle_obtener_formulario_proveedor(pedido_id: str):
     try:
         from src.database.services.pedido_proveedor_web_service import PedidoProveedorWebService
         service = PedidoProveedorWebService()
@@ -270,7 +270,7 @@ def register_proveedor_endpoints(app: FastAPI):
         _: None = Depends(require_permission(_PERM_MABEL_VIEW))
     ):
         """Obtiene los datos del pedido formateados para el formulario web del proveedor."""
-        return await _handle_obtener_formulario_proveedor(pedido_id, user)
+        return await _handle_obtener_formulario_proveedor(pedido_id)
 
     @app.post("/api/pedidos/{pedido_id}/enviar-respuesta-proveedor",
               response_model=RespuestaProveedorResponse,
