@@ -27,6 +27,9 @@ _MSG_EMAIL_DESHABILITADO = "⏭️ Notificaciones por email deshabilitadas"
 _DEFAULT_NOMBRE_PRODUCTO = "Sin nombre"
 _PROBLEMA_ERROR_CONSULTAR = "Error al consultar"
 _PROBLEMA_NO_EXISTE = "No existe en SAP"
+_SECCION_INFO_PEDIDO = "Informaci&oacute;n del Pedido"
+_LABEL_NUMERO_PEDIDO = "N&uacute;mero de Pedido"
+_LABEL_PEDIDO_ID = "Pedido ID"
 
 
 # ─── Helpers privados ────────────────────────────────────────────────────────
@@ -216,7 +219,7 @@ def _registrar_notificados(homologacion_repository, productos_a_notificar):
         logger.warning(f"⚠️ No se pudo registrar productos notificados: {e}")
 
 
-def _generate_odc_pdf_attachment(oc_cabecera, oc_detalles, doc_num, doc_entry, numero_oc_sap, pedido_info):
+def _generate_odc_pdf_attachment(oc_cabecera, oc_detalles, doc_num, numero_oc_sap, pedido_info):
     try:
         from src.utils.odc_pdf_generator import generar_odc_pdf
         pdf_bytes = generar_odc_pdf(
@@ -952,6 +955,7 @@ def send_oc_to_supplier(
         proveedor = oc_cabecera.get("proveedor", "N/A")
         numero_oc_sap = doc_num or oc_cabecera.get("numero_oc_sap", "N/A")
         referencia = oc_cabecera.get("referencia_despacho", "N/A")
+        doc_entry_str = doc_entry or "N/A"
 
         from src.utils.email_template import (
             build_email, info_section, table_section,
@@ -990,7 +994,7 @@ def send_oc_to_supplier(
                 ),
                 info_section("Informaci&oacute;n de la ODC", [
                     ("N&uacute;mero ODC SAP", numero_oc_sap),
-                    ("DocEntry", doc_entry or "N/A"),
+                    ("DocEntry", doc_entry_str),
                     ("Proveedor", proveedor),
                     ("Referencia", referencia),
                     ("Total L&iacute;neas", total_lineas),
@@ -1012,7 +1016,7 @@ Adjunto: ODC {numero_oc_sap}.pdf
 
 Informacion de la ODC:
 - Numero ODC SAP: {numero_oc_sap}
-- DocEntry: {doc_entry or 'N/A'}
+- DocEntry: {doc_entry_str}
 - Proveedor: {proveedor}
 - Referencia: {referencia}
 - Total Lineas: {total_lineas}
@@ -1035,7 +1039,7 @@ Detalle:
         body_text += f"\nFecha y Hora: {fecha_ejecucion.strftime('%Y-%m-%d %H:%M:%S')}\n"
 
         pdf_attachment = _generate_odc_pdf_attachment(
-            oc_cabecera, oc_detalles, doc_num, doc_entry, numero_oc_sap, pedido_info
+            oc_cabecera, oc_detalles, doc_num, numero_oc_sap, pedido_info
         )
 
         msg = create_email_message(
@@ -1266,19 +1270,25 @@ def send_plantilla_upload_notification(
             logger.warning("⚠️ No hay destinatarios configurados para notificación de plantilla")
             return False
 
+        num_pedido_val = numero_pedido or "N/A"
+        pedido_id_val = pedido_id or "N/A"
+        filename_val = filename or "N/A"
+        usuario_val = usuario_id or "N/A"
+        formato_val = formato_detectado or "N/A"
+
         from src.utils.email_template import build_email, info_section, paragraph, create_email_message
 
         body_html = build_email(
             title="Plantilla Excel Procesada Exitosamente",
-            subtitle=f"Pedido: {numero_pedido or 'N/A'}",
+            subtitle=f"Pedido: {num_pedido_val}",
             sections=[
                 paragraph("Se ha procesado y guardado exitosamente una plantilla Excel de pedido."),
-                info_section("Informaci&oacute;n del Pedido", [
-                    ("N&uacute;mero de Pedido", numero_pedido or "N/A"),
-                    ("Pedido ID", pedido_id or "N/A"),
-                    ("Archivo", filename or "N/A"),
-                    ("Usuario", usuario_id or "N/A"),
-                    ("Formato", formato_detectado or "N/A"),
+                info_section(_SECCION_INFO_PEDIDO, [
+                    (_LABEL_NUMERO_PEDIDO, num_pedido_val),
+                    (_LABEL_PEDIDO_ID, pedido_id_val),
+                    ("Archivo", filename_val),
+                    ("Usuario", usuario_val),
+                    ("Formato", formato_val),
                     ("Art&iacute;culos Cargados", articulos_cargados),
                     ("Distribuciones Cargadas", distribuciones_cargadas),
                 ], accent="green"),
@@ -1291,11 +1301,11 @@ def send_plantilla_upload_notification(
 {'=' * 40}
 
 Informacion del Pedido:
-- Numero de Pedido: {numero_pedido or 'N/A'}
-- Pedido ID: {pedido_id or 'N/A'}
-- Archivo: {filename or 'N/A'}
-- Usuario: {usuario_id or 'N/A'}
-- Formato: {formato_detectado or 'N/A'}
+- Numero de Pedido: {num_pedido_val}
+- Pedido ID: {pedido_id_val}
+- Archivo: {filename_val}
+- Usuario: {usuario_val}
+- Formato: {formato_val}
 - Articulos Cargados: {articulos_cargados}
 - Distribuciones Cargadas: {distribuciones_cargadas}
 
@@ -1303,7 +1313,7 @@ Fecha y Hora: {fecha_ejecucion.strftime('%Y-%m-%d %H:%M:%S')}
 """
 
         msg = create_email_message(
-            subject=f"Plantilla Excel Procesada - {numero_pedido or 'N/A'}",
+            subject=f"Plantilla Excel Procesada - {num_pedido_val}",
             recipients=recipients,
             body_html=body_html,
             body_text=body_text,
@@ -1311,7 +1321,7 @@ Fecha y Hora: {fecha_ejecucion.strftime('%Y-%m-%d %H:%M:%S')}
 
         send_smtp_message(msg, recipients)
 
-        logger.info(f"✅ Notificación de plantilla procesada enviada a {', '.join(recipients)} (Pedido: {numero_pedido or pedido_id or 'N/A'})")
+        logger.info(f"✅ Notificación de plantilla procesada enviada a {', '.join(recipients)} (Pedido: {num_pedido_val})")
         return True
 
     except Exception as e:
@@ -1361,9 +1371,9 @@ def send_pedido_cancelado_notification(
             subtitle=f"Pedido: {numero_pedido or pedido_id}",
             sections=[
                 paragraph(f"Se ha cancelado un pedido. El estado ha cambiado a {badge_html('CANCELADO', '#ffebee', '#c62828')}."),
-                info_section("Informaci&oacute;n del Pedido", [
-                    ("N&uacute;mero de Pedido", numero_pedido or "N/A"),
-                    ("Pedido ID", pedido_id),
+                info_section(_SECCION_INFO_PEDIDO, [
+                    (_LABEL_NUMERO_PEDIDO, numero_pedido or "N/A"),
+                    (_LABEL_PEDIDO_ID, pedido_id),
                     ("Usuario que cancel&oacute;", usuario_id or "N/A"),
                     ("Nuevo Estado", badge_html("CANCELADO", "#ffebee", "#c62828")),
                 ], accent="red"),
@@ -1444,9 +1454,9 @@ def send_pedido_descartado_notification(
             subtitle=f"Pedido: {numero_pedido or pedido_id}",
             sections=[
                 paragraph("Se ha descartado y eliminado un pedido completamente de la base de datos."),
-                info_section("Informaci&oacute;n del Pedido", [
-                    ("N&uacute;mero de Pedido", numero_pedido or "N/A"),
-                    ("Pedido ID", pedido_id),
+                info_section(_SECCION_INFO_PEDIDO, [
+                    (_LABEL_NUMERO_PEDIDO, numero_pedido or "N/A"),
+                    (_LABEL_PEDIDO_ID, pedido_id),
                     ("Usuario que descart&oacute;", usuario_id or "N/A"),
                 ], accent="red"),
                 paragraph("El pedido ya no est&aacute; disponible en el sistema. Podr&aacute;n volver a cargarlo desde cero si lo necesitan.", italic=True),
@@ -1534,8 +1544,8 @@ def send_mabel_redistribucion_confirmacion_notification(
         )
 
         info_items = [
-            ("N&uacute;mero de Pedido", numero_pedido),
-            ("Pedido ID", pedido_id),
+            (_LABEL_NUMERO_PEDIDO, numero_pedido),
+            (_LABEL_PEDIDO_ID, pedido_id),
         ]
         if usuario_mabel:
             info_items.append(("Usuario MABEL TRADING", usuario_mabel))
@@ -1553,7 +1563,7 @@ def send_mabel_redistribucion_confirmacion_notification(
             sections=[
                 success_badge_section("MABEL TRADING ha confirmado la redistribuci&oacute;n exitosamente"),
                 paragraph("Se ha procesado la confirmaci&oacute;n de la redistribuci&oacute;n del pedido y est&aacute; listo para continuar."),
-                info_section("Informaci&oacute;n del Pedido", info_items, accent="blue"),
+                info_section(_SECCION_INFO_PEDIDO, info_items, accent="blue"),
                 button_section("Ver Pedido", url_pedido, accent="blue"),
                 paragraph("El pedido est&aacute; ahora listo para la generaci&oacute;n de orden de compra (ODC).", italic=True),
             ],
@@ -1640,8 +1650,8 @@ def send_pedido_eliminado_mabel_notification(
             sections=[
                 paragraph("Se ha eliminado un pedido desde la interfaz de Detalle del Pedido."),
                 info_section("Informaci&oacute;n del Pedido Eliminado", [
-                    ("N&uacute;mero de Pedido", numero_pedido or "N/A"),
-                    ("Pedido ID", pedido_id),
+                    (_LABEL_NUMERO_PEDIDO, numero_pedido or "N/A"),
+                    (_LABEL_PEDIDO_ID, pedido_id),
                     ("Usuario que elimin&oacute;", usuario_id or "N/A"),
                     ("Estado al eliminar", "Gestionar Pedido"),
                 ], accent="green"),
