@@ -29,13 +29,13 @@ __all__ = ["register_homologaciones_sku_endpoints"]
 def get_user_id_or_username(user: Dict) -> str:
     """
     Obtiene el ID del usuario, o usa username como fallback.
-    
+
     Args:
         user: Diccionario con información del usuario del JWT
-        
+
     Returns:
         ID del usuario o username como fallback (como string)
-        
+
     Raises:
         HTTPException: Si no hay ni id ni username disponible
     """
@@ -43,47 +43,235 @@ def get_user_id_or_username(user: Dict) -> str:
     user_id = user.get('id')
     if user_id:
         return str(user_id)
-    
+
     # Fallback a username si id no está disponible
     username = user.get('username')
     if username:
         logger.warning(f"⚠️ user.id no disponible, usando username como fallback: {username}")
         return str(username)
-    
+
     # Buscar en raw_claims si está disponible
     raw_claims = user.get('raw_claims', {})
     if raw_claims:
         # Buscar en diferentes claims comunes
         possible_id_keys = ['sub', 'userId', 'user_id', 'id', 'nameidentifier']
-        
+
         for key in possible_id_keys:
             value = raw_claims.get(key)
             if value:
                 return str(value)
-        
+
         # Buscar username en raw_claims
         possible_username_keys = ['name', 'username', 'user_name', 'preferred_username']
-        
+
         for key in possible_username_keys:
             value = raw_claims.get(key)
             if value:
                 logger.warning(f"⚠️ user_id no encontrado, usando username de raw_claims como fallback: {value}")
                 return str(value)
-    
+
     raise HTTPException(
         status_code=401,
         detail="No se pudo obtener el ID o username del usuario del token"
     )
 
 
+def _obtener_modificado_por(user: Dict) -> Optional[str]:
+    """Obtiene el identificador del usuario que modifica; None si no se puede resolver."""
+    try:
+        return get_user_id_or_username(user)
+    except HTTPException:
+        return None  # Continuar sin usuario si falla
+
+
+async def _get_homologaciones_sku_handler(
+    page: int, page_size: int, estado: Optional[str],
+    tiene_diferencias: Optional[bool], tiene_datos_sap: Optional[bool],
+    sku: Optional[str], search: Optional[str]
+):
+    """Lógica para listar homologaciones SKU con filtros y paginación."""
+    try:
+        # Validar estado si se proporciona
+        if estado and estado not in ['PENDIENTE', 'HOMOLOGADO', 'ERROR']:
+            raise HTTPException(
+                status_code=400,
+                detail="Estado inválido. Debe ser PENDIENTE, HOMOLOGADO o ERROR"
+            )
+
+        service = HomologacionService()
+        resultado = service.get_homologaciones_sku_paginadas(
+            page=page,
+            page_size=page_size,
+            estado=estado,
+            tiene_diferencias=tiene_diferencias,
+            tiene_datos_sap=tiene_datos_sap,
+            sku=sku,
+            search=search
+        )
+
+        if resultado.get('status') == 'error':
+            raise HTTPException(
+                status_code=500,
+                detail=resultado.get('message', 'Error al obtener homologaciones')
+            )
+
+        return resultado
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ Error al obtener homologaciones SKU: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error al obtener homologaciones: {str(e)}"
+        )
+
+
+async def _create_homologacion_sku_handler(request_body: HomologacionSkuCreateRequest, user: Dict):
+    """Lógica para crear una homologación SKU."""
+    try:
+        # Obtener usuario que crea la homologación
+        modificado_por = _obtener_modificado_por(user)
+
+        # Convertir request a dict (excluyendo None)
+        data = request_body.dict(exclude_none=True)
+
+        service = HomologacionService()
+        resultado = service.create_homologacion_sku(
+            data=data,
+            modificado_por=modificado_por
+        )
+
+        if resultado.get('status') == 'error':
+            error_code = resultado.get('error_code')
+            if error_code == 'VALIDATION_ERROR':
+                raise HTTPException(status_code=400, detail=resultado.get('message'))
+            else:
+                raise HTTPException(status_code=500, detail=resultado.get('message'))
+
+        return JSONResponse(
+            status_code=201,
+            content=resultado
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ Error al crear homologación: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error al crear homologación: {str(e)}"
+        )
+
+
+async def _update_homologacion_sku_handler(homologacion_id: str, request_body: HomologacionSkuUpdateRequest, user: Dict):
+    """Lógica para actualizar una homologación SKU específica."""
+    try:
+        # Obtener usuario que realiza la modificación
+        modificado_por = _obtener_modificado_por(user)
+
+        # Convertir request a dict (excluyendo None)
+        data = request_body.dict(exclude_none=True)
+
+        service = HomologacionService()
+        resultado = service.update_homologacion_sku(
+            homologacion_id=homologacion_id,
+            data=data,
+            modificado_por=modificado_por
+        )
+
+        if resultado.get('status') == 'error':
+            error_code = resultado.get('error_code')
+            if error_code == 'NOT_FOUND':
+                raise HTTPException(status_code=404, detail=resultado.get('message'))
+            elif error_code == 'VALIDATION_ERROR':
+                raise HTTPException(status_code=400, detail=resultado.get('message'))
+            else:
+                raise HTTPException(status_code=500, detail=resultado.get('message'))
+
+        return resultado
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ Error al actualizar homologación {homologacion_id}: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error al actualizar homologación: {str(e)}"
+        )
+
+
+async def _bulk_update_homologaciones_handler(request_body: HomologacionSkuBulkUpdateRequest, user: Dict):
+    """Lógica para actualizar múltiples homologaciones en lote."""
+    try:
+        # Obtener usuario que realiza la modificación
+        modificado_por = _obtener_modificado_por(user)
+
+        # Convertir updates a formato adecuado
+        updates = []
+        for item in request_body.updates:
+            updates.append({
+                'homologacion_id': item.homologacion_id,
+                'data': item.data.dict(exclude_none=True)
+            })
+
+        service = HomologacionService()
+        resultado = service.bulk_update_homologaciones(
+            updates=updates,
+            modificado_por=modificado_por
+        )
+
+        if resultado.get('status') == 'error':
+            raise HTTPException(
+                status_code=500,
+                detail=resultado.get('message', 'Error al actualizar homologaciones')
+            )
+
+        return resultado
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ Error al actualizar homologaciones en lote: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error al actualizar homologaciones en lote: {str(e)}"
+        )
+
+
+async def _sincronizar_homologaciones_handler():
+    """Lógica para sincronizar homologaciones desde los despachos."""
+    try:
+        service = HomologacionService()
+        resultado = service.sincronizar_homologaciones()
+
+        if resultado.get('status') == 'error':
+            raise HTTPException(
+                status_code=500,
+                detail=resultado.get('message', 'Error al sincronizar homologaciones')
+            )
+
+        logger.info(f"✅ Sincronización completada: {resultado.get('data', {})}")
+        return resultado
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ Error al sincronizar homologaciones: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error al sincronizar homologaciones: {str(e)}"
+        )
+
+
 def register_homologaciones_sku_endpoints(app: FastAPI):
     """
     Registra los endpoints de homologaciones SKU en la aplicación FastAPI.
-    
+
     Args:
         app: Instancia de FastAPI
     """
-    
+
     # Handler global para errores de validación
     @app.exception_handler(RequestValidationError)
     async def validation_exception_handler(request: Request, exc: RequestValidationError):
@@ -97,7 +285,7 @@ def register_homologaciones_sku_endpoints(app: FastAPI):
                 "errors": exc.errors()
             }
         )
-    
+
     # Handler global para HTTPException
     @app.exception_handler(HTTPException)
     async def http_exception_handler(request: Request, exc: HTTPException):
@@ -111,13 +299,13 @@ def register_homologaciones_sku_endpoints(app: FastAPI):
                 "error_code": getattr(exc, 'error_code', None)
             }
         )
-    
+
     @app.get("/api/homologaciones-sku",
              tags=["Homologaciones SKU"])
     async def get_homologaciones_sku(
         request: Request,
         page: int = Query(1, ge=1, description="Número de página"),
-        pageSize: int = Query(10, ge=1, le=100, description="Tamaño de página"),
+        page_size: int = Query(10, ge=1, le=100, alias="pageSize", description="Tamaño de página"),
         estado: Optional[str] = Query(None, description="Filtro por estado (PENDIENTE, HOMOLOGADO, ERROR)"),
         tiene_diferencias: Optional[bool] = Query(None, description="Filtro por diferencias MBA3 vs SAP"),
         tiene_datos_sap: Optional[bool] = Query(None, description="Filtro por presencia de datos SAP"),
@@ -127,10 +315,10 @@ def register_homologaciones_sku_endpoints(app: FastAPI):
     ):
         """
         Obtiene lista de homologaciones SKU con filtros y paginación.
-        
+
         **Headers requeridos:**
         - `Authorization: Bearer {token}` - Token JWT válido
-        
+
         **Parámetros de query:**
         - `page` (int): Número de página (default: 1)
         - `pageSize` (int): Tamaño de página (default: 10, max: 100)
@@ -139,7 +327,7 @@ def register_homologaciones_sku_endpoints(app: FastAPI):
         - `tiene_datos_sap` (boolean): Filtro por datos SAP
         - `sku` (string): Búsqueda por SKU (busca en MBA3 y SAP) - tiene prioridad sobre search
         - `search` (string): Búsqueda general en SKU y nombres de producto (MBA3 y SAP)
-        
+
         **Respuesta exitosa (200):**
         ```json
         {
@@ -177,42 +365,10 @@ def register_homologaciones_sku_endpoints(app: FastAPI):
         }
         ```
         """
-        try:
-            # Validar estado si se proporciona
-            if estado and estado not in ['PENDIENTE', 'HOMOLOGADO', 'ERROR']:
-                raise HTTPException(
-                    status_code=400,
-                    detail="Estado inválido. Debe ser PENDIENTE, HOMOLOGADO o ERROR"
-                )
-            
-            service = HomologacionService()
-            resultado = service.get_homologaciones_sku_paginadas(
-                page=page,
-                page_size=pageSize,
-                estado=estado,
-                tiene_diferencias=tiene_diferencias,
-                tiene_datos_sap=tiene_datos_sap,
-                sku=sku,
-                search=search
-            )
-            
-            if resultado.get('status') == 'error':
-                raise HTTPException(
-                    status_code=500,
-                    detail=resultado.get('message', 'Error al obtener homologaciones')
-                )
-            
-            return resultado
-            
-        except HTTPException:
-            raise
-        except Exception as e:
-            logger.error(f"❌ Error al obtener homologaciones SKU: {e}", exc_info=True)
-            raise HTTPException(
-                status_code=500,
-                detail=f"Error al obtener homologaciones: {str(e)}"
-            )
-    
+        return await _get_homologaciones_sku_handler(
+            page, page_size, estado, tiene_diferencias, tiene_datos_sap, sku, search
+        )
+
     @app.post("/api/homologaciones-sku",
              tags=["Homologaciones SKU"])
     async def create_homologacion_sku(
@@ -222,11 +378,11 @@ def register_homologaciones_sku_endpoints(app: FastAPI):
     ):
         """
         Crea una nueva homologación SKU.
-        
+
         **Headers requeridos:**
         - `Authorization: Bearer {token}` - Token JWT válido
         - `Content-Type: application/json`
-        
+
         **Body (sku_mba3 es requerido, los demás campos son opcionales):**
         ```json
         {
@@ -246,7 +402,7 @@ def register_homologaciones_sku_endpoints(app: FastAPI):
           "despacho_id": "despacho-456"
         }
         ```
-        
+
         **Respuesta exitosa (201):**
         ```json
         {
@@ -258,49 +414,14 @@ def register_homologaciones_sku_endpoints(app: FastAPI):
           "message": "Homologación creada correctamente"
         }
         ```
-        
+
         **Errores posibles:**
         - 400: Error de validación
         - 401: No autenticado
         - 500: Error interno
         """
-        try:
-            # Obtener usuario que crea la homologación
-            try:
-                modificado_por = get_user_id_or_username(user)
-            except HTTPException:
-                modificado_por = None  # Continuar sin usuario si falla
-            
-            # Convertir request a dict (excluyendo None)
-            data = request_body.dict(exclude_none=True)
-            
-            service = HomologacionService()
-            resultado = service.create_homologacion_sku(
-                data=data,
-                modificado_por=modificado_por
-            )
-            
-            if resultado.get('status') == 'error':
-                error_code = resultado.get('error_code')
-                if error_code == 'VALIDATION_ERROR':
-                    raise HTTPException(status_code=400, detail=resultado.get('message'))
-                else:
-                    raise HTTPException(status_code=500, detail=resultado.get('message'))
-            
-            return JSONResponse(
-                status_code=201,
-                content=resultado
-            )
-            
-        except HTTPException:
-            raise
-        except Exception as e:
-            logger.error(f"❌ Error al crear homologación: {e}", exc_info=True)
-            raise HTTPException(
-                status_code=500,
-                detail=f"Error al crear homologación: {str(e)}"
-            )
-    
+        return await _create_homologacion_sku_handler(request_body, user)
+
     @app.put("/api/homologaciones-sku/{homologacion_id}",
              tags=["Homologaciones SKU"])
     async def update_homologacion_sku(
@@ -311,14 +432,14 @@ def register_homologaciones_sku_endpoints(app: FastAPI):
     ):
         """
         Actualiza una homologación SKU específica.
-        
+
         **Parámetros:**
         - `homologacion_id`: UUID de la homologación a actualizar
-        
+
         **Headers requeridos:**
         - `Authorization: Bearer {token}` - Token JWT válido
         - `Content-Type: application/json`
-        
+
         **Body (todos los campos son opcionales):**
         ```json
         {
@@ -331,7 +452,7 @@ def register_homologaciones_sku_endpoints(app: FastAPI):
           "estado": "HOMOLOGADO"
         }
         ```
-        
+
         **Respuesta exitosa (200):**
         ```json
         {
@@ -343,50 +464,15 @@ def register_homologaciones_sku_endpoints(app: FastAPI):
           "message": "Homologación actualizada correctamente"
         }
         ```
-        
+
         **Errores posibles:**
         - 400: Error de validación
         - 401: No autenticado
         - 404: Homologación no encontrada
         - 500: Error interno
         """
-        try:
-            # Obtener usuario que realiza la modificación
-            try:
-                modificado_por = get_user_id_or_username(user)
-            except HTTPException:
-                modificado_por = None  # Continuar sin usuario si falla
-            
-            # Convertir request a dict (excluyendo None)
-            data = request_body.dict(exclude_none=True)
-            
-            service = HomologacionService()
-            resultado = service.update_homologacion_sku(
-                homologacion_id=homologacion_id,
-                data=data,
-                modificado_por=modificado_por
-            )
-            
-            if resultado.get('status') == 'error':
-                error_code = resultado.get('error_code')
-                if error_code == 'NOT_FOUND':
-                    raise HTTPException(status_code=404, detail=resultado.get('message'))
-                elif error_code == 'VALIDATION_ERROR':
-                    raise HTTPException(status_code=400, detail=resultado.get('message'))
-                else:
-                    raise HTTPException(status_code=500, detail=resultado.get('message'))
-            
-            return resultado
-            
-        except HTTPException:
-            raise
-        except Exception as e:
-            logger.error(f"❌ Error al actualizar homologación {homologacion_id}: {e}", exc_info=True)
-            raise HTTPException(
-                status_code=500,
-                detail=f"Error al actualizar homologación: {str(e)}"
-            )
-    
+        return await _update_homologacion_sku_handler(homologacion_id, request_body, user)
+
     @app.post("/api/homologaciones-sku/bulk-update",
               tags=["Homologaciones SKU"])
     async def bulk_update_homologaciones(
@@ -396,11 +482,11 @@ def register_homologaciones_sku_endpoints(app: FastAPI):
     ):
         """
         Actualiza múltiples homologaciones en lote.
-        
+
         **Headers requeridos:**
         - `Authorization: Bearer {token}` - Token JWT válido
         - `Content-Type: application/json`
-        
+
         **Body:**
         ```json
         {
@@ -423,7 +509,7 @@ def register_homologaciones_sku_endpoints(app: FastAPI):
           ]
         }
         ```
-        
+
         **Respuesta exitosa (200):**
         ```json
         {
@@ -445,44 +531,8 @@ def register_homologaciones_sku_endpoints(app: FastAPI):
         }
         ```
         """
-        try:
-            # Obtener usuario que realiza la modificación
-            try:
-                modificado_por = get_user_id_or_username(user)
-            except HTTPException:
-                modificado_por = None
-            
-            # Convertir updates a formato adecuado
-            updates = []
-            for item in request_body.updates:
-                updates.append({
-                    'homologacion_id': item.homologacion_id,
-                    'data': item.data.dict(exclude_none=True)
-                })
-            
-            service = HomologacionService()
-            resultado = service.bulk_update_homologaciones(
-                updates=updates,
-                modificado_por=modificado_por
-            )
-            
-            if resultado.get('status') == 'error':
-                raise HTTPException(
-                    status_code=500,
-                    detail=resultado.get('message', 'Error al actualizar homologaciones')
-                )
-            
-            return resultado
-            
-        except HTTPException:
-            raise
-        except Exception as e:
-            logger.error(f"❌ Error al actualizar homologaciones en lote: {e}", exc_info=True)
-            raise HTTPException(
-                status_code=500,
-                detail=f"Error al actualizar homologaciones en lote: {str(e)}"
-            )
-    
+        return await _bulk_update_homologaciones_handler(request_body, user)
+
     @app.post("/api/homologaciones-sku/sincronizar",
               tags=["Homologaciones SKU"])
     async def sincronizar_homologaciones(
@@ -491,16 +541,16 @@ def register_homologaciones_sku_endpoints(app: FastAPI):
     ):
         """
         Sincroniza homologaciones desde los despachos.
-        
+
         Este endpoint analiza todos los productos en `despacho_detalle`,
         compara con datos de SAP, y detecta diferencias para crear o
         actualizar registros de homologación.
-        
+
         **Headers requeridos:**
         - `Authorization: Bearer {token}` - Token JWT válido
-        
+
         **Body:** vacío (no se requiere)
-        
+
         **Respuesta exitosa (200):**
         ```json
         {
@@ -513,7 +563,7 @@ def register_homologaciones_sku_endpoints(app: FastAPI):
           }
         }
         ```
-        
+
         **Proceso de sincronización:**
         1. Lee todos los productos de `despacho_detalle`
         2. Busca información SAP correspondiente en `producto_sap_cache`
@@ -522,24 +572,4 @@ def register_homologaciones_sku_endpoints(app: FastAPI):
         5. Calcula flags `tiene_diferencias` y `tiene_datos_sap`
         6. Asigna estado (PENDIENTE si hay diferencias, HOMOLOGADO si coincide)
         """
-        try:
-            service = HomologacionService()
-            resultado = service.sincronizar_homologaciones()
-            
-            if resultado.get('status') == 'error':
-                raise HTTPException(
-                    status_code=500,
-                    detail=resultado.get('message', 'Error al sincronizar homologaciones')
-                )
-            
-            logger.info(f"✅ Sincronización completada: {resultado.get('data', {})}")
-            return resultado
-            
-        except HTTPException:
-            raise
-        except Exception as e:
-            logger.error(f"❌ Error al sincronizar homologaciones: {e}", exc_info=True)
-            raise HTTPException(
-                status_code=500,
-                detail=f"Error al sincronizar homologaciones: {str(e)}"
-            )
+        return await _sincronizar_homologaciones_handler()

@@ -529,17 +529,15 @@ class PedidoValidator:
     def validar_productos_existen_en_sap(
         self,
         codigos_productos: List[str],
-        usar_cache: bool = True,
         sap_obligatorio: bool = True
     ) -> Dict[str, Any]:
         """
         Valida que los códigos de producto existan directamente en SAP.
-        
+
         REFACTORIZADO: Delega a PedidoSAPValidator para mantener compatibilidad.
-        
+
         Args:
             codigos_productos: Lista de códigos de productos a validar (deben ser únicos)
-            usar_cache: Si True, usa SAPService que tiene cache. Si False, consulta directamente SAPClient
             sap_obligatorio: Si True, errores de SAP bloquean. Si False, solo WARNING
             
         Returns:
@@ -794,62 +792,62 @@ class PedidoValidator:
             "tiendas_inactivas": [],
             "errores": []
         }
-        
+
         # ✅ Normalizar tiendas de movimiento para comparación
         tiendas_normalizar = set()
         for tienda in tiendas_movimiento:
             if tienda:
-                tienda_norm = str(tienda).strip().upper()
-                tiendas_normalizar.add(tienda_norm)
-        
+                tiendas_normalizar.add(str(tienda).strip().upper())
+
         # Validar cada tienda
         for tienda_codigo in tiendas_normalizar:
-            if tienda_codigo not in catalogo_tiendas:
-                resultado["tiendas_no_encontradas"].append(tienda_codigo)
-                resultado["valido"] = False
-                
-                error_dict = {
-                    "campo": "IdTienda",
-                    "tipo": "ERROR",
-                    "mensaje": f"La tienda '{tienda_codigo}' no está declarada en la hoja 'Tiendas'",
-                    "valor": tienda_codigo,
-                    "accion_recomendada": f"Agregar '{tienda_codigo}' a la hoja 'Tiendas' con sus datos completos"
-                }
-                
-                # Mapear a filas si se proporciona
-                if mapear_a_filas and tienda_codigo in mapear_a_filas:
-                    for fila in mapear_a_filas[tienda_codigo]:
-                        error_dict_fila = error_dict.copy()
-                        error_dict_fila["fila"] = fila
-                        resultado["errores"].append(error_dict_fila)
-                else:
-                    resultado["errores"].append(error_dict)
-            
-            else:
-                info_tienda = catalogo_tiendas[tienda_codigo]
-                
-                if not info_tienda.get("activa", True):
-                    resultado["tiendas_inactivas"].append(tienda_codigo)
-                    resultado["valido"] = False
-                    
-                    error_dict = {
-                        "campo": "IdTienda",
-                        "tipo": "ERROR",
-                        "mensaje": f"La tienda '{tienda_codigo}' está marcada como INACTIVA",
-                        "valor": tienda_codigo,
-                        "accion_recomendada": f"Marcar '{tienda_codigo}' como activa en la hoja 'Tiendas' o usar otra tienda"
-                    }
-                    
-                    # Mapear a filas
-                    if mapear_a_filas and tienda_codigo in mapear_a_filas:
-                        for fila in mapear_a_filas[tienda_codigo]:
-                            error_dict_fila = error_dict.copy()
-                            error_dict_fila["fila"] = fila
-                            resultado["errores"].append(error_dict_fila)
-                    else:
-                        resultado["errores"].append(error_dict)
-                
-                else:
-                    resultado["tiendas_validas"].append(tienda_codigo)
-        
+            self._evaluar_tienda_catalogo(tienda_codigo, catalogo_tiendas, mapear_a_filas, resultado)
+
         return resultado
+
+    @staticmethod
+    def _registrar_error_tienda(
+        resultado: dict, error_dict: dict, mapear_a_filas: Optional[dict], tienda_codigo: str
+    ) -> None:
+        """Agrega el error de tienda al resultado, expandiéndolo por fila si hay mapeo disponible."""
+        if mapear_a_filas and tienda_codigo in mapear_a_filas:
+            for fila in mapear_a_filas[tienda_codigo]:
+                error_dict_fila = error_dict.copy()
+                error_dict_fila["fila"] = fila
+                resultado["errores"].append(error_dict_fila)
+        else:
+            resultado["errores"].append(error_dict)
+
+    def _evaluar_tienda_catalogo(
+        self, tienda_codigo: str, catalogo_tiendas: dict,
+        mapear_a_filas: Optional[dict], resultado: dict
+    ) -> None:
+        """Clasifica una tienda como no encontrada, inactiva o válida y registra errores."""
+        if tienda_codigo not in catalogo_tiendas:
+            resultado["tiendas_no_encontradas"].append(tienda_codigo)
+            resultado["valido"] = False
+            error_dict = {
+                "campo": "IdTienda",
+                "tipo": "ERROR",
+                "mensaje": f"La tienda '{tienda_codigo}' no está declarada en la hoja 'Tiendas'",
+                "valor": tienda_codigo,
+                "accion_recomendada": f"Agregar '{tienda_codigo}' a la hoja 'Tiendas' con sus datos completos"
+            }
+            self._registrar_error_tienda(resultado, error_dict, mapear_a_filas, tienda_codigo)
+            return
+
+        info_tienda = catalogo_tiendas[tienda_codigo]
+        if not info_tienda.get("activa", True):
+            resultado["tiendas_inactivas"].append(tienda_codigo)
+            resultado["valido"] = False
+            error_dict = {
+                "campo": "IdTienda",
+                "tipo": "ERROR",
+                "mensaje": f"La tienda '{tienda_codigo}' está marcada como INACTIVA",
+                "valor": tienda_codigo,
+                "accion_recomendada": f"Marcar '{tienda_codigo}' como activa en la hoja 'Tiendas' o usar otra tienda"
+            }
+            self._registrar_error_tienda(resultado, error_dict, mapear_a_filas, tienda_codigo)
+            return
+
+        resultado["tiendas_validas"].append(tienda_codigo)

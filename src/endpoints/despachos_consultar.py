@@ -18,6 +18,32 @@ from src.config import MBA3_QUERY_PREDEFINIDA
 logger = logging.getLogger(__name__)
 
 
+def _log_respuesta_mba3(result) -> None:
+    """Registra información detallada de la respuesta de MBA3 (solo debugging)."""
+    logger.info("=" * 70)
+    logger.info("📊 RESPUESTA DE MBA3:")
+    if isinstance(result, list):
+        logger.info(f"   Tipo: Lista con {len(result)} elementos")
+        if len(result) > 0:
+            first_item = result[0]  # type: ignore[reportArgumentType]
+            if isinstance(first_item, dict):
+                campos = list(first_item.keys())
+                logger.info(f"   Campos en primera factura: {campos}")
+                logger.info(f"   Total de campos: {len(campos)}")
+                # Mostrar algunos valores de ejemplo
+                for campo in campos[:5]:  # Primeros 5 campos
+                    logger.info(f"   {campo}: {first_item.get(campo)}")
+            else:
+                logger.warning(f"   ⚠️ Primer elemento no es dict: {type(first_item)}")
+    elif isinstance(result, dict):
+        logger.info("   Tipo: Diccionario")
+        campos = list(result.keys())
+        logger.info(f"   Campos: {campos}")
+    else:
+        logger.warning(f"   ⚠️ Tipo inesperado: {type(result)}")
+    logger.info("=" * 70)
+
+
 def register_consultar_endpoint(app: FastAPI):
     """
     Registra el endpoint /consultar en la aplicación FastAPI.
@@ -81,31 +107,10 @@ def register_consultar_endpoint(app: FastAPI):
         try:
             # Ejecutar consulta usando el servicio (SOLO consulta, NO guarda)
             result = MBA3Service.execute_query(query_predefinida)
-            
+
             # Log detallado de la respuesta para debugging
-            logger.info("=" * 70)
-            logger.info("📊 RESPUESTA DE MBA3:")
-            if isinstance(result, list):
-                logger.info(f"   Tipo: Lista con {len(result)} elementos")
-                if len(result) > 0:
-                    first_item = result[0]  # type: ignore[reportArgumentType]
-                    if isinstance(first_item, dict):
-                        campos = list(first_item.keys())
-                        logger.info(f"   Campos en primera factura: {campos}")
-                        logger.info(f"   Total de campos: {len(campos)}")
-                        # Mostrar algunos valores de ejemplo
-                        for campo in campos[:5]:  # Primeros 5 campos
-                            logger.info(f"   {campo}: {first_item.get(campo)}")
-                    else:
-                        logger.warning(f"   ⚠️ Primer elemento no es dict: {type(first_item)}")
-            elif isinstance(result, dict):
-                logger.info(f"   Tipo: Diccionario")
-                campos = list(result.keys())
-                logger.info(f"   Campos: {campos}")
-            else:
-                logger.warning(f"   ⚠️ Tipo inesperado: {type(result)}")
-            logger.info("=" * 70)
-            
+            _log_respuesta_mba3(result)
+
             # Preparar headers de respuesta
             headers = {
                 "X-Query": query_predefinida[:100],  # Primeros 100 caracteres de la query
@@ -128,7 +133,7 @@ def register_consultar_endpoint(app: FastAPI):
                 status_code=503,
                 content={
                     "status": "error",
-                    "message": f"No se pudo conectar al servidor MBA3",
+                    "message": "No se pudo conectar al servidor MBA3",
                     "detail": str(e),
                     "type": "connection_error",
                     "hint": "Verifica que el servidor MBA3 esté disponible y accesible. Revisa la configuración de MBA3_BASE_URL en tu archivo .env"
@@ -140,7 +145,7 @@ def register_consultar_endpoint(app: FastAPI):
                 status_code=500,
                 content={
                     "status": "error",
-                    "message": f"Error al ejecutar consulta en MBA3",
+                    "message": "Error al ejecutar consulta en MBA3",
                     "detail": str(e),
                     "type": "query_error"
                 }

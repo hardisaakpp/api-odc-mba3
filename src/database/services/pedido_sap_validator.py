@@ -49,6 +49,38 @@ class PedidoSAPValidator:
         elif tipo == "warning":
             warnings.append(codigo)
 
+    def _registrar_error_producto(
+        self, codigo: str, e: Exception, sap_obligatorio: bool,
+        detalle: Dict, errores: List, warnings: List, incluir_extras: bool = False
+    ) -> None:
+        """Registra el detalle y clasifica un código que falló con excepción inesperada."""
+        logger.error(f"❌ Error inesperado al validar código {codigo} en SAP: {e}", exc_info=True)
+        severity = "ERROR" if sap_obligatorio else "WARNING"
+        det = {
+            "existe": False,
+            "info": None,
+            "error": str(e),
+            "severity": severity
+        }
+        if incluir_extras:
+            det["mba3"] = None
+            det["sugerencias_sap"] = []
+        detalle[codigo] = det
+        if sap_obligatorio:
+            errores.append(codigo)
+        else:
+            warnings.append(codigo)
+
+    @staticmethod
+    def _log_resumen_sugerencias(validos: List, no_encontrados: List, errores: List) -> None:
+        """Emite el log resumen de la validación de productos con sugerencias."""
+        if no_encontrados or errores:
+            logger.warning(
+                f"📊 Validación SAP: {len(validos)}✓, {len(no_encontrados)}✗, {len(errores)} errores"
+            )
+        else:
+            logger.debug(f"📊 Validación SAP: {len(validos)} productos válidos")
+
     def validar_productos_existen_en_sap(
         self,
         codigos_productos: List[str],
@@ -232,29 +264,13 @@ class PedidoSAPValidator:
                 detalle[codigo] = det
                 self._clasificar_tipo_codigo(tipo, codigo, validos, no_encontrados, errores, warnings)
             except Exception as e:
-                logger.error(f"❌ Error inesperado al validar código {codigo} en SAP: {e}", exc_info=True)
-                severity = "ERROR" if sap_obligatorio else "WARNING"
-                detalle[codigo] = {
-                    "existe": False,
-                    "info": None,
-                    "error": str(e),
-                    "severity": severity,
-                    "mba3": None,
-                    "sugerencias_sap": []
-                }
-                if sap_obligatorio:
-                    errores.append(codigo)
-                else:
-                    warnings.append(codigo)
+                self._registrar_error_producto(
+                    codigo, e, sap_obligatorio, detalle, errores, warnings, incluir_extras=True
+                )
 
         todos_validos = len(no_encontrados) == 0 and len(errores) == 0
 
-        if no_encontrados or errores:
-            logger.warning(
-                f"📊 Validación SAP: {len(validos)}✓, {len(no_encontrados)}✗, {len(errores)} errores"
-            )
-        else:
-            logger.debug(f"📊 Validación SAP: {len(validos)} productos válidos")
+        self._log_resumen_sugerencias(validos, no_encontrados, errores)
 
         return {
             "validos": validos,

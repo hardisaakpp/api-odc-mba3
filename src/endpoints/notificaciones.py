@@ -30,6 +30,100 @@ logger = logging.getLogger(__name__)
 HEARTBEAT_INTERVAL = 30
 
 
+def _resolver_permisos_notificaciones(user: Dict, username: str) -> list:
+    """Determina los permisos relevantes para suscribir al usuario a notificaciones."""
+    permissions = user.get("permissions", [])
+
+    # Filtrar solo permisos relevantes para notificaciones
+    relevant_permissions = [
+        p for p in permissions
+        if p in ("odcsap.view", "mabel.view")
+    ]
+
+    if not relevant_permissions:
+        # Si el usuario es Admin, suscribir a ambos canales
+        roles = user.get("roles", [])
+        if "Admin" in roles:
+            return ["odcsap.view", "mabel.view"]
+        logger.warning(
+            f"📢 Usuario {username} sin permisos relevantes para notificaciones"
+        )
+        return []
+
+    return relevant_permissions
+
+
+async def _event_stream_notificaciones(request, queue, username, relevant_permissions):
+    """Generador de eventos SSE para el stream de notificaciones."""
+    try:
+        # Evento de conexión exitosa
+        connected_data = json.dumps({
+            "username": username,
+            "permissions": relevant_permissions,
+            "timestamp": time.time(),
+        })
+        yield f"event: connected\ndata: {connected_data}\n\n"
+
+        last_heartbeat = time.time()
+
+        while True:
+            # Verificar si el cliente se desconectó
+            if await request.is_disconnected():
+                logger.info(f"📢 Cliente '{username}' desconectado del stream SSE")
+                break
+
+            try:
+                # Esperar notificación con timeout para heartbeat
+                notification = await asyncio.wait_for(
+                    queue.get(), timeout=HEARTBEAT_INTERVAL
+                )
+                # Enviar notificación como evento SSE
+                event_data = json.dumps(notification.to_dict())
+                yield f"event: notification\ndata: {event_data}\n\n"
+
+            except asyncio.TimeoutError:
+                # Sin notificaciones: enviar heartbeat
+                now = time.time()
+                if now - last_heartbeat >= HEARTBEAT_INTERVAL:
+                    heartbeat_data = json.dumps({"timestamp": now})
+                    yield f"event: heartbeat\ndata: {heartbeat_data}\n\n"
+                    last_heartbeat = now
+
+    except asyncio.CancelledError:
+        logger.info(f"📢 Stream SSE cancelado para '{username}'")
+    except Exception as e:
+        logger.error(f"📢 Error en stream SSE para '{username}': {e}")
+    finally:
+        # Limpiar suscripción
+        await notification_manager.unsubscribe(queue, relevant_permissions)
+        logger.info(f"📢 Suscripción SSE limpiada para '{username}'")
+
+
+async def _stream_notificaciones_handler(request: Request, user: Dict):
+    """Prepara la suscripción y devuelve el StreamingResponse SSE."""
+    username = user.get("username", "unknown")
+
+    relevant_permissions = _resolver_permisos_notificaciones(user, username)
+
+    logger.info(
+        f"📢 Nueva conexión SSE de '{username}' con permisos: {relevant_permissions}"
+    )
+
+    # Suscribir al bus (username permite excluir al autor al notificar mismo permiso)
+    queue = await notification_manager.subscribe(relevant_permissions, username=username)
+
+    return StreamingResponse(
+        _event_stream_notificaciones(request, queue, username, relevant_permissions),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+            "Access-Control-Allow-Origin": "*",
+        },
+    )
+
+
 def register_notificaciones_endpoints(app: FastAPI):
     """Registra los endpoints de notificaciones en tiempo real."""
 
@@ -65,88 +159,7 @@ def register_notificaciones_endpoints(app: FastAPI):
         }
         ```
         """
-        permissions = user.get("permissions", [])
-        username = user.get("username", "unknown")
-
-        # Filtrar solo permisos relevantes para notificaciones
-        relevant_permissions = [
-            p for p in permissions
-            if p in ("odcsap.view", "mabel.view")
-        ]
-
-        if not relevant_permissions:
-            # Si el usuario es Admin, suscribir a ambos canales
-            roles = user.get("roles", [])
-            if "Admin" in roles:
-                relevant_permissions = ["odcsap.view", "mabel.view"]
-            else:
-                logger.warning(
-                    f"📢 Usuario {username} sin permisos relevantes para notificaciones"
-                )
-                relevant_permissions = []
-
-        logger.info(
-            f"📢 Nueva conexión SSE de '{username}' con permisos: {relevant_permissions}"
-        )
-
-        # Suscribir al bus (username permite excluir al autor al notificar mismo permiso)
-        queue = await notification_manager.subscribe(relevant_permissions, username=username)
-
-        async def event_stream():
-            """Generador de eventos SSE."""
-            try:
-                # Evento de conexión exitosa
-                connected_data = json.dumps({
-                    "username": username,
-                    "permissions": relevant_permissions,
-                    "timestamp": time.time(),
-                })
-                yield f"event: connected\ndata: {connected_data}\n\n"
-
-                last_heartbeat = time.time()
-
-                while True:
-                    # Verificar si el cliente se desconectó
-                    if await request.is_disconnected():
-                        logger.info(f"📢 Cliente '{username}' desconectado del stream SSE")
-                        break
-
-                    try:
-                        # Esperar notificación con timeout para heartbeat
-                        notification = await asyncio.wait_for(
-                            queue.get(), timeout=HEARTBEAT_INTERVAL
-                        )
-                        # Enviar notificación como evento SSE
-                        event_data = json.dumps(notification.to_dict())
-                        yield f"event: notification\ndata: {event_data}\n\n"
-
-                    except asyncio.TimeoutError:
-                        # Sin notificaciones: enviar heartbeat
-                        now = time.time()
-                        if now - last_heartbeat >= HEARTBEAT_INTERVAL:
-                            heartbeat_data = json.dumps({"timestamp": now})
-                            yield f"event: heartbeat\ndata: {heartbeat_data}\n\n"
-                            last_heartbeat = now
-
-            except asyncio.CancelledError:
-                logger.info(f"📢 Stream SSE cancelado para '{username}'")
-            except Exception as e:
-                logger.error(f"📢 Error en stream SSE para '{username}': {e}")
-            finally:
-                # Limpiar suscripción
-                await notification_manager.unsubscribe(queue, relevant_permissions)
-                logger.info(f"📢 Suscripción SSE limpiada para '{username}'")
-
-        return StreamingResponse(
-            event_stream(),
-            media_type="text/event-stream",
-            headers={
-                "Cache-Control": "no-cache",
-                "Connection": "keep-alive",
-                "X-Accel-Buffering": "no",
-                "Access-Control-Allow-Origin": "*",
-            },
-        )
+        return await _stream_notificaciones_handler(request, user)
 
     @app.get("/notificaciones/status", tags=["Notificaciones"])
     async def notificaciones_status(

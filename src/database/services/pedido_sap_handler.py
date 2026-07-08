@@ -61,16 +61,14 @@ class PedidoSAPHandler:
         self,
         codigos_productos: List[str],
         validar_sap: bool = True,
-        usar_cache: bool = True,
         sap_obligatorio: bool = True
     ) -> Optional[Dict[str, Any]]:
         """
         Valida que los códigos de producto existan en SAP ITEMS.
-        
+
         Args:
             codigos_productos: Lista de códigos a validar
             validar_sap: Si False, retorna None sin validar
-            usar_cache: Si True, usa caché de SAP
             sap_obligatorio: Si True, errores bloquean persistencia
             
         Returns:
@@ -81,7 +79,6 @@ class PedidoSAPHandler:
         
         resultado = self.validator.validar_productos_existen_en_sap(
             codigos_productos=codigos_productos,
-            usar_cache=usar_cache,
             sap_obligatorio=sap_obligatorio
         )
         
