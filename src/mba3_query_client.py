@@ -416,7 +416,7 @@ class MBA3APIClient:
         logger.error(error_msg, exc_info=True)
         raise MBA3ConnectionError(error_msg)
 
-    def _handle_timeout_error(self, e: Exception) -> None:
+    def _handle_timeout_error(self) -> None:
         error_msg = (
             f"Timeout al conectar con el servidor MBA3 en {self.base_url}.\n"
             f"El servidor no respondió a tiempo.\n\n"
@@ -466,8 +466,8 @@ class MBA3APIClient:
             raise
         except requests.exceptions.ConnectionError as e:
             self._handle_connection_error(e)
-        except requests.exceptions.Timeout as e:
-            self._handle_timeout_error(e)
+        except requests.exceptions.Timeout:
+            self._handle_timeout_error()
         except requests.exceptions.HTTPError as e:
             self._handle_http_exception(e)
         except requests.exceptions.RequestException as e:

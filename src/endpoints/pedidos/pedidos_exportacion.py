@@ -9,6 +9,8 @@ from typing import Dict
 from src.utils.timezone import ahora_naive
 from fastapi import FastAPI, Depends, HTTPException, Path, Query, status
 from fastapi.responses import Response
+from openpyxl import Workbook
+from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
 
 from src.database.connection import get_db_connection_context
 from src.database.repositories.pedido_repository import PedidoRepository
@@ -23,13 +25,144 @@ DESC_UUID_PEDIDO = "UUID del pedido"
 MEDIA_TYPE_EXCEL = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
 
-def _generar_excel_pedido(cabecera: dict, detalles: list) -> bytes:
+def _agregar_logo_roland(ws) -> None:
+    """Inserta el logo ROLAND en la hoja si el archivo existe."""
     import os
-    import io
-    from openpyxl import Workbook
-    from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
     from openpyxl.drawing.image import Image as XlImage
 
+    logo_path = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "..", "assets", "roland_logo.png"))
+    if not os.path.exists(logo_path):
+        logger.warning(f"⚠️ Logo ROLAND no encontrado en {logo_path}")
+        return
+    img = XlImage(logo_path)
+    img.width = 180
+    img.height = 45
+    ws.add_image(img, "B3")
+
+
+def _formatear_fecha_pedido(fecha_pedido) -> str:
+    """Normaliza la fecha de pedido, agregando hora 00:00:00 si viene sin hora (10 caracteres)."""
+    if not fecha_pedido:
+        return ""
+    if len(str(fecha_pedido)) == 10:
+        fecha_pedido = f"{fecha_pedido} 00:00:00"
+    return str(fecha_pedido)
+
+
+def _escribir_cabecera_pedido(ws, cabecera: dict, bold_font) -> None:
+    """Escribe las etiquetas y valores del formulario de cabecera (filas 1-11)."""
+    ws["D1"] = "PEDIDO ROLAND NO."
+    ws["E1"] = cabecera.get("numero_pedido", "")
+    ws["D2"] = "FECHA DE PEDIDO"
+    ws["E2"] = _formatear_fecha_pedido(cabecera.get("fecha_pedido", ""))
+    ws["D3"] = "FECHA DE ENTREGA"
+    ws["E3"] = cabecera.get("fecha_entrega", "")
+    ws["D4"] = "FORMA DE PAGO"
+    ws["E4"] = cabecera.get("forma_pago", "")
+    ws["D6"] = "MENSAJE"
+    ws["E6"] = cabecera.get("mensaje", "")
+    ws["D7"] = "NOMBRE PROVEEDOR"
+    ws["E7"] = cabecera.get("proveedor_nombre", "")
+    ws["D8"] = "COMPRADOR NOMBRE"
+    ws["E8"] = cabecera.get("comprador_nombre", "")
+    ws["D9"] = "COD COMPRADOR"
+    ws["E9"] = cabecera.get("comprador_codigo", "")
+    ws["D10"] = "ORIGEN TRASLADO"
+    ws["E10"] = cabecera.get("origen_traslado", "")
+    ws["D11"] = "SERIE"
+    ws["E11"] = cabecera.get("serie", "")
+    for row_num in (1, 2, 3, 4, 6, 7, 8, 9, 10, 11):
+        ws[f"D{row_num}"].font = bold_font
+
+
+def _aplicar_estilos_cabecera(ws, label_fill, label_font, thin_border) -> None:
+    """Aplica relleno, fuente y bordes a las celdas del formulario de cabecera."""
+    for row_num in range(2, 12):
+        if row_num != 5:
+            cell = ws[f"D{row_num}"]
+            cell.fill = label_fill
+            cell.font = label_font
+    for row_num in (1, 2, 3, 4, 6, 7, 8, 9, 10, 11):
+        ws[f"D{row_num}"].border = thin_border
+        ws[f"E{row_num}"].border = thin_border
+
+
+def _escribir_encabezados_tabla(ws, bold_font, thin_border) -> None:
+    """Escribe y estiliza los encabezados de la tabla de detalle (fila 13)."""
+    headers = {
+        "B13": "CODIGO INTERNO", "C13": "MARCA", "D13": "CODIGO DE BARRAS",
+        "E13": "DESCRIPCION SAP", "F13": "PACK", "G13": "PRECIO DE LISTA",
+        "H13": "DSCTO", "I13": "PVP", "J13": "TOTAL",
+    }
+    table_header_fill = PatternFill(start_color="F2F2F2", end_color="F2F2F2", fill_type="solid")
+    for cell_ref, header_text in headers.items():
+        cell = ws[cell_ref]
+        cell.value = header_text
+        cell.font = bold_font
+        cell.fill = table_header_fill
+        cell.alignment = Alignment(horizontal="center")
+        cell.border = thin_border
+
+
+def _set_valor_numerico_celda(ws, col: str, row: int, val) -> None:
+    """Asigna un valor numérico a una celda, con fallback a texto si no es convertible."""
+    if val is None:
+        ws[f"{col}{row}"] = ""
+        return
+    try:
+        ws[f"{col}{row}"] = float(val)
+    except (ValueError, TypeError):
+        ws[f"{col}{row}"] = val
+
+
+def _escribir_fila_detalle(ws, row: int, detalle: dict, marca_excel: str, thin_border) -> None:
+    """Escribe una fila de detalle de producto en la tabla."""
+    ws[f"B{row}"] = detalle.get("codigo_interno", "")
+    ws[f"C{row}"] = marca_excel
+    ws[f"D{row}"] = detalle.get("codigo_barras", "")
+    ws[f"E{row}"] = detalle.get("descripcion_sap", "")
+    ws[f"F{row}"] = detalle.get("pack", "")
+    _set_valor_numerico_celda(ws, "G", row, detalle.get("costo_doc_sin_iva"))
+    _set_valor_numerico_celda(ws, "H", row, detalle.get("descuento_1"))
+    ws[f"H{row}"].number_format = '0.00%'
+    _set_valor_numerico_celda(ws, "I", row, detalle.get("pvp"))
+    _set_valor_numerico_celda(ws, "J", row, detalle.get("total"))
+    for col_letter in ("B", "C", "D", "E", "F", "G", "H", "I", "J"):
+        ws[f"{col_letter}{row}"].border = thin_border
+
+
+def _escribir_detalles_productos(ws, detalles: list, cabecera: dict, thin_border) -> None:
+    """Escribe todas las filas de detalle de productos a partir de la fila 14."""
+    marca_por_origen = {"RL-CD": "ROLAND", "OUT-CD": "DESCUENTON", "RG-CD": "REGIONS"}
+    origen_traslado = (cabecera.get("origen_traslado") or "").strip().upper()
+    marca_excel = marca_por_origen.get(origen_traslado, "")
+    for idx, detalle in enumerate(detalles):
+        _escribir_fila_detalle(ws, 14 + idx, detalle, marca_excel, thin_border)
+
+
+def _escribir_fila_total(ws, detalles: list, bold_font, thin_border) -> None:
+    """Escribe la fila de totales al final de la tabla de detalle, si hay productos."""
+    if not detalles:
+        return
+    ultima_fila_datos = 14 + len(detalles) - 1
+    fila_total = ultima_fila_datos + 1
+    ws[f"I{fila_total}"] = "TOTAL"
+    ws[f"I{fila_total}"].font = bold_font
+    ws[f"I{fila_total}"].alignment = Alignment(horizontal="right")
+    ws[f"I{fila_total}"].border = thin_border
+    ws[f"J{fila_total}"] = f"=SUM(J14:J{ultima_fila_datos})"
+    ws[f"J{fila_total}"].font = bold_font
+    ws[f"J{fila_total}"].border = thin_border
+
+
+def _ajustar_anchos_columnas(ws) -> None:
+    """Ajusta el ancho de las columnas de la tabla de detalle."""
+    anchos = {"B": 18, "C": 12, "D": 18, "E": 50, "F": 8, "G": 16, "H": 10, "I": 10, "J": 10}
+    for col, ancho in anchos.items():
+        ws.column_dimensions[col].width = ancho
+
+
+def _generar_excel_pedido(cabecera: dict, detalles: list) -> bytes:
     wb = Workbook()
     ws = wb.active
     assert ws is not None
@@ -45,134 +178,13 @@ def _generar_excel_pedido(cabecera: dict, detalles: list) -> bytes:
         bottom=Side(style="thin"),
     )
 
-    logo_path = os.path.join(os.path.dirname(__file__), "..", "..", "assets", "roland_logo.png")
-    logo_path = os.path.normpath(logo_path)
-    if os.path.exists(logo_path):
-        img = XlImage(logo_path)
-        img.width = 180
-        img.height = 45
-        ws.add_image(img, "B3")
-    else:
-        logger.warning(f"⚠️ Logo ROLAND no encontrado en {logo_path}")
-
-    ws["D1"] = "PEDIDO ROLAND NO."
-    ws["D1"].font = bold_font
-    ws["E1"] = cabecera.get("numero_pedido", "")
-
-    ws["D2"] = "FECHA DE PEDIDO"
-    ws["D2"].font = bold_font
-    fecha_pedido = cabecera.get("fecha_pedido", "")
-    if fecha_pedido and len(str(fecha_pedido)) == 10:
-        fecha_pedido = f"{fecha_pedido} 00:00:00"
-    ws["E2"] = str(fecha_pedido) if fecha_pedido else ""
-
-    ws["D3"] = "FECHA DE ENTREGA"
-    ws["D3"].font = bold_font
-    ws["E3"] = cabecera.get("fecha_entrega", "")
-
-    ws["D4"] = "FORMA DE PAGO"
-    ws["D4"].font = bold_font
-    ws["E4"] = cabecera.get("forma_pago", "")
-
-    ws["D6"] = "MENSAJE"
-    ws["D6"].font = bold_font
-    ws["E6"] = cabecera.get("mensaje", "")
-
-    ws["D7"] = "NOMBRE PROVEEDOR"
-    ws["D7"].font = bold_font
-    ws["E7"] = cabecera.get("proveedor_nombre", "")
-
-    ws["D8"] = "COMPRADOR NOMBRE"
-    ws["D8"].font = bold_font
-    ws["E8"] = cabecera.get("comprador_nombre", "")
-
-    ws["D9"] = "COD COMPRADOR"
-    ws["D9"].font = bold_font
-    ws["E9"] = cabecera.get("comprador_codigo", "")
-
-    ws["D10"] = "ORIGEN TRASLADO"
-    ws["D10"].font = bold_font
-    ws["E10"] = cabecera.get("origen_traslado", "")
-
-    ws["D11"] = "SERIE"
-    ws["D11"].font = bold_font
-    ws["E11"] = cabecera.get("serie", "")
-
-    for row_num in range(2, 12):
-        if row_num == 5:
-            continue
-        cell = ws[f"D{row_num}"]
-        cell.fill = label_fill
-        cell.font = label_font
-
-    for row_num in [1, 2, 3, 4, 6, 7, 8, 9, 10, 11]:
-        ws[f"D{row_num}"].border = thin_border
-        ws[f"E{row_num}"].border = thin_border
-
-    headers = {
-        "B13": "CODIGO INTERNO", "C13": "MARCA", "D13": "CODIGO DE BARRAS",
-        "E13": "DESCRIPCION SAP", "F13": "PACK", "G13": "PRECIO DE LISTA",
-        "H13": "DSCTO", "I13": "PVP", "J13": "TOTAL",
-    }
-    table_header_fill = PatternFill(start_color="F2F2F2", end_color="F2F2F2", fill_type="solid")
-    for cell_ref, header_text in headers.items():
-        cell = ws[cell_ref]
-        cell.value = header_text
-        cell.font = bold_font
-        cell.fill = table_header_fill
-        cell.alignment = Alignment(horizontal="center")
-        cell.border = thin_border
-
-    MARCA_POR_ORIGEN = {"RL-CD": "ROLAND", "OUT-CD": "DESCUENTON", "RG-CD": "REGIONS"}
-    origen_traslado = (cabecera.get("origen_traslado") or "").strip().upper()
-    marca_excel = MARCA_POR_ORIGEN.get(origen_traslado, "")
-
-    for idx, detalle in enumerate(detalles):
-        row = 14 + idx
-        ws[f"B{row}"] = detalle.get("codigo_interno", "")
-        ws[f"C{row}"] = marca_excel
-        ws[f"D{row}"] = detalle.get("codigo_barras", "")
-        ws[f"E{row}"] = detalle.get("descripcion_sap", "")
-        ws[f"F{row}"] = detalle.get("pack", "")
-
-        def _set_number_val(col, val):
-            if val is not None:
-                try:
-                    ws[f"{col}{row}"] = float(val)
-                except (ValueError, TypeError):
-                    ws[f"{col}{row}"] = val
-            else:
-                ws[f"{col}{row}"] = ""
-
-        _set_number_val("G", detalle.get("costo_doc_sin_iva"))
-        _set_number_val("H", detalle.get("descuento_1"))
-        ws[f"H{row}"].number_format = '0.00%'
-        _set_number_val("I", detalle.get("pvp"))
-        _set_number_val("J", detalle.get("total"))
-
-        for col_letter in ["B", "C", "D", "E", "F", "G", "H", "I", "J"]:
-            ws[f"{col_letter}{row}"].border = thin_border
-
-    if detalles:
-        ultima_fila_datos = 14 + len(detalles) - 1
-        fila_total = ultima_fila_datos + 1
-        ws[f"I{fila_total}"] = "TOTAL"
-        ws[f"I{fila_total}"].font = bold_font
-        ws[f"I{fila_total}"].alignment = Alignment(horizontal="right")
-        ws[f"I{fila_total}"].border = thin_border
-        ws[f"J{fila_total}"] = f"=SUM(J14:J{ultima_fila_datos})"
-        ws[f"J{fila_total}"].font = bold_font
-        ws[f"J{fila_total}"].border = thin_border
-
-    ws.column_dimensions["B"].width = 18
-    ws.column_dimensions["C"].width = 12
-    ws.column_dimensions["D"].width = 18
-    ws.column_dimensions["E"].width = 50
-    ws.column_dimensions["F"].width = 8
-    ws.column_dimensions["G"].width = 16
-    ws.column_dimensions["H"].width = 10
-    ws.column_dimensions["I"].width = 10
-    ws.column_dimensions["J"].width = 10
+    _agregar_logo_roland(ws)
+    _escribir_cabecera_pedido(ws, cabecera, bold_font)
+    _aplicar_estilos_cabecera(ws, label_fill, label_font, thin_border)
+    _escribir_encabezados_tabla(ws, bold_font, thin_border)
+    _escribir_detalles_productos(ws, detalles, cabecera, thin_border)
+    _escribir_fila_total(ws, detalles, bold_font, thin_border)
+    _ajustar_anchos_columnas(ws)
 
     output = io.BytesIO()
     wb.save(output)

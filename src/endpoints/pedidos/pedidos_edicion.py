@@ -90,8 +90,8 @@ def _logic_actualizar_costo_detalle(numero_pedido: str, pedido_detalle_id: str, 
         
         with get_db_connection_context() as conn:
             repo = PedidoRepository(conn)
-            pedido = _validar_pedido_editable(repo, numero_pedido)
-            
+            _validar_pedido_editable(repo, numero_pedido)
+
             resultado = repo.update_costo_detalle(pedido_detalle_id, nuevo_costo, modificado_por=user_id)
             if resultado.get("success"):
                 pedido_actualizado = _get_pedido_por_identificador(repo, numero_pedido)
@@ -143,8 +143,8 @@ def _logic_actualizar_total_detalle(numero_pedido: str, pedido_detalle_id: str, 
         
         with get_db_connection_context() as conn:
             repo = PedidoRepository(conn)
-            pedido = _validar_pedido_editable(repo, numero_pedido)
-            
+            _validar_pedido_editable(repo, numero_pedido)
+
             resultado = repo.update_total_detalle(pedido_detalle_id, nuevo_total, modificado_por=user_id)
             if resultado.get("success"):
                 pedido_actualizado = _get_pedido_por_identificador(repo, numero_pedido)
@@ -191,8 +191,8 @@ def _logic_actualizar_comentario_detalle(numero_pedido: str, pedido_detalle_id: 
         
         with get_db_connection_context() as conn:
             repo = PedidoRepository(conn)
-            pedido = _validar_pedido_editable(repo, numero_pedido)
-            
+            _validar_pedido_editable(repo, numero_pedido)
+
             resultado = repo.update_comentario_detalle(pedido_detalle_id, nuevo_comentario, modificado_por=user_id)
         
         if resultado["success"]:
