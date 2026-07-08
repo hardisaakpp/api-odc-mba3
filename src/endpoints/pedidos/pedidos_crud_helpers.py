@@ -125,6 +125,26 @@ def _oc_permite_reintento_envio_por_detalle_error(oc: Dict[str, Any]) -> bool:
     return False
 
 
+def _es_reintentable_en_estado_confirmado(ordenes_compra: List[Dict[str, Any]]) -> bool:
+    """Evalúa si se puede reintentar ODC en estado CONFIRMADO."""
+    if not ordenes_compra:
+        return True
+    for oc in ordenes_compra or []:
+        est = (oc.get("estado") or "").strip().upper()
+        if est == "PENDIENTE":
+            return True
+        if est == "ERROR" and _oc_permite_reintento_envio_por_detalle_error(oc):
+            return True
+    return False
+
+def _es_reintentable_en_estado_error(ordenes_compra: List[Dict[str, Any]]) -> bool:
+    """Evalúa si se puede reintentar ODC en estado ERROR ENVÍO SAP."""
+    for oc in ordenes_compra or []:
+        est = (oc.get("estado") or "").strip().upper()
+        if est in ("PENDIENTE", "ERROR"):
+            return True
+    return False
+
 def pedido_permite_reintento_envio_odc_sap(
     pedido: Dict[str, Any],
     ordenes_compra: List[Dict[str, Any]],
@@ -152,22 +172,10 @@ def pedido_permite_reintento_envio_odc_sap(
         return True
 
     if estado_id == ESTADO_PEDIDO_CONFIRMADO:
-        if not ordenes_compra:
-            return True
-        for oc in ordenes_compra or []:
-            est = (oc.get("estado") or "").strip().upper()
-            if est == "PENDIENTE":
-                return True
-            if est == "ERROR" and _oc_permite_reintento_envio_por_detalle_error(oc):
-                return True
-        return False
+        return _es_reintentable_en_estado_confirmado(ordenes_compra)
 
     if estado_id == ESTADO_ERROR_ENVIO_SAP_REINTENTO:
-        for oc in ordenes_compra or []:
-            est = (oc.get("estado") or "").strip().upper()
-            if est in ("PENDIENTE", "ERROR"):
-                return True
-        return False
+        return _es_reintentable_en_estado_error(ordenes_compra)
 
     return False
 

@@ -215,6 +215,30 @@ class MBA3Client:
 
         return token
 
+    def _try_single_login_payload(self, i: int, payload: dict, url: str, headers: dict, timeout: int, codigo: str, total: int) -> Optional[str]:
+        try:
+            token = self._attempt_login(i, payload, url, headers, timeout, codigo, total)
+            if token is None:
+                return None
+            self.token = token
+            if ENVIRONMENT == "development":
+                logger.debug(f"✅ Login exitoso. JWT obtenido (primeros 20 caracteres): {token[:20]}...")
+            else:
+                logger.info("✅ Login exitoso. JWT obtenido")
+            return token
+        except requests.exceptions.ConnectionError as e:
+            raise MBA3ConnectionError(_build_connection_error_msg(url, e))
+        except requests.exceptions.Timeout:
+            raise MBA3ConnectionError(_build_timeout_error_msg(url))
+        except requests.exceptions.HTTPError as e:
+            _handle_http_error(e, i, total)
+            return None
+        except (ValueError, MBA3ConnectionError):
+            raise
+        except Exception as e:
+            _handle_generic_exception(e, url, i, total)
+            return None
+
     def login(self, codigo: str, pwd: str, timeout: int = 10) -> str:
         """
         Crea un LOGIN y obtiene el JWT (sesión).
@@ -256,28 +280,9 @@ class MBA3Client:
         logger.info(f"🔐 Intentando login con código: {codigo[:3]}***")
 
         for i, payload in enumerate(payloads_to_try, 1):
-            try:
-                token = self._attempt_login(i, payload, url, headers, timeout, codigo, total)
-                if token is None:
-                    continue
-                self.token = token
-                if ENVIRONMENT == "development":
-                    logger.debug(f"✅ Login exitoso. JWT obtenido (primeros 20 caracteres): {token[:20]}...")
-                else:
-                    logger.info("✅ Login exitoso. JWT obtenido")
+            token = self._try_single_login_payload(i, payload, url, headers, timeout, codigo, total)
+            if token is not None:
                 return token
-            except requests.exceptions.ConnectionError as e:
-                raise MBA3ConnectionError(_build_connection_error_msg(url, e))
-            except requests.exceptions.Timeout:
-                raise MBA3ConnectionError(_build_timeout_error_msg(url))
-            except requests.exceptions.HTTPError as e:
-                _handle_http_error(e, i, total)
-                continue
-            except (ValueError, MBA3ConnectionError):
-                raise
-            except Exception as e:
-                _handle_generic_exception(e, url, i, total)
-                continue
 
         raise ValueError(f"Error en login después de {total} intentos")
 

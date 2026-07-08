@@ -363,32 +363,36 @@ def _combinar_st(st_existente, resultado_st):
     }
 
 
+def _procesar_detalle_acumulado(detalle, pedidos_procesados):
+    try:
+        with get_db_connection_context() as conn_temp:
+            oc_repo_temp = OrdenCompraRepository(conn_temp)
+            oc_info = oc_repo_temp.get_existing_cabecera(detalle["oc_id"])
+            if not (oc_info and oc_info.get("pedido_id")):
+                return
+            pedido_id = oc_info["pedido_id"]
+            resultado_st = detalle.get("solicitudes_transferencia")
+            if pedido_id in pedidos_procesados:
+                st_existente = pedidos_procesados[pedido_id].get("resultado_st")
+                if st_existente and resultado_st:
+                    pedidos_procesados[pedido_id]["resultado_st"] = _combinar_st(st_existente, resultado_st)
+                elif resultado_st:
+                    pedidos_procesados[pedido_id]["resultado_st"] = resultado_st
+            else:
+                pedidos_procesados[pedido_id] = {
+                    "oc_id": detalle["oc_id"],
+                    "resultado_st": resultado_st
+                }
+    except Exception:
+        pass
+
+
 def _acumular_pedidos_procesados(detalles):
     pedidos_procesados = {}
     for detalle in detalles:
         if not detalle.get("success"):
             continue
-        try:
-            with get_db_connection_context() as conn_temp:
-                oc_repo_temp = OrdenCompraRepository(conn_temp)
-                oc_info = oc_repo_temp.get_existing_cabecera(detalle["oc_id"])
-                if not (oc_info and oc_info.get("pedido_id")):
-                    continue
-                pedido_id = oc_info["pedido_id"]
-                resultado_st = detalle.get("solicitudes_transferencia")
-                if pedido_id in pedidos_procesados:
-                    st_existente = pedidos_procesados[pedido_id].get("resultado_st")
-                    if st_existente and resultado_st:
-                        pedidos_procesados[pedido_id]["resultado_st"] = _combinar_st(st_existente, resultado_st)
-                    elif resultado_st:
-                        pedidos_procesados[pedido_id]["resultado_st"] = resultado_st
-                else:
-                    pedidos_procesados[pedido_id] = {
-                        "oc_id": detalle["oc_id"],
-                        "resultado_st": resultado_st
-                    }
-        except Exception:
-            pass
+        _procesar_detalle_acumulado(detalle, pedidos_procesados)
     return pedidos_procesados
 
 

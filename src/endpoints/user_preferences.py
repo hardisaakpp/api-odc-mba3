@@ -310,20 +310,7 @@ async def _get_table_preferences(table_id: str, user: Dict) -> PreferencesRespon
             conn.close()
 
 
-async def _save_table_preferences(table_id: str, request_body: SavePreferencesRequest, user: Dict):
-    logger.info(f"🔍 POST /api/users/preferences/{table_id}: Iniciado")
-    logger.debug(f"   User object keys: {list(user.keys()) if user else 'None'}")
-    logger.debug(f"   Request body type: {type(request_body)}")
-    logger.debug(f"   Request body: {request_body}")
-
-    try:
-        user_id = get_user_id_or_username(user)
-        logger.debug(f"   User ID obtenido: {user_id}")
-    except HTTPException as e:
-        logger.error(f"❌ Error al obtener user_id: {e.detail}")
-        raise
-
-    # Validar datos - verificar que request_body y preferences existan
+def _validate_save_table_request(request_body: SavePreferencesRequest):
     if not request_body:
         logger.error("❌ Request body es None o vacío")
         raise HTTPException(
@@ -341,7 +328,6 @@ async def _save_table_preferences(table_id: str, request_body: SavePreferencesRe
     prefs = request_body.preferences
     logger.debug(f"   Preferences recibidas: visibleColumns={prefs.visibleColumns if prefs else None}, columnOrder={prefs.columnOrder if prefs else None}")
 
-    # Validar que visibleColumns y columnOrder existan y no estén vacíos
     if not hasattr(prefs, 'visibleColumns') or prefs.visibleColumns is None:
         logger.warning("⚠️ visibleColumns es None o no existe")
         raise HTTPException(
@@ -383,6 +369,24 @@ async def _save_table_preferences(table_id: str, request_body: SavePreferencesRe
             status_code=400,
             detail="Debe haber al menos una columna en columnOrder"
         )
+
+    return prefs
+
+
+async def _save_table_preferences(table_id: str, request_body: SavePreferencesRequest, user: Dict):
+    logger.info(f"🔍 POST /api/users/preferences/{table_id}: Iniciado")
+    logger.debug(f"   User object keys: {list(user.keys()) if user else 'None'}")
+    logger.debug(f"   Request body type: {type(request_body)}")
+    logger.debug(f"   Request body: {request_body}")
+
+    try:
+        user_id = get_user_id_or_username(user)
+        logger.debug(f"   User ID obtenido: {user_id}")
+    except HTTPException as e:
+        logger.error(f"❌ Error al obtener user_id: {e.detail}")
+        raise
+
+    prefs = _validate_save_table_request(request_body)
 
     try:
         # Usar context manager para garantizar transacción y cierre de conexión

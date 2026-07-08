@@ -357,6 +357,35 @@ class ProductoStagingSyncService:
                 continue
         return productos_staging, errores
 
+    def _procesar_y_guardar_lote_mba3(
+        self,
+        productos: List[Dict[str, Any]],
+        batch_number: int,
+        last_product_id: Optional[str],
+        force_full_sync: bool,
+        productos_encontrados: set,
+        mba3_staging_repo: ProductoMBA3StagingRepository
+    ) -> Tuple[int, int, int, int, Optional[str]]:
+        """Procesa, normaliza y guarda el lote en staging."""
+        logger.info(f"📦 Lote {batch_number}: Procesando {len(productos)} productos...")
+        ultimo_product_id_valido = self._calcular_cursor_lote_mba3(productos, batch_number, last_product_id)
+
+        productos_staging, errores_lote = self._extraer_productos_staging_mba3(
+            productos, force_full_sync, productos_encontrados
+        )
+
+        nuevo_last_product_id = ultimo_product_id_valido or last_product_id
+        if ultimo_product_id_valido:
+            logger.info(f"📍 Cursor actualizado para siguiente lote: {ultimo_product_id_valido}")
+
+        ins, act, err, proc = 0, 0, errores_lote, 0
+        if productos_staging:
+            logger.info(f"💾 Lote {batch_number}: Guardando {len(productos_staging)} productos en staging...")
+            ins, act, err_db, proc = self._guardar_lote_staging(mba3_staging_repo, productos_staging, batch_number)
+            err += err_db
+
+        return ins, act, err, proc, nuevo_last_product_id
+
     def _bucle_paginacion_mba3(
         self,
         mba3_staging_repo: ProductoMBA3StagingRepository,
@@ -417,25 +446,15 @@ class ProductoStagingSyncService:
             if detener:
                 break
 
-            logger.info(f"📦 Lote {batch_number}: Procesando {len(productos)} productos...")
-            ultimo_product_id_valido = self._calcular_cursor_lote_mba3(productos, batch_number, last_product_id)
-
-            productos_staging, errores_lote = self._extraer_productos_staging_mba3(
-                productos, force_full_sync, productos_encontrados
+            ins, act, err, proc, last_product_id = self._procesar_y_guardar_lote_mba3(
+                productos, batch_number, last_product_id, force_full_sync,
+                productos_encontrados, mba3_staging_repo
             )
-            total_errores += errores_lote
 
-            if ultimo_product_id_valido:
-                last_product_id = ultimo_product_id_valido
-                logger.info(f"📍 Cursor actualizado para siguiente lote: {last_product_id}")
-
-            if productos_staging:
-                logger.info(f"💾 Lote {batch_number}: Guardando {len(productos_staging)} productos en staging...")
-                ins, act, err, proc = self._guardar_lote_staging(mba3_staging_repo, productos_staging, batch_number)
-                total_insertados += ins
-                total_actualizados += act
-                total_errores += err
-                total_procesados += proc
+            total_insertados += ins
+            total_actualizados += act
+            total_errores += err
+            total_procesados += proc
 
             if len(productos) < batch_size:
                 logger.info(f"✅ Último lote procesado (menos de {batch_size} productos)")

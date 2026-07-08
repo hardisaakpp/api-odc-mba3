@@ -154,7 +154,7 @@ def _aplicar_validacion_sap(resultado, sap_obligatorio):
     )
 
 
-async def _importar_excel_pedido_handler(file, hoja_cabecera, hoja_detalle, validar_sap, sap_obligatorio, user):
+async def _importar_excel_pedido_handler(file, hoja_cabecera, hoja_detalle, validar_sap, sap_obligatorio):
     """Lógica del endpoint de importación/parsing de Excel de pedido."""
     try:
         # Validar archivo
@@ -444,7 +444,7 @@ def register_pedidos_crear_editar_endpoints(app: FastAPI):
             JSON con resultado del parsing tecnico incluyendo cabecera y detalle
         """
         return await _importar_excel_pedido_handler(
-            file, hoja_cabecera, hoja_detalle, validar_sap, sap_obligatorio, user
+            file, hoja_cabecera, hoja_detalle, validar_sap, sap_obligatorio
         )
 
     @app.post("/api/pedidos",
