@@ -1,0 +1,422 @@
+"""
+Cliente para el SAP Middleware API.
+
+Reemplaza la conexión directa a SAP Business One Service Layer.
+El middleware gestiona sesiones SAP, throttling, reintentos y circuit breaker internamente.
+"""
+
+import logging
+import urllib.parse
+import requests
+from typing import Dict, Any, Optional, List
+
+from src.config import (
+    SAP_MIDDLEWARE_URL,
+    ENABLE_SAP_SERVICE_LAYER,
+    SAP_SERVICE_LAYER_TIMEOUT,
+)
+from src.exceptions import SAPDataMasterError
+
+logger = logging.getLogger(__name__)
+
+
+class SAPServiceLayerClient:
+    """Cliente para el SAP Middleware API."""
+
+    def __init__(self):
+        self.base_url = SAP_MIDDLEWARE_URL.rstrip("/")
+        self.enabled = ENABLE_SAP_SERVICE_LAYER
+        self.timeout = SAP_SERVICE_LAYER_TIMEOUT
+
+        if not self.enabled:
+            logger.warning("⚠️ SAP Service Layer deshabilitado (ENABLE_SAP_SERVICE_LAYER=False)")
+
+    # ─── HTTP helpers ──────────────────────────────────────────────────────────
+
+    def _get(self, path: str) -> Optional[requests.Response]:
+        try:
+            return requests.get(f"{self.base_url}{path}", timeout=self.timeout)
+        except requests.exceptions.RequestException as e:
+            logger.error(f"❌ GET {path}: error de conexión: {e}")
+            return None
+
+    def _post(self, path: str, json_data: Dict) -> Optional[requests.Response]:
+        try:
+            return requests.post(
+                f"{self.base_url}{path}",
+                json=json_data,
+                headers={"Content-Type": "application/json"},
+                timeout=self.timeout,
+            )
+        except requests.exceptions.RequestException as e:
+            logger.error(f"❌ POST {path}: error de conexión: {e}")
+            return None
+
+    @staticmethod
+    def _problem_detail(response: requests.Response) -> str:
+        """Extrae el mensaje de una respuesta ProblemDetails (RFC 7807)."""
+        try:
+            body = response.json()
+            return body.get("detail") or body.get("title") or f"HTTP {response.status_code}"
+        except Exception:
+            return f"HTTP {response.status_code}: {response.text[:200]}"
+
+    @staticmethod
+    def _bool_to_tyes(value: Any) -> str:
+        """Convierte bool del middleware al formato SAP tYES/tNO que esperan los callers."""
+        if isinstance(value, bool):
+            return "tYES" if value else "tNO"
+        return value  # ya viene como string (ej: "tYES")
+
+    # ─── Purchase Orders ───────────────────────────────────────────────────────
+
+    def create_purchase_order(self, purchase_order_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """
+        Crea una OC en SAP via middleware.
+
+        Traduce el formato PascalCase/OData que produce SAPOCMapper
+        al camelCase que espera el middleware (POST /api/v1/purchase-orders).
+        """
+        if not self.enabled:
+            logger.debug("⏭️ Creación de Purchase Order deshabilitada")
+            return None
+
+        lines = [
+            {
+                "itemCode": line.get("ItemCode"),
+                "quantity": line.get("Quantity"),
+                "unitPrice": line.get("UnitPrice"),
+                "warehouseCode": line.get("WarehouseCode"),
+            }
+            for line in purchase_order_data.get("DocumentLines", [])
+        ]
+
+        payload = {
+            "cardCode": purchase_order_data.get("CardCode"),
+            "docDate": purchase_order_data.get("DocDate"),
+            "docDueDate": purchase_order_data.get("DocDueDate"),
+            "taxDate": purchase_order_data.get("TaxDate"),
+            "comments": purchase_order_data.get("Comments"),
+            "u_ORIGEN": purchase_order_data.get("U_ORIGEN"),
+            "u_USUARIO": purchase_order_data.get("U_USUARIO"),
+            "u_FECHA": purchase_order_data.get("U_FECHA"),
+            "u_FE_ETG": purchase_order_data.get("U_FE_ETG"),
+            "u_LOTE": purchase_order_data.get("U_LOTE"),
+            "lines": lines,
+        }
+
+        logger.info(f"📤 POST /api/v1/purchase-orders (CardCode={payload['cardCode']}, {len(lines)} líneas)")
+        logger.debug(f"   Payload: {payload}")
+
+        response = self._post("/api/v1/purchase-orders", payload)
+        if response is None:
+            return {"success": False, "error": "No se pudo conectar con el middleware SAP"}
+
+        if response.status_code in (200, 201):
+            result = response.json()
+            doc_entry = result.get("docEntry")
+            doc_num = result.get("docNum")
+            logger.info(f"✅ Purchase Order creada: DocEntry={doc_entry}, DocNum={doc_num}")
+            return {"success": True, "doc_entry": doc_entry, "doc_num": doc_num, "data": result}
+
+        error_msg = self._problem_detail(response)
+        logger.error(f"❌ Error al crear Purchase Order: {error_msg}")
+        return {
+            "success": False,
+            "error": error_msg,
+            "error_code": None,
+            "status_code": response.status_code,
+            "sap_error_details": None,
+        }
+
+    # ─── Stock Transfers ────────────────────────────────────────────────────────
+
+    def create_stock_transfer(self, stock_transfer_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """
+        Crea una Inventory Transfer Request en SAP via middleware.
+
+        Traduce el formato PascalCase/OData que produce SAPStockTransferMapper
+        al camelCase que espera el middleware (POST /api/v1/stock-transfers/requests).
+        """
+        if not self.enabled:
+            logger.debug("⏭️ Creación de Inventory Transfer Request deshabilitada")
+            return None
+
+        lines = [
+            {
+                "itemCode": line.get("ItemCode"),
+                "quantity": line.get("Quantity"),
+                "projectCode": None,
+            }
+            for line in stock_transfer_data.get("StockTransferLines", [])
+        ]
+
+        payload = {
+            "fromWarehouse": stock_transfer_data.get("FromWarehouse"),
+            "toWarehouse": stock_transfer_data.get("ToWarehouse"),
+            "docDate": stock_transfer_data.get("DocDate"),
+            "comments": stock_transfer_data.get("Comments"),
+            "lines": lines,
+        }
+
+        from_wh = payload["fromWarehouse"]
+        to_wh = payload["toWarehouse"]
+        logger.info(f"📤 POST /api/v1/stock-transfers/requests ({from_wh} → {to_wh}, {len(lines)} líneas)")
+
+        response = self._post("/api/v1/stock-transfers/requests", payload)
+        if response is None:
+            return {"success": False, "error": "No se pudo conectar con el middleware SAP"}
+
+        if response.status_code in (200, 201):
+            result = response.json()
+            doc_entry = result.get("docEntry")
+            doc_num = result.get("docNum")
+            logger.info(f"✅ Inventory Transfer Request creada: DocEntry={doc_entry}, DocNum={doc_num}")
+            return {"success": True, "doc_entry": doc_entry, "doc_num": doc_num, "data": result}
+
+        error_msg = self._problem_detail(response)
+        logger.error(f"❌ Error al crear Inventory Transfer Request: {error_msg}")
+        return {
+            "success": False,
+            "error": error_msg,
+            "error_code": None,
+            "status_code": response.status_code,
+            "sap_error_details": None,
+        }
+
+    # ─── Inventory Transfer Requests (query) ──────────────────────────────────
+
+    def get_inventory_transfer_requests_by_comment(self, comment_filter: str) -> List[Dict[str, Any]]:
+        """Consulta ITRs filtrando por texto en Comments via middleware."""
+        if not self.enabled:
+            logger.debug("⏭️ Consulta de ITR deshabilitada")
+            return []
+
+        encoded = urllib.parse.quote(comment_filter)
+        path = f"/api/v1/inventory-transfer-requests?commentsContain={encoded}"
+
+        logger.info(f"🔍 GET /api/v1/inventory-transfer-requests?commentsContain='{comment_filter}'")
+        response = self._get(path)
+        if response is None:
+            return []
+
+        if response.status_code == 200:
+            data = response.json()
+            items = data if isinstance(data, list) else data.get("value", [])
+            logger.info(f"✅ ITR encontrados: {len(items)}")
+            return [
+                {
+                    "doc_num": item.get("docNum"),
+                    "doc_entry": item.get("docEntry"),
+                    "to_warehouse": item.get("toWarehouse"),
+                    "from_warehouse": item.get("fromWarehouse"),
+                    "comments": item.get("comments"),
+                }
+                for item in items
+            ]
+
+        logger.warning(f"⚠️ Error al consultar ITR: {self._problem_detail(response)}")
+        return []
+
+    # ─── Items ─────────────────────────────────────────────────────────────────
+
+    def get_item(self, item_code: str) -> Optional[Dict[str, Any]]:
+        """Consulta un artículo en SAP via middleware."""
+        if not self.enabled:
+            logger.debug(f"⏭️ Consulta de Item deshabilitada: {item_code}")
+            return None
+
+        path = f"/api/v1/items/{urllib.parse.quote(item_code, safe='')}"
+        logger.debug(f"🔍 GET {path}")
+        response = self._get(path)
+        if response is None:
+            return None
+
+        if response.status_code == 200:
+            data = response.json()
+            is_purchase = data.get("purchaseItem")
+            is_valid = data.get("valid")
+            is_frozen = data.get("frozen")
+            logger.info(
+                f"✅ Item encontrado: {item_code} - "
+                f"Comprable={is_purchase}, Valid={is_valid}, Frozen={is_frozen}"
+            )
+            return {
+                "ItemCode": data.get("itemCode"),
+                "ItemName": data.get("itemName"),
+                "PurchaseItem": self._bool_to_tyes(is_purchase),
+                "SalesItem": self._bool_to_tyes(data.get("salesItem")),
+                "InventoryItem": self._bool_to_tyes(data.get("inventoryItem")),
+                "Valid": self._bool_to_tyes(is_valid),
+                "Frozen": self._bool_to_tyes(is_frozen),
+                "ItemType": data.get("itemType"),
+            }
+
+        if response.status_code == 404:
+            logger.warning(f"⚠️ Item no encontrado: {item_code}")
+            return {
+                "_error": True,
+                "_error_type": "no_existe",
+                "_error_message": f"Item '{item_code}' no existe en SAP",
+            }
+
+        error_msg = self._problem_detail(response)
+        logger.error(f"❌ Error al consultar Item {item_code}: {error_msg}")
+        return {"_error": True, "_error_type": "error", "_error_message": error_msg}
+
+    def get_stock_by_warehouse(self, item_code: str, warehouse_code: str) -> Optional[Dict[str, Any]]:
+        """
+        Consulta el stock disponible de un artículo en una bodega via middleware.
+
+        Lanza SAPDataMasterError si el artículo no está configurado en esa bodega (404).
+        """
+        if not self.enabled:
+            logger.debug("⏭️ Consulta de stock deshabilitada")
+            return None
+
+        path = (
+            f"/api/v1/items/{urllib.parse.quote(item_code, safe='')}"
+            f"/stock/{urllib.parse.quote(warehouse_code, safe='')}"
+        )
+        logger.debug(f"🔍 GET {path}")
+        response = self._get(path)
+        if response is None:
+            return None
+
+        if response.status_code == 200:
+            data = response.json()
+            in_stock_raw = float(data.get("inStock") or 0)
+            is_committed = float(data.get("isCommitted") or 0)
+            in_stock = in_stock_raw - is_committed
+            uom_code = data.get("uomCode")
+            locked = data.get("locked")
+            locked_str = self._bool_to_tyes(locked)
+
+            if uom_code is None:
+                logger.warning(f"⚠️ {item_code}: UomCode=NULL - validación en unidades base")
+            if locked_str == "tYES":
+                logger.warning(f"⚠️ {item_code} en {warehouse_code} está BLOQUEADO")
+
+            logger.info(
+                f"✅ Stock disponible: {item_code} en {warehouse_code} = {in_stock} "
+                f"(InStock={in_stock_raw}, Comprometido={is_committed})"
+            )
+            return {
+                "InStock": in_stock,
+                "UomCode": uom_code,
+                "WarehouseCode": warehouse_code,
+                "Locked": locked_str,
+                "IsCommited": is_committed,
+            }
+
+        if response.status_code == 404:
+            logger.warning(f"⚠️ {item_code} no configurado en bodega {warehouse_code}")
+            raise SAPDataMasterError(
+                item_code=item_code,
+                warehouse_code=warehouse_code,
+                error_type="warehouse_not_found",
+                available_warehouses=[],
+            )
+
+        logger.error(f"❌ Error al consultar stock de {item_code}: {self._problem_detail(response)}")
+        return None
+
+    def get_business_partner(self, card_code: str) -> Optional[Dict[str, Any]]:
+        """Consulta un Business Partner en SAP via middleware."""
+        if not self.enabled:
+            logger.debug(f"⏭️ Consulta de Business Partner deshabilitada: {card_code}")
+            return None
+
+        path = f"/api/v1/business-partners/{urllib.parse.quote(card_code, safe='')}"
+        logger.debug(f"🔍 GET {path}")
+        response = self._get(path)
+        if response is None:
+            return None
+
+        if response.status_code == 200:
+            data = response.json()
+            logger.info(
+                f"✅ Business Partner encontrado: {card_code} - "
+                f"{data.get('cardName')} ({data.get('cardType')})"
+            )
+            return {
+                "CardCode": data.get("cardCode"),
+                "CardName": data.get("cardName"),
+                "CardType": data.get("cardType"),
+                "Valid": self._bool_to_tyes(data.get("valid")),
+                "Frozen": self._bool_to_tyes(data.get("frozen")),
+            }
+
+        if response.status_code == 404:
+            logger.warning(f"⚠️ Business Partner no encontrado: {card_code}")
+            return {
+                "_error": True,
+                "_error_type": "no_existe",
+                "_error_message": f"Business Partner '{card_code}' no existe en SAP",
+            }
+
+        error_msg = self._problem_detail(response)
+        logger.error(f"❌ Error al consultar Business Partner {card_code}: {error_msg}")
+        return {"_error": True, "_error_type": "error", "_error_message": error_msg}
+
+    def validate_item_in_warehouse(self, item_code: str, warehouse_code: str) -> Dict[str, Any]:
+        """Valida que un artículo exista y esté configurado en una bodega."""
+        result = {
+            "valid": False,
+            "item_exists": False,
+            "is_purchase_item": False,
+            "warehouse_configured": False,
+            "stock": None,
+            "errors": [],
+        }
+
+        item = self.get_item(item_code)
+        if item is None:
+            result["errors"].append(f"Error de conexión al validar artículo {item_code}")
+            return result
+
+        if item.get("_error"):
+            if item.get("_error_type") == "no_existe":
+                result["errors"].append(f"Artículo '{item_code}' no existe en SAP")
+            else:
+                result["errors"].append(item.get("_error_message", f"Error al validar {item_code}"))
+            return result
+
+        result["item_exists"] = True
+
+        if item.get("PurchaseItem") != "tYES":
+            result["errors"].append(
+                f"Artículo '{item_code}' no está habilitado para compra "
+                f"(PurchaseItem={item.get('PurchaseItem')})"
+            )
+            return result
+
+        result["is_purchase_item"] = True
+
+        try:
+            stock_info = self.get_stock_by_warehouse(item_code, warehouse_code)
+            if stock_info is None:
+                result["errors"].append(f"Error de conexión al validar bodega {warehouse_code}")
+                return result
+            result["warehouse_configured"] = True
+            result["stock"] = stock_info.get("InStock", 0)
+            result["valid"] = True
+        except SAPDataMasterError as e:
+            if e.available_warehouses:
+                result["errors"].append(
+                    f"Artículo '{item_code}' no está configurado en bodega '{warehouse_code}'. "
+                    f"Bodegas disponibles: {', '.join(e.available_warehouses)}"
+                )
+            else:
+                result["errors"].append(
+                    f"Artículo '{item_code}' no tiene bodegas configuradas en SAP. "
+                    f"Contacte a logística para dar de alta el artículo en la bodega '{warehouse_code}'."
+                )
+        except Exception as e:
+            result["errors"].append(f"Error inesperado al validar artículo en bodega: {str(e)}")
+
+        return result
+
+    def logout(self) -> bool:
+        """No-op: el middleware gestiona las sesiones SAP internamente."""
+        return True

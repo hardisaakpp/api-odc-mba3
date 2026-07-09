@@ -1,0 +1,46 @@
+# Dependencias del proyecto MBA3 Consultas
+# Instalar con: pip install -r requirements.txt
+
+python-dotenv>=1.0.0
+requests>=2.31.0
+
+# Dependencias para la API FastAPI
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+pydantic>=2.0.0
+python-multipart>=0.0.6
+
+# Dependencias para SQL Server
+pyodbc>=5.0.0
+
+# Dependencias para procesamiento de Excel
+pandas>=2.0.0
+openpyxl>=3.1.0  # Para leer archivos .xlsx
+Pillow>=10.0.0  # Para insertar imágenes en Excel (openpyxl.drawing.image)
+
+# Dependencias para Testing (opcional)
+pytest>=7.4.0
+pytest-asyncio>=0.21.0
+pytest-cov>=4.1.0
+httpx>=0.25.0  # Para testing de FastAPI
+
+# Dependencias para Seguridad (opcional)
+slowapi>=0.1.9  # Rate limiting
+PyJWT>=2.8.0  # JWT authentication para integración con SCNexus.Core
+
+# Dependencias para Celery (migración automática en proceso separado)
+celery>=5.3.4  # Sistema de colas de tareas distribuidas
+redis>=5.0.1  # Broker y backend para Celery
+flower>=2.0.1  # Dashboard de monitoreo para Celery (opcional)
+
+# Dependencias para Fuzzy Matching (sistema híbrido de homologaciones)
+rapidfuzz>=3.0.0  # Librería rápida para fuzzy string matching
+
+# Dependencias para Sistema de Migraciones
+PyYAML>=6.0.1  # Para leer manifest de migraciones
+
+# Dependencias para generación de PDF
+reportlab>=4.0.0  # Generación de documentos PDF (ODC para proveedores)
+
+# Dependencias para Storage de Archivos (S3/MinIO)
+boto3>=1.34.0  # Cliente S3 compatible (funciona con MinIO)

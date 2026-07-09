@@ -1,0 +1,145 @@
+# MBA3 Consultas — Infraestructura local y stack opcional en Docker
+#
+# Por defecto (sin perfil): solo Redis.
+#   docker compose up -d
+#
+# MinIO embebido (solo desarrollo local), perfil "bundled-minio":
+#   docker compose --profile bundled-minio up -d
+#
+# Stack completo API + Celery (desarrollo), perfiles "app" + "bundled-minio":
+#   docker compose --profile app --profile bundled-minio up -d --build
+#   .\scripts\docker-app-up.ps1 -Build
+#
+# Producción (srv-mabuiosapi, MinIO externo 192.168.2.211): sin bundled-minio.
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml --profile app up -d --build
+#   ./scripts/docker-app-up-prod.sh -Build
+#   Ver docs/DEPLOY_DOCKER_PRODUCCION.md
+#
+# Requisitos para el perfil app (desarrollo):
+#   - Archivo .env.develop en la raíz del repo.
+#   - SQL Server / SAP / MBA3 alcanzables desde el contenedor (host.docker.internal o IP).
+#
+# Puertos host: Redis 6379, MinIO embebido 9100/9101 (solo bundled-minio), API 8000.
+# En dev, API/Celery usan redis://redis:6379/0 y http://minio:9000 dentro de la red Docker.
+#
+# Red compartida con scnexus-front (otro docker-compose): mba3-nexus_edge
+# La API y Redis se anclan ahí para que la red exista también sin perfil "app".
+# Desde el contenedor del front: http://mba3-api:8000 . Desde el navegador del usuario:
+# http://localhost:8000 (mapeo de puerto). Ver docs/DOCKER_COMPOSE.md.
+
+name: mba3-consultas
+
+networks:
+  nexus-edge:
+    name: mba3-nexus_edge
+    driver: bridge
+
+x-app-common: &app-common
+  build:
+    context: .
+    dockerfile: Dockerfile
+  profiles:
+    - app
+  restart: unless-stopped
+  environment:
+    ENVIRONMENT: development
+    REDIS_URL: redis://redis:6379/0
+    FILE_STORAGE_ENDPOINT: http://minio:9000
+  env_file:
+    - .env.develop
+  volumes:
+    - ./.env.develop:/app/.env.develop:ro
+  extra_hosts:
+    - "host.docker.internal:host-gateway"
+  depends_on:
+    redis:
+      condition: service_healthy
+
+services:
+  redis:
+    image: redis:7-alpine
+    networks:
+      - default
+      - nexus-edge
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  minio:
+    profiles:
+      - bundled-minio
+    image: minio/minio
+    command: server /data --console-address ":9001"
+    environment:
+      - MINIO_ROOT_USER=minioadmin
+      - MINIO_ROOT_PASSWORD=minioadmin
+    ports:
+      - "9100:9000"
+      - "9101:9001"
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  api:
+    <<: *app-common
+    container_name: mba3-api
+    networks:
+      - default
+      - nexus-edge
+    ports:
+      - "8000:8000"
+    command:
+      [
+        "uvicorn",
+        "src.api_server:app",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "8000",
+      ]
+
+  celery-worker:
+    <<: *app-common
+    container_name: mba3-celery-worker
+    command:
+      [
+        "celery",
+        "-A",
+        "src.celery_app",
+        "worker",
+        "--loglevel=info",
+        "--pool=prefork",
+      ]
+
+  celery-beat:
+    <<: *app-common
+    container_name: mba3-celery-beat
+    volumes:
+      - ./.env.develop:/app/.env.develop:ro
+      - celerybeat_data:/var/lib/celery
+    command:
+      [
+        "celery",
+        "-A",
+        "src.celery_app",
+        "beat",
+        "--loglevel=info",
+        "--schedule=/var/lib/celery/celerybeat-schedule",
+      ]
+
+volumes:
+  redis_data:
+  minio_data:
+  celerybeat_data:

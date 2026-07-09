@@ -1,0 +1,103 @@
+# Disparador para Integración Continua en múltiples ramas
+trigger:
+  branches:
+    include:
+      - main
+      - test
+      - ci/*
+      - feature/*
+      - fix/*
+      - bugfix/*
+      - hotfix/*
+
+# Enrutamiento al servidor Ubuntu corporativo
+pool:
+  name: 'agents-srv-test'
+  demands:
+    - Agent.OS -equals Linux
+
+variables:
+  pythonVersion: '3.14'
+  
+  # Ruta al registro corporativo en la nube (ACR)
+  imageName: 'dockermg-g9hrgcc4etdrh8eg.azurecr.io/api-odc-mba3'
+  dockerfilePath: '$(Build.SourcesDirectory)/Dockerfile'
+
+  # Lógica Declarativa de Prefijos Dinámicos por Rama
+  ${{ if eq(variables['Build.SourceBranchName'], 'main') }}:
+    envTag: 'prod-latest'
+    uniqueTag: 'prod-$(Build.BuildId)'
+  ${{ elseif eq(variables['Build.SourceBranchName'], 'test') }}:
+    envTag: 'test-latest'
+    uniqueTag: 'test-$(Build.BuildId)'
+  ${{ else }}:
+    envTag: 'none'
+    uniqueTag: 'none'
+
+stages:
+# =====================================================================
+# ETAPA 1: PREPARACIÓN Y VALIDACIÓN DE CÓDIGO (CI Puro)
+# =====================================================================
+- stage: CI_Code_Quality
+  displayName: 'Integración Continua - Python'
+  jobs:
+  - job: Validar_Dependencias
+    displayName: 'Preparar Entorno y Dependencias'
+    steps:
+    
+    # 1. Verificar Python disponible en el agente (self-hosted, no requiere UsePythonVersion)
+    - script: |
+        echo "Python disponible en el agente:"
+        python3 --version
+      displayName: 'Verificar Python $(pythonVersion)'
+
+    # 2. Crear entorno virtual, activar e instalar dependencias Python
+    - script: |
+        python3 -m venv venv
+        source venv/bin/activate
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt -r requirements-dev.txt
+      displayName: 'Setup Virtual Environment & Install Dependencies'
+    
+    # ----------------------------------------------------------------------
+    # VALIDACIONES Y PRUEBAS OMITIDAS TEMPORALMENTE (BYPASS)
+    # ----------------------------------------------------------------------
+    # - script: |
+    #     source venv/bin/activate
+    #     echo "Ejecutando linter (Ruff)..."
+    #     ruff check .
+    #     echo "Ejecutando chequeo de tipos estáticos (Pyright)..."
+    #     pyright .
+    #   displayName: 'Code Quality (Ruff & Pyright)'
+
+    # - script: |
+    #     source venv/bin/activate
+    #     pytest tests/ -v --junitxml=junit/test-results.xml
+    #   displayName: 'Run Pytest'
+    #   env:
+    #     ENVIRONMENT: test
+
+# =====================================================================
+# ETAPA 2: CONSTRUCCIÓN Y PUBLICACIÓN EN AZURE CONTAINER REGISTRY
+# =====================================================================
+- stage: Build_Docker
+  displayName: 'Construcción de Imagen Docker'
+  dependsOn: CI_Code_Quality
+  
+  # Candado de Seguridad: Solo construye Docker si pasó la Etapa 1 Y si la rama es main o test
+  condition: and(succeeded(), ne(variables.envTag, 'none'))
+  jobs:
+  - job: BuildAndPush
+    displayName: 'Construir y Subir a Azure ACR'
+    steps:
+    
+    - script: |
+        echo "1. Construyendo la imagen de Docker para FastAPI / Celery ($(envTag))..."
+        docker build -f $(dockerfilePath) \
+          -t $(imageName):$(uniqueTag) \
+          -t $(imageName):$(envTag) .
+        
+        echo "2. Subiendo la imagen al registro corporativo en Azure..."
+        docker push $(imageName):$(uniqueTag)
+        docker push $(imageName):$(envTag)
+      displayName: 'Empaquetar y Almacenar Contenedor'

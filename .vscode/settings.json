@@ -1,0 +1,12 @@
+{
+    "sonarlint.connectedMode.project": {
+        "connectionId": "http-210-17-1-53-9010-",
+        "projectKey": "api-odc-mba3"
+    },
+    "python.analysis.exclude": [
+        "venv/**"
+    ],
+    "python.analysis.ignore": [
+        "venv/**"
+    ]
+}

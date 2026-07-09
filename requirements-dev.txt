@@ -1,0 +1,13 @@
+# Herramientas de desarrollo (lint / tipos). Instalar en el venv de trabajo:
+#   pip install -r requirements-dev.txt
+#
+# Hooks de Git (solo local; no afecta Docker ni producción):
+#   pre-commit install
+#
+# Comprobar estáticamente sin abrir archivo por archivo:
+#   .\scripts\lint.ps1
+#   .\scripts\lint.ps1 -Paths src/database/services
+
+ruff>=0.8.0
+pyright>=1.1.390
+pre-commit>=3.7.0
