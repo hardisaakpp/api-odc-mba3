@@ -264,7 +264,7 @@ def _enviar_emails_exito_sap(
             usuario_mabel=user_id,
             version_confirmada=resultado_redistribucion.get("version_confirmada"),
             total_productos=resumen.total_productos if resumen else 0,
-            total_cantidad_ajustada=int(resumen.total_cantidad_ajustada if resumen else 0)
+            total_cantidad_ajustada=resumen.total_cantidad_ajustada if resumen else 0
         )
     except Exception:
         pass

@@ -120,7 +120,7 @@ class ProductoSAPRepository:
                 - grupo_articulos: Grupo de artículos (ItmsGrpNam)
                 
         Returns:
-            True si se insertó (nuevo registro), False si se actualizó (registro existente)
+            True si se insertó/actualizó correctamente
         """
         cursor = self.conn.cursor()
         
@@ -162,7 +162,7 @@ class ProductoSAPRepository:
                 cursor.execute(sql, values)
                 self.conn.commit()
                 logger.debug(f"✅ Producto SAP cache actualizado: {sku}")
-                return False
+                return True
             else:
                 # INSERTAR
                 sql = """

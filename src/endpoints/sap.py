@@ -233,11 +233,7 @@ def _log_resultado_oc(log_repo, proceso_id, username, source, oc_id_item, provee
         logger.warning(f"No se pudo guardar log de resultado: {e}")
 
 
-def _procesar_oc_individual(oc_repo, log_repo, oc_sap_service, proceso_id, username, source, oc_id_item):
-    oc_info = oc_repo.get_existing_cabecera(oc_id_item)
-    proveedor = oc_info.get("proveedor") if oc_info else "UNKNOWN"
-    referencia = oc_info.get("referencia_despacho") if oc_info else None
-
+def _procesar_oc_individual(oc_repo, log_repo, oc_sap_service, proceso_id, username, source, oc_id_item, proveedor, referencia):
     _log_safe(log_repo, SAPLogEntry(
         proceso_id=proceso_id,
         nivel_log="INFO",
@@ -309,8 +305,12 @@ def _procesar_lista_ocs(oc_repo, log_repo, oc_sap_service, proceso_id, username,
     errores = 0
     for oc_id_item in oc_ids_a_procesar:
         try:
+            oc_info = oc_repo.get_existing_cabecera(oc_id_item)
+            proveedor = oc_info.get("proveedor") if oc_info else "UNKNOWN"
+            referencia = oc_info.get("referencia_despacho") if oc_info else None
+
             detalle_resultado, success, error = _procesar_oc_individual(
-                oc_repo, log_repo, oc_sap_service, proceso_id, username, source, oc_id_item
+                oc_repo, log_repo, oc_sap_service, proceso_id, username, source, oc_id_item, proveedor, referencia
             )
             detalles.append(detalle_resultado)
             if success:
@@ -321,6 +321,7 @@ def _procesar_lista_ocs(oc_repo, log_repo, oc_sap_service, proceso_id, username,
         except Exception as e:
             errores += 1
             logger.error(f"❌ Error al procesar ODC {oc_id_item[:8]}...: {e}", exc_info=True)
+            proveedor_fallback = proveedor if 'proveedor' in locals() else "UNKNOWN"
             try:
                 log_repo.guardar_log(SAPLogEntry(
                     proceso_id=proceso_id,
@@ -329,7 +330,7 @@ def _procesar_lista_ocs(oc_repo, log_repo, oc_sap_service, proceso_id, username,
                     usuario=username,
                     fuente=source,
                     oc_id=oc_id_item,
-                    proveedor="UNKNOWN",
+                    proveedor=proveedor_fallback,
                     error_source="BACKEND",
                     success=False
                 ))
@@ -337,7 +338,7 @@ def _procesar_lista_ocs(oc_repo, log_repo, oc_sap_service, proceso_id, username,
                 pass
             detalles.append({
                 "oc_id": oc_id_item,
-                "proveedor": "UNKNOWN",
+                "proveedor": proveedor_fallback,
                 "success": False,
                 "doc_entry": None,
                 "doc_num": None,

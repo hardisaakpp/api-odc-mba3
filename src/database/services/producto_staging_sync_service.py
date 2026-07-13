@@ -134,6 +134,7 @@ class ProductoStagingSyncService:
         query_base: str,
         batch_size: int,
         force_full_sync: bool,
+        initial_cursor: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Ejecuta el bucle de paginación por lotes para MBA3."""
         total_insertados = 0
@@ -141,7 +142,7 @@ class ProductoStagingSyncService:
         total_errores = 0
         total_procesados = 0
         productos_encontrados: set = set()
-        last_product_id = None
+        last_product_id = initial_cursor
         batch_number = 0
         lotes_fallidos_consecutivos = 0
         max_lotes_fallidos = 3
@@ -395,7 +396,7 @@ class ProductoStagingSyncService:
             sync_control_repo = SyncControlRepository(conn)
             mba3_staging_repo = ProductoMBA3StagingRepository(conn)
 
-            modo_sync, _ = self._determinar_estrategia_sync(
+            modo_sync, initial_cursor = self._determinar_estrategia_sync(
                 force_full_sync,
                 mba3_staging_repo.get_last_product_id(),
                 mba3_staging_repo.count_all()
@@ -436,7 +437,9 @@ class ProductoStagingSyncService:
                 "ORDER BY PRODUCT_ID"
             )
 
-            loop_stats = self._bucle_paginacion_mba3(mba3_staging_repo, query_base, batch_size, force_full_sync)
+            loop_stats = self._bucle_paginacion_mba3(
+                mba3_staging_repo, query_base, batch_size, force_full_sync, initial_cursor
+            )
             total_eliminados = self._limpiar_obsoletos_mba3(
                 mba3_staging_repo, force_full_sync, loop_stats['productos_encontrados']
             )
