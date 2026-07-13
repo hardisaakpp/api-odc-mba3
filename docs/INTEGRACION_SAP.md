@@ -2,12 +2,43 @@
 
 Guía completa de integración con SAP para conversión de unidades y envío de órdenes de compra.
 
+## 🏛️ Principio arquitectónico (léelo antes de tocar código de integración SAP)
+
+**Todo proceso que apunte a SAP debe pasar por el middleware** (`SAP_MIDDLEWARE_URL`, cliente `SAPServiceLayerClient`), no por `OPENQUERY` directo a HANA.
+
+**Única excepción:** sincronización masiva de catálogo completo hacia staging (`producto_staging_sync_service.py`, `cruce_productos_service.py`, tarea Celery `celery_sync_productos.py`). Es una lectura *bulk* (todo el catálogo de una vez para cachear localmente), no una consulta puntual — ahí `OPENQUERY` sigue siendo el canal correcto.
+
+Regla práctica para decidir el canal de una operación nueva:
+
+| Tipo de operación | Canal correcto |
+|---|---|
+| Leer/escribir UN registro puntual (un ítem, una bodega, un proveedor, crear una OC/ITR) | **Middleware** (Service Layer) |
+| Traer *todo* el catálogo para cache/staging | `OPENQUERY` (excepción) |
+| Búsqueda difusa/`LIKE` sobre el catálogo (ej. SKUs similares) | `OPENQUERY` (es en esencia una lectura bulk filtrada) |
+| Endpoint de diagnóstico explícito (`/sap/test`, `/sap/test/direct`) | Cualquiera — es intencional, no es flujo de negocio |
+
+**Patrón de migración obligatorio** para todo punto que hoy siga en `OPENQUERY` y debiera pasar a middleware: agregar un flag en `.env` con default `false`, un dispatcher que intente middleware primero y haga *fallback* automático a `OPENQUERY` si el middleware no responde, y activar el flag solo en `.env.develop` tras verificación en vivo — nunca tocar `.env.production` sin decisión explícita. Ver [CALIDAD_CODIGO_SONAR.md](CALIDAD_CODIGO_SONAR.md) para el estándar de calidad de ese código.
+
+### Estado de la migración (auditoría en curso)
+
+✅ **Ya migrados** (middleware primero, fallback a OPENQUERY):
+- Bodega puntual — `bodega_sap_service.py` (`_consultar_bodega_sap`), flag `USE_MIDDLEWARE_WAREHOUSES`
+- Catálogo/validación batch de bodegas — `bodega_sap_service.py`, flag `USE_MIDDLEWARE_WAREHOUSES`
+- SKU exacto (cruce de productos) — `cruce_productos.py` (`_buscar_sku_sap_handler`), flag `USE_MIDDLEWARE_SKU_LOOKUP`
+- Prevalidación de OC (proveedor + artículos) — `oc_sap_service.py` (`_precheck_batch`), flag `USE_BATCH_VALIDATION`
+
+❌ **Pendientes de migrar** (hoy 100% OPENQUERY, sin opción de middleware):
+- `SAPService.get_or_fetch_producto_info` (`sap_service.py`) — cache-first (30 días), pero en cache-miss va directo a OPENQUERY. Usado por `pedido_sap_validator.py`, `pedido_sap_service.py`, `factura_service.py`. Es el de mayor impacto: alimenta validación de pedidos y facturación.
+- `SAPClient.get_producto_info` llamado directo desde `ordenes_compra.py` (reasignación de SKU en una línea de OC) — se salta incluso la capa de cache.
+- `SAPClient.get_productos_info_batch` (`pedido_service.py`) — "batch" solo en apariencia: internamente hace una llamada OPENQUERY por cada SKU único.
+
 ## 📋 Resumen
 
-El sistema integra con SAP de dos formas:
+El sistema integra con SAP de tres formas:
 
-1. **Consultas SAP HANA** - Para conversión automática de unidades (docenas → packs)
-2. **SAP Service Layer** - Para envío de órdenes de compra (Purchase Orders)
+1. **Middleware (SAP Service Layer)** — canal por defecto para toda operación puntual: lectura de ítems/bodegas/proveedores y creación de OC/ITR. Ver principio arquitectónico arriba.
+2. **Consultas SAP HANA (`OPENQUERY`)** — reservado para sincronización bulk de catálogo hacia staging, y para los puntos aún pendientes de migrar listados arriba.
+3. **SAP Service Layer sin pasar por el middleware** — histórico; hoy toda comunicación con Service Layer debería ir a través del middleware, no directo.
 
 ### Conversión de Unidades
 
@@ -99,14 +130,20 @@ ADD precio_unitario_sap DECIMAL(18, 4) NULL;
 ### Variables de Entorno (.env)
 
 ```env
-# SAP HANA (Consultas)
+# Middleware (canal por defecto — ver Principio Arquitectónico)
+SAP_MIDDLEWARE_URL=http://localhost:8011
+USE_BATCH_VALIDATION=false          # Prevalidación de OC (proveedor + artículos) vía middleware
+USE_MIDDLEWARE_WAREHOUSES=false     # Bodegas (puntual, catálogo y validación batch) vía middleware
+USE_MIDDLEWARE_SKU_LOOKUP=false     # SKU exacto (cruce de productos) vía middleware
+
+# SAP HANA (Consultas) — solo sync bulk de staging + puntos pendientes de migrar
 SAP_LINKED_SERVER=MYHANADB
 SAP_DATABASE=SBO_MABEL_PROD
 SAP_SCHEMA=SBO_MABEL_PROD
 ENABLE_SAP_QUERIES=true
 SAP_CACHE_DAYS=30
 
-# SAP Service Layer (Envío de Purchase Orders)
+# SAP Service Layer (usado por el middleware; también accesible directo — ver excepciones)
 SAP_SERVICE_LAYER_URL=http://tu-servidor-sap:50000/b1s/v1
 SAP_SERVICE_LAYER_USERNAME=tu_usuario
 SAP_SERVICE_LAYER_PASSWORD=tu_contraseña
@@ -257,13 +294,15 @@ ENABLE_SAP_QUERIES=false
 ```
 src/database/
 ├── clients/
-│   ├── sap_client.py          # Cliente para consultar SAP HANA
-│   └── sap_service_layer_client.py  # Cliente para SAP Service Layer
+│   ├── sap_client.py          # OPENQUERY directo a HANA (bulk + pendientes de migrar)
+│   └── sap_service_layer_client.py  # Cliente del middleware (canal por defecto)
 ├── repositories/
 │   ├── producto_sap_repository.py  # Repositorio para producto_sap_cache
 │   └── orden_compra_repository.py  # Repositorio para órdenes de compra
 ├── services/
-│   └── sap_service.py         # Servicio para gestionar SAP y cache
+│   ├── sap_service.py          # Cache-first de producto; en cache-miss usa sap_client (OPENQUERY) — pendiente de migrar
+│   ├── bodega_sap_service.py   # Dispatcher bodegas: middleware primero, fallback OPENQUERY — ya migrado
+│   └── oc_sap_service.py       # Prevalidación de OC: middleware primero, fallback línea a línea — ya migrado
 └── mappers/
     └── sap_oc_mapper.py       # Mapeo de órdenes de compra a SAP
 
