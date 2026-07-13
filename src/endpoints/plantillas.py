@@ -62,6 +62,192 @@ def _celery_workers_available() -> bool:
         return False
 
 
+def _validar_modo_sincronizar_maestro(modo_tiendas: str, confirmar_sincronizacion: bool, user: Dict) -> None:
+    """Exige confirmación explícita para el modo destructivo 'sincronizar_maestro'."""
+    if modo_tiendas != "sincronizar_maestro":
+        return
+    if not confirmar_sincronizacion:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "confirmation_required",
+                "message": (
+                    "El modo 'sincronizar_maestro' requiere confirmación explícita. "
+                    "Esta operación va a DESACTIVAR tiendas no presentes en el Excel. "
+                    "Envía el parámetro ?confirmar_sincronizacion=true si estás seguro."
+                ),
+                "modo_tiendas": "sincronizar_maestro",
+                "accion_recomendada": "Revisar Excel antes de confirmar"
+            }
+        )
+    logger.warning(
+        f"OPERACION DESTRUCTIVA CONFIRMADA - "
+        f"Usuario {get_user_id(user)} activó modo SINCRONIZAR_MAESTRO con confirmación. "
+        f"Se va a actualizar el maestro de tiendas (puede desactivar existentes)."
+    )
+
+
+async def _leer_y_validar_archivo(file: UploadFile) -> bytes:
+    """Valida extensión y tamaño del archivo Excel. Retorna su contenido."""
+    validate_excel_file(file)
+    content = await file.read()
+    file_size = len(content)
+    if file_size > MAX_FILE_SIZE:
+        raise HTTPException(
+            status_code=400,
+            detail=f"El archivo es demasiado grande. Tamaño máximo: {MAX_FILE_SIZE / (1024*1024):.1f} MB"
+        )
+    if file_size == 0:
+        raise HTTPException(
+            status_code=400,
+            detail="El archivo está vacío"
+        )
+    return content
+
+
+def _parsear_correcciones_codigos(correcciones_codigos: Optional[str]) -> Optional[Dict[str, str]]:
+    """Parsea el JSON de correcciones de códigos. Lanza HTTPException 400 si el formato es inválido."""
+    if not correcciones_codigos:
+        return None
+    try:
+        correcciones_dict = json.loads(correcciones_codigos)
+        if not isinstance(correcciones_dict, dict):
+            raise ValueError("correcciones_codigos debe ser un objeto JSON")
+        logger.info(f"Correcciones de códigos recibidas: {len(correcciones_dict)} código(s) a corregir")
+        for codigo_orig, codigo_corr in correcciones_dict.items():
+            logger.info(f"   • {codigo_orig} -> {codigo_corr}")
+        return correcciones_dict
+    except json.JSONDecodeError as e:
+        logger.warning(f"Error al parsear correcciones_codigos JSON: {e}")
+        raise HTTPException(
+            status_code=400,
+            detail=f"Formato JSON inválido en correcciones_codigos: {str(e)}"
+        )
+
+
+def _construir_respuesta_procesamiento(resultado: Dict, filename: Optional[str], file_size: int, user_id):
+    """Construye el response_data común a partir del resultado del procesamiento.
+
+    Returns:
+        Tupla (response_data, tiene_pedido_guardado)
+    """
+    tiene_pedido_guardado = bool(resultado.get("pedido_id"))
+    mensaje_respuesta = "Plantilla procesada y guardada exitosamente"
+    if resultado["status"] == "validation_error":
+        if tiene_pedido_guardado:
+            mensaje_respuesta = "Plantilla procesada y guardada con advertencias. Revisa el detalle si lo deseas."
+        else:
+            errores = resultado.get("errores", [])
+            mensaje_respuesta = errores[0] if errores else "Plantilla validada pero tiene errores críticos"
+    elif resultado["status"] == "error":
+        mensaje_respuesta = resultado.get("message", "Error al procesar plantilla")
+
+    status_respuesta = resultado["status"]
+    if resultado["status"] == "validation_error" and tiene_pedido_guardado:
+        status_respuesta = "success"
+
+    response_data = {
+        "status": status_respuesta,
+        "message": mensaje_respuesta,
+        "pedido_id": resultado.get("pedido_id"),
+        "numero_pedido": resultado.get("numero_pedido"),
+        "formato_detectado": resultado.get("formato_detectado"),
+        "articulos_cargados": resultado.get("articulos_cargados", 0),
+        "distribuciones_cargadas": resultado.get("distribuciones_cargadas", 0),
+        "validation": resultado.get("validation"),
+        "correcciones_aplicadas": resultado.get("correcciones_aplicadas", []),
+        "file_info": {
+            "filename": filename,
+            "size_mb": round(file_size / (1024 * 1024), 2)
+        },
+        "metadata": {
+            "uploaded_by": user_id,
+            "uploaded_at": ahora_naive().isoformat()
+        }
+    }
+    return response_data, tiene_pedido_guardado
+
+
+def _respuesta_error_procesamiento(resultado: Dict, tiene_pedido_guardado: bool, response_data: Dict) -> Optional[JSONResponse]:
+    """Retorna la respuesta 400 para errores de validación sin pedido guardado, o lanza HTTPException en error."""
+    if resultado["status"] == "validation_error" and not tiene_pedido_guardado:
+        return JSONResponse(status_code=400, content=response_data)
+    if resultado["status"] == "error":
+        raise HTTPException(
+            status_code=400,
+            detail=f"Error al procesar plantilla: {resultado.get('errores', ['Error desconocido'])}"
+        )
+    return None
+
+
+def _agregar_log_validacion(response_data: Dict, validation: Dict) -> None:
+    """Adjunta el log de validación en Excel (base64) al response_data."""
+    from src.database.services.pedido_validation_exporter import PedidoValidationExporter
+
+    excel_bytes = PedidoValidationExporter.export_to_excel_bytes(validation)
+    response_data["validation_log_excel_base64"] = base64.b64encode(excel_bytes).decode('utf-8')
+    response_data["validation_log_filename"] = f"validation_log_{ahora_naive().strftime('%Y%m%d_%H%M%S')}.xlsx"
+
+
+def _guardar_archivo_original(content: bytes, pedido_id, filename: str, file_size: int, user_id) -> str:
+    """Guarda el Excel original en storage y registra el archivo en BD. Retorna el storage_path."""
+    from src.services.file_storage_service import get_file_storage
+
+    storage = get_file_storage()
+    storage_path = storage.guardar_archivo(
+        contenido=content,
+        pedido_id=pedido_id,
+        nombre_original=filename,
+        usuario_id=user_id
+    )
+    with get_db_connection_context() as conn:
+        archivo_repo = ArchivoPlantillaRepository(conn)
+        archivo_repo.crear(
+            pedido_id=pedido_id,
+            nombre_original=filename,
+            storage_path=storage_path,
+            tamano_bytes=file_size,
+            subido_por=user_id
+        )
+    return storage_path
+
+
+def _adjuntar_archivo_original(response_data: Dict, content: bytes, resultado: Dict, filename: str, file_size: int, user_id) -> None:
+    """Guarda el archivo original en storage (si aplica) y adjunta el estado al response_data."""
+    if ENABLE_FILE_STORAGE and resultado.get("pedido_id"):
+        from src.services.file_storage_service import FileStorageError
+        try:
+            storage_path = _guardar_archivo_original(content, resultado["pedido_id"], filename, file_size, user_id)
+            response_data["archivo_original"] = {
+                "guardado": True,
+                "storage_path": storage_path,
+                "descarga_disponible": True
+            }
+            logger.info(
+                f"✅ Archivo Excel original guardado en storage: {storage_path}"
+            )
+        except FileStorageError as e:
+            logger.warning(f"⚠️ No se pudo guardar archivo en storage: {e}")
+            response_data["archivo_original"] = {
+                "guardado": False,
+                "error": str(e),
+                "descarga_disponible": False
+            }
+        except Exception as e:
+            logger.warning(f"⚠️ Error inesperado al guardar archivo: {e}")
+            response_data["archivo_original"] = {
+                "guardado": False,
+                "error": "Error interno al guardar archivo",
+                "descarga_disponible": False
+            }
+    elif not ENABLE_FILE_STORAGE:
+        response_data["archivo_original"] = {
+            "guardado": False,
+            "mensaje": "Almacenamiento de archivos deshabilitado (ENABLE_FILE_STORAGE=false)",
+            "descarga_disponible": False
+        }
+
+
 async def _upload_plantilla_handler(
     file: UploadFile,
     validar: bool,
@@ -73,62 +259,12 @@ async def _upload_plantilla_handler(
     user: Dict,
 ) -> JSONResponse:
     try:
-        if modo_tiendas == "sincronizar_maestro":
-            if not confirmar_sincronizacion:
-                raise HTTPException(
-                    status_code=400,
-                    detail={
-                        "error": "confirmation_required",
-                        "message": (
-                            "El modo 'sincronizar_maestro' requiere confirmación explícita. "
-                            "Esta operación va a DESACTIVAR tiendas no presentes en el Excel. "
-                            "Envía el parámetro ?confirmar_sincronizacion=true si estás seguro."
-                        ),
-                        "modo_tiendas": "sincronizar_maestro",
-                        "accion_recomendada": "Revisar Excel antes de confirmar"
-                    }
-                )
+        _validar_modo_sincronizar_maestro(modo_tiendas, confirmar_sincronizacion, user)
 
-            logger.warning(
-                f"OPERACION DESTRUCTIVA CONFIRMADA - "
-                f"Usuario {get_user_id(user)} activó modo SINCRONIZAR_MAESTRO con confirmación. "
-                f"Se va a actualizar el maestro de tiendas (puede desactivar existentes)."
-            )
-
-        validate_excel_file(file)
-
-        content = await file.read()
+        content = await _leer_y_validar_archivo(file)
         file_size = len(content)
-
-        if file_size > MAX_FILE_SIZE:
-            raise HTTPException(
-                status_code=400,
-                detail=f"El archivo es demasiado grande. Tamaño máximo: {MAX_FILE_SIZE / (1024*1024):.1f} MB"
-            )
-
-        if file_size == 0:
-            raise HTTPException(
-                status_code=400,
-                detail="El archivo está vacío"
-            )
-
         user_id = get_user_id(user)
-
-        correcciones_dict: Optional[Dict[str, str]] = None
-        if correcciones_codigos:
-            try:
-                correcciones_dict = json.loads(correcciones_codigos)
-                if not isinstance(correcciones_dict, dict):
-                    raise ValueError("correcciones_codigos debe ser un objeto JSON")
-                logger.info(f"Correcciones de códigos recibidas: {len(correcciones_dict)} código(s) a corregir")
-                for codigo_orig, codigo_corr in correcciones_dict.items():
-                    logger.info(f"   • {codigo_orig} -> {codigo_corr}")
-            except json.JSONDecodeError as e:
-                logger.warning(f"Error al parsear correcciones_codigos JSON: {e}")
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Formato JSON inválido en correcciones_codigos: {str(e)}"
-                )
+        correcciones_dict = _parsear_correcciones_codigos(correcciones_codigos)
 
         logger.info(
             f"Iniciando procesamiento de plantilla '{file.filename}' "
@@ -149,113 +285,21 @@ async def _upload_plantilla_handler(
             correcciones_codigos=correcciones_dict
         )
 
-        tiene_pedido_guardado = bool(resultado.get("pedido_id"))
-        mensaje_respuesta = "Plantilla procesada y guardada exitosamente"
-        if resultado["status"] == "validation_error":
-            if tiene_pedido_guardado:
-                mensaje_respuesta = "Plantilla procesada y guardada con advertencias. Revisa el detalle si lo deseas."
-            else:
-                errores = resultado.get("errores", [])
-                mensaje_respuesta = errores[0] if errores else "Plantilla validada pero tiene errores críticos"
-        elif resultado["status"] == "error":
-            mensaje_respuesta = resultado.get("message", "Error al procesar plantilla")
-
-        status_respuesta = resultado["status"]
-        if resultado["status"] == "validation_error" and tiene_pedido_guardado:
-            status_respuesta = "success"
-
-        response_data = {
-            "status": status_respuesta,
-            "message": mensaje_respuesta,
-            "pedido_id": resultado.get("pedido_id"),
-            "numero_pedido": resultado.get("numero_pedido"),
-            "formato_detectado": resultado.get("formato_detectado"),
-            "articulos_cargados": resultado.get("articulos_cargados", 0),
-            "distribuciones_cargadas": resultado.get("distribuciones_cargadas", 0),
-            "validation": resultado.get("validation"),
-            "correcciones_aplicadas": resultado.get("correcciones_aplicadas", []),
-            "file_info": {
-                "filename": file.filename,
-                "size_mb": round(file_size / (1024 * 1024), 2)
-            },
-            "metadata": {
-                "uploaded_by": user_id,
-                "uploaded_at": ahora_naive().isoformat()
-            }
-        }
+        response_data, tiene_pedido_guardado = _construir_respuesta_procesamiento(
+            resultado, file.filename, file_size, user_id
+        )
 
         if exportar_log and resultado.get("validation"):
-            from src.database.services.pedido_validation_exporter import PedidoValidationExporter
+            _agregar_log_validacion(response_data, resultado["validation"])
 
-            excel_bytes = PedidoValidationExporter.export_to_excel_bytes(resultado["validation"])
-            response_data["validation_log_excel_base64"] = base64.b64encode(excel_bytes).decode('utf-8')
-            response_data["validation_log_filename"] = f"validation_log_{ahora_naive().strftime('%Y%m%d_%H%M%S')}.xlsx"
+        respuesta_error = _respuesta_error_procesamiento(resultado, tiene_pedido_guardado, response_data)
+        if respuesta_error is not None:
+            return respuesta_error
 
-        if resultado["status"] == "validation_error" and not tiene_pedido_guardado:
-            return JSONResponse(
-                status_code=400,
-                content=response_data
-            )
-
-        if resultado["status"] == "error":
-            raise HTTPException(
-                status_code=400,
-                detail=f"Error al procesar plantilla: {resultado.get('errores', ['Error desconocido'])}"
-            )
-
-        if ENABLE_FILE_STORAGE and resultado.get("pedido_id"):
-            try:
-                from src.services.file_storage_service import get_file_storage, FileStorageError
-
-                storage = get_file_storage()
-
-                storage_path = storage.guardar_archivo(
-                    contenido=content,
-                    pedido_id=resultado["pedido_id"],
-                    nombre_original=file.filename or _DEFAULT_FILENAME,
-                    usuario_id=user_id
-                )
-
-                with get_db_connection_context() as conn:
-                    archivo_repo = ArchivoPlantillaRepository(conn)
-                    archivo_repo.crear(
-                        pedido_id=resultado["pedido_id"],
-                        nombre_original=file.filename or _DEFAULT_FILENAME,
-                        storage_path=storage_path,
-                        tamano_bytes=file_size,
-                        subido_por=user_id
-                    )
-
-                response_data["archivo_original"] = {
-                    "guardado": True,
-                    "storage_path": storage_path,
-                    "descarga_disponible": True
-                }
-
-                logger.info(
-                    f"✅ Archivo Excel original guardado en storage: {storage_path}"
-                )
-
-            except FileStorageError as e:
-                logger.warning(f"⚠️ No se pudo guardar archivo en storage: {e}")
-                response_data["archivo_original"] = {
-                    "guardado": False,
-                    "error": str(e),
-                    "descarga_disponible": False
-                }
-            except Exception as e:
-                logger.warning(f"⚠️ Error inesperado al guardar archivo: {e}")
-                response_data["archivo_original"] = {
-                    "guardado": False,
-                    "error": "Error interno al guardar archivo",
-                    "descarga_disponible": False
-                }
-        elif not ENABLE_FILE_STORAGE:
-            response_data["archivo_original"] = {
-                "guardado": False,
-                "mensaje": "Almacenamiento de archivos deshabilitado (ENABLE_FILE_STORAGE=false)",
-                "descarga_disponible": False
-            }
+        _adjuntar_archivo_original(
+            response_data, content, resultado,
+            file.filename or _DEFAULT_FILENAME, file_size, user_id
+        )
 
         # La carga Excel solo crea BORRADOR. El correo a EL RAYO se envía al hacer clic en "Enviar".
         return JSONResponse(status_code=200, content=response_data)
@@ -270,6 +314,123 @@ async def _upload_plantilla_handler(
             status_code=500,
             detail=f"Error interno al procesar la plantilla: {str(e)}"
         )
+
+
+def _encolar_plantilla_async(
+    content: bytes,
+    file: UploadFile,
+    validar: bool,
+    bloquea_con_errores: bool,
+    modo_tiendas: str,
+    correcciones_dict: Optional[Dict[str, str]],
+    user_id,
+) -> Optional[JSONResponse]:
+    """Encola el procesamiento en Celery. Retorna la respuesta 202, o None si falla (fallback sync)."""
+    try:
+        from src.services.file_storage_service import get_file_storage
+        estado_service = ProcesoEstadoService()
+        process_id = estado_service.crear_proceso_plantilla(user_id=user_id)
+        storage = get_file_storage()
+        storage_path = storage.guardar_archivo_temporal(
+            contenido=content,
+            process_id=process_id,
+            nombre_original=file.filename or _DEFAULT_FILENAME
+        )
+        from src.tasks.celery_plantilla_upload import procesar_plantilla_upload
+        procesar_plantilla_upload.delay(
+            process_id=process_id,
+            user_id=user_id,
+            storage_path=storage_path,
+            filename=file.filename or _DEFAULT_FILENAME,
+            validar=validar,
+            bloquea_con_errores=bloquea_con_errores,
+            modo_tiendas=modo_tiendas,
+            correcciones_codigos=correcciones_dict
+        )
+        logger.info(f"📤 Plantilla encolada: {process_id} (usuario: {user_id})")
+        return JSONResponse(
+            status_code=202,
+            content={
+                "status": "accepted",
+                "process_id": process_id,
+                "message": "Plantilla en procesamiento. Consulta GET /api/plantillas/resultado/{process_id} o GET /api/plantillas/stream/{process_id}.",
+                "resultado_url": f"/api/plantillas/resultado/{process_id}",
+                "stream_url": f"/api/plantillas/stream/{process_id}"
+            }
+        )
+    except Exception as e:
+        logger.warning(
+            "No se pudo iniciar procesamiento de plantilla en segundo plano (%s). "
+            "Procesando en primer plano (fallback sync).",
+            e,
+            exc_info=True,
+        )
+        return None
+
+
+def _adjuntar_archivo_original_fallback(response_data: Dict, content: bytes, resultado: Dict, filename: str, file_size: int, user_id) -> None:
+    """Variante fallback-sync del guardado del archivo original en storage."""
+    if ENABLE_FILE_STORAGE and resultado.get("pedido_id"):
+        try:
+            storage_path = _guardar_archivo_original(content, resultado["pedido_id"], filename, file_size, user_id)
+            response_data["archivo_original"] = {
+                "guardado": True,
+                "storage_path": storage_path,
+                "descarga_disponible": True
+            }
+        except Exception as storage_err:
+            logger.warning("No se pudo guardar archivo en storage (fallback): %s", storage_err)
+            response_data["archivo_original"] = {
+                "guardado": False,
+                "error": str(storage_err),
+                "descarga_disponible": False
+            }
+    else:
+        response_data["archivo_original"] = {
+            "guardado": False,
+            "mensaje": "Almacenamiento deshabilitado o no aplicable" if not ENABLE_FILE_STORAGE else "No guardado",
+            "descarga_disponible": False
+        }
+
+
+async def _procesar_plantilla_sync_fallback(
+    content: bytes,
+    file: UploadFile,
+    file_size: int,
+    validar: bool,
+    bloquea_con_errores: bool,
+    correcciones_dict: Optional[Dict[str, str]],
+    user_id,
+) -> JSONResponse:
+    """Procesa la plantilla en primer plano (force_sync o fallback cuando no hay worker/storage)."""
+    from src.database.services.pedido_service import PedidoService
+    service = PedidoService()
+    resultado = await asyncio.to_thread(
+        service.validar_y_procesar_archivo_excel,
+        file_content=content,
+        filename=file.filename or _DEFAULT_FILENAME,
+        usuario_id=user_id,
+        validar_antes_de_guardar=validar,
+        bloquea_con_errores=bloquea_con_errores,
+        tiendas_permitidas=None,
+        correcciones_codigos=correcciones_dict
+    )
+    response_data, tiene_pedido_guardado = _construir_respuesta_procesamiento(
+        resultado, file.filename, file_size, user_id
+    )
+    response_data.update({
+        "fallback": "sync",
+        "process_id": None,
+        "async": False,
+    })
+    respuesta_error = _respuesta_error_procesamiento(resultado, tiene_pedido_guardado, response_data)
+    if respuesta_error is not None:
+        return respuesta_error
+    _adjuntar_archivo_original_fallback(
+        response_data, content, resultado,
+        file.filename or _DEFAULT_FILENAME, file_size, user_id
+    )
+    return JSONResponse(status_code=200, content=response_data)
 
 
 async def _upload_plantilla_async_handler(
@@ -290,25 +451,10 @@ async def _upload_plantilla_async_handler(
                 "message": "El modo 'sincronizar_maestro' requiere confirmar_sincronizacion=true."
             }
         )
-    validate_excel_file(file)
-    content = await file.read()
+    content = await _leer_y_validar_archivo(file)
     file_size = len(content)
-    if file_size > MAX_FILE_SIZE:
-        raise HTTPException(
-            status_code=400,
-            detail=f"El archivo es demasiado grande. Tamaño máximo: {MAX_FILE_SIZE / (1024*1024):.1f} MB"
-        )
-    if file_size == 0:
-        raise HTTPException(status_code=400, detail="El archivo está vacío")
     user_id = get_user_id(user)
-    correcciones_dict: Optional[Dict[str, str]] = None
-    if correcciones_codigos:
-        try:
-            correcciones_dict = json.loads(correcciones_codigos)
-            if not isinstance(correcciones_dict, dict):
-                raise ValueError("correcciones_codigos debe ser un objeto JSON")
-        except json.JSONDecodeError as e:
-            raise HTTPException(status_code=400, detail=f"Formato JSON inválido en correcciones_codigos: {str(e)}")
+    correcciones_dict = _parsear_correcciones_codigos(correcciones_codigos)
 
     run_async = not force_sync
     if run_async and not _celery_workers_available():
@@ -330,139 +476,16 @@ async def _upload_plantilla_async_handler(
         )
 
     if run_async:
-        try:
-            from src.services.file_storage_service import get_file_storage
-            estado_service = ProcesoEstadoService()
-            process_id = estado_service.crear_proceso_plantilla(user_id=user_id)
-            storage = get_file_storage()
-            storage_path = storage.guardar_archivo_temporal(
-                contenido=content,
-                process_id=process_id,
-                nombre_original=file.filename or _DEFAULT_FILENAME
-            )
-            from src.tasks.celery_plantilla_upload import procesar_plantilla_upload
-            procesar_plantilla_upload.delay(
-                process_id=process_id,
-                user_id=user_id,
-                storage_path=storage_path,
-                filename=file.filename or _DEFAULT_FILENAME,
-                validar=validar,
-                bloquea_con_errores=bloquea_con_errores,
-                modo_tiendas=modo_tiendas,
-                correcciones_codigos=correcciones_dict
-            )
-            logger.info(f"📤 Plantilla encolada: {process_id} (usuario: {user_id})")
-            return JSONResponse(
-                status_code=202,
-                content={
-                    "status": "accepted",
-                    "process_id": process_id,
-                    "message": "Plantilla en procesamiento. Consulta GET /api/plantillas/resultado/{process_id} o GET /api/plantillas/stream/{process_id}.",
-                    "resultado_url": f"/api/plantillas/resultado/{process_id}",
-                    "stream_url": f"/api/plantillas/stream/{process_id}"
-                }
-            )
-        except Exception as e:
-            logger.warning(
-                "No se pudo iniciar procesamiento de plantilla en segundo plano (%s). "
-                "Procesando en primer plano (fallback sync).",
-                e,
-                exc_info=True,
-            )
-            run_async = False
-
-    if not run_async:
-        from src.database.services.pedido_service import PedidoService
-        service = PedidoService()
-        resultado = await asyncio.to_thread(
-            service.validar_y_procesar_archivo_excel,
-            file_content=content,
-            filename=file.filename or _DEFAULT_FILENAME,
-            usuario_id=user_id,
-            validar_antes_de_guardar=validar,
-            bloquea_con_errores=bloquea_con_errores,
-            tiendas_permitidas=None,
-            correcciones_codigos=correcciones_dict
+        respuesta_async = _encolar_plantilla_async(
+            content, file, validar, bloquea_con_errores,
+            modo_tiendas, correcciones_dict, user_id
         )
-        tiene_pedido_guardado = bool(resultado.get("pedido_id"))
-        mensaje_respuesta = "Plantilla procesada y guardada exitosamente"
-        if resultado["status"] == "validation_error":
-            if tiene_pedido_guardado:
-                mensaje_respuesta = "Plantilla procesada y guardada con advertencias. Revisa el detalle si lo deseas."
-            else:
-                mensaje_respuesta = resultado.get("errores", ["Error de validación"])[0] if resultado.get("errores") else "Plantilla validada pero tiene errores críticos"
-        elif resultado["status"] == "error":
-            mensaje_respuesta = resultado.get("message", "Error al procesar plantilla")
-        status_respuesta = resultado["status"]
-        if resultado["status"] == "validation_error" and tiene_pedido_guardado:
-            status_respuesta = "success"
-        response_data = {
-            "status": status_respuesta,
-            "message": mensaje_respuesta,
-            "pedido_id": resultado.get("pedido_id"),
-            "numero_pedido": resultado.get("numero_pedido"),
-            "formato_detectado": resultado.get("formato_detectado"),
-            "articulos_cargados": resultado.get("articulos_cargados", 0),
-            "distribuciones_cargadas": resultado.get("distribuciones_cargadas", 0),
-            "validation": resultado.get("validation"),
-            "correcciones_aplicadas": resultado.get("correcciones_aplicadas", []),
-            "file_info": {
-                "filename": file.filename,
-                "size_mb": round(file_size / (1024 * 1024), 2)
-            },
-            "metadata": {
-                "uploaded_by": user_id,
-                "uploaded_at": ahora_naive().isoformat()
-            },
-            "fallback": "sync",
-            "process_id": None,
-            "async": False,
-        }
-        if resultado["status"] == "validation_error" and not tiene_pedido_guardado:
-            return JSONResponse(status_code=400, content=response_data)
-        if resultado["status"] == "error":
-            raise HTTPException(
-                status_code=400,
-                detail=f"Error al procesar plantilla: {resultado.get('errores', ['Error desconocido'])}"
-            )
-        if ENABLE_FILE_STORAGE and resultado.get("pedido_id"):
-            try:
-                from src.services.file_storage_service import get_file_storage
-                storage = get_file_storage()
-                storage_path = storage.guardar_archivo(
-                    contenido=content,
-                    pedido_id=resultado["pedido_id"],
-                    nombre_original=file.filename or _DEFAULT_FILENAME,
-                    usuario_id=user_id
-                )
-                with get_db_connection_context() as conn:
-                    archivo_repo = ArchivoPlantillaRepository(conn)
-                    archivo_repo.crear(
-                        pedido_id=resultado["pedido_id"],
-                        nombre_original=file.filename or _DEFAULT_FILENAME,
-                        storage_path=storage_path,
-                        tamano_bytes=file_size,
-                        subido_por=user_id
-                    )
-                response_data["archivo_original"] = {
-                    "guardado": True,
-                    "storage_path": storage_path,
-                    "descarga_disponible": True
-                }
-            except Exception as storage_err:
-                logger.warning("No se pudo guardar archivo en storage (fallback): %s", storage_err)
-                response_data["archivo_original"] = {
-                    "guardado": False,
-                    "error": str(storage_err),
-                    "descarga_disponible": False
-                }
-        else:
-            response_data["archivo_original"] = {
-                "guardado": False,
-                "mensaje": "Almacenamiento deshabilitado o no aplicable" if not ENABLE_FILE_STORAGE else "No guardado",
-                "descarga_disponible": False
-            }
-        return JSONResponse(status_code=200, content=response_data)
+        if respuesta_async is not None:
+            return respuesta_async
+
+    return await _procesar_plantilla_sync_fallback(
+        content, file, file_size, validar, bloquea_con_errores, correcciones_dict, user_id
+    )
 
 
 async def _obtener_resultado_plantilla_handler(process_id: str, user: Dict):
@@ -507,6 +530,52 @@ async def _obtener_resultado_plantilla_handler(process_id: str, user: Dict):
     }
 
 
+def _construir_payload_stream(estado_actual: Dict, updated_at, version) -> Dict:
+    """Construye el payload SSE de un cambio de estado del proceso."""
+    payload = {
+        "process_id": estado_actual["process_id"],
+        "status": estado_actual["status"],
+        "step": estado_actual["step"],
+        "progress": estado_actual["progress"],
+        "message": estado_actual["message"],
+        "updated_at": updated_at,
+        "version": version
+    }
+    if "data" in estado_actual:
+        payload["data"] = estado_actual["data"]
+    if estado_actual["status"] == "completed":
+        res = estado_actual.get("resultado") or {}
+        if isinstance(res, dict):
+            res.setdefault("correcciones_aplicadas", [])
+        payload["resultado"] = res
+    if estado_actual["status"] == "error":
+        payload["error"] = estado_actual.get("error")
+    return payload
+
+
+async def _stream_eventos_proceso(request: Request, estado_service: ProcesoEstadoService, process_id: str):
+    """Generador SSE: emite el estado del proceso cada vez que cambia, hasta completar o error."""
+    ultimo_updated_at = None
+    ultima_version = None
+    while True:
+        if await request.is_disconnected():
+            break
+        estado_actual = estado_service.obtener_estado(process_id)
+        if not estado_actual:
+            yield f"data: {json.dumps({'error': 'Proceso no encontrado'})}\n\n"
+            break
+        updated_at = estado_actual.get("updated_at")
+        version = estado_actual.get("version", 0)
+        if updated_at != ultimo_updated_at or version != ultima_version:
+            payload = _construir_payload_stream(estado_actual, updated_at, version)
+            yield f"data: {json.dumps(payload)}\n\n"
+            ultimo_updated_at = updated_at
+            ultima_version = version
+        if estado_actual["status"] in ("completed", "error"):
+            break
+        await asyncio.sleep(1)
+
+
 async def _stream_progreso_plantilla_handler(
     process_id: str, request: Request, user: Dict
 ) -> StreamingResponse:
@@ -520,46 +589,8 @@ async def _stream_progreso_plantilla_handler(
     if estado.get("user_id") and estado["user_id"] != user_id:
         raise HTTPException(status_code=403, detail="No tienes acceso a este proceso")
 
-    async def event_stream():
-        ultimo_updated_at = None
-        ultima_version = None
-        while True:
-            if await request.is_disconnected():
-                break
-            estado_actual = estado_service.obtener_estado(process_id)
-            if not estado_actual:
-                yield f"data: {json.dumps({'error': 'Proceso no encontrado'})}\n\n"
-                break
-            updated_at = estado_actual.get("updated_at")
-            version = estado_actual.get("version", 0)
-            if updated_at != ultimo_updated_at or version != ultima_version:
-                payload = {
-                    "process_id": estado_actual["process_id"],
-                    "status": estado_actual["status"],
-                    "step": estado_actual["step"],
-                    "progress": estado_actual["progress"],
-                    "message": estado_actual["message"],
-                    "updated_at": updated_at,
-                    "version": version
-                }
-                if "data" in estado_actual:
-                    payload["data"] = estado_actual["data"]
-                if estado_actual["status"] == "completed":
-                    res = estado_actual.get("resultado") or {}
-                    if isinstance(res, dict):
-                        res.setdefault("correcciones_aplicadas", [])
-                    payload["resultado"] = res
-                if estado_actual["status"] == "error":
-                    payload["error"] = estado_actual.get("error")
-                yield f"data: {json.dumps(payload)}\n\n"
-                ultimo_updated_at = updated_at
-                ultima_version = version
-            if estado_actual["status"] in ("completed", "error"):
-                break
-            await asyncio.sleep(1)
-
     return StreamingResponse(
-        event_stream(),
+        _stream_eventos_proceso(request, estado_service, process_id),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"}
     )
@@ -669,6 +700,79 @@ async def _listar_pedidos_plantillas_handler(
         )
 
 
+def _obtener_archivo_info_por_id(conn, archivo_id: int) -> Optional[Dict]:
+    """Obtiene la información de un archivo activo por su archivo_id, o None si no existe."""
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT
+            archivo_id,
+            pedido_id,
+            nombre_original,
+            storage_path,
+            content_type,
+            tamaño_bytes,
+            subido_por,
+            fecha_subida,
+            activo,
+            descargas,
+            ultima_descarga,
+            ultimo_descargador
+        FROM archivo_plantilla
+        WHERE archivo_id = ? AND activo = 1
+    """, (archivo_id,))
+    row = cursor.fetchone()
+    if not row:
+        return None
+    return {
+        "archivo_id": row[0],
+        "pedido_id": row[1],
+        "nombre_original": row[2],
+        "storage_path": row[3],
+        "content_type": row[4],
+        _KEY_TAMANO_BYTES: row[5],
+        "subido_por": row[6],
+        "fecha_subida": row[7].isoformat() if row[7] else None,
+        "activo": row[8],
+        "descargas": row[9],
+        "ultima_descarga": row[10].isoformat() if row[10] else None,
+        "ultimo_descargador": row[11],
+    }
+
+
+def _buscar_archivo_info(conn, pedido_id: Optional[str], archivo_id: Optional[int]) -> Optional[Dict]:
+    """Busca la información del archivo original por archivo_id o pedido_id."""
+    if archivo_id is not None:
+        return _obtener_archivo_info_por_id(conn, archivo_id)
+    if pedido_id is None:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "bad_request",
+                "message": "Debes enviar pedido_id o archivo_id para descargar."
+            }
+        )
+    archivo_repo = ArchivoPlantillaRepository(conn)
+    return archivo_repo.obtener_por_pedido_id(pedido_id)
+
+
+def _descargar_contenido_storage(storage_path: str) -> bytes:
+    """Descarga el contenido del archivo desde el storage. Lanza HTTPException 500 en error."""
+    from src.services.file_storage_service import get_file_storage, FileStorageError
+    try:
+        storage = get_file_storage()
+        contenido, _ = storage.descargar_archivo(storage_path)
+        return contenido
+    except FileStorageError as e:
+        logger.error(f"Error al descargar archivo del storage: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": "storage_error",
+                "message": f"Error al recuperar el archivo: {str(e)}"
+            }
+        )
+
+
 async def _descargar_plantilla(
     *,
     user: Dict,
@@ -698,53 +802,7 @@ async def _descargar_plantilla(
             )
 
         with get_db_connection_context() as conn:
-            archivo_repo = ArchivoPlantillaRepository(conn)
-            archivo_info = None
-            if archivo_id is not None:
-                cursor = conn.cursor()
-                cursor.execute("""
-                    SELECT
-                        archivo_id,
-                        pedido_id,
-                        nombre_original,
-                        storage_path,
-                        content_type,
-                        tamaño_bytes,
-                        subido_por,
-                        fecha_subida,
-                        activo,
-                        descargas,
-                        ultima_descarga,
-                        ultimo_descargador
-                    FROM archivo_plantilla
-                    WHERE archivo_id = ? AND activo = 1
-                """, (archivo_id,))
-                row = cursor.fetchone()
-                if row:
-                    archivo_info = {
-                        "archivo_id": row[0],
-                        "pedido_id": row[1],
-                        "nombre_original": row[2],
-                        "storage_path": row[3],
-                        "content_type": row[4],
-                        _KEY_TAMANO_BYTES: row[5],
-                        "subido_por": row[6],
-                        "fecha_subida": row[7].isoformat() if row[7] else None,
-                        "activo": row[8],
-                        "descargas": row[9],
-                        "ultima_descarga": row[10].isoformat() if row[10] else None,
-                        "ultimo_descargador": row[11],
-                    }
-            else:
-                if pedido_id is None:
-                    raise HTTPException(
-                        status_code=400,
-                        detail={
-                            "error": "bad_request",
-                            "message": "Debes enviar pedido_id o archivo_id para descargar."
-                        }
-                    )
-                archivo_info = archivo_repo.obtener_por_pedido_id(pedido_id)
+            archivo_info = _buscar_archivo_info(conn, pedido_id, archivo_id)
 
             if not archivo_info:
                 identificador = f"archivo_id={archivo_id}" if archivo_id is not None else f"pedido_id={pedido_id}"
@@ -756,20 +814,7 @@ async def _descargar_plantilla(
                     }
                 )
 
-        from src.services.file_storage_service import get_file_storage, FileStorageError
-
-        try:
-            storage = get_file_storage()
-            contenido, _ = storage.descargar_archivo(archivo_info["storage_path"])
-        except FileStorageError as e:
-            logger.error(f"Error al descargar archivo del storage: {e}")
-            raise HTTPException(
-                status_code=500,
-                detail={
-                    "error": "storage_error",
-                    "message": f"Error al recuperar el archivo: {str(e)}"
-                }
-            )
+        contenido = _descargar_contenido_storage(archivo_info["storage_path"])
 
         with get_db_connection_context() as conn:
             archivo_repo = ArchivoPlantillaRepository(conn)
