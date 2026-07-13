@@ -83,7 +83,40 @@ REDIS_URL=redis://localhost:6379/0
 # Migración automática (opcional, legacy; por defecto está deshabilitada)
 # ENABLE_AUTO_MIGRATE=false   # por defecto: no se programa migración periódica
 # Si la activas: ENABLE_AUTO_MIGRATE=true y AUTO_MIGRATE_INTERVAL_MINUTES=15
+
+# Sync nocturna de maestros de productos (deshabilitada por defecto desde 2026-07, ver abajo)
+# ENABLE_SYNC_PRODUCTOS_AUTOMATICA=false
+
+# Reconciliación automática de ST pendientes (por defecto deshabilitada; en prod va en true)
+# ENABLE_RECONCILIACION_ST_AUTOMATICA=true
+# RECONCILIAR_ST_INTERVALO_MINUTOS=5
 ```
+
+### Tareas programadas (Celery Beat) y sus flags
+
+Todas las tareas de Beat se encolan en la cola `maintenance` (las interactivas disparadas
+desde la API usan la cola por defecto `celery`). El worker consume **ambas** colas: están
+declaradas en `task_queues` en `src/celery_app.py`, así que aplica aunque se lance sin `-Q`.
+
+> ⚠️ **Lección de producción (2026-07):** el worker corría sin `-Q` y sin `task_queues`
+> declaradas, por lo que solo consumía la cola `celery`. Las tareas de Beat se acumularon
+> ~18 días en Redis (5,318 mensajes en `maintenance`) sin ejecutarse nunca. Si se cambia
+> la topología de colas, verificar con `redis-cli LLEN maintenance` que se mantenga en ~0.
+
+| Tarea | Flag | Default | Frecuencia |
+|---|---|---|---|
+| `reconciliar_transferencias_pendientes` | `ENABLE_RECONCILIACION_ST_AUTOMATICA` | `false` (prod: `true`) | cada `RECONCILIAR_ST_INTERVALO_MINUTOS` (5 min) |
+| `sync_productos_maestro` | `ENABLE_SYNC_PRODUCTOS_AUTOMATICA` | `false` | diaria, `SYNC_PRODUCTOS_HOUR:MINUTE` (3:00 AM) |
+| `execute_auto_migration` (legacy) | `ENABLE_AUTO_MIGRATE` | `false` | cada `AUTO_MIGRATE_INTERVAL_MINUTES` |
+
+**Sobre `sync_productos_maestro` (deshabilitada el 2026-07):** copia los catálogos completos
+de productos MBA3 (API) y SAP (OPENQUERY) a las tablas staging `producto_mba3_staging` /
+`producto_sap_staging`, que alimentan únicamente el **cruce de productos** (homologación de
+SKUs). Se deshabilitó porque la homologación masiva concluyó y la pantalla de cruce tiene
+sincronización manual (`cruce_productos.py`: endpoints `/sincronizar-maestros*`), así que la
+nocturna solo consumía recursos (lee dos ERPs completos, límite de 30 min). La tarea y los
+endpoints manuales siguen operativos. **Para reactivarla:** `ENABLE_SYNC_PRODUCTOS_AUTOMATICA=true`
+en el `.env` y reiniciar `celery-beat` (y el worker si también estaba abajo) — nada más.
 
 ## ✅ Paso 4: Ejecutar los procesos
 

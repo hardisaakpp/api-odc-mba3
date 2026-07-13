@@ -400,6 +400,14 @@ MIGRATE_DATE_FILTER_DAYS = int(_migrate_days)
 # URL de Redis para Celery (broker y backend)
 REDIS_URL = os.getenv('REDIS_URL', 'redis://localhost:6379/0')
 
+# Sincronizacion nocturna de maestros de productos (MBA3 + SAP -> tablas staging
+# del cruce de productos). Deshabilitada por defecto (2026-07): la homologacion
+# masiva ya concluyo y el cruce de productos tiene sincronizacion manual desde la
+# UI, asi que la nocturna solo consumiria recursos (lee catalogos completos de
+# ambos ERPs, hasta 30 min). Para reactivarla: ENABLE_SYNC_PRODUCTOS_AUTOMATICA=true
+# en .env y reiniciar celery-beat. Ver docs/CELERY_QUICKSTART.md.
+ENABLE_SYNC_PRODUCTOS_AUTOMATICA = os.getenv("ENABLE_SYNC_PRODUCTOS_AUTOMATICA", "false").lower() == "true"
+
 # Horario de sincronizaciÃ³n de productos (hora en formato 24h)
 SYNC_PRODUCTOS_HOUR = int(os.getenv('SYNC_PRODUCTOS_HOUR', '3'))  # Default: 3:00 AM
 SYNC_PRODUCTOS_MINUTE = int(os.getenv('SYNC_PRODUCTOS_MINUTE', '0'))  # Default: minuto 0

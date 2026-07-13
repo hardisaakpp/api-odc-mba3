@@ -19,6 +19,7 @@ Comandos de ejecución:
 import logging
 from celery import Celery
 from celery.schedules import crontab
+from kombu import Queue
 from celery.signals import worker_process_init, worker_process_shutdown, beat_init, worker_ready
 
 # Importar configuración centralizada desde config.py
@@ -27,6 +28,7 @@ from src.config import (
     REDIS_URL,
     ENABLE_AUTO_MIGRATE,
     AUTO_MIGRATE_INTERVAL_MINUTES,
+    ENABLE_SYNC_PRODUCTOS_AUTOMATICA,
     SYNC_PRODUCTOS_HOUR,
     SYNC_PRODUCTOS_MINUTE,
     ENABLE_RECONCILIACION_ST_AUTOMATICA,
@@ -70,14 +72,21 @@ celery_app.conf.update(
                 'options': {'expires': 60.0, 'queue': 'maintenance'},
             }
         } if ENABLE_AUTO_MIGRATE else {}),
-        'sync-productos-maestro': {
-            'task': 'src.tasks.celery_sync_productos.sync_productos_maestro',
-            'schedule': crontab(hour=SYNC_PRODUCTOS_HOUR, minute=SYNC_PRODUCTOS_MINUTE),  # type: ignore[arg-type] # Diario a las 3:00 AM - crontab acepta enteros aunque los stubs indiquen str
-            'options': {
-                'queue': 'maintenance',
-                'expires': 300.0,  # Expira si no se ejecuta en 5 minutos
+        # Sync nocturna de maestros deshabilitada por defecto (2026-07): la
+        # homologacion masiva concluyo y el cruce de productos se sincroniza
+        # manualmente desde la UI. Reactivar con ENABLE_SYNC_PRODUCTOS_AUTOMATICA=true
+        # (ver src/config.py y docs/INTEGRACION_SAP.md). La tarea y sus endpoints
+        # manuales siguen operativos; solo se quita la programacion de Beat.
+        **({
+            'sync-productos-maestro': {
+                'task': 'src.tasks.celery_sync_productos.sync_productos_maestro',
+                'schedule': crontab(hour=SYNC_PRODUCTOS_HOUR, minute=SYNC_PRODUCTOS_MINUTE),  # type: ignore[arg-type] # Diario a las 3:00 AM - crontab acepta enteros aunque los stubs indiquen str
+                'options': {
+                    'queue': 'maintenance',
+                    'expires': 300.0,  # Expira si no se ejecuta en 5 minutos
+                }
             }
-        },
+        } if ENABLE_SYNC_PRODUCTOS_AUTOMATICA else {}),
         **({
             'reconciliar-transferencias-pendientes': {
                 'task': 'src.tasks.celery_reconciliar_transferencias.reconciliar_transferencias_pendientes',
@@ -90,6 +99,15 @@ celery_app.conf.update(
     # Mantener cargas interactivas en la cola por defecto y mover tareas
     # programadas/largas a maintenance para que no bloqueen plantillas.
     task_default_queue='celery',
+    # Declarar ambas colas para que el worker las consuma aunque se lance sin -Q
+    # (deploy sin Docker, systemd, celery a mano). Sin esto, un worker sin -Q solo
+    # consume la cola por defecto y las tareas de Beat quedan huerfanas en Redis
+    # (incidente prod 2026-07: 5,318 tareas acumuladas en 'maintenance').
+    # El -Q del CLI, si se pasa, tiene prioridad sobre esta lista.
+    task_queues=(
+        Queue('celery'),
+        Queue('maintenance'),
+    ),
     task_routes={
         'src.tasks.celery_auto_migrate.execute_auto_migration': {'queue': 'maintenance'},
         'src.tasks.celery_sync_productos.sync_productos_maestro': {'queue': 'maintenance'},
@@ -99,6 +117,11 @@ celery_app.conf.update(
     # CRÍTICO: Configuración de workers para prevenir acumulación de recursos
     worker_prefetch_multiplier=1,  # Solo tomar 1 tarea a la vez
     worker_max_tasks_per_child=20,  # Reiniciar worker después de 20 tareas (previene memory leaks)
+    # Tareas I/O-bound contra SAP/SQL Server: el default (1 hijo por nucleo, ej. 8)
+    # sobra y ademas presiona a SAP en paralelo. Pico realista: 2 interactivas
+    # (plantillas/cruce/redistribucion) + 1 programada. El --concurrency del CLI,
+    # si se pasa, tiene prioridad. Con --pool=solo (Windows dev) se ignora.
+    worker_concurrency=3,
     
     # Pool: usar 'solo' en Windows, 'prefork' en Linux
     # En Windows, el pool por defecto puede causar problemas
