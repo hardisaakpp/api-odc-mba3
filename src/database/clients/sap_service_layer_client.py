@@ -5,6 +5,7 @@ Reemplaza la conexión directa a SAP Business One Service Layer.
 El middleware gestiona sesiones SAP, throttling, reintentos y circuit breaker internamente.
 """
 
+import json
 import logging
 import urllib.parse
 import requests
@@ -60,6 +61,41 @@ class SAPServiceLayerClient:
             return body.get("detail") or body.get("title") or f"HTTP {response.status_code}"
         except Exception:
             return f"HTTP {response.status_code}: {response.text[:200]}"
+
+    @staticmethod
+    def _extraer_error_sap_embebido(response: requests.Response) -> Dict[str, Any]:
+        """
+        Extrae el código y detalle de error nativo de SAP B1 cuando el middleware
+        lo reenvía embebido como texto dentro de `detail`, ej.:
+        "SAP Service Layer returned HTTP 404: {\"error\": {\"code\": -2028, ...}}".
+
+        Sin esto, retry_utils.sap_service_layer_result_should_retry no puede aplicar
+        su política por código B1 (forzar/evitar reintento) y cae siempre a la
+        heurística genérica por status HTTP.
+
+        Retorna {"error_code": ..., "sap_error_details": ...}; ambos None si el
+        body no es JSON o no sigue el formato esperado (no bloqueante).
+        """
+        try:
+            problem_body = response.json()
+        except ValueError:
+            return {"error_code": None, "sap_error_details": None}
+
+        detail = problem_body.get("detail") or ""
+        inicio_json = detail.find("{")
+        if inicio_json == -1:
+            return {"error_code": None, "sap_error_details": None}
+
+        try:
+            sap_error_body = json.loads(detail[inicio_json:])
+        except ValueError:
+            return {"error_code": None, "sap_error_details": None}
+
+        error_detail = sap_error_body.get("error") or {}
+        return {
+            "error_code": error_detail.get("code"),
+            "sap_error_details": sap_error_body,
+        }
 
     @staticmethod
     def _bool_to_tyes(value: Any) -> str:
@@ -120,13 +156,14 @@ class SAPServiceLayerClient:
             return {"success": True, "doc_entry": doc_entry, "doc_num": doc_num, "data": result}
 
         error_msg = self._problem_detail(response)
-        logger.error(f"❌ Error al crear Purchase Order: {error_msg}")
+        sap_error = self._extraer_error_sap_embebido(response)
+        logger.error(f"❌ Error al crear Purchase Order: {error_msg} (Código SAP: {sap_error['error_code']})")
         return {
             "success": False,
             "error": error_msg,
-            "error_code": None,
+            "error_code": sap_error["error_code"],
             "status_code": response.status_code,
-            "sap_error_details": None,
+            "sap_error_details": sap_error["sap_error_details"],
         }
 
     # ─── Stock Transfers ────────────────────────────────────────────────────────
@@ -175,13 +212,17 @@ class SAPServiceLayerClient:
             return {"success": True, "doc_entry": doc_entry, "doc_num": doc_num, "data": result}
 
         error_msg = self._problem_detail(response)
-        logger.error(f"❌ Error al crear Inventory Transfer Request: {error_msg}")
+        sap_error = self._extraer_error_sap_embebido(response)
+        logger.error(
+            f"❌ Error al crear Inventory Transfer Request: {error_msg} "
+            f"(Código SAP: {sap_error['error_code']})"
+        )
         return {
             "success": False,
             "error": error_msg,
-            "error_code": None,
+            "error_code": sap_error["error_code"],
             "status_code": response.status_code,
-            "sap_error_details": None,
+            "sap_error_details": sap_error["sap_error_details"],
         }
 
     # ─── Inventory Transfer Requests (query) ──────────────────────────────────
@@ -250,6 +291,9 @@ class SAPServiceLayerClient:
                 "Valid": self._bool_to_tyes(is_valid),
                 "Frozen": self._bool_to_tyes(is_frozen),
                 "ItemType": data.get("itemType"),
+                "U_IXX_PACK": data.get("packCode"),
+                "ItmsGrpCod": data.get("groupCode"),
+                "CardCode": data.get("preferredVendorCode") or None,
             }
 
         if response.status_code == 404:
@@ -416,6 +460,120 @@ class SAPServiceLayerClient:
             result["errors"].append(f"Error inesperado al validar artículo en bodega: {str(e)}")
 
         return result
+
+    _WAREHOUSE_VALIDATE_CHUNK_SIZE = 200
+
+    def get_all_warehouses(self) -> Optional[List[Dict[str, Any]]]:
+        """Consulta el catálogo completo de bodegas via middleware."""
+        if not self.enabled:
+            logger.debug("⏭️ Consulta de bodegas deshabilitada")
+            return None
+
+        response = self._get("/api/v1/warehouses")
+        if response is None:
+            return None
+
+        if response.status_code == 200:
+            warehouses = response.json().get("warehouses", [])
+            logger.info(f"✅ {len(warehouses)} bodega(s) obtenidas del middleware")
+            return [
+                {"WhsCode": w.get("whsCode"), "WhsName": w.get("whsName")}
+                for w in warehouses
+            ]
+
+        logger.error(f"❌ Error al consultar bodegas: {self._problem_detail(response)}")
+        return None
+
+    def _validate_warehouses_chunk(self, codes: List[str]) -> Optional[List[Dict[str, Any]]]:
+        response = self._post("/api/v1/warehouses/validate", {"warehouseCodes": codes})
+        if response is None:
+            return None
+        if response.status_code == 200:
+            return response.json().get("warehouses", [])
+        logger.error(
+            f"❌ Validación batch de bodegas no disponible (HTTP {response.status_code}): "
+            f"{self._problem_detail(response)}"
+        )
+        return None
+
+    def validate_warehouses_batch(self, warehouse_codes: List[str]) -> Optional[Dict[str, Any]]:
+        """
+        Valida una lista de códigos de bodega contra SAP, en chunks de 200 (límite del middleware).
+
+        Returns:
+            {"warehouses": [...]} combinando todos los chunks, o None si NINGÚN chunk
+            pudo consultarse (el caller debe hacer fallback a OPENQUERY). Si solo
+            algunos chunks fallan, sus códigos se marcan con errorType="connection_error".
+        """
+        if not self.enabled:
+            logger.debug("⏭️ Validación batch de bodegas deshabilitada")
+            return None
+        if not warehouse_codes:
+            return {"warehouses": []}
+
+        chunks = [
+            warehouse_codes[i:i + self._WAREHOUSE_VALIDATE_CHUNK_SIZE]
+            for i in range(0, len(warehouse_codes), self._WAREHOUSE_VALIDATE_CHUNK_SIZE)
+        ]
+        warehouses: List[Dict[str, Any]] = []
+        chunks_ok = 0
+        for chunk in chunks:
+            resultado_chunk = self._validate_warehouses_chunk(chunk)
+            if resultado_chunk is None:
+                warehouses.extend(
+                    {"whsCode": code, "exists": False, "whsName": None, "errorType": "connection_error"}
+                    for code in chunk
+                )
+                continue
+            chunks_ok += 1
+            warehouses.extend(resultado_chunk)
+
+        if chunks_ok == 0:
+            return None
+        return {"warehouses": warehouses}
+
+    def validate_purchase_order_batch(
+        self,
+        card_code: Optional[str],
+        lines: List[Dict[str, str]],
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Prevalida proveedor + líneas de una ODC en una sola llamada batch al middleware.
+
+        Args:
+            card_code: CardCode del proveedor a validar (None para omitir)
+            lines: Lista de {"itemCode": ..., "warehouseCode": ...}
+
+        Returns:
+            Respuesta del middleware ({"businessPartner": ..., "items": [...]}),
+            o None si el batch no está disponible (deshabilitado, error de conexión,
+            middleware sin el endpoint, o SL totalmente caído) — el caller debe
+            hacer fallback a la validación línea por línea.
+        """
+        if not self.enabled:
+            logger.debug("⏭️ Validación batch deshabilitada (ENABLE_SAP_SERVICE_LAYER=False)")
+            return None
+
+        payload: Dict[str, Any] = {"lines": lines}
+        if card_code:
+            payload["cardCode"] = card_code
+
+        logger.info(
+            f"📤 POST /api/v1/validations/purchase-order "
+            f"(cardCode={card_code}, {len(lines)} líneas)"
+        )
+        response = self._post("/api/v1/validations/purchase-order", payload)
+        if response is None:
+            return None
+
+        if response.status_code == 200:
+            return response.json()
+
+        logger.error(
+            f"❌ Validación batch no disponible (HTTP {response.status_code}): "
+            f"{self._problem_detail(response)}"
+        )
+        return None
 
     def logout(self) -> bool:
         """No-op: el middleware gestiona las sesiones SAP internamente."""

@@ -18,6 +18,7 @@ from src.config import (
     SAP_ODC_RETRY_MAX_ATTEMPTS,
     SAP_ODC_RETRY_BASE_DELAY_SECONDS,
     SAP_ODC_RETRY_MAX_JITTER_SECONDS,
+    USE_BATCH_VALIDATION,
 )
 from .retry_utils import retry_operation, sap_service_layer_result_should_retry
 from ..repositories.orden_compra_repository import OrdenCompraRepository
@@ -27,29 +28,6 @@ from ..mappers.sap_oc_mapper import SAPOCMapper
 logger = logging.getLogger(__name__)
 
 _SIN_RESPUESTA_SAP = "Sin respuesta de SAP"
-
-
-def _mensaje_sugiere_reintento_sap(mensaje: str) -> bool:
-    """True si el texto describe un fallo típicamente transitorio hacia SAP SL (red, SL caído)."""
-    if not mensaje:
-        return False
-    m = mensaje.lower()
-    needles = (
-        "conexión",
-        "conexion",
-        "connection",
-        "timeout",
-        "remote",
-        "disconnected",
-        "sin respuesta",
-        "no se pudo establecer conexión",
-        "no se pudo establecer conexion",
-        # Regla operativa: permitir reenvío manual en errores de presupuesto de RL.
-        "presupuesto excedido rl",
-        "código sap: -1116",
-        "codigo sap: -1116",
-    )
-    return any(n in m for n in needles)
 
 
 class OCSAPService:
@@ -1083,19 +1061,18 @@ class OCSAPService:
                 logger.info(f"✅ Proveedor validado: {card_code} - {bp_info.get('CardName')}")
 
     @staticmethod
-    def _validar_linea_detalle_sap(
-        idx, detalle_linea, sap_client, errors, warnings, detalle
-    ) -> tuple:
+    def _extraer_linea(detalle_linea: Dict[str, Any]) -> tuple:
+        """Extrae (sku, cantidad, bodega) normalizados de una línea de detalle."""
         sku = detalle_linea.get("sku_sap", "").strip()
         cantidad = float(detalle_linea.get("cantidad_sap", 0))
         bodega = (detalle_linea.get("codigo_bodega") or detalle_linea.get("warehouse_code") or "").strip()
-        if cantidad <= 0:
-            return 0, 0
-        if not sku:
-            errors.append(f"Línea {idx}: SKU vacío")
-            return 0, 1
-        logger.debug(f"🔍 Validando línea {idx}: {sku} en bodega {bodega}")
-        validacion_item = sap_client.validate_item_in_warehouse(sku, bodega)
+        return sku, cantidad, bodega
+
+    @staticmethod
+    def _registrar_validacion_linea(
+        idx, sku, bodega, cantidad, validacion_item, errors, warnings, detalle
+    ) -> tuple:
+        """Registra el resultado de validación de una línea. Retorna (validados, con_error)."""
         detalle["articulos"][sku] = {
             "linea": idx,
             "bodega": bodega,
@@ -1114,6 +1091,22 @@ class OCSAPService:
         return 1, 0
 
     @staticmethod
+    def _validar_linea_detalle_sap(
+        idx, detalle_linea, sap_client, errors, warnings, detalle
+    ) -> tuple:
+        sku, cantidad, bodega = OCSAPService._extraer_linea(detalle_linea)
+        if cantidad <= 0:
+            return 0, 0
+        if not sku:
+            errors.append(f"Línea {idx}: SKU vacío")
+            return 0, 1
+        logger.debug(f"🔍 Validando línea {idx}: {sku} en bodega {bodega}")
+        validacion_item = sap_client.validate_item_in_warehouse(sku, bodega)
+        return OCSAPService._registrar_validacion_linea(
+            idx, sku, bodega, cantidad, validacion_item, errors, warnings, detalle
+        )
+
+    @staticmethod
     def _validar_articulos_sap(sap_client, oc_detalles, errors, warnings, detalle) -> tuple:
         articulos_validados = 0
         articulos_con_error = 0
@@ -1124,6 +1117,151 @@ class OCSAPService:
             articulos_validados += validated
             articulos_con_error += with_error
         return articulos_validados, articulos_con_error
+
+    @staticmethod
+    def _validar_proveedor_batch(bp_result, card_code, errors, detalle) -> None:
+        """Registra la validación del proveedor a partir de la respuesta batch del middleware."""
+        if not card_code:
+            return
+        if bp_result is None or bp_result.get("errorType") == "connection_error":
+            errors.append(f"Error de conexión al validar proveedor '{card_code}'")
+            detalle["proveedor"] = {"error": "conexion", "card_code": card_code}
+            return
+        error_type = bp_result.get("errorType")
+        if error_type == "not_found" or not bp_result.get("exists"):
+            errors.append(f"Proveedor '{card_code}' no existe en SAP BusinessPartners")
+            detalle["proveedor"] = {"error": "no_existe", "card_code": card_code}
+        elif error_type:
+            errors.append(bp_result.get("errorMessage") or f"Error al validar proveedor {card_code}")
+            detalle["proveedor"] = {"error": error_type, "card_code": card_code}
+        elif bp_result.get("frozen"):
+            errors.append(f"Proveedor '{card_code}' está CONGELADO en SAP (Frozen=tYES)")
+            detalle["proveedor"] = {"error": "congelado", "card_code": card_code}
+        elif bp_result.get("valid") is False:
+            errors.append(f"Proveedor '{card_code}' no está activo en SAP (Valid=tNO)")
+            detalle["proveedor"] = {"error": "inactivo", "card_code": card_code}
+        else:
+            detalle["proveedor"] = {
+                "valid": True,
+                "card_code": card_code,
+                "card_name": bp_result.get("cardName"),
+                "card_type": bp_result.get("cardType"),
+            }
+            logger.info(f"✅ Proveedor validado (batch): {card_code} - {bp_result.get('cardName')}")
+
+    @staticmethod
+    def _validacion_desde_batch_item(item_result, sku, bodega) -> Dict[str, Any]:
+        """
+        Traduce un elemento de la respuesta batch al mismo formato que
+        SAPServiceLayerClient.validate_item_in_warehouse, para reutilizar
+        el registro de líneas sin lógica nueva.
+        """
+        result = {
+            "valid": False,
+            "item_exists": False,
+            "is_purchase_item": False,
+            "warehouse_configured": False,
+            "stock": None,
+            "errors": [],
+        }
+        if item_result is None or item_result.get("errorType") == "connection_error":
+            result["errors"].append(f"Error de conexión al validar artículo {sku}")
+            return result
+
+        error_type = item_result.get("errorType")
+        if error_type == "item_not_found":
+            result["errors"].append(f"Artículo '{sku}' no existe en SAP")
+            return result
+        if error_type and error_type != "warehouse_not_found":
+            result["errors"].append(item_result.get("errorMessage") or f"Error al validar {sku}")
+            return result
+
+        result["item_exists"] = True
+        if not item_result.get("purchaseItem"):
+            result["errors"].append(
+                f"Artículo '{sku}' no está habilitado para compra (PurchaseItem=tNO)"
+            )
+            return result
+
+        result["is_purchase_item"] = True
+        if error_type == "warehouse_not_found":
+            result["errors"].append(
+                f"Artículo '{sku}' no está configurado en bodega '{bodega}'. "
+                f"Contacte a logística para dar de alta el artículo en la bodega '{bodega}'."
+            )
+            return result
+
+        result["warehouse_configured"] = True
+        in_stock = float(item_result.get("inStock") or 0)
+        committed = float(item_result.get("isCommitted") or 0)
+        result["stock"] = in_stock - committed
+        result["valid"] = True
+        return result
+
+    @staticmethod
+    def _validar_articulos_batch(
+        oc_detalles, items_lookup, errors, warnings, detalle
+    ) -> tuple:
+        """Valida todas las líneas usando el lookup de la respuesta batch."""
+        articulos_validados = 0
+        articulos_con_error = 0
+        for idx, detalle_linea in enumerate(oc_detalles, start=1):
+            sku, cantidad, bodega = OCSAPService._extraer_linea(detalle_linea)
+            if cantidad <= 0:
+                continue
+            if not sku:
+                errors.append(f"Línea {idx}: SKU vacío")
+                articulos_con_error += 1
+                continue
+            validacion_item = OCSAPService._validacion_desde_batch_item(
+                items_lookup.get((sku, bodega)), sku, bodega
+            )
+            validated, with_error = OCSAPService._registrar_validacion_linea(
+                idx, sku, bodega, cantidad, validacion_item, errors, warnings, detalle
+            )
+            articulos_validados += validated
+            articulos_con_error += with_error
+        return articulos_validados, articulos_con_error
+
+    def _precheck_batch(
+        self, oc_cabecera, oc_detalles, errors, warnings, detalle
+    ) -> Optional[tuple]:
+        """
+        Prevalidación con una sola llamada batch al middleware.
+
+        Retorna (articulos_validados, articulos_con_error), o None si el batch
+        no está disponible (el caller hace fallback a la validación por línea).
+        """
+        proveedor = (oc_cabecera.get("proveedor") or "").strip()
+        card_code = None
+        if proveedor:
+            card_code = proveedor if proveedor.startswith('P') else f"P{proveedor}"
+
+        pares_unicos = {}
+        for detalle_linea in oc_detalles:
+            sku, cantidad, bodega = self._extraer_linea(detalle_linea)
+            if cantidad > 0 and sku:
+                pares_unicos[(sku, bodega)] = {"itemCode": sku, "warehouseCode": bodega}
+
+        # Límite del contrato batch del middleware; con más pares se usa la vía por línea
+        if len(pares_unicos) > 500:
+            logger.warning(
+                f"⚠️ Batch omitido: {len(pares_unicos)} pares únicos supera el límite de 500"
+            )
+            return None
+
+        batch = self.sap_client.validate_purchase_order_batch(
+            card_code, list(pares_unicos.values())
+        )
+        if batch is None:
+            return None
+
+        self._validar_proveedor_batch(batch.get("businessPartner"), card_code, errors, detalle)
+        items_lookup = {
+            (item.get("itemCode"), item.get("warehouseCode")): item
+            for item in (batch.get("items") or [])
+        }
+        return self._validar_articulos_batch(oc_detalles, items_lookup, errors, warnings, detalle)
 
     def _precheck_against_service_layer(
         self,
@@ -1166,10 +1304,27 @@ class OCSAPService:
 
         logger.info("🔍 Iniciando prevalidación contra SAP Service Layer...")
 
-        self._validar_proveedor_sap(self.sap_client, oc_cabecera, errors, detalle)
-        articulos_validados, articulos_con_error = self._validar_articulos_sap(
-            self.sap_client, oc_detalles, errors, warnings, detalle
-        )
+        resultado_batch = None
+        if USE_BATCH_VALIDATION:
+            resultado_batch = self._precheck_batch(
+                oc_cabecera, oc_detalles, errors, warnings, detalle
+            )
+            if resultado_batch is None:
+                logger.warning(
+                    "⚠️ Validación batch no disponible; fallback a validación línea por línea"
+                )
+                errors.clear()
+                warnings.clear()
+                detalle["proveedor"] = {}
+                detalle["articulos"] = {}
+
+        if resultado_batch is not None:
+            articulos_validados, articulos_con_error = resultado_batch
+        else:
+            self._validar_proveedor_sap(self.sap_client, oc_cabecera, errors, detalle)
+            articulos_validados, articulos_con_error = self._validar_articulos_sap(
+                self.sap_client, oc_detalles, errors, warnings, detalle
+            )
 
         total_lineas = articulos_validados + articulos_con_error
 

@@ -9,6 +9,7 @@ import asyncio
 import time
 import json
 from datetime import datetime
+from typing import Any, Dict, Optional
 
 from src.utils.timezone import ahora_naive
 from fastapi import FastAPI, HTTPException, Depends, Query, Request
@@ -20,8 +21,9 @@ from src.database.services.producto_staging_sync_service import ProductoStagingS
 from src.database.services.proceso_estado_service import ProcesoEstadoService
 from src.database.repositories.sync_control_repository import SyncControlRepository
 from src.security.jwt_auth import verify_jwt_token, require_permission
-from src.config import SAP_LINKED_SERVER, SAP_DATABASE, ENABLE_SAP_QUERIES
+from src.config import SAP_LINKED_SERVER, SAP_DATABASE, ENABLE_SAP_QUERIES, USE_MIDDLEWARE_SKU_LOOKUP
 from src.database.connection import get_sap_db_connection, get_db_connection
+from src.database.clients.sap_service_layer_client import SAPServiceLayerClient
 
 logger = logging.getLogger(__name__)
 
@@ -428,20 +430,56 @@ async def _buscar_sku_mba3_handler(sku: str, incluir_sugerencias_sap: bool, limi
         raise HTTPException(status_code=500, detail=f"Error al buscar SKU en MBA3: {str(e)}")
 
 
-async def _buscar_sku_sap_handler(sku: str):
+def _mapear_item_middleware_a_producto(item: Dict[str, Any], sku_clean: str) -> Dict[str, Any]:
+    """Traduce la respuesta de GET /items/{code} del middleware al formato de este endpoint."""
+    valid_for_raw = item.get("Valid") or "N"
+    valid_for = valid_for_raw == "tYES"
+    return {
+        "codigo": item.get("ItemCode") or sku_clean,
+        "nombre": item.get("ItemName") or "",
+        "pack": item.get("U_IXX_PACK") or "",
+        "group_code": item.get("ItmsGrpCod"),
+        "card_code": item.get("CardCode"),
+        "valid_for": valid_for_raw,
+        "estado": "activo" if valid_for else "inactivo",
+    }
+
+
+async def _buscar_sku_via_middleware(sku_clean: str) -> Optional[Dict[str, Any]]:
+    """
+    Busca el SKU vía middleware (GET /api/v1/items/{code}).
+
+    Returns la respuesta final del endpoint si el middleware pudo resolverlo
+    (encontrado o no encontrado), o None si no está disponible y el caller
+    debe hacer fallback a OPENQUERY.
+    """
+    client = SAPServiceLayerClient()
+    item = await asyncio.to_thread(client.get_item, sku_clean)
+
+    if item is None:
+        return None  # sin conexión al middleware: fallback
+
+    if item.get("_error"):
+        if item.get("_error_type") == "no_existe":
+            return {
+                "status": "not_found",
+                "message": f"SKU no encontrado en SAP: {sku_clean}",
+                "sku": sku_clean,
+                "data": None,
+            }
+        return None  # otro error del middleware: fallback a OPENQUERY
+
+    return {
+        "status": "success",
+        "message": "SKU encontrado en SAP",
+        "sku": sku_clean,
+        "data": _mapear_item_middleware_a_producto(item, sku_clean),
+    }
+
+
+async def _buscar_sku_via_openquery(sku_clean: str) -> Dict[str, Any]:
+    """Busca el SKU directo en SAP HANA por OPENQUERY (vía por defecto / fallback)."""
     try:
-        sku_clean = sku.strip()
-        _validar_sku(sku_clean)
-
-        logger.info(f"🔍 Buscando SKU en SAP: {sku_clean}")
-
-        # Verificar si SAP está habilitado
-        if not ENABLE_SAP_QUERIES:
-            raise HTTPException(
-                status_code=400,
-                detail="Consultas SAP están deshabilitadas. Configura ENABLE_SAP_QUERIES=true en .env"
-            )
-
         # Escapar comillas simples para la query (aunque ya está validado)
         # En OPENQUERY, las comillas simples dentro de la query remota se escapan duplicándolas
         sku_escaped = sku_clean.replace("'", "''")
@@ -539,6 +577,37 @@ async def _buscar_sku_sap_handler(sku: str):
 
     except HTTPException:
         # Re-lanzar excepciones HTTP (validaciones)
+        raise
+    except Exception as e:
+        logger.error(f"❌ Error al buscar SKU en SAP: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Error al buscar SKU en SAP: {str(e)}")
+
+
+async def _buscar_sku_sap_handler(sku: str):
+    try:
+        sku_clean = sku.strip()
+        _validar_sku(sku_clean)
+
+        logger.info(f"🔍 Buscando SKU en SAP: {sku_clean}")
+
+        # Verificar si SAP está habilitado
+        if not ENABLE_SAP_QUERIES:
+            raise HTTPException(
+                status_code=400,
+                detail="Consultas SAP están deshabilitadas. Configura ENABLE_SAP_QUERIES=true en .env"
+            )
+
+        if USE_MIDDLEWARE_SKU_LOOKUP:
+            resultado = await _buscar_sku_via_middleware(sku_clean)
+            if resultado is not None:
+                return resultado
+            logger.warning(
+                f"⚠️ Middleware no disponible para SKU {sku_clean}; fallback a OPENQUERY"
+            )
+
+        return await _buscar_sku_via_openquery(sku_clean)
+
+    except HTTPException:
         raise
     except Exception as e:
         logger.error(f"❌ Error al buscar SKU en SAP: {e}", exc_info=True)
