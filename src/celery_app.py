@@ -28,7 +28,9 @@ from src.config import (
     ENABLE_AUTO_MIGRATE,
     AUTO_MIGRATE_INTERVAL_MINUTES,
     SYNC_PRODUCTOS_HOUR,
-    SYNC_PRODUCTOS_MINUTE
+    SYNC_PRODUCTOS_MINUTE,
+    ENABLE_RECONCILIACION_ST_AUTOMATICA,
+    RECONCILIAR_ST_INTERVALO_MINUTOS,
 )
 
 logger = logging.getLogger(__name__)
@@ -44,6 +46,7 @@ celery_app = Celery(
         'src.tasks.celery_cruce_productos',
         'src.tasks.celery_plantilla_upload',
         'src.tasks.celery_proceso_sap',
+        'src.tasks.celery_reconciliar_transferencias',
     ]
 )
 
@@ -75,6 +78,13 @@ celery_app.conf.update(
                 'expires': 300.0,  # Expira si no se ejecuta en 5 minutos
             }
         },
+        **({
+            'reconciliar-transferencias-pendientes': {
+                'task': 'src.tasks.celery_reconciliar_transferencias.reconciliar_transferencias_pendientes',
+                'schedule': float(RECONCILIAR_ST_INTERVALO_MINUTOS * 60),
+                'options': {'queue': 'maintenance', 'expires': 240.0},
+            }
+        } if ENABLE_RECONCILIACION_ST_AUTOMATICA else {}),
     },
 
     # Mantener cargas interactivas en la cola por defecto y mover tareas
@@ -83,6 +93,7 @@ celery_app.conf.update(
     task_routes={
         'src.tasks.celery_auto_migrate.execute_auto_migration': {'queue': 'maintenance'},
         'src.tasks.celery_sync_productos.sync_productos_maestro': {'queue': 'maintenance'},
+        'src.tasks.celery_reconciliar_transferencias.reconciliar_transferencias_pendientes': {'queue': 'maintenance'},
     },
     
     # CRÍTICO: Configuración de workers para prevenir acumulación de recursos

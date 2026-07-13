@@ -170,6 +170,37 @@ def sap_service_layer_result_should_retry(response: Any) -> bool:
     return _http_status_should_retry(status_code)
 
 
+def mensaje_sugiere_reintento_transitorio(mensaje: str) -> bool:
+    """
+    True si el texto describe un fallo típicamente transitorio hacia SAP SL (red, SL caído).
+
+    Clasificador basado en mensaje ya aplanado a texto (a diferencia de
+    sap_service_layer_result_should_retry, que opera sobre la respuesta estructurada
+    en el momento del envío). Se usa post-hoc, cuando solo queda el mensaje de error
+    persistido (ej. decidir si mostrar el botón de reintento manual, o si la
+    reconciliación automática debe escalar de inmediato en vez de esperar).
+    """
+    if not mensaje:
+        return False
+    m = mensaje.lower()
+    needles = (
+        "conexión",
+        "conexion",
+        "connection",
+        "timeout",
+        "remote",
+        "disconnected",
+        "sin respuesta",
+        "no se pudo establecer conexión",
+        "no se pudo establecer conexion",
+        # Regla operativa: permitir reenvío manual en errores de presupuesto de RL.
+        "presupuesto excedido rl",
+        "código sap: -1116",
+        "codigo sap: -1116",
+    )
+    return any(n in m for n in needles)
+
+
 def retry_operation(
     *,
     execute: Callable[[], Any],

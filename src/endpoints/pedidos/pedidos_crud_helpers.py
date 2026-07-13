@@ -109,8 +109,10 @@ def enrich_pedido_with_ui_flags(pedido: Dict[str, Any]) -> None:
 
 def _oc_permite_reintento_envio_por_detalle_error(oc: Dict[str, Any]) -> bool:
     """Errores SAP/conexión reintentables; maestro puro u otros códigos no listados → False."""
-    from src.database.services.oc_sap_service import _mensaje_sugiere_reintento_sap
-    from src.database.services.retry_utils import _parse_sap_b1_error_code
+    from src.database.services.retry_utils import (
+        _parse_sap_b1_error_code,
+        mensaje_sugiere_reintento_transitorio,
+    )
 
     sap_codes_reintento_manual = {-1116}
     msg = f"{oc.get('respuesta_sap') or ''} {oc.get('error_message') or ''}"
@@ -120,7 +122,7 @@ def _oc_permite_reintento_envio_por_detalle_error(oc: Dict[str, Any]) -> bool:
         return True
     if src == "SAP_CONNECTION":
         return True
-    if _mensaje_sugiere_reintento_sap(msg):
+    if mensaje_sugiere_reintento_transitorio(msg):
         return True
     return False
 

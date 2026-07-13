@@ -20,20 +20,32 @@ from src.database.repositories.envio_odc_sap_repository import EnvioODCSAPReposi
 from src.database.repositories.sap_integration_log_repository import SAPIntegrationLogRepository
 from src.database.connection import get_db_connection, get_db_connection_context
 from src.database.clients.sap_client import SAPClient
+from src.database.services.stock_transfer_service import StockTransferService, redis_lock_reintento_st
 from src.security.jwt_auth import verify_jwt_token, require_permission, require_any_permission
 
 logger = logging.getLogger(__name__)
 
-# Evita doble envío concurrente de reintento ITR para la misma OC.
-_itr_retry_locks_guard = threading.Lock()
-_itr_retry_locks_by_oc_id: Dict[str, threading.Lock] = {}
+# Traduce el status interno de StockTransferService.reintentar_pendientes a HTTP + status externo.
+_RETRY_ST_STATUS_HTTP = {
+    "no_encontrada": 404,
+    "estado_invalido": 400,
+    "sin_pedido": 400,
+}
+_RETRY_ST_STATUS_EXTERNO = {
+    "no_encontrada": "error",
+    "estado_invalido": "error",
+    "sin_pedido": "error",
+    "no_pendientes": "success",
+}
 
 
-def _lock_reintento_st_por_oc_id(oc_id: str) -> threading.Lock:
-    with _itr_retry_locks_guard:
-        if oc_id not in _itr_retry_locks_by_oc_id:
-            _itr_retry_locks_by_oc_id[oc_id] = threading.Lock()
-        return _itr_retry_locks_by_oc_id[oc_id]
+def _traducir_resultado_reintento_st(resultado: Dict[str, Any]) -> Dict[str, Any]:
+    """Traduce el dict de reintentar_pendientes al contrato HTTP ya usado por el frontend."""
+    status_interno = resultado.get("status", "error")
+    status_code = _RETRY_ST_STATUS_HTTP.get(status_interno, 200)
+    body = dict(resultado)
+    body["status"] = _RETRY_ST_STATUS_EXTERNO.get(status_interno, status_interno)
+    return {"status_code": status_code, "body": body}
 
 # ============================================================================
 # Sistema de Caché para /ordenes-compra
@@ -1451,103 +1463,25 @@ def register_ordenes_compra_endpoints(app: FastAPI):
 
         try:
             def _retry_st_only():
-                oc_lock = _lock_reintento_st_por_oc_id(oc_id)
-                if not oc_lock.acquire(blocking=True, timeout=120):
-                    return {
-                        "status_code": 409,
-                        "body": {
-                            "status": "error",
-                            "message": "Otro reintento de ST está en curso para esta OC. Espere unos segundos e intente de nuevo.",
-                            "oc_id": oc_id,
-                        },
-                    }
-                try:
-                    with get_db_connection_context() as conn:
-                        oc_repo = OrdenCompraRepository(conn)
-                        st_repo = SolicitudTransferenciaRepository(conn)
-
-                        oc_cabecera = oc_repo.get_existing_cabecera(oc_id)
-                        if not oc_cabecera:
-                            return {"status_code": 404, "body": {"status": "error", "message": "Orden de compra no encontrada"}}
-
-                        estado = str(oc_cabecera.get("estado") or "").strip().upper()
-                        if estado != "ENVIADA":
-                            return {
-                                "status_code": 400,
-                                "body": {
-                                    "status": "error",
-                                    "message": f"Solo se puede reintentar ST cuando la ODC está ENVIADA (estado actual: {estado or 'N/A'})",
-                                },
-                            }
-
-                        # Idempotente: solo tiendas aún en error en el último batch, sin duplicar ITR ya creadas en intentos previos.
-                        tiendas_objetivo = st_repo.get_tiendas_pendientes_reintento_st(oc_id)
-                        origen_lista = "detalle"
-                        if not tiendas_objetivo:
-                            tiendas_objetivo = st_repo.get_tiendas_fallidas_desde_resultado_json_fallback(oc_id)
-                            origen_lista = "resultado_json" if tiendas_objetivo else "ninguno"
-
-                        if not tiendas_objetivo:
-                            return {
-                                "status_code": 200,
-                                "body": {
-                                    "status": "success",
-                                    "message": "No hay Solicitudes de Transferencia pendientes para reintentar (todas las tiendas ya tienen ITR o no hay registro de fallas).",
-                                    "oc_id": oc_id,
-                                    "reintentadas": 0,
-                                    "origen_lista_tiendas": origen_lista,
-                                },
-                            }
-
-                        pedido_id = oc_cabecera.get("pedido_id")
-                        if not pedido_id:
-                            return {
-                                "status_code": 400,
-                                "body": {
-                                    "status": "error",
-                                    "message": "La ODC no tiene pedido_id asociado para reconstruir ST.",
-                                },
-                            }
-
-                        bodega_origen = oc_cabecera.get("codigo_bodega")
-                        oc_doc_num_raw = oc_cabecera.get("numero_oc_sap")
-                        oc_doc_num = None
-                        if oc_doc_num_raw is not None:
-                            try:
-                                oc_doc_num = int(oc_doc_num_raw)
-                            except (TypeError, ValueError):
-                                oc_doc_num = None
-
-                        from src.database.services.stock_transfer_service import StockTransferService
-                        st_service = StockTransferService()
-                        resultado = st_service.crear_solicitudes_transferencia_desde_pedido(
-                            pedido_id=str(pedido_id),
-                            oc_doc_num=oc_doc_num,
-                            oc_id=oc_id,
-                            bodega_origen=bodega_origen,
-                            usuario_id=username,
-                            tiendas_destino_filtro=tiendas_objetivo,
-                        )
-
+                with redis_lock_reintento_st(oc_id, blocking_timeout=120.0) as acquired:
+                    if not acquired:
+                        return {
+                            "status_code": 409,
+                            "body": {
+                                "status": "error",
+                                "message": "Otro reintento de ST está en curso para esta OC. Espere unos segundos e intente de nuevo.",
+                                "oc_id": oc_id,
+                            },
+                        }
+                    resultado = StockTransferService().reintentar_pendientes(
+                        oc_id, usuario_id=username, origen="manual"
+                    )
+                    if resultado.get("status") in ("success", "partial"):
                         try:
                             invalidate_ordenes_compra_cache()
                         except Exception:
                             pass
-
-                        return {
-                            "status_code": 200,
-                            "body": {
-                                "status": "success" if resultado.get("success") else "partial",
-                                "message": "Reintento ST ejecutado.",
-                                "oc_id": oc_id,
-                                "origen_lista_tiendas": origen_lista,
-                                "tiendas_objetivo": tiendas_objetivo,
-                                "tiendas_count": len(tiendas_objetivo),
-                                "resultado_st": resultado,
-                            },
-                        }
-                finally:
-                    oc_lock.release()
+                    return _traducir_resultado_reintento_st(resultado)
 
             out = await asyncio.to_thread(_retry_st_only)
             return JSONResponse(

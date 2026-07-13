@@ -170,7 +170,29 @@ SAP_CACHE_DAYS = int(os.getenv("SAP_CACHE_DAYS", "30"))
 # No hardcodear credenciales en servicios; usar variables de entorno.
 
 # URL del SAP Middleware (reemplaza conexión directa a SAP Service Layer)
-SAP_MIDDLEWARE_URL = os.getenv("SAP_MIDDLEWARE_URL", "http://localhost:5250")
+SAP_MIDDLEWARE_URL = os.getenv("SAP_MIDDLEWARE_URL", "http://localhost:8011")
+
+# Prevalidación de ODC en una sola llamada batch al middleware
+# (POST /api/v1/validations/purchase-order) en lugar de N requests por línea.
+# Si el batch falla o está deshabilitado, se usa la validación línea por línea.
+USE_BATCH_VALIDATION = os.getenv("USE_BATCH_VALIDATION", "false").lower() == "true"
+
+# Bodegas: usar GET/POST /api/v1/warehouses(/validate) del middleware en lugar de
+# OPENQUERY directo a HANA. Si el middleware no responde, cae a OPENQUERY.
+USE_MIDDLEWARE_WAREHOUSES = os.getenv("USE_MIDDLEWARE_WAREHOUSES", "false").lower() == "true"
+
+# Búsqueda de SKU exacto: usar GET /api/v1/items/{itemCode} del middleware en lugar de
+# OPENQUERY directo a HANA. Si el middleware no responde, cae a OPENQUERY.
+USE_MIDDLEWARE_SKU_LOOKUP = os.getenv("USE_MIDDLEWARE_SKU_LOOKUP", "false").lower() == "true"
+
+# Reconciliación automática de Solicitudes de Transferencia (ITR) pendientes.
+# Automatiza el botón manual "Reintentar ST": una tarea Celery periódica reintenta
+# las transferencias que quedaron pendientes por una caída transitoria de SAP.
+# Si tras RECONCILIAR_ST_ESCALAMIENTO_HORAS sigue pendiente, notifica a técnicos por
+# correo y deja de reintentar automáticamente esa OC (el botón manual sigue disponible).
+ENABLE_RECONCILIACION_ST_AUTOMATICA = os.getenv("ENABLE_RECONCILIACION_ST_AUTOMATICA", "false").lower() == "true"
+RECONCILIAR_ST_INTERVALO_MINUTOS = int(os.getenv("RECONCILIAR_ST_INTERVALO_MINUTOS", "5"))
+RECONCILIAR_ST_ESCALAMIENTO_HORAS = float(os.getenv("RECONCILIAR_ST_ESCALAMIENTO_HORAS", "1"))
 
 # URL base (sin /Login). Prioridad: SAP_SL_BASE_URL > SAP_SERVICE_LAYER_URL
 _sl_url = os.getenv("SAP_SL_BASE_URL") or os.getenv("SAP_SERVICE_LAYER_URL", "http://localhost:50001/b1s/v1")
@@ -245,7 +267,7 @@ JWT_AUDIENCE = os.getenv('JWT_AUDIENCE', 'SCNexus.Users')
 # URL base del Core para llamadas a la API de permisos y otros servicios
 # El Core gestiona la integraciÃ³n con Active Directory y asigna permisos
 # a usuarios y roles de AD segÃºn las pÃ¡ginas a las que pueden tener acceso
-CORE_API_URL = os.getenv("CORE_API_URL", "http://192.168.2.12:8080")
+CORE_API_URL = os.getenv("CORE_API_URL", "http://210.17.1.59:5053")
 CORE_API_TIMEOUT = int(os.getenv("CORE_API_TIMEOUT", "30"))  # Timeout en segundos
 
 # Habilitar autenticaciÃ³n JWT (requiere token vÃ¡lido del Core)
