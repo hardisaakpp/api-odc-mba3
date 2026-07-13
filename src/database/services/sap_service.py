@@ -5,12 +5,17 @@ Servicio para consultar SAP y poblar el cache de productos.
 import logging
 from typing import Optional, Dict, Any
 
-from src.config import SAP_CACHE_DAYS, ENABLE_SAP_QUERIES
+from src.config import SAP_CACHE_DAYS, ENABLE_SAP_QUERIES, USE_MIDDLEWARE_PRODUCTO_INFO
 from ..connection import get_db_connection
 from ..clients.sap_client import SAPClient
+from ..clients.sap_service_layer_client import SAPServiceLayerClient
 from ..repositories.producto_sap_repository import ProductoSAPRepository
 
 logger = logging.getLogger(__name__)
+
+# Sentinel para distinguir "middleware no disponible" (fallback a OPENQUERY) de
+# "no existe en SAP" (respuesta definitiva, que se representa con None).
+_SIN_RESPUESTA_MIDDLEWARE = object()
 
 
 class SAPService:
@@ -20,6 +25,47 @@ class SAPService:
         """Inicializa el servicio SAP."""
         self.sap_client = SAPClient()
         self.enabled = ENABLE_SAP_QUERIES
+
+    @staticmethod
+    def _consultar_producto_via_middleware(sku: str):
+        """
+        Consulta el producto vía middleware (GET /api/v1/items/{code}).
+
+        Returns:
+            Dict con el mismo formato que SAPClient.get_producto_info,
+            None si el middleware confirmó que el SKU no existe (404 definitivo),
+            o _SIN_RESPUESTA_MIDDLEWARE si no está disponible y el caller debe
+            hacer fallback a OPENQUERY.
+        """
+        item = SAPServiceLayerClient().get_item(sku)
+        if item is None:
+            return _SIN_RESPUESTA_MIDDLEWARE  # sin conexión: fallback
+        if item.get("_error"):
+            if item.get("_error_type") == "no_existe":
+                return None
+            return _SIN_RESPUESTA_MIDDLEWARE  # otro error: fallback
+        return {
+            "ItemCode": item.get("ItemCode"),
+            "ItemName": item.get("ItemName"),
+            "U_IXX_PACK": item.get("U_IXX_PACK"),
+            "ItmsGrpNam": item.get("ItmsGrpNam"),
+            "validFor": "Y" if item.get("Valid") == "tYES" else "N",
+        }
+
+    def _consultar_producto_sap(self, sku: str) -> Optional[Dict[str, Any]]:
+        """
+        Consulta info del producto en SAP: middleware primero
+        (USE_MIDDLEWARE_PRODUCTO_INFO), con fallback automático a OPENQUERY
+        si el middleware no responde.
+        """
+        if USE_MIDDLEWARE_PRODUCTO_INFO:
+            resultado = self._consultar_producto_via_middleware(sku)
+            if resultado is not _SIN_RESPUESTA_MIDDLEWARE:
+                return resultado
+            logger.warning(
+                f"⚠️ Middleware no disponible para producto {sku}; fallback a OPENQUERY"
+            )
+        return self.sap_client.get_producto_info(sku)
     
     def _consultar_cache(
         self, repository: "ProductoSAPRepository", sku: str, force_refresh: bool
@@ -115,8 +161,9 @@ class SAPService:
                 return cached
 
             # Cache no válido o force_refresh=True: consultar SAP
+            # (middleware primero, fallback a OPENQUERY)
             logger.debug(f"🔍 Consultando SAP para SKU: {sku}")
-            sap_info = self.sap_client.get_producto_info(sku)
+            sap_info = self._consultar_producto_sap(sku)
 
             if not sap_info:
                 logger.debug(f"⚠️ SKU no encontrado en SAP: {sku}")

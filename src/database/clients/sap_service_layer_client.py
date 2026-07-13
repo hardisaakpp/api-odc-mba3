@@ -293,6 +293,7 @@ class SAPServiceLayerClient:
                 "ItemType": data.get("itemType"),
                 "U_IXX_PACK": data.get("packCode"),
                 "ItmsGrpCod": data.get("groupCode"),
+                "ItmsGrpNam": data.get("groupName"),
                 "CardCode": data.get("preferredVendorCode") or None,
             }
 

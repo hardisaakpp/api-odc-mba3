@@ -20,7 +20,9 @@ from src.database.repositories.envio_odc_sap_repository import EnvioODCSAPReposi
 from src.database.repositories.sap_integration_log_repository import SAPIntegrationLogRepository
 from src.database.connection import get_db_connection, get_db_connection_context
 from src.database.clients.sap_client import SAPClient
+from src.database.clients.sap_service_layer_client import SAPServiceLayerClient
 from src.database.services.stock_transfer_service import StockTransferService, redis_lock_reintento_st
+from src.config import USE_MIDDLEWARE_SKU_LOOKUP
 from src.security.jwt_auth import verify_jwt_token, require_permission, require_any_permission
 
 logger = logging.getLogger(__name__)
@@ -46,6 +48,41 @@ def _traducir_resultado_reintento_st(resultado: Dict[str, Any]) -> Dict[str, Any
     body = dict(resultado)
     body["status"] = _RETRY_ST_STATUS_EXTERNO.get(status_interno, status_interno)
     return {"status_code": status_code, "body": body}
+
+
+def _sku_existe_via_middleware(sku_clean: str) -> Optional[bool]:
+    """
+    Verifica vía middleware (GET /api/v1/items/{code}) si un SKU existe en SAP.
+
+    Returns:
+        True si existe, False si el middleware confirmó que no existe (404),
+        None si el middleware no está disponible y el caller debe hacer
+        fallback a OPENQUERY.
+    """
+    item = SAPServiceLayerClient().get_item(sku_clean)
+    if item is None:
+        return None  # sin conexión al middleware: fallback
+    if item.get("_error"):
+        if item.get("_error_type") == "no_existe":
+            return False
+        return None  # otro error del middleware: fallback a OPENQUERY
+    return True
+
+
+def _sku_existe_en_sap(sku_clean: str) -> bool:
+    """
+    Verifica si un SKU existe en SAP: middleware primero (USE_MIDDLEWARE_SKU_LOOKUP),
+    con fallback automático a OPENQUERY si el middleware no responde.
+    """
+    if USE_MIDDLEWARE_SKU_LOOKUP:
+        existe = _sku_existe_via_middleware(sku_clean)
+        if existe is not None:
+            return existe
+        logger.warning(
+            f"⚠️ Middleware no disponible para validar SKU {sku_clean}; fallback a OPENQUERY"
+        )
+    sap_client = SAPClient()
+    return sap_client.get_producto_info(sku_clean) is not None
 
 # ============================================================================
 # Sistema de Caché para /ordenes-compra
@@ -1577,9 +1614,7 @@ def register_ordenes_compra_endpoints(app: FastAPI):
                 logger.info(f"🔍 Validando SKU en SAP: {nuevo_sku_clean}")
                 
                 def validar_sku_en_sap():
-                    sap_client = SAPClient()
-                    producto_info = sap_client.get_producto_info(nuevo_sku_clean)
-                    return producto_info is not None
+                    return _sku_existe_en_sap(nuevo_sku_clean)
                 
                 try:
                     sku_validado_en_sap = await asyncio.to_thread(validar_sku_en_sap)

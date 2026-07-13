@@ -185,6 +185,11 @@ USE_MIDDLEWARE_WAREHOUSES = os.getenv("USE_MIDDLEWARE_WAREHOUSES", "false").lowe
 # OPENQUERY directo a HANA. Si el middleware no responde, cae a OPENQUERY.
 USE_MIDDLEWARE_SKU_LOOKUP = os.getenv("USE_MIDDLEWARE_SKU_LOOKUP", "false").lower() == "true"
 
+# Info de producto en cache-miss (get_or_fetch_producto_info): usar el middleware
+# en lugar de OPENQUERY. Alimenta validación de pedidos y facturación (regla de
+# medias por grupo de artículos). Si el middleware no responde, cae a OPENQUERY.
+USE_MIDDLEWARE_PRODUCTO_INFO = os.getenv("USE_MIDDLEWARE_PRODUCTO_INFO", "false").lower() == "true"
+
 # Reconciliación automática de Solicitudes de Transferencia (ITR) pendientes.
 # Automatiza el botón manual "Reintentar ST": una tarea Celery periódica reintenta
 # las transferencias que quedaron pendientes por una caída transitoria de SAP.

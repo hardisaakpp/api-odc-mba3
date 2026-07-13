@@ -26,11 +26,11 @@ Regla práctica para decidir el canal de una operación nueva:
 - Catálogo/validación batch de bodegas — `bodega_sap_service.py`, flag `USE_MIDDLEWARE_WAREHOUSES`
 - SKU exacto (cruce de productos) — `cruce_productos.py` (`_buscar_sku_sap_handler`), flag `USE_MIDDLEWARE_SKU_LOOKUP`
 - Prevalidación de OC (proveedor + artículos) — `oc_sap_service.py` (`_precheck_batch`), flag `USE_BATCH_VALIDATION`
+- Validación de existencia de SKU al reasignarlo en una línea de OC — `ordenes_compra.py` (`_sku_existe_en_sap`), flag `USE_MIDDLEWARE_SKU_LOOKUP`
+- Enriquecimiento de detalles de pedido (descripcion_sap/pack) — `pedido_service.py` (`_consultar_productos_sap`), flag `USE_MIDDLEWARE_SKU_LOOKUP`. Nota: sigue siendo una llamada HTTP por SKU único (el endpoint batch del middleware de validación no expone `itemName`/`packCode`); si algún día se necesita un batch real de datos de catálogo, pedirlo como extensión al middleware.
+- Info de producto en cache-miss — `sap_service.py` (`_consultar_producto_sap`), flag `USE_MIDDLEWARE_PRODUCTO_INFO`. Alimenta validación de pedidos y facturación (regla de medias por `ItmsGrpNam`). El middleware ya expone `groupName` (verificado en vivo: `GET /api/v1/items/{code}` → `"groupName": "R-MEDIAS"`); un 404 confirmado se trata como "no existe" definitivo (sin fallback), distinguido del "middleware caído" mediante sentinel.
 
-❌ **Pendientes de migrar** (hoy 100% OPENQUERY, sin opción de middleware):
-- `SAPService.get_or_fetch_producto_info` (`sap_service.py`) — cache-first (30 días), pero en cache-miss va directo a OPENQUERY. Usado por `pedido_sap_validator.py`, `pedido_sap_service.py`, `factura_service.py`. Es el de mayor impacto: alimenta validación de pedidos y facturación.
-- `SAPClient.get_producto_info` llamado directo desde `ordenes_compra.py` (reasignación de SKU en una línea de OC) — se salta incluso la capa de cache.
-- `SAPClient.get_productos_info_batch` (`pedido_service.py`) — "batch" solo en apariencia: internamente hace una llamada OPENQUERY por cada SKU único.
+Con esto, **la migración de consultas puntuales a middleware está completa**: no quedan puntos de negocio que consulten OPENQUERY sin alternativa de middleware. OPENQUERY queda solo como fallback automático y para las excepciones bulk documentadas arriba.
 
 ## 📋 Resumen
 
