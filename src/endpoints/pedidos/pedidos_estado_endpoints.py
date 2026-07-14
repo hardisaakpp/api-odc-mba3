@@ -45,7 +45,7 @@ def _obtener_pedido_completo_o_404(repo: PedidoRepository, pedido_id: str) -> Di
         )
     return pedido
 
-def _logic_marcar_pedido_gestionar(pedido_id: str, request: Request, user: Dict):
+async def _logic_marcar_pedido_gestionar(pedido_id: str, request: Request, user: Dict):
     audit = get_audit_context(request, user, origen=ORIGEN_WEB)
     try:
         with get_db_connection_context() as conn:
@@ -66,15 +66,14 @@ def _logic_marcar_pedido_gestionar(pedido_id: str, request: Request, user: Dict)
                     from src.utils.notification_manager import notification_manager, NotificationType
                     numero_pedido = pedido.get("cabecera", {}).get("numero_pedido", "")
                     _username = user.get("username") or user.get("sub") or "unknown"
-                    from asyncio import create_task
-                    create_task(notification_manager.notify_by_actor(
+                    await notification_manager.notify_by_actor(
                         actor_permission=PERM_ODCSAP_VIEW,
                         actor_username=_username,
                         title="EL RAYO está gestionando tu pedido",
                         message=f"El pedido {numero_pedido} está siendo revisado por EL RAYO.",
                         notification_type=NotificationType.INFO,
                         metadata={"pedido_id": pedido_id, "numero_pedido": numero_pedido, "accion": "pedido_en_gestion"},
-                    ))
+                    )
                 except Exception as notif_err:
                     logger.warning(f"⚠️ Error al enviar notificación en tiempo real: {notif_err}")
             
@@ -86,7 +85,7 @@ def _logic_marcar_pedido_gestionar(pedido_id: str, request: Request, user: Dict)
         logger.error(f"Error al marcar pedido como gestionar: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Error interno: {str(e)}")
 
-def _logic_confirmar_para_redistribucion(pedido_id: str, request: Request, user: Dict):
+async def _logic_confirmar_para_redistribucion(pedido_id: str, request: Request, user: Dict):
     audit = get_audit_context(request, user, origen=ORIGEN_WEB)
     try:
         with get_db_connection_context() as conn:
@@ -113,15 +112,14 @@ def _logic_confirmar_para_redistribucion(pedido_id: str, request: Request, user:
             try:
                 from src.utils.notification_manager import notification_manager, NotificationType
                 _username = user.get("username") or user.get("sub") or "unknown"
-                from asyncio import create_task
-                create_task(notification_manager.notify_by_actor(
+                await notification_manager.notify_by_actor(
                     actor_permission=PERM_ODCSAP_VIEW,
                     actor_username=_username,
                     title="Pedido confirmado para redistribución",
                     message=f"El pedido {numero_pedido} ha sido confirmado por EL RAYO. Ya puedes descargarlo.",
                     notification_type=NotificationType.SUCCESS,
                     metadata={"pedido_id": pedido_id, "numero_pedido": numero_pedido, "accion": "confirmar_redistribucion"},
-                ))
+                )
             except Exception as notif_err:
                 logger.warning(f"⚠️ Error al enviar notificación: {notif_err}")
             
@@ -133,7 +131,7 @@ def _logic_confirmar_para_redistribucion(pedido_id: str, request: Request, user:
         logger.error(f"Error al confirmar pedido para redistribución: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Error interno: {str(e)}")
 
-def _logic_marcar_despachar_y_facturar(pedido_id: str, request: Request, user: Dict):
+async def _logic_marcar_despachar_y_facturar(pedido_id: str, request: Request, user: Dict):
     audit = get_audit_context(request, user, origen=ORIGEN_WEB)
     try:
         with get_db_connection_context() as conn:
@@ -160,15 +158,14 @@ def _logic_marcar_despachar_y_facturar(pedido_id: str, request: Request, user: D
             try:
                 from src.utils.notification_manager import notification_manager, NotificationType
                 _username = user.get("username") or user.get("sub") or "unknown"
-                from asyncio import create_task
-                create_task(notification_manager.notify_by_actor(
+                await notification_manager.notify_by_actor(
                     actor_permission=PERM_ODCSAP_VIEW,
                     actor_username=_username,
                     title="Pedido marcado para Despachar y Facturar",
                     message=f"El pedido {numero_pedido} está listo para ser despachado y facturado.",
                     notification_type=NotificationType.INFO,
                     metadata={"pedido_id": pedido_id, "numero_pedido": numero_pedido, "accion": "despachar_y_facturar"},
-                ))
+                )
             except Exception as notif_err:
                 logger.warning(f"⚠️ Error al enviar notificación: {notif_err}")
 
@@ -204,7 +201,7 @@ def _logic_marcar_despachar_y_facturar(pedido_id: str, request: Request, user: D
         logger.error(f"Error al marcar pedido para despachar y facturar: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Error interno: {str(e)}")
 
-def _logic_marcar_finalizado(pedido_id: str, request: Request, user: Dict):
+async def _logic_marcar_finalizado(pedido_id: str, request: Request, user: Dict):
     audit = get_audit_context(request, user, origen=ORIGEN_WEB)
     try:
         with get_db_connection_context() as conn:
@@ -231,15 +228,14 @@ def _logic_marcar_finalizado(pedido_id: str, request: Request, user: Dict):
             try:
                 from src.utils.notification_manager import notification_manager, NotificationType
                 _username = user.get("username") or user.get("sub") or "unknown"
-                from asyncio import create_task
-                create_task(notification_manager.notify_by_actor(
+                await notification_manager.notify_by_actor(
                     actor_permission=PERM_ODCSAP_VIEW,
                     actor_username=_username,
                     title="Pedido finalizado",
                     message=f"El pedido {numero_pedido} ha sido marcado como FINALIZADO.",
                     notification_type=NotificationType.SUCCESS,
                     metadata={"pedido_id": pedido_id, "numero_pedido": numero_pedido, "accion": "finalizar"},
-                ))
+                )
             except Exception as notif_err:
                 logger.warning(f"⚠️ Error al enviar notificación: {notif_err}")
 
@@ -291,7 +287,7 @@ def register_pedidos_estado_endpoints(app: FastAPI):
         Si el pedido está en estado NUEVO PEDIDO, actualiza a GESTIONAR PEDIDO y devuelve el pedido completo.
         Si ya está en otro estado, solo devuelve el pedido sin cambiar estado.
         """
-        return _logic_marcar_pedido_gestionar(pedido_id, request, user)
+        return await _logic_marcar_pedido_gestionar(pedido_id, request, user)
     
     @app.post("/api/pedidos/{pedido_id}/confirmar-para-redistribucion", tags=["Pedidos"])
     async def confirmar_para_redistribucion(
@@ -301,7 +297,7 @@ def register_pedidos_estado_endpoints(app: FastAPI):
         _: None = Depends(require_any_permission([PERM_ODCSAP_VIEW, PERM_MABEL_VIEW]))
     ):
         """Confirmar pedido para redistribución (ESTADO_REDISTRIBUCION)."""
-        return _logic_confirmar_para_redistribucion(pedido_id, request, user)
+        return await _logic_confirmar_para_redistribucion(pedido_id, request, user)
     
     @app.post("/api/pedidos/{pedido_id}/marcar-despachar-y-facturar", tags=["Pedidos"])
     async def marcar_despachar_y_facturar(
@@ -318,7 +314,7 @@ def register_pedidos_estado_endpoints(app: FastAPI):
         - Envía correo a MABEL TRADING informando que el pedido fue marcado como
           "Despachar y Facturar" (best-effort; si falla el email no se rompe el flujo).
         """
-        return _logic_marcar_despachar_y_facturar(pedido_id, request, user)
+        return await _logic_marcar_despachar_y_facturar(pedido_id, request, user)
     
     @app.post("/api/pedidos/{pedido_id}/marcar-finalizado", tags=["Pedidos"])
     async def marcar_finalizado(
@@ -335,4 +331,4 @@ def register_pedidos_estado_endpoints(app: FastAPI):
         - Envía correo a EL RAYO (OPERACIONES) notificando que MABEL TRADING
           finalizó el pedido (best-effort; si falla el email no se rompe el flujo).
         """
-        return _logic_marcar_finalizado(pedido_id, request, user)
+        return await _logic_marcar_finalizado(pedido_id, request, user)

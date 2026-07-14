@@ -46,6 +46,9 @@ celerybeat-schedule-wal
 # JetBrains (PyCharm / IntelliJ)
 .idea/
 
+# Visual Studio Code
+.vscode/
+
 # Cursor IDE
 .cursor/
 
