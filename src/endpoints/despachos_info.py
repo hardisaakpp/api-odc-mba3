@@ -87,10 +87,56 @@ def invalidate_despachos_cache():
         logger.info("🗑️ Cache invalidado para /despachos/count")
 
 
+def _enriquecer_despachos_con_oc(despachos_info, oc_repo) -> None:
+    """Agrega (in-place) los detalles de OC a cada despacho que tenga una OC asociada."""
+    for despacho in despachos_info:
+        oc_info = despacho.get("orden_compra_info")
+        if not (oc_info and oc_info.get("oc_id")):
+            continue
+        oc_id = oc_info["oc_id"]
+        try:
+            oc_info["oc_detalles"] = oc_repo.get_detalles(oc_id)
+        except Exception as e:
+            logger.warning(f"⚠️ Error al obtener detalles de OC {oc_id}: {e}")
+            oc_info["oc_detalles"] = []
+
+
+def _query_despachos_count(limit_param: Optional[int]):
+    """Ejecuta en un thread separado el conteo e info detallada de despachos con sus OCs."""
+    conn = get_db_connection()
+    try:
+        despacho_repo = DespachoRepository(conn)
+        oc_repo = OrdenCompraRepository(conn)
+
+        # Contar despachos sin OC (misma lógica que usa /procesar-oc)
+        count = despacho_repo.count_despachos_sin_oc()
+
+        # Obtener información detallada de despachos con sus OCs
+        despachos_info = despacho_repo.get_despachos_con_info_oc(limit=limit_param)
+
+        # Agregar detalles de OC para cada despacho que tenga OC
+        _enriquecer_despachos_con_oc(despachos_info, oc_repo)
+
+        disponible = count > 0
+        return count, disponible, despachos_info
+    finally:
+        conn.close()
+
+
+def _query_despacho_detalles(desp_id: str):
+    """Ejecuta en un thread separado la consulta de detalles de un despacho."""
+    conn = get_db_connection()
+    try:
+        despacho_repo = DespachoRepository(conn)
+        return despacho_repo.get_detalles(desp_id)
+    finally:
+        conn.close()
+
+
 def register_info_endpoints(app: FastAPI):
     """
     Registra los endpoints de información de despachos en la aplicación FastAPI.
-    
+
     Args:
         app: Instancia de FastAPI
     """
@@ -158,40 +204,9 @@ def register_info_endpoints(app: FastAPI):
             )
         
         try:
-            # Función helper que se ejecutará en thread pool para no bloquear el event loop
+            # Ejecutar consultas de BD en thread pool para no bloquear el event loop
             # Esto permite que el endpoint responda inmediatamente incluso si el proceso
             # automático está ejecutándose simultáneamente
-            def _query_despachos_count(limit_param: Optional[int]):
-                """Función helper que ejecuta las consultas de BD en thread separado"""
-                conn = get_db_connection()
-                try:
-                    despacho_repo = DespachoRepository(conn)
-                    oc_repo = OrdenCompraRepository(conn)
-                    
-                    # Contar despachos sin OC (misma lógica que usa /procesar-oc)
-                    count = despacho_repo.count_despachos_sin_oc()
-                    
-                    # Obtener información detallada de despachos con sus OCs
-                    despachos_info = despacho_repo.get_despachos_con_info_oc(limit=limit_param)
-                    
-                    # Agregar detalles de OC para cada despacho que tenga OC
-                    for despacho in despachos_info:
-                        if despacho.get("orden_compra_info") and despacho["orden_compra_info"].get("oc_id"):
-                            oc_id = despacho["orden_compra_info"]["oc_id"]
-                            try:
-                                oc_detalles = oc_repo.get_detalles(oc_id)
-                                despacho["orden_compra_info"]["oc_detalles"] = oc_detalles
-                            except Exception as e:
-                                logger.warning(f"⚠️ Error al obtener detalles de OC {oc_id}: {e}")
-                                despacho["orden_compra_info"]["oc_detalles"] = []
-                    
-                    disponible = count > 0
-                    
-                    return count, disponible, despachos_info
-                finally:
-                    conn.close()
-            
-            # Ejecutar consultas de BD en thread pool para no bloquear el event loop
             logger.debug("🔄 Ejecutando consultas de BD en thread pool (no bloquea otras peticiones)...")
             count, disponible, despachos_info = await asyncio.to_thread(_query_despachos_count, limit)
             
@@ -276,17 +291,6 @@ def register_info_endpoints(app: FastAPI):
         logger.info("=" * 70)
         
         try:
-            # Función helper que se ejecutará en thread pool para no bloquear el event loop
-            def _query_despacho_detalles(desp_id: str):
-                """Función helper que ejecuta la consulta de BD en thread separado"""
-                conn = get_db_connection()
-                try:
-                    despacho_repo = DespachoRepository(conn)
-                    detalles = despacho_repo.get_detalles(desp_id)
-                    return detalles
-                finally:
-                    conn.close()
-            
             # Ejecutar consulta de BD en thread pool para no bloquear el event loop
             logger.debug(f"🔄 Ejecutando consulta de BD en thread pool para despacho {despacho_id}...")
             detalles = await asyncio.to_thread(_query_despacho_detalles, despacho_id)

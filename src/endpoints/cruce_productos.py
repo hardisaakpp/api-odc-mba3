@@ -207,6 +207,170 @@ async def _sincronizar_maestros_handler(force_full: bool):
         raise HTTPException(status_code=500, detail=f"Error al sincronizar: {str(e)}")
 
 
+async def _ejecutar_query_mba3(mba3_service, query: str, sku_clean: str):
+    """Ejecuta la consulta MBA3 en thread pool con timeout. Lanza HTTPException ante timeout/error."""
+    start_time = time.time()
+    try:
+        # Timeout de 50 segundos para dar margen a:
+        # - Delays de JWT (hasta 5s: 2s post-login + 3s si JWT reciente)
+        # - Consultas que pueden tardar 30-40s en MBA3
+        # El frontend tiene timeout de 60s, así que 50s da margen suficiente
+        result = await asyncio.wait_for(
+            asyncio.to_thread(mba3_service.execute_query, query),
+            timeout=50.0
+        )
+        elapsed_time = time.time() - start_time
+        logger.info(f"⏱️ Consulta MBA3 completada en {elapsed_time:.2f}s para SKU: {sku_clean}")
+        return result
+    except asyncio.TimeoutError:
+        elapsed_time = time.time() - start_time
+        logger.error(
+            f"❌ Timeout al buscar SKU en MBA3: {sku_clean} "
+            f"(más de 50 segundos, tiempo transcurrido: {elapsed_time:.2f}s)"
+        )
+        raise HTTPException(
+            status_code=504,
+            detail="Timeout al buscar SKU en MBA3. La consulta tardó más de 50 segundos. Verifique la conexión con MBA3."
+        )
+    except Exception as e:
+        logger.error(f"❌ Error al ejecutar consulta MBA3: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Error al buscar SKU en MBA3: {str(e)}")
+
+
+def _normalizar_productos_mba3(result) -> list:
+    """Normaliza la respuesta del API MBA3 a una lista de productos."""
+    if isinstance(result, list):
+        return result
+    if not isinstance(result, dict):
+        return []
+    productos = []
+    for value in result.values():
+        if isinstance(value, list):
+            productos = value
+            break
+    if not productos and result:
+        productos = [result]
+    return productos
+
+
+def _mapear_producto_info_mba3(producto: dict, sku_clean: str) -> dict:
+    """Mapea los campos del producto MBA3 (múltiples formatos) al formato esperado por el frontend."""
+    return {
+        "codigo": producto.get("PRODUCT_ID") or producto.get("product_id") or producto.get("Product_ID") or sku_clean,
+        "nombre": producto.get("PRODUCT_NAME") or producto.get("product_name") or producto.get("Product_Name") or "",
+        "corp": producto.get("CORP") or producto.get("corp") or producto.get("Corp") or "",
+        "grupo_prenda": producto.get("GrupoPrenda") or producto.get("grupoPrenda") or producto.get("grupo_prenda") or "",
+        "talla": producto.get("Talla") or producto.get("talla") or "",
+        "presentacion": producto.get("PRESENTACION") or producto.get("presentacion") or producto.get("Presentacion") or "",
+        "group_code": producto.get("GROUP_CODE") or producto.get("group_code") or producto.get("Group_Code") or "",
+        "tipo_origen": producto.get("Tipo_Origen") or producto.get("tipo_origen") or "",
+        "descontinuado": producto.get("Descontinuado") or producto.get("descontinuado") or "",
+        "inactive": producto.get("INACTIVE") or producto.get("inactive") or producto.get("Inactive") or ""
+    }
+
+
+def _formatear_sugerencias_sap(productos_sap: list, producto_info: dict, sku_clean: str, limite_sugerencias: int) -> list:
+    """Calcula y formatea las sugerencias SAP a partir de los productos SAP similares."""
+    producto_mba3_ref = {
+        "codigo_mba3": producto_info.get("codigo", sku_clean),
+        "nombre_mba3": producto_info.get("nombre", ""),
+    }
+    productos_sap_formateados = [
+        {
+            "item_code": prod.get("ItemCode", ""),
+            "item_name": prod.get("ItemName", ""),
+            "pack": prod.get("U_IXX_PACK", ""),
+            "active": prod.get("validFor", "N").upper() == "Y"
+        }
+        for prod in productos_sap
+    ]
+
+    sugerencias_service = SugerenciasHomologacionService()
+    sugerencias = sugerencias_service.buscar_sugerencias_para_producto(
+        producto_mba3=producto_mba3_ref,
+        productos_sap=productos_sap_formateados,
+        productos_ya_homologados=set()  # No excluir ningún producto
+    )
+
+    sugerencias_formateadas = []
+    productos_sap_dict = {p.get("ItemCode"): p for p in productos_sap}
+    for sugerencia in sugerencias:
+        codigo_sap = sugerencia.get("codigo_sap")
+        producto_sap = productos_sap_dict.get(codigo_sap, {})
+        valid_for = producto_sap.get("validFor", "N")
+        estado = "activo" if valid_for.upper() == "Y" else "inactivo"
+        sugerencias_formateadas.append({
+            "codigo": codigo_sap,
+            "nombre": producto_sap.get("ItemName", ""),
+            "pack": producto_sap.get("U_IXX_PACK", ""),
+            "group_code": producto_sap.get("ItmsGrpCod"),
+            "group_name": producto_sap.get("ItmsGrpNam", ""),
+            "estado": estado,
+            "valid_for": valid_for,
+            "score": sugerencia.get("score", 0.0),
+            "score_porcentaje": round(sugerencia.get("score", 0.0) * 100, 1),
+            "motivos": sugerencia.get("motivos", [])
+        })
+
+    return sugerencias_formateadas[:limite_sugerencias]
+
+
+async def _agregar_sugerencias_sap(respuesta: dict, producto_info: dict, sku_clean: str, limite_sugerencias: int) -> None:
+    """Agrega (in-place) sugerencias SAP a la respuesta. Nunca falla la respuesta principal."""
+    logger.info(f"🔍 Buscando sugerencias SAP para SKU MBA3: {sku_clean}")
+    try:
+        if not ENABLE_SAP_QUERIES:
+            logger.debug("⏭️ Consultas SAP deshabilitadas, omitiendo sugerencias")
+            respuesta["sugerencias_sap"] = []
+            respuesta["total_sugerencias_sap"] = 0
+            respuesta["sugerencias_sap_disabled"] = True
+            return
+
+        from src.database.clients.sap_client import SAPClient
+        sap_client = SAPClient()
+
+        def buscar_sugerencias_en_sap():
+            return sap_client.buscar_skus_similares(
+                sku_referencia=sku_clean,
+                limite=limite_sugerencias * 2,  # Buscar más para tener mejor selección
+                solo_activos=True
+            )
+
+        try:
+            # Ejecutar búsqueda en thread pool con timeout
+            productos_sap = await asyncio.wait_for(
+                asyncio.to_thread(buscar_sugerencias_en_sap),
+                timeout=50.0
+            )
+            if productos_sap:
+                sugerencias_formateadas = _formatear_sugerencias_sap(
+                    productos_sap, producto_info, sku_clean, limite_sugerencias
+                )
+                respuesta["sugerencias_sap"] = sugerencias_formateadas
+                respuesta["total_sugerencias_sap"] = len(sugerencias_formateadas)
+                logger.info(f"✅ Encontradas {len(sugerencias_formateadas)} sugerencias SAP para {sku_clean}")
+            else:
+                respuesta["sugerencias_sap"] = []
+                respuesta["total_sugerencias_sap"] = 0
+                logger.info(f"⚠️ No se encontraron sugerencias SAP para {sku_clean}")
+        except asyncio.TimeoutError:
+            logger.warning(f"⚠️ Timeout al buscar sugerencias SAP para {sku_clean}")
+            respuesta["sugerencias_sap"] = []
+            respuesta["total_sugerencias_sap"] = 0
+            respuesta["sugerencias_sap_timeout"] = True
+        except Exception as e:
+            logger.warning(f"⚠️ Error al buscar sugerencias SAP para {sku_clean}: {e}")
+            respuesta["sugerencias_sap"] = []
+            respuesta["total_sugerencias_sap"] = 0
+            respuesta["sugerencias_sap_error"] = str(e)
+    except Exception as e:
+        # Si hay error al buscar sugerencias, no fallar la respuesta principal
+        logger.warning(f"⚠️ Error al buscar sugerencias SAP: {e}", exc_info=True)
+        respuesta["sugerencias_sap"] = []
+        respuesta["total_sugerencias_sap"] = 0
+        respuesta["sugerencias_sap_error"] = str(e)
+
+
 async def _buscar_sku_mba3_handler(sku: str, incluir_sugerencias_sap: bool, limite_sugerencias: int):
     try:
         sku_clean = sku.strip()
@@ -233,51 +397,9 @@ async def _buscar_sku_mba3_handler(sku: str, incluir_sugerencias_sap: bool, limi
         from src.services.mba3_service import MBA3Service
         mba3_service = MBA3Service()
 
-        try:
-            # Medir tiempo de ejecución para diagnóstico
-            start_time = time.time()
+        result = await _ejecutar_query_mba3(mba3_service, query, sku_clean)
 
-            # Timeout de 50 segundos para dar margen a:
-            # - Delays de JWT (hasta 5s: 2s post-login + 3s si JWT reciente)
-            # - Consultas que pueden tardar 30-40s en MBA3
-            # El frontend tiene timeout de 60s, así que 50s da margen suficiente
-            result = await asyncio.wait_for(
-                asyncio.to_thread(mba3_service.execute_query, query),
-                timeout=50.0
-            )
-
-            elapsed_time = time.time() - start_time
-            logger.info(f"⏱️ Consulta MBA3 completada en {elapsed_time:.2f}s para SKU: {sku_clean}")
-
-        except asyncio.TimeoutError:
-            elapsed_time = time.time() - start_time if 'start_time' in locals() else 50.0
-            logger.error(
-                f"❌ Timeout al buscar SKU en MBA3: {sku_clean} "
-                f"(más de 50 segundos, tiempo transcurrido: {elapsed_time:.2f}s)"
-            )
-            raise HTTPException(
-                status_code=504,
-                detail="Timeout al buscar SKU en MBA3. La consulta tardó más de 50 segundos. Verifique la conexión con MBA3."
-            )
-        except Exception as e:
-            logger.error(f"❌ Error al ejecutar consulta MBA3: {e}", exc_info=True)
-            raise HTTPException(status_code=500, detail=f"Error al buscar SKU en MBA3: {str(e)}")
-
-        # Normalizar resultado
-        if isinstance(result, list):
-            productos = result
-        elif isinstance(result, dict):
-            # Buscar la clave que contiene la lista de resultados
-            productos = []
-            for key, value in result.items():
-                if isinstance(value, list):
-                    productos = value
-                    break
-            if not productos and result:
-                productos = [result]
-        else:
-            productos = []
-
+        productos = _normalizar_productos_mba3(result)
         if not productos:
             return {
                 "status": "not_found",
@@ -286,22 +408,7 @@ async def _buscar_sku_mba3_handler(sku: str, incluir_sugerencias_sap: bool, limi
                 "data": None
             }
 
-        producto = productos[0]
-
-        # Normalizar nombres de campos (el API puede devolver diferentes formatos)
-        # Mapear a los campos que el frontend espera
-        producto_info = {
-            "codigo": producto.get("PRODUCT_ID") or producto.get("product_id") or producto.get("Product_ID") or sku_clean,
-            "nombre": producto.get("PRODUCT_NAME") or producto.get("product_name") or producto.get("Product_Name") or "",
-            "corp": producto.get("CORP") or producto.get("corp") or producto.get("Corp") or "",
-            "grupo_prenda": producto.get("GrupoPrenda") or producto.get("grupoPrenda") or producto.get("grupo_prenda") or "",
-            "talla": producto.get("Talla") or producto.get("talla") or "",
-            "presentacion": producto.get("PRESENTACION") or producto.get("presentacion") or producto.get("Presentacion") or "",
-            "group_code": producto.get("GROUP_CODE") or producto.get("group_code") or producto.get("Group_Code") or "",
-            "tipo_origen": producto.get("Tipo_Origen") or producto.get("tipo_origen") or "",
-            "descontinuado": producto.get("Descontinuado") or producto.get("descontinuado") or "",
-            "inactive": producto.get("INACTIVE") or producto.get("inactive") or producto.get("Inactive") or ""
-        }
+        producto_info = _mapear_producto_info_mba3(productos[0], sku_clean)
 
         # Preparar respuesta base
         respuesta = {
@@ -313,112 +420,7 @@ async def _buscar_sku_mba3_handler(sku: str, incluir_sugerencias_sap: bool, limi
 
         # Si se solicita, buscar sugerencias similares en SAP
         if incluir_sugerencias_sap:
-            logger.info(f"🔍 Buscando sugerencias SAP para SKU MBA3: {sku_clean}")
-
-            try:
-                # Verificar si SAP está habilitado
-                if ENABLE_SAP_QUERIES:
-                    # Importar cliente SAP y servicio de sugerencias
-                    from src.database.clients.sap_client import SAPClient
-                    sap_client = SAPClient()
-                    sugerencias_service = SugerenciasHomologacionService()
-
-                    # Buscar SKUs similares en SAP
-                    def buscar_sugerencias_en_sap():
-                        return sap_client.buscar_skus_similares(
-                            sku_referencia=sku_clean,
-                            limite=limite_sugerencias * 2,  # Buscar más para tener mejor selección
-                            solo_activos=True
-                        )
-
-                    try:
-                        # Ejecutar búsqueda en thread pool con timeout
-                        productos_sap = await asyncio.wait_for(
-                            asyncio.to_thread(buscar_sugerencias_en_sap),
-                            timeout=50.0
-                        )
-
-                        if productos_sap:
-                            # Preparar producto MBA3 para usar servicio de sugerencias
-                            producto_mba3_ref = {
-                                "codigo_mba3": producto_info.get("codigo", sku_clean),
-                                "nombre_mba3": producto_info.get("nombre", ""),
-                            }
-
-                            # Convertir productos SAP al formato esperado
-                            productos_sap_formateados = []
-                            for prod in productos_sap:
-                                productos_sap_formateados.append({
-                                    "item_code": prod.get("ItemCode", ""),
-                                    "item_name": prod.get("ItemName", ""),
-                                    "pack": prod.get("U_IXX_PACK", ""),
-                                    "active": prod.get("validFor", "N").upper() == "Y"
-                                })
-
-                            # Calcular scores y motivos usando servicio de sugerencias
-                            sugerencias = sugerencias_service.buscar_sugerencias_para_producto(
-                                producto_mba3=producto_mba3_ref,
-                                productos_sap=productos_sap_formateados,
-                                productos_ya_homologados=set()  # No excluir ningún producto
-                            )
-
-                            # Formatear sugerencias con información adicional
-                            sugerencias_formateadas = []
-                            productos_sap_dict = {p.get("ItemCode"): p for p in productos_sap}
-
-                            for sugerencia in sugerencias:
-                                codigo_sap = sugerencia.get("codigo_sap")
-                                producto_sap = productos_sap_dict.get(codigo_sap, {})
-
-                                valid_for = producto_sap.get("validFor", "N")
-                                estado = "activo" if valid_for.upper() == "Y" else "inactivo"
-
-                                sugerencias_formateadas.append({
-                                    "codigo": codigo_sap,
-                                    "nombre": producto_sap.get("ItemName", ""),
-                                    "pack": producto_sap.get("U_IXX_PACK", ""),
-                                    "group_code": producto_sap.get("ItmsGrpCod"),
-                                    "group_name": producto_sap.get("ItmsGrpNam", ""),
-                                    "estado": estado,
-                                    "valid_for": valid_for,
-                                    "score": sugerencia.get("score", 0.0),
-                                    "score_porcentaje": round(sugerencia.get("score", 0.0) * 100, 1),
-                                    "motivos": sugerencia.get("motivos", [])
-                                })
-
-                            # Limitar a la cantidad solicitada
-                            sugerencias_formateadas = sugerencias_formateadas[:limite_sugerencias]
-
-                            respuesta["sugerencias_sap"] = sugerencias_formateadas
-                            respuesta["total_sugerencias_sap"] = len(sugerencias_formateadas)
-                            logger.info(f"✅ Encontradas {len(sugerencias_formateadas)} sugerencias SAP para {sku_clean}")
-                        else:
-                            respuesta["sugerencias_sap"] = []
-                            respuesta["total_sugerencias_sap"] = 0
-                            logger.info(f"⚠️ No se encontraron sugerencias SAP para {sku_clean}")
-
-                    except asyncio.TimeoutError:
-                        logger.warning(f"⚠️ Timeout al buscar sugerencias SAP para {sku_clean}")
-                        respuesta["sugerencias_sap"] = []
-                        respuesta["total_sugerencias_sap"] = 0
-                        respuesta["sugerencias_sap_timeout"] = True
-                    except Exception as e:
-                        logger.warning(f"⚠️ Error al buscar sugerencias SAP para {sku_clean}: {e}")
-                        respuesta["sugerencias_sap"] = []
-                        respuesta["total_sugerencias_sap"] = 0
-                        respuesta["sugerencias_sap_error"] = str(e)
-                else:
-                    logger.debug("⏭️ Consultas SAP deshabilitadas, omitiendo sugerencias")
-                    respuesta["sugerencias_sap"] = []
-                    respuesta["total_sugerencias_sap"] = 0
-                    respuesta["sugerencias_sap_disabled"] = True
-
-            except Exception as e:
-                # Si hay error al buscar sugerencias, no fallar la respuesta principal
-                logger.warning(f"⚠️ Error al buscar sugerencias SAP: {e}", exc_info=True)
-                respuesta["sugerencias_sap"] = []
-                respuesta["total_sugerencias_sap"] = 0
-                respuesta["sugerencias_sap_error"] = str(e)
+            await _agregar_sugerencias_sap(respuesta, producto_info, sku_clean, limite_sugerencias)
 
         return respuesta
 
@@ -428,6 +430,60 @@ async def _buscar_sku_mba3_handler(sku: str, incluir_sugerencias_sap: bool, limi
     except Exception as e:
         logger.error(f"❌ Error al buscar SKU en MBA3: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Error al buscar SKU en MBA3: {str(e)}")
+
+
+async def _ejecutar_query_sap(query: str, sku_clean: str):
+    """Ejecuta la consulta SAP (OPENQUERY) en thread pool con timeout. Lanza HTTPException ante error."""
+    def execute_sap_query():
+        conn = None
+        try:
+            conn = get_sap_db_connection()
+            cursor = conn.cursor()
+            cursor.execute(query)
+            return cursor.fetchone()
+        finally:
+            if conn:
+                try:
+                    cursor.close()
+                    conn.close()
+                except Exception:
+                    pass
+
+    try:
+        # Timeout de 50 segundos (consistente con MBA3)
+        # SAP suele ser más rápido, pero mantener mismo timeout para consistencia
+        # El frontend tiene timeout de 60s, así que 50s da margen suficiente
+        return await asyncio.wait_for(
+            asyncio.to_thread(execute_sap_query),
+            timeout=50.0
+        )
+    except asyncio.TimeoutError:
+        logger.error(f"❌ Timeout al buscar SKU en SAP: {sku_clean} (más de 50 segundos)")
+        raise HTTPException(
+            status_code=504,
+            detail="Timeout al buscar SKU en SAP. La consulta tardó más de 50 segundos. Verifique la conexión con SAP."
+        )
+    except pyodbc.Error as e:
+        logger.error(f"❌ Error de base de datos al consultar SAP: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Error al consultar SAP: {str(e)}")
+    except Exception as e:
+        logger.error(f"❌ Error al ejecutar consulta SAP: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Error al buscar SKU en SAP: {str(e)}")
+
+
+def _mapear_producto_info_sap(result, sku_clean: str) -> dict:
+    """Normaliza una fila cruda de SAP al formato de respuesta esperado."""
+    valid_for_raw = result[5] if len(result) > 5 and result[5] is not None else 'N'
+    valid_for = str(valid_for_raw).upper() == 'Y'
+    return {
+        "codigo": result[0] if result[0] else sku_clean,
+        "nombre": result[1] if result[1] else "",
+        "pack": result[2] if result[2] else "",
+        "group_code": result[3] if result[3] else None,
+        "card_code": result[4] if result[4] else None,
+        "valid_for": valid_for_raw,
+        "estado": "activo" if valid_for else "inactivo"
+    }
 
 
 def _mapear_item_middleware_a_producto(item: Dict[str, Any], sku_clean: str) -> Dict[str, Any]:
@@ -509,43 +565,7 @@ async def _buscar_sku_via_openquery(sku_clean: str) -> Dict[str, Any]:
         ') T0;
         """
 
-        # Función auxiliar para ejecutar la query en thread pool
-        def execute_sap_query():
-            conn = None
-            try:
-                conn = get_sap_db_connection()
-                cursor = conn.cursor()
-                cursor.execute(query)
-                result = cursor.fetchone()
-                return result
-            finally:
-                if conn:
-                    try:
-                        cursor.close()
-                        conn.close()
-                    except Exception:
-                        pass
-
-        try:
-            # Timeout de 50 segundos (consistente con MBA3)
-            # SAP suele ser más rápido, pero mantener mismo timeout para consistencia
-            # El frontend tiene timeout de 60s, así que 50s da margen suficiente
-            result = await asyncio.wait_for(
-                asyncio.to_thread(execute_sap_query),
-                timeout=50.0
-            )
-        except asyncio.TimeoutError:
-            logger.error(f"❌ Timeout al buscar SKU en SAP: {sku_clean} (más de 50 segundos)")
-            raise HTTPException(
-                status_code=504,
-                detail="Timeout al buscar SKU en SAP. La consulta tardó más de 50 segundos. Verifique la conexión con SAP."
-            )
-        except pyodbc.Error as e:
-            logger.error(f"❌ Error de base de datos al consultar SAP: {e}", exc_info=True)
-            raise HTTPException(status_code=500, detail=f"Error al consultar SAP: {str(e)}")
-        except Exception as e:
-            logger.error(f"❌ Error al ejecutar consulta SAP: {e}", exc_info=True)
-            raise HTTPException(status_code=500, detail=f"Error al buscar SKU en SAP: {str(e)}")
+        result = await _ejecutar_query_sap(query, sku_clean)
 
         if not result:
             return {
@@ -555,19 +575,7 @@ async def _buscar_sku_via_openquery(sku_clean: str) -> Dict[str, Any]:
                 "data": None
             }
 
-        # Normalizar formato de respuesta
-        valid_for_raw = result[5] if len(result) > 5 and result[5] is not None else 'N'
-        valid_for = str(valid_for_raw).upper() == 'Y'
-
-        producto_info = {
-            "codigo": result[0] if result[0] else sku_clean,
-            "nombre": result[1] if result[1] else "",
-            "pack": result[2] if result[2] else "",
-            "group_code": result[3] if result[3] else None,
-            "card_code": result[4] if result[4] else None,
-            "valid_for": valid_for_raw,
-            "estado": "activo" if valid_for else "inactivo"
-        }
+        producto_info = _mapear_producto_info_sap(result, sku_clean)
 
         return {
             "status": "success",
@@ -794,6 +802,64 @@ async def _iniciar_cruce_productos_handler(user: dict):
         }
 
 
+def _construir_evento_estado(estado_actual: dict) -> dict:
+    """Construye el payload SSE con los campos necesarios del estado actual."""
+    # Enviar solo campos necesarios (no incluir resultado completo hasta completar)
+    estado_enviar = {
+        "process_id": estado_actual["process_id"],
+        "status": estado_actual["status"],
+        "step": estado_actual["step"],
+        "progress": estado_actual["progress"],
+        "message": estado_actual["message"],
+        "updated_at": estado_actual.get("updated_at"),
+        "version": estado_actual.get("version", 0)
+    }
+    # Incluir data parcial si existe
+    if "data" in estado_actual:
+        estado_enviar["data"] = estado_actual["data"]
+    # Si completó, incluir resultado completo
+    if estado_actual["status"] == "completed":
+        estado_enviar["resultado"] = estado_actual.get("resultado")
+    # Si error, incluir error
+    if estado_actual["status"] == "error":
+        estado_enviar["error"] = estado_actual.get("error")
+    return estado_enviar
+
+
+async def _event_stream_cruce(process_id: str, request: Request, estado_service):
+    """Generador de eventos SSE para el progreso del cruce."""
+    ultimo_updated_at = None
+    ultima_version = None
+
+    while True:
+        # Verificar si el cliente se desconectó
+        if await request.is_disconnected():
+            logger.info(f"🔌 Cliente desconectado del stream {process_id}")
+            break
+
+        estado_actual = estado_service.obtener_estado(process_id)
+
+        if not estado_actual:
+            yield f"data: {json.dumps({'error': 'Proceso no encontrado'})}\n\n"
+            break
+
+        # Comparar por updated_at y version (más robusto que comparar dict completo)
+        updated_at = estado_actual.get("updated_at")
+        version = estado_actual.get("version", 0)
+
+        if updated_at != ultimo_updated_at or version != ultima_version:
+            estado_enviar = _construir_evento_estado(estado_actual)
+            yield f"data: {json.dumps(estado_enviar)}\n\n"
+            ultimo_updated_at = updated_at
+            ultima_version = version
+
+        # Si completó o error, cerrar stream
+        if estado_actual["status"] in ("completed", "error"):
+            break
+
+        await asyncio.sleep(1)  # Poll cada segundo
+
+
 async def _stream_progreso_cruce_handler(process_id: str, request: Request, user: dict):
     try:
         estado_service = ProcesoEstadoService()
@@ -811,64 +877,8 @@ async def _stream_progreso_cruce_handler(process_id: str, request: Request, user
                     detail="No tienes acceso a este proceso"
                 )
 
-        async def event_stream():
-            """Generador de eventos SSE."""
-            ultimo_updated_at = None
-            ultima_version = None
-
-            while True:
-                # Verificar si el cliente se desconectó
-                if await request.is_disconnected():
-                    logger.info(f"🔌 Cliente desconectado del stream {process_id}")
-                    break
-
-                estado_actual = estado_service.obtener_estado(process_id)
-
-                if not estado_actual:
-                    yield f"data: {json.dumps({'error': 'Proceso no encontrado'})}\n\n"
-                    break
-
-                # Comparar por updated_at y version (más robusto que comparar dict completo)
-                updated_at = estado_actual.get("updated_at")
-                version = estado_actual.get("version", 0)
-
-                if updated_at != ultimo_updated_at or version != ultima_version:
-                    # Enviar solo campos necesarios (no incluir resultado completo hasta completar)
-                    estado_enviar = {
-                        "process_id": estado_actual["process_id"],
-                        "status": estado_actual["status"],
-                        "step": estado_actual["step"],
-                        "progress": estado_actual["progress"],
-                        "message": estado_actual["message"],
-                        "updated_at": updated_at,
-                        "version": version
-                    }
-
-                    # Incluir data parcial si existe
-                    if "data" in estado_actual:
-                        estado_enviar["data"] = estado_actual["data"]
-
-                    # Si completó, incluir resultado completo
-                    if estado_actual["status"] == "completed":
-                        estado_enviar["resultado"] = estado_actual.get("resultado")
-
-                    # Si error, incluir error
-                    if estado_actual["status"] == "error":
-                        estado_enviar["error"] = estado_actual.get("error")
-
-                    yield f"data: {json.dumps(estado_enviar)}\n\n"
-
-                    ultimo_updated_at = updated_at
-                    ultima_version = version
-
-                # Si completó o error, cerrar stream
-                if estado_actual["status"] in ("completed", "error"):
-                    break
-
-                await asyncio.sleep(1)  # Poll cada segundo
-
         return StreamingResponse(
-            event_stream(),
+            _event_stream_cruce(process_id, request, estado_service),
             media_type="text/event-stream",
             headers={
                 "Cache-Control": "no-cache",

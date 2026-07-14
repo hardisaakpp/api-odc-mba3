@@ -57,3 +57,6 @@ celerybeat-schedule-wal
 
 # Archivos temporales / scratch
 scratch_*.py
+
+# SonarLint
+.sonarlint/

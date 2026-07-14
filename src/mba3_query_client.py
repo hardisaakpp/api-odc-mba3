@@ -403,6 +403,55 @@ class MBA3APIClient:
             f"Respuesta del servidor: {error_detail}"
         )
 
+    def _handle_connection_error(self, e: Exception) -> None:
+        error_msg = (
+            f"No se pudo conectar al servidor MBA3 en {self.base_url}.\n"
+            f"Error: {str(e)}\n\n"
+            f"Posibles causas:\n"
+            f"- El servidor MBA3 no está disponible o no está ejecutándose\n"
+            f"- El servidor está en una red diferente o no es accesible desde este equipo\n"
+            f"- Verifica la configuración de MBA3_BASE_URL en tu archivo .env\n"
+            f"- Verifica que el firewall permita la conexión al puerto {self.base_url.split(':')[-1] if ':' in self.base_url else '8081'}"
+        )
+        logger.error(error_msg, exc_info=True)
+        raise MBA3ConnectionError(error_msg)
+
+    def _handle_timeout_error(self) -> None:
+        error_msg = (
+            f"Timeout al conectar con el servidor MBA3 en {self.base_url}.\n"
+            f"El servidor no respondió a tiempo.\n\n"
+            f"Posibles causas:\n"
+            f"- El servidor está sobrecargado\n"
+            f"- Problemas de red\n"
+            f"- El servidor está inactivo o no responde"
+        )
+        logger.error(error_msg, exc_info=True)
+        raise MBA3ConnectionError(error_msg)
+
+    def _handle_http_exception(self, e: Exception) -> None:
+        error_detail = ""
+        if hasattr(e, 'response') and getattr(e, 'response'):
+            resp_text = getattr(e.response, 'text', '')
+            error_detail = resp_text[:1000] if resp_text else "Sin respuesta"
+        error_msg = f"Error HTTP al comunicarse con MBA3: {str(e)}. Respuesta: {error_detail}"
+        logger.error(error_msg, exc_info=True)
+        raise MBA3QueryError(error_msg)
+
+    def _handle_request_exception(self, e: Exception) -> None:
+        error_str = str(e).lower()
+        if any(keyword in error_str for keyword in ['connection', 'refused', 'unreachable', 'no connection', 'failed to establish']):
+            error_msg = (
+                f"No se pudo conectar al servidor MBA3 en {self.base_url}.\n"
+                f"Error: {str(e)}\n\n"
+                f"Verifica que el servidor MBA3 esté disponible y accesible."
+            )
+            logger.error(error_msg, exc_info=True)
+            raise MBA3ConnectionError(error_msg)
+        else:
+            error_msg = f"Error en la petición a MBA3: {str(e)}"
+            logger.error(error_msg, exc_info=True)
+            raise MBA3QueryError(error_msg)
+
     def _do_request(self, query: str, url: str, form_data: dict, headers: dict):
         """Ejecuta la petición HTTP y despacha el manejo según el código de respuesta."""
         try:
@@ -416,49 +465,13 @@ class MBA3APIClient:
         except MBA3QueryError:
             raise
         except requests.exceptions.ConnectionError as e:
-            error_msg = (
-                f"No se pudo conectar al servidor MBA3 en {self.base_url}.\n"
-                f"Error: {str(e)}\n\n"
-                f"Posibles causas:\n"
-                f"- El servidor MBA3 no está disponible o no está ejecutándose\n"
-                f"- El servidor está en una red diferente o no es accesible desde este equipo\n"
-                f"- Verifica la configuración de MBA3_BASE_URL en tu archivo .env\n"
-                f"- Verifica que el firewall permita la conexión al puerto {self.base_url.split(':')[-1] if ':' in self.base_url else '8081'}"
-            )
-            logger.error(error_msg, exc_info=True)
-            raise MBA3ConnectionError(error_msg)
+            self._handle_connection_error(e)
         except requests.exceptions.Timeout:
-            error_msg = (
-                f"Timeout al conectar con el servidor MBA3 en {self.base_url}.\n"
-                f"El servidor no respondió a tiempo.\n\n"
-                f"Posibles causas:\n"
-                f"- El servidor está sobrecargado\n"
-                f"- Problemas de red\n"
-                f"- El servidor está inactivo o no responde"
-            )
-            logger.error(error_msg, exc_info=True)
-            raise MBA3ConnectionError(error_msg)
+            self._handle_timeout_error()
         except requests.exceptions.HTTPError as e:
-            error_detail = ""
-            if hasattr(e, 'response') and e.response:
-                error_detail = e.response.text[:1000] if e.response.text else "Sin respuesta"
-            error_msg = f"Error HTTP al comunicarse con MBA3: {str(e)}. Respuesta: {error_detail}"
-            logger.error(error_msg, exc_info=True)
-            raise MBA3QueryError(error_msg)
+            self._handle_http_exception(e)
         except requests.exceptions.RequestException as e:
-            error_str = str(e).lower()
-            if any(keyword in error_str for keyword in ['connection', 'refused', 'unreachable', 'no connection', 'failed to establish']):
-                error_msg = (
-                    f"No se pudo conectar al servidor MBA3 en {self.base_url}.\n"
-                    f"Error: {str(e)}\n\n"
-                    f"Verifica que el servidor MBA3 esté disponible y accesible."
-                )
-                logger.error(error_msg, exc_info=True)
-                raise MBA3ConnectionError(error_msg)
-            else:
-                error_msg = f"Error en la petición a MBA3: {str(e)}"
-                logger.error(error_msg, exc_info=True)
-                raise MBA3QueryError(error_msg)
+            self._handle_request_exception(e)
 
     def _despachar_respuesta(self, response, query: str, url: str, form_data: dict, headers: dict):
         """Despacha la respuesta HTTP al handler correspondiente según el status code."""

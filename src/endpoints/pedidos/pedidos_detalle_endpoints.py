@@ -23,6 +23,50 @@ from .pedidos_crud_helpers import (
 logger = logging.getLogger(__name__)
 
 
+def _obtener_y_enriquecer_pedido(identificador: str, incluir_respuesta: bool, conn) -> Dict:
+    """Extrae la lógica de obtención y enriquecimiento del pedido para reducir complejidad."""
+    # Detectar si es UUID (formato: 8-4-4-4-12 caracteres hexadecimales)
+    uuid_pattern = re.compile(r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$')
+    es_uuid = uuid_pattern.match(identificador.strip()) is not None
+    
+    repository = PedidoRepository(conn)
+    
+    # Usar método apropiado según el formato detectado
+    if es_uuid:
+        logger.info(f"🔍 Detectado UUID: {identificador}, usando get_pedido_completo")
+        pedido = repository.get_pedido_completo(identificador)
+        if not pedido:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Pedido no encontrado con UUID: {identificador}"
+            )
+    else:
+        logger.info(f"🔍 Detectado numero_pedido: {identificador}, usando get_pedido_completo_por_numero")
+        pedido = repository.get_pedido_completo_por_numero(identificador)
+        if not pedido:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Pedido no encontrado con número: {identificador}"
+            )
+    
+    # Agregar respuesta si se solicita y existe (usando pedido_id de la cabecera)
+    if incluir_respuesta:
+        respuesta_repo = PedidoRespuestaRepository(conn)
+        pedido_id = pedido["cabecera"]["pedido_id"]
+        respuesta = respuesta_repo.obtener_respuesta_activa(pedido_id)
+        if respuesta:
+            pedido["respuesta_proveedor"] = respuesta
+
+    # Descartar (Cargar Plantilla): solo Borrador o Nuevo Pedido. Cancelar Pedido (Redistribución): deshabilitar desde Confirmado redistribución (10) en adelante.
+    enrich_pedido_with_ui_flags(pedido)
+    enrich_pedido_reintento_envio_odc_sap(pedido, conn)
+
+    # Totales calculados en backend (no persistidos): suma de COSTO UNIT., SUBTOTAL y TOTAL por detalle
+    pedido["totales"] = calcular_totales_detalles(pedido.get("detalles", []))
+    
+    return pedido
+
+
 def register_pedidos_detalle_endpoints(app: FastAPI):
     """Registra endpoint de detalle de pedido (por número o UUID)."""
 
@@ -65,45 +109,8 @@ def register_pedidos_detalle_endpoints(app: FastAPI):
             JSON con pedido completo
         """
         try:
-            # Detectar si es UUID (formato: 8-4-4-4-12 caracteres hexadecimales)
-            uuid_pattern = re.compile(r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$')
-            es_uuid = uuid_pattern.match(identificador.strip()) is not None
-            
             with get_db_connection_context() as conn:
-                repository = PedidoRepository(conn)
-                
-                # Usar método apropiado según el formato detectado
-                if es_uuid:
-                    logger.info(f"🔍 Detectado UUID: {identificador}, usando get_pedido_completo")
-                    pedido = repository.get_pedido_completo(identificador)
-                    if not pedido:
-                        raise HTTPException(
-                            status_code=404,
-                            detail=f"Pedido no encontrado con UUID: {identificador}"
-                        )
-                else:
-                    logger.info(f"🔍 Detectado numero_pedido: {identificador}, usando get_pedido_completo_por_numero")
-                    pedido = repository.get_pedido_completo_por_numero(identificador)
-                    if not pedido:
-                        raise HTTPException(
-                            status_code=404,
-                            detail=f"Pedido no encontrado con número: {identificador}"
-                        )
-                
-                # Agregar respuesta si se solicita y existe (usando pedido_id de la cabecera)
-                if incluir_respuesta:
-                    respuesta_repo = PedidoRespuestaRepository(conn)
-                    pedido_id = pedido["cabecera"]["pedido_id"]
-                    respuesta = respuesta_repo.obtener_respuesta_activa(pedido_id)
-                    if respuesta:
-                        pedido["respuesta_proveedor"] = respuesta
-
-                # Descartar (Cargar Plantilla): solo Borrador o Nuevo Pedido. Cancelar Pedido (Redistribución): deshabilitar desde Confirmado redistribución (10) en adelante.
-                enrich_pedido_with_ui_flags(pedido)
-                enrich_pedido_reintento_envio_odc_sap(pedido, conn)
-
-                # Totales calculados en backend (no persistidos): suma de COSTO UNIT., SUBTOTAL y TOTAL por detalle
-                pedido["totales"] = calcular_totales_detalles(pedido.get("detalles", []))
+                pedido = _obtener_y_enriquecer_pedido(identificador, incluir_respuesta, conn)
 
                 # Asegurar que Decimal (p. ej. cantidad_solicitada_total, cantidad_confirmada_total, total, cantidad) sea JSON serializable
                 content = make_json_serializable(pedido)

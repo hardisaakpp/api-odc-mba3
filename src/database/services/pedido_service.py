@@ -728,11 +728,29 @@ class PedidoService:
             else:
                 logger.info(f"✅ [VALIDACIÓN TEMPRANA #1] Número de pedido '{numero_pedido_raw}' disponible")
 
-    def _validar_productos_sap_temprana(
-        self,
+    @staticmethod
+    def _norm_list(valor: Any) -> List:
+        """Normaliza un valor a lista: si viene como int (o no-lista) lo convierte en []."""
+        return [] if isinstance(valor, int) else valor
+
+    @staticmethod
+    def _construir_log_detalle_sap(etiqueta: str, no_encontradas: List, errores: List) -> str:
+        """Construye el mensaje de log resumido para una validación SAP fallida."""
+        log_detalle = f"{etiqueta} no encontradas ({len(no_encontradas)}): {', '.join(no_encontradas[:10])}"
+        if len(no_encontradas) > 10:
+            log_detalle += f" y {len(no_encontradas) - 10} más"
+        if errores:
+            log_detalle += f" | Errores ({len(errores)}): {', '.join(errores[:5])}"
+            if len(errores) > 5:
+                log_detalle += f" y {len(errores) - 5} más"
+        return log_detalle
+
+    @staticmethod
+    def _recolectar_codigos_producto_parsing(
         datos_parsing: List[Dict],
         correcciones_codigos: Optional[Dict[str, str]]
-    ) -> None:
+    ) -> List[str]:
+        """Extrae los códigos de producto únicos del parsing, aplicando correcciones si existen."""
         codigos_set: set = set()
         for item in datos_parsing:
             codigo = item.get("codigoProducto")
@@ -746,6 +764,62 @@ class PedidoService:
                 if codigo_corregido is not None and isinstance(codigo_corregido, str):
                     codigos_corregidos.append(codigo_corregido)
             codigos_productos_parsing = codigos_corregidos
+        return codigos_productos_parsing
+
+    def _raise_productos_sap_invalidos(
+        self,
+        validacion_sap_productos: Optional[Dict[str, Any]],
+        codigos_productos_parsing: List[str]
+    ) -> None:
+        """Registra el log y lanza BusinessException cuando la validación temprana de productos SAP falla."""
+        no_encontrados = self._norm_list(validacion_sap_productos.get("no_encontrados", []) if validacion_sap_productos else [])
+        errores = self._norm_list(validacion_sap_productos.get("errores", []) if validacion_sap_productos else [])
+        validos = self._norm_list(validacion_sap_productos.get("validos", []) if validacion_sap_productos else [])
+        detalle_validacion = validacion_sap_productos.get("detalle", {}) if validacion_sap_productos else {}
+        no_encontrados_str = ', '.join(no_encontrados[:5])
+        if len(no_encontrados) > 5:
+            no_encontrados_str += f" (+{len(no_encontrados) - 5} más)"
+        logger.error(f"❌ Validación SAP falló: {len(validos)}✓, {len(no_encontrados)}✗ [{no_encontrados_str}]")
+        raise BusinessException(
+            message="Existen códigos de producto no válidos en SAP",
+            error_code="PRODUCTOS_NO_VALIDOS_SAP",
+            data={
+                "validacion": {
+                    "productos": {
+                        "no_encontrados": no_encontrados,
+                        "errores": errores,
+                        "validos": validos,
+                        "total_validos": len(validos),
+                        "total_invalidos": len(no_encontrados) + len(errores)
+                    }
+                },
+                "validacion_sap": {
+                    "total_codigos": len(codigos_productos_parsing),
+                    "validos": len(validos),
+                    "no_encontrados": len(no_encontrados),
+                    "errores": len(errores),
+                    "todos_validos": False,
+                    "detalle_validacion": {
+                        codigo: {
+                            "existe": info.get("existe"),
+                            "severity": info.get("severity"),
+                            "error": info.get("error"),
+                            "mensaje": info.get("mensaje"),
+                            "mba3": info.get("mba3"),
+                            "sugerencias_sap": info.get("sugerencias_sap", [])
+                        }
+                        for codigo, info in detalle_validacion.items()
+                    }
+                }
+            }
+        )
+
+    def _validar_productos_sap_temprana(
+        self,
+        datos_parsing: List[Dict],
+        correcciones_codigos: Optional[Dict[str, str]]
+    ) -> None:
+        codigos_productos_parsing = self._recolectar_codigos_producto_parsing(datos_parsing, correcciones_codigos)
         if not codigos_productos_parsing:
             return
         codigos_sample = sorted(codigos_productos_parsing)[:20]
@@ -762,53 +836,7 @@ class PedidoService:
             limite_sugerencias=20
         )
         if validacion_sap_productos is None or not validacion_sap_productos.get("todos_validos", False):
-            no_encontrados = validacion_sap_productos.get("no_encontrados", []) if validacion_sap_productos else []
-            errores = validacion_sap_productos.get("errores", []) if validacion_sap_productos else []
-            validos = validacion_sap_productos.get("validos", []) if validacion_sap_productos else []
-            detalle_validacion = validacion_sap_productos.get("detalle", {}) if validacion_sap_productos else {}
-            if isinstance(no_encontrados, int):
-                no_encontrados = []
-            if isinstance(errores, int):
-                errores = []
-            if isinstance(validos, int):
-                validos = []
-            no_encontrados_str = ', '.join(no_encontrados[:5])
-            if len(no_encontrados) > 5:
-                no_encontrados_str += f" (+{len(no_encontrados) - 5} más)"
-            logger.error(f"❌ Validación SAP falló: {len(validos)}✓, {len(no_encontrados)}✗ [{no_encontrados_str}]")
-            raise BusinessException(
-                message="Existen códigos de producto no válidos en SAP",
-                error_code="PRODUCTOS_NO_VALIDOS_SAP",
-                data={
-                    "validacion": {
-                        "productos": {
-                            "no_encontrados": no_encontrados,
-                            "errores": errores,
-                            "validos": validos,
-                            "total_validos": len(validos),
-                            "total_invalidos": len(no_encontrados) + len(errores)
-                        }
-                    },
-                    "validacion_sap": {
-                        "total_codigos": len(codigos_productos_parsing),
-                        "validos": len(validos),
-                        "no_encontrados": len(no_encontrados),
-                        "errores": len(errores),
-                        "todos_validos": False,
-                        "detalle_validacion": {
-                            codigo: {
-                                "existe": info.get("existe"),
-                                "severity": info.get("severity"),
-                                "error": info.get("error"),
-                                "mensaje": info.get("mensaje"),
-                                "mba3": info.get("mba3"),
-                                "sugerencias_sap": info.get("sugerencias_sap", [])
-                            }
-                            for codigo, info in detalle_validacion.items()
-                        }
-                    }
-                }
-            )
+            self._raise_productos_sap_invalidos(validacion_sap_productos, codigos_productos_parsing)
         logger.debug(f"✅ Validación SAP: {len(validacion_sap_productos.get('validos', []))} productos válidos")
 
     def _agrupar_datos_en_detalles(
@@ -892,6 +920,100 @@ class PedidoService:
             )
         return cabecera, detalles_con_tiendas
 
+    @staticmethod
+    def _recolectar_codigos_tiendas_bodegas(
+        cabecera: Dict[str, Any],
+        detalles_con_tiendas: List[Dict]
+    ) -> tuple:
+        """Separa los códigos de tiendas y bodegas presentes en los detalles y la cabecera."""
+        codigos_tiendas_set: set = set()
+        codigos_bodegas_set: set = set()
+        for detalle_item in detalles_con_tiendas:
+            if not isinstance(detalle_item, dict):
+                continue
+            for dist in detalle_item.get("distribuciones", []):
+                tienda_codigo = dist.get("tienda_codigo")
+                if not tienda_codigo:
+                    continue
+                if dist.get("es_bodega", False):
+                    codigos_bodegas_set.add(tienda_codigo.strip())
+                else:
+                    codigos_tiendas_set.add(tienda_codigo)
+        origen_traslado = cabecera.get("origen_traslado")
+        if origen_traslado and origen_traslado.strip():
+            codigos_bodegas_set.add(origen_traslado.strip())
+        return codigos_tiendas_set, codigos_bodegas_set
+
+    def _validar_tiendas_sap_primero(self, codigos_tiendas_set: set, resultado: Dict[str, Any]) -> None:
+        """Valida los códigos de tienda contra SAP y lanza BusinessException si hay inválidos."""
+        logger.info(f"🔍 [SAP PRIMERO] Validando {len(codigos_tiendas_set)} códigos de tienda contra SAP")
+        validacion_tiendas_sap = self.sap_validator_helper.validar_tiendas_sap(
+            codigos_tiendas=list(codigos_tiendas_set),
+            resultado=resultado,
+            sap_obligatorio=True
+        )
+        if validacion_tiendas_sap.get("todas_validas", False):
+            return
+        no_encontradas = self._norm_list(validacion_tiendas_sap.get("no_encontradas", []))
+        errores_sap = self._norm_list(validacion_tiendas_sap.get("errores", []))
+        validas = self._norm_list(validacion_tiendas_sap.get("validas", []))
+        log_detalle = self._construir_log_detalle_sap("Tiendas", no_encontradas, errores_sap)
+        logger.error(f"❌ Validación SAP tiendas falló: {log_detalle}")
+        raise BusinessException(
+            message="Existen códigos de tienda/bodega no válidos en SAP",
+            error_code="TIENDAS_NO_VALIDAS_SAP",
+            data={
+                "validacion": {
+                    "tiendas": {
+                        "no_encontradas": no_encontradas,
+                        "errores": errores_sap,
+                        "validas": validas,
+                        "total_validas": len(validas),
+                        "total_invalidas": len(no_encontradas) + len(errores_sap)
+                    }
+                },
+                "validacion_sap": {
+                    "validas": validas,
+                    "no_encontradas": no_encontradas,
+                    "errores": errores_sap,
+                    "warnings": validacion_tiendas_sap.get("warnings", []),
+                    "total_codigos": len(codigos_tiendas_set),
+                    "todas_validas": False,
+                    "fuente": "ID TIENDA"
+                }
+            }
+        )
+
+    def _validar_bodegas_sap_primero(self, validator: Any, codigos_bodegas_set: set) -> None:
+        """Valida los códigos de bodega contra SAP y lanza BusinessException si hay inválidos."""
+        logger.info(f"🔍 [SAP PRIMERO] Validando {len(codigos_bodegas_set)} códigos de bodega contra SAP")
+        validacion_bodegas_sap = validator.validar_bodegas_existen_en_sap(
+            codigos_bodegas=list(codigos_bodegas_set),
+            sap_obligatorio=True
+        )
+        if validacion_bodegas_sap.get("todas_validas", False):
+            return
+        no_encontradas = self._norm_list(validacion_bodegas_sap.get("no_encontradas", []))
+        errores = self._norm_list(validacion_bodegas_sap.get("errores", []))
+        validas = self._norm_list(validacion_bodegas_sap.get("validas", []))
+        log_detalle = self._construir_log_detalle_sap("Bodegas", no_encontradas, errores)
+        logger.error(f"❌ Validación SAP bodegas falló: {log_detalle}")
+        raise BusinessException(
+            message="Existen códigos de bodega no válidos en SAP",
+            error_code="BODEGAS_NO_VALIDAS_SAP",
+            data={
+                "validacion": {
+                    "bodegas": {
+                        "no_encontradas": no_encontradas,
+                        "errores": errores,
+                        "validas": validas,
+                        "total_validas": len(validas),
+                        "total_invalidas": len(no_encontradas) + len(errores)
+                    }
+                }
+            }
+        )
+
     def _validar_tiendas_bodegas_sap(
         self,
         cabecera: Dict[str, Any],
@@ -899,108 +1021,13 @@ class PedidoService:
         resultado: Dict[str, Any]
     ) -> None:
         validator = PedidoValidator()
-        codigos_tiendas_set: set = set()
-        codigos_bodegas_set: set = set()
-        for detalle_item in detalles_con_tiendas:
-            if isinstance(detalle_item, dict):
-                for dist in detalle_item.get("distribuciones", []):
-                    tienda_codigo = dist.get("tienda_codigo")
-                    if tienda_codigo:
-                        if dist.get("es_bodega", False):
-                            codigos_bodegas_set.add(tienda_codigo.strip())
-                        else:
-                            codigos_tiendas_set.add(tienda_codigo)
-        origen_traslado = cabecera.get("origen_traslado")
-        if origen_traslado and origen_traslado.strip():
-            codigos_bodegas_set.add(origen_traslado.strip())
+        codigos_tiendas_set, codigos_bodegas_set = self._recolectar_codigos_tiendas_bodegas(
+            cabecera, detalles_con_tiendas
+        )
         if codigos_tiendas_set:
-            logger.info(f"🔍 [SAP PRIMERO] Validando {len(codigos_tiendas_set)} códigos de tienda contra SAP")
-            validacion_tiendas_sap = self.sap_validator_helper.validar_tiendas_sap(
-                codigos_tiendas=list(codigos_tiendas_set),
-                resultado=resultado,
-                sap_obligatorio=True
-            )
-            if not validacion_tiendas_sap.get("todas_validas", False):
-                no_encontradas = validacion_tiendas_sap.get("no_encontradas", [])
-                errores_sap = validacion_tiendas_sap.get("errores", [])
-                validas = validacion_tiendas_sap.get("validas", [])
-                if isinstance(no_encontradas, int):
-                    no_encontradas = []
-                if isinstance(errores_sap, int):
-                    errores_sap = []
-                if isinstance(validas, int):
-                    validas = []
-                log_detalle = f"Tiendas no encontradas ({len(no_encontradas)}): {', '.join(no_encontradas[:10])}"
-                if len(no_encontradas) > 10:
-                    log_detalle += f" y {len(no_encontradas) - 10} más"
-                if errores_sap:
-                    log_detalle += f" | Errores ({len(errores_sap)}): {', '.join(errores_sap[:5])}"
-                    if len(errores_sap) > 5:
-                        log_detalle += f" y {len(errores_sap) - 5} más"
-                logger.error(f"❌ Validación SAP tiendas falló: {log_detalle}")
-                raise BusinessException(
-                    message="Existen códigos de tienda/bodega no válidos en SAP",
-                    error_code="TIENDAS_NO_VALIDAS_SAP",
-                    data={
-                        "validacion": {
-                            "tiendas": {
-                                "no_encontradas": no_encontradas,
-                                "errores": errores_sap,
-                                "validas": validas,
-                                "total_validas": len(validas),
-                                "total_invalidas": len(no_encontradas) + len(errores_sap)
-                            }
-                        },
-                        "validacion_sap": {
-                            "validas": validas,
-                            "no_encontradas": no_encontradas,
-                            "errores": errores_sap,
-                            "warnings": validacion_tiendas_sap.get("warnings", []),
-                            "total_codigos": len(codigos_tiendas_set),
-                            "todas_validas": False,
-                            "fuente": "ID TIENDA"
-                        }
-                    }
-                )
+            self._validar_tiendas_sap_primero(codigos_tiendas_set, resultado)
         if codigos_bodegas_set:
-            logger.info(f"🔍 [SAP PRIMERO] Validando {len(codigos_bodegas_set)} códigos de bodega contra SAP")
-            validacion_bodegas_sap = validator.validar_bodegas_existen_en_sap(
-                codigos_bodegas=list(codigos_bodegas_set),
-                sap_obligatorio=True
-            )
-            if not validacion_bodegas_sap.get("todas_validas", False):
-                no_encontradas = validacion_bodegas_sap.get("no_encontradas", [])
-                errores = validacion_bodegas_sap.get("errores", [])
-                validas = validacion_bodegas_sap.get("validas", [])
-                if isinstance(no_encontradas, int):
-                    no_encontradas = []
-                if isinstance(errores, int):
-                    errores = []
-                if isinstance(validas, int):
-                    validas = []
-                log_detalle = f"Bodegas no encontradas ({len(no_encontradas)}): {', '.join(no_encontradas[:10])}"
-                if len(no_encontradas) > 10:
-                    log_detalle += f" y {len(no_encontradas) - 10} más"
-                if errores:
-                    log_detalle += f" | Errores ({len(errores)}): {', '.join(errores[:5])}"
-                    if len(errores) > 5:
-                        log_detalle += f" y {len(errores) - 5} más"
-                logger.error(f"❌ Validación SAP bodegas falló: {log_detalle}")
-                raise BusinessException(
-                    message="Existen códigos de bodega no válidos en SAP",
-                    error_code="BODEGAS_NO_VALIDAS_SAP",
-                    data={
-                        "validacion": {
-                            "bodegas": {
-                                "no_encontradas": no_encontradas,
-                                "errores": errores,
-                                "validas": validas,
-                                "total_validas": len(validas),
-                                "total_invalidas": len(no_encontradas) + len(errores)
-                            }
-                        }
-                    }
-                )
+            self._validar_bodegas_sap_primero(validator, codigos_bodegas_set)
 
     def _ejecutar_validacion_pedido(
         self,
@@ -1295,19 +1322,9 @@ class PedidoService:
             sap_obligatorio=True
         )
         if validacion_sap_productos is None or not validacion_sap_productos.get("todos_validos", False):
-            no_encontrados = (validacion_sap_productos or {}).get("no_encontrados", [])
-            errores = (validacion_sap_productos or {}).get("errores", [])
-            if isinstance(no_encontrados, int):
-                no_encontrados = []
-            if isinstance(errores, int):
-                errores = []
-            log_detalle = f"Productos no encontrados ({len(no_encontrados)}): {', '.join(no_encontrados[:10])}"
-            if len(no_encontrados) > 10:
-                log_detalle += f" y {len(no_encontrados) - 10} más"
-            if errores:
-                log_detalle += f" | Errores ({len(errores)}): {', '.join(errores[:5])}"
-                if len(errores) > 5:
-                    log_detalle += f" y {len(errores) - 5} más"
+            no_encontrados = self._norm_list((validacion_sap_productos or {}).get("no_encontrados", []))
+            errores = self._norm_list((validacion_sap_productos or {}).get("errores", []))
+            log_detalle = self._construir_log_detalle_sap("Productos", no_encontrados, errores)
             logger.warning(f"⚠️ Validación SAP productos falló: {log_detalle}")
             resultado["status"] = "validation_error"
             resultado["errores"].append("Existen códigos de producto no válidos en SAP")
