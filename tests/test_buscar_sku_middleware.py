@@ -21,11 +21,14 @@ class TestMapearItemMiddlewareAProducto:
         assert producto["estado"] == "activo"
         assert producto["pack"] == "X1"
         assert producto["card_code"] == "P123"
+        # valid_for crudo normalizado al formato del canal OPENQUERY
+        assert producto["valid_for"] == "Y"
 
     def test_item_inactivo(self):
         item = {"ItemCode": "A1", "ItemName": "Producto", "Valid": "tNO"}
         producto = _mapear_item_middleware_a_producto(item, "A1")
         assert producto["estado"] == "inactivo"
+        assert producto["valid_for"] == "N"
 
     def test_campos_ausentes_usan_defaults(self):
         producto = _mapear_item_middleware_a_producto({}, "A1")

@@ -432,15 +432,16 @@ async def _buscar_sku_mba3_handler(sku: str, incluir_sugerencias_sap: bool, limi
 
 def _mapear_item_middleware_a_producto(item: Dict[str, Any], sku_clean: str) -> Dict[str, Any]:
     """Traduce la respuesta de GET /items/{code} del middleware al formato de este endpoint."""
-    valid_for_raw = item.get("Valid") or "N"
-    valid_for = valid_for_raw == "tYES"
+    valid_for = (item.get("Valid") or "N") == "tYES"
     return {
         "codigo": item.get("ItemCode") or sku_clean,
         "nombre": item.get("ItemName") or "",
         "pack": item.get("U_IXX_PACK") or "",
         "group_code": item.get("ItmsGrpCod"),
         "card_code": item.get("CardCode"),
-        "valid_for": valid_for_raw,
+        # Normalizado al formato del canal OPENQUERY ("Y"/"N") para que el
+        # campo crudo sea idéntico entre canales de cara al frontend.
+        "valid_for": "Y" if valid_for else "N",
         "estado": "activo" if valid_for else "inactivo",
     }
 
