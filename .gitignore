@@ -1,38 +1,54 @@
+# Variables de entorno y secretos
 .env
-.venv/
-__pycache__/
-*.pyc
+.env.*
+!.env.example
+!.env.*.example
+deploy/env/*.env
+!deploy/env/*.env.example
 
-# Archivos JSON generados
+# Entornos virtuales y Python
+.venv/
+venv/
+env/
+ENV/
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyd
+
+# Empaquetado y artefactos generados
+build/
+dist/
+*.egg-info/
+.eggs/
+pip-wheel-metadata/
+
+# Archivos JSON y salidas generadas
 resultado_api.json
 ultima_consulta.json
 src/resultado_api.json
-
-# Directorio de salida (JSONs de OC, etc.)
 output/
 
-# Archivos de debugging
+# Depuración y logs
 debug/
-*.log
-
-# Directorio de logs de la aplicación
 logs/
+*.log
+*.pid
 
-# Despliegue en servidor (secretos y logs de deploy)
-deploy/env/active.env
-deploy/logs/*.log
-!deploy/logs/.gitkeep
-
-# Ruff
+# Herramientas de calidad, testing y cobertura
 .ruff_cache/
-
-# Testing
+.mypy_cache/
+.pyright/
 .pytest_cache/
-.coverage
-htmlcov/
 .tox/
-*.cover
+.nox/
 .hypothesis/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+*.cover
+junit*.xml
 
 # Celery
 celerybeat-schedule
@@ -40,23 +56,25 @@ celerybeat-schedule.*
 celerybeat-schedule-shm
 celerybeat-schedule-wal
 
-# Visual Studio
+# IDE y herramientas locales
 .vs/
-
-# JetBrains (PyCharm / IntelliJ)
 .idea/
-
-# Cursor IDE
 .cursor/
-
-# Claude Code (CLI)
 .claude/
+.sonarlint/
 
-# GitHub Actions (repo vive en Azure DevOps, no aplica)
-.github/
+# Sistema operativo y archivos temporales
+.DS_Store
+Thumbs.db
+Desktop.ini
+*.swp
+*.swo
+*.tmp
+*.bak
+*~
 
 # Archivos temporales / scratch
 scratch_*.py
 
-# SonarLint
-.sonarlint/
+# GitHub Actions (el repositorio usa Azure DevOps)
+.github/
