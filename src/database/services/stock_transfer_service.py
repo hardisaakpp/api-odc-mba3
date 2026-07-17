@@ -760,7 +760,7 @@ class StockTransferService:
             return None, True
 
         # ⭐ VALIDACIÓN 4: Validar que la tienda pertenezca a la bodega origen
-        bodega_tienda = self.obtener_bodega_de_tienda(tienda_codigo)
+        bodega_tienda = self.obtener_bodega_de_tienda(tienda_codigo_upper)
         if bodega_tienda is None:
             logger.warning(
                 f"⚠️ Omitiendo distribución: No se pudo determinar la bodega de la tienda '{tienda_codigo}'. "
@@ -817,6 +817,10 @@ class StockTransferService:
             (lista_de_entries, cantidad_omitidas)
         """
         pedido_detalle_id = producto_dist.get("pedido_detalle_id")
+        if pedido_detalle_id is None:
+            logger.warning(f"⚠️ producto_dist sin pedido_detalle_id: {producto_dist.get('codigo_producto')}")
+            return [], 0
+
         procesamiento = mapa_procesamientos.get(pedido_detalle_id)
 
         if not procesamiento:
