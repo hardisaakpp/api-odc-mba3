@@ -142,7 +142,7 @@ def _calcular_cantidades(respuesta: dict, detalle: dict):
 
 def _construir_ajuste_detalle_normal(detalle: dict, respuesta: dict, tienda_repo) -> AjusteDetalle:
     pedido_detalle_id = detalle.get("pedido_detalle_id")
-    codigo_producto = detalle.get("codigo_interno")
+    codigo_producto = detalle.get("codigo_interno") or ""
     cantidad_solicitada, cantidad_confirmada = _calcular_cantidades(respuesta, detalle)
     costo_actual = detalle.get("costo_doc_sin_iva")
     if costo_actual is not None:

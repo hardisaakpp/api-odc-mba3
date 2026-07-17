@@ -36,6 +36,7 @@ class TestGetItemExtendido:
         }
         with patch.object(client, "_get", return_value=_mock_response(200, data)):
             item = client.get_item("A1")
+        assert item is not None
         assert item["U_IXX_PACK"] == "X1"
         assert item["ItmsGrpCod"] == 103
         assert item["CardCode"] == "P123"
@@ -50,6 +51,7 @@ class TestGetItemExtendido:
         }
         with patch.object(client, "_get", return_value=_mock_response(200, data)):
             item = client.get_item("A1")
+        assert item is not None
         assert item["CardCode"] is None
         assert item["U_IXX_PACK"] is None
 
@@ -104,6 +106,7 @@ class TestValidateWarehousesBatch:
         respuestas = [None, [{"whsCode": "W200", "exists": True, "whsName": "X"}]]
         with patch.object(client, "_validate_warehouses_chunk", side_effect=respuestas):
             result = client.validate_warehouses_batch(codigos)
+        assert result is not None
         errores = [w for w in result["warehouses"] if w.get("errorType") == "connection_error"]
         assert len(errores) == 200
         assert any(w.get("whsCode") == "W200" for w in result["warehouses"])
@@ -174,6 +177,7 @@ class TestExtraerErrorSapEmbebido:
                 "CardCode": "PFAKE",
                 "DocumentLines": [],
             })
+        assert resultado is not None
         assert resultado["success"] is False
         assert resultado["error_code"] == -2028
         assert resultado["sap_error_details"]["error"]["code"] == -2028
@@ -190,5 +194,6 @@ class TestExtraerErrorSapEmbebido:
                 "ToWarehouse": "ZZZ2",
                 "StockTransferLines": [],
             })
+        assert resultado is not None
         assert resultado["success"] is False
         assert resultado["error_code"] == -2028

@@ -134,7 +134,7 @@ def _procesar_detalle_pedido(
             logger.warning(f"⚠️ Producto {idx} sin código interno, omitiendo...")
             return
         logger.info(f"[{idx}/{total_productos}] Procesando producto: {codigo_interno}")
-        producto_dist = productos_distribucion.get(pedido_detalle_id, {})
+        producto_dist = productos_distribucion.get(pedido_detalle_id, {}) if pedido_detalle_id else {}
         cantidad_total = producto_dist.get("cantidad_asignada_total", 0)
         if cantidad_total == 0:
             logger.warning(f"   ⚠️ Producto {codigo_interno} tiene cantidad 0, omitiendo...")

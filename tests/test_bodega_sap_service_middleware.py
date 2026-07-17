@@ -5,12 +5,13 @@ Cubre la selección de vía según USE_MIDDLEWARE_WAREHOUSES y el fallback
 a OPENQUERY cuando el middleware no está disponible.
 """
 
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 from src.database.services.bodega_sap_service import BodegaSAPService
 
 
-def _service():
+def _service() -> Any:
     service = BodegaSAPService.__new__(BodegaSAPService)
     service.sap_client = MagicMock()
     service.sap_sl_client = MagicMock()

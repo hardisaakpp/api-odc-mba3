@@ -6,6 +6,7 @@ la validación del proveedor, y el fallback a la validación línea por línea
 cuando el batch no está disponible.
 """
 
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 from src.database.services.oc_sap_service import OCSAPService
@@ -128,7 +129,7 @@ class TestPrecheckBatchFallback:
     """Condiciones en que _precheck_batch cede a la validación por línea."""
 
     @staticmethod
-    def _service_con_mock():
+    def _service_con_mock() -> Any:
         service = OCSAPService.__new__(OCSAPService)
         service.sap_client = MagicMock()
         return service
@@ -195,7 +196,7 @@ class TestPrecheckWiring:
     """Selección de vía (batch vs. línea por línea) en _precheck_against_service_layer."""
 
     @staticmethod
-    def _service_con_mock():
+    def _service_con_mock() -> Any:
         service = OCSAPService.__new__(OCSAPService)
         service.sap_client = MagicMock()
         return service

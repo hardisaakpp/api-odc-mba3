@@ -3,7 +3,8 @@ Servicio para consultar SAP y poblar el cache de productos.
 """
 
 import logging
-from typing import Optional, Dict, Any
+from enum import Enum, auto
+from typing import Literal, Optional, Dict, Any, Union
 
 from src.config import SAP_CACHE_DAYS, ENABLE_SAP_QUERIES, USE_MIDDLEWARE_PRODUCTO_INFO
 from ..connection import get_db_connection
@@ -13,9 +14,15 @@ from ..repositories.producto_sap_repository import ProductoSAPRepository
 
 logger = logging.getLogger(__name__)
 
-# Sentinel para distinguir "middleware no disponible" (fallback a OPENQUERY) de
-# "no existe en SAP" (respuesta definitiva, que se representa con None).
-_SIN_RESPUESTA_MIDDLEWARE = object()
+
+class _MiddlewareSentinel(Enum):
+    """Sentinel para distinguir "middleware no disponible" (fallback a OPENQUERY) de
+    "no existe en SAP" (respuesta definitiva, que se representa con None)."""
+
+    SIN_RESPUESTA = auto()
+
+
+_SIN_RESPUESTA_MIDDLEWARE = _MiddlewareSentinel.SIN_RESPUESTA
 
 
 class SAPService:
@@ -27,7 +34,9 @@ class SAPService:
         self.enabled = ENABLE_SAP_QUERIES
 
     @staticmethod
-    def _consultar_producto_via_middleware(sku: str):
+    def _consultar_producto_via_middleware(
+        sku: str,
+    ) -> Union[Dict[str, Any], None, Literal[_MiddlewareSentinel.SIN_RESPUESTA]]:
         """
         Consulta el producto vía middleware (GET /api/v1/items/{code}).
 

@@ -16,13 +16,13 @@ from src.database.repositories.bodega_sap_repository import BodegaSAPRepository
 def _repo_con_conn_mock():
     conn = MagicMock()
     conn.cursor.return_value = MagicMock()
-    return BodegaSAPRepository(conn)
+    return BodegaSAPRepository(conn), conn
 
 
 def test_update_retorna_true_incluso_con_rowcount_cero():
-    repo = _repo_con_conn_mock()
+    repo, conn = _repo_con_conn_mock()
     repo.find_by_whs_code = MagicMock(return_value={"whs_code": "RL-CD"})
-    repo.conn.cursor.return_value.rowcount = 0
+    conn.cursor.return_value.rowcount = 0
 
     resultado = repo.insert_or_update({"whs_code": "RL-CD", "whs_name": "ROLAND CD"})
 
@@ -30,7 +30,7 @@ def test_update_retorna_true_incluso_con_rowcount_cero():
 
 
 def test_insert_retorna_true():
-    repo = _repo_con_conn_mock()
+    repo, _conn = _repo_con_conn_mock()
     repo.find_by_whs_code = MagicMock(return_value=None)
 
     resultado = repo.insert_or_update({"whs_code": "NUEVA-BODEGA", "whs_name": "Nueva"})
@@ -39,9 +39,9 @@ def test_insert_retorna_true():
 
 
 def test_batch_no_subcuenta_cuando_rowcount_es_cero():
-    repo = _repo_con_conn_mock()
+    repo, conn = _repo_con_conn_mock()
     repo.find_by_whs_code = MagicMock(return_value={"whs_code": "RL-CD"})
-    repo.conn.cursor.return_value.rowcount = 0
+    conn.cursor.return_value.rowcount = 0
 
     updated_count = repo.insert_or_update_batch([{"whs_code": "RL-CD", "whs_name": "ROLAND CD"}])
 

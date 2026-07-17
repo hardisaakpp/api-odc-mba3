@@ -170,7 +170,7 @@ def sap_service_layer_result_should_retry(response: Any) -> bool:
     return _http_status_should_retry(status_code)
 
 
-def mensaje_sugiere_reintento_transitorio(mensaje: str) -> bool:
+def mensaje_sugiere_reintento_transitorio(mensaje: Optional[str]) -> bool:
     """
     True si el texto describe un fallo típicamente transitorio hacia SAP SL (red, SL caído).
 

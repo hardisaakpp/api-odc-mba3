@@ -463,6 +463,7 @@ def _ejecutar_proceso_completo_sync(
         )
         if partial_response is not None:
             return partial_response
+        assert oc_id is not None
 
         logger.info("🚀 PASO 3/3: Enviando ODC a SAP...")
         from src.database.services.oc_sap_service import OCSAPService

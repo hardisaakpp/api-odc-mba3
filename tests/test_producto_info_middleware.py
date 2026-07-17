@@ -41,6 +41,7 @@ class TestConsultarProductoViaMiddleware:
         with patch("src.database.services.sap_service.SAPServiceLayerClient") as mock_cls:
             mock_cls.return_value.get_item.return_value = _item_middleware(valid="tNO")
             resultado = SAPService._consultar_producto_via_middleware("5-0012.9")
+        assert isinstance(resultado, dict)
         assert resultado["validFor"] == "N"
 
     def test_404_confirmado_retorna_none_definitivo(self):
@@ -73,6 +74,7 @@ class TestConsultarProductoSap:
         ) as mock_mw, patch.object(service, "sap_client") as mock_oq:
             mock_mw.return_value.get_item.return_value = _item_middleware()
             resultado = service._consultar_producto_sap("5-0012.9")
+        assert resultado is not None
         assert resultado["ItmsGrpNam"] == "R-MEDIAS"
         mock_oq.get_producto_info.assert_not_called()
 

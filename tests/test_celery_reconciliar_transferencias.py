@@ -119,6 +119,7 @@ class TestReconciliarOc:
             mock_lock.return_value.__enter__.return_value = True
             MockService.return_value.reintentar_pendientes.return_value = {"status": "no_pendientes"}
             resultado = _reconciliar_oc("oc-1", redis_client)
+        assert resultado is not None
         assert resultado["status"] == "no_pendientes"
         mock_escalar.assert_not_called()
         mock_inmediato.assert_not_called()
@@ -139,6 +140,7 @@ class TestReconciliarOc:
             mock_lock.return_value.__enter__.return_value = True
             MockService.return_value.reintentar_pendientes.return_value = {"status": "success"}
             resultado = _reconciliar_oc("oc-1", redis_client)
+        assert resultado is not None
         assert resultado["status"] == "success"
         mock_escalar.assert_not_called()
         mock_inmediato.assert_not_called()
@@ -162,6 +164,7 @@ class TestReconciliarOc:
                 "status": "partial", "resultado_st": resultado_st,
             }
             resultado = _reconciliar_oc("oc-1", redis_client)
+        assert resultado is not None
         assert resultado["status"] == "partial"
         mock_escalar.assert_called_once_with("oc-1", resultado_st, redis_client)
         mock_inmediato.assert_not_called()
@@ -185,6 +188,7 @@ class TestReconciliarOc:
                 "status": "partial", "resultado_st": resultado_st,
             }
             resultado = _reconciliar_oc("oc-1", redis_client)
+        assert resultado is not None
         assert resultado["status"] == "partial"
         mock_inmediato.assert_called_once_with("oc-1", resultado_st, redis_client)
         mock_escalar.assert_not_called()
