@@ -4,6 +4,14 @@
 # Uso (lo ejecuta el release de Azure DevOps):
 #   export IMAGE_TAG=test-<BuildId>
 #   docker compose -f docker-compose.yml -f docker-compose.deploy.yml --profile app up -d
+#
+# Variables opcionales por ambiente (exportadas por el release; entre paréntesis el default):
+#   ENVIRONMENT          -> test | production        (test)
+#   CELERY_CONCURRENCY   -> procesos del worker      (2)
+#   API_MEM_LIMIT        -> memoria máx API          (512m)
+#   WORKER_MEM_LIMIT     -> memoria máx worker       (800m)
+#   BEAT_MEM_LIMIT       -> memoria máx beat         (256m)
+#   REDIS_MEM_LIMIT      -> memoria máx redis        (256m)
 
 x-deploy-common: &deploy-common
   image: ${ACR_LOGIN_SERVER:-dockermg-g9hrgcc4etdrh8eg.azurecr.io}/api-odc-mba3:${IMAGE_TAG:-test-latest}
@@ -18,9 +26,11 @@ x-deploy-common: &deploy-common
 services:
   redis:
     ports: !reset []   # No publicar 6379: hay un Redis nativo en el host
+    mem_limit: ${REDIS_MEM_LIMIT:-256m}
 
   api:
     <<: *deploy-common
+    mem_limit: ${API_MEM_LIMIT:-512m}
     volumes:
       - /opt/odc-sap/.env:/app/.env:ro
       - /opt/odc-sap/.env:/app/.env.${ENVIRONMENT:-test}:ro
@@ -28,6 +38,18 @@ services:
 
   celery-worker:
     <<: *deploy-common
+    mem_limit: ${WORKER_MEM_LIMIT:-800m}
+    command:
+      [
+        "celery",
+        "-A",
+        "src.celery_app",
+        "worker",
+        "--loglevel=info",
+        "--pool=prefork",
+        "--concurrency=${CELERY_CONCURRENCY:-2}",
+        "--max-tasks-per-child=50",
+      ]
     volumes:
       - /opt/odc-sap/.env:/app/.env:ro
       - /opt/odc-sap/.env:/app/.env.${ENVIRONMENT:-test}:ro
@@ -35,6 +57,7 @@ services:
 
   celery-beat:
     <<: *deploy-common
+    mem_limit: ${BEAT_MEM_LIMIT:-256m}
     volumes:
       - /opt/odc-sap/.env:/app/.env:ro
       - /opt/odc-sap/.env:/app/.env.${ENVIRONMENT:-test}:ro
