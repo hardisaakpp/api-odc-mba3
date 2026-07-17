@@ -1,24 +1,84 @@
-# No copiar al construir la imagen (más rápido y seguro)
+# Control de versiones
+.git/
+.gitignore
+.gitattributes
+
+# Entornos virtuales y Python
 venv/
+.venv/
+env/
+ENV/
+__pycache__/
+**/__pycache__/
+*.py[cod]
+*$py.class
+*.pyd
+*.so
+
+# Variables de entorno y secretos (se montan en runtime)
 .env
 .env.*
 !.env.example
-.git/
-.gitignore
-__pycache__/
-*.py[cod]
-*$py.class
+!.env.*.example
+deploy/env/*.env
+
+# Cachés, pruebas y cobertura
 .pytest_cache/
+.mypy_cache/
+.pyright/
+.ruff_cache/
+.tox/
+.nox/
+.hypothesis/
 .coverage
+.coverage.*
+coverage.xml
 htmlcov/
+tests/
+
+# Empaquetado y artefactos generados
+build/
+dist/
 *.egg-info/
 .eggs/
-dist/
-build/
-*.md
-docs/
-tests/
-.cursor/
+pip-wheel-metadata/
+output/
+debug/
+logs/
 *.log
+*.pid
 celerybeat-schedule
 celerybeat-schedule.*
+
+# IDE, sistema operativo y temporales
+.vs/
+.vscode/
+.idea/
+.cursor/
+.claude/
+.sonarlint/
+.DS_Store
+Thumbs.db
+Desktop.ini
+*.swp
+*.swo
+*.tmp
+*.bak
+*~
+
+# Archivos que no necesita la imagen de runtime
+docs/
+scripts/
+azure-pipeline/
+deploy/
+docker-compose*.yml
+requirements-dev.txt
+pyproject.toml
+pyrightconfig.json
+pytest.ini
+*.md
+refactor.py
+scratch_*.py
+run-*.ps1
+start*.ps1
+deploy-prod.sh

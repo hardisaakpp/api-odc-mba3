@@ -1,0 +1,41 @@
+# Override para despliegue en servidores (test/prod) usando imagen de ACR.
+# No compila nada en el servidor: solo pull de la imagen.
+#
+# Uso (lo ejecuta el release de Azure DevOps):
+#   export IMAGE_TAG=test-<BuildId>
+#   docker compose -f docker-compose.yml -f docker-compose.deploy.yml --profile app up -d
+
+x-deploy-common: &deploy-common
+  image: ${ACR_LOGIN_SERVER:-dockermg-g9hrgcc4etdrh8eg.azurecr.io}/api-odc-mba3:${IMAGE_TAG:-test-latest}
+  build: !reset null
+  environment:
+    ENVIRONMENT: ${ENVIRONMENT:-test}
+    REDIS_URL: redis://redis:6379/0
+    FILE_STORAGE_ENDPOINT: ${FILE_STORAGE_ENDPOINT}
+  env_file:
+    - /opt/odc-sap/.env
+
+services:
+  redis:
+    ports: !reset []   # No publicar 6379: hay un Redis nativo en el host
+
+  api:
+    <<: *deploy-common
+    volumes:
+      - /opt/odc-sap/.env:/app/.env:ro
+      - /opt/odc-sap/.env:/app/.env.${ENVIRONMENT:-test}:ro
+      - /opt/odc-sap/logs:/app/logs
+
+  celery-worker:
+    <<: *deploy-common
+    volumes:
+      - /opt/odc-sap/.env:/app/.env:ro
+      - /opt/odc-sap/.env:/app/.env.${ENVIRONMENT:-test}:ro
+      - /opt/odc-sap/logs:/app/logs
+
+  celery-beat:
+    <<: *deploy-common
+    volumes:
+      - /opt/odc-sap/.env:/app/.env:ro
+      - /opt/odc-sap/.env:/app/.env.${ENVIRONMENT:-test}:ro
+      - celerybeat_data:/var/lib/celery
