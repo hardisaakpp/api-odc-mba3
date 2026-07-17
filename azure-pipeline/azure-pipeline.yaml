@@ -1,3 +1,4 @@
+# Disparador para Integración Continua
 trigger:
   branches:
     include:
@@ -9,42 +10,113 @@ trigger:
       - bugfix/*
       - hotfix/*
 
+# Enrutamiento al servidor Ubuntu
 pool:
   name: 'agents-srv-test'
   demands:
     - Agent.OS -equals Linux
 
 variables:
-  pythonVersion: '3.11' # Asegúrate de que esta versión esté instalada en el servidor
+  - group: acr-credentials
+  - name: imageName
+    value: 'dockermg-g9hrgcc4etdrh8eg.azurecr.io/api-odc-mba3'
+  - name: dockerfilePath
+    value: '$(Build.SourcesDirectory)/Dockerfile'
+  - ${{ if eq(variables['Build.SourceBranchName'], 'main') }}:
+    - name: envTag
+      value: 'prod-latest'
+    - name: uniqueTag
+      value: 'prod-$(Build.BuildId)'
+  - ${{ elseif eq(variables['Build.SourceBranchName'], 'test') }}:
+    - name: envTag
+      value: 'test-latest'
+    - name: uniqueTag
+      value: 'test-$(Build.BuildId)'
+  - ${{ else }}:
+    - name: envTag
+      value: 'none'
+    - name: uniqueTag
+      value: 'none'
 
 stages:
-- stage: Build_and_Publish
-  displayName: 'Preparar y Publicar Código Fuente'
+# =====================================================================
+# ETAPA 1: VALIDACIÓN DE CÓDIGO (CI Puro para Python)
+# =====================================================================
+- stage: CI_Code_Quality
+  displayName: 'Integración Continua - Calidad de Código'
   jobs:
-  - job: Publish_Drop
-    displayName: 'Empaquetar Artefacto Python'
+  - job: Validar_Codigo
+    displayName: 'Validación de Sintaxis Python'
     steps:
-    
-    # 1. (Opcional) Aquí podrías correr tests o linters
-    - script: |
-        echo "Validando sintaxis..."
-        python3 -m py_compile src/**/*.py
-      displayName: 'Validación rápida de código'
-      continueOnError: true
 
-    # 2. Copiar solo los archivos necesarios para producción a un directorio temporal
+    # 1. Validación de sintaxis de todo el código fuente
+    - script: |
+        echo "Validando sintaxis de Python..."
+        find src -name "*.py" -exec python3 -m py_compile {} +
+      displayName: 'Validación de sintaxis'
+
+    # 2. (Opcional a futuro: ruff / pytest aquí)
+
+# =====================================================================
+# ETAPA 2: CONSTRUCCIÓN Y PUBLICACIÓN EN AZURE CONTAINER REGISTRY
+# =====================================================================
+- stage: Build_Docker
+  displayName: 'Construcción de Imagen Docker'
+  dependsOn: CI_Code_Quality
+  # Bloqueo: Solo construye Docker si la Etapa 1 pasó Y si estamos en test o main
+  condition: and(succeeded(), ne(variables.envTag, 'none'))
+  jobs:
+  - job: BuildAndPush
+    displayName: 'Build & Push Docker Azure'
+    steps:
+
+    # 1. Login a ACR
+    - script: |
+        echo "$(acrPassword)" | docker login dockermg-g9hrgcc4etdrh8eg.azurecr.io -u $(acrUsername) --password-stdin
+      displayName: 'Login a ACR'
+
+    # 2. Build y Push de la imagen
+    - script: |
+        set -e
+        echo "1. Construyendo la imagen de Docker para api-odc-mba3 ($(envTag))..."
+        docker build -f $(dockerfilePath) \
+          -t $(imageName):$(uniqueTag) \
+          -t $(imageName):$(envTag) .
+
+        echo "2. Subiendo imágenes al registro corporativo en la nube..."
+        docker push $(imageName):$(uniqueTag)
+        docker push $(imageName):$(envTag)
+      displayName: 'Empaquetar y Almacenar Contenedor en Azure'
+
+    # 3. Limpieza de imágenes locales en el agente
+    - script: |
+        docker rmi $(imageName):$(uniqueTag) $(imageName):$(envTag) || true
+        docker image prune -f
+      displayName: 'Limpiar imágenes locales'
+      condition: always()
+
+# =====================================================================
+# ETAPA 3: PUBLICAR ARTEFACTO DE DESPLIEGUE (para el Release)
+# =====================================================================
+- stage: Publish_Drop
+  displayName: 'Publicar Artefacto de Despliegue'
+  dependsOn: Build_Docker
+  condition: and(succeeded(), ne(variables.envTag, 'none'))
+  jobs:
+  - job: Publicar
+    displayName: 'Publicar archivos compose'
+    steps:
+
     - task: CopyFiles@2
-      displayName: 'Copiar archivos al Staging Directory'
+      displayName: 'Copiar archivos de despliegue al Staging'
       inputs:
         SourceFolder: '$(Build.SourcesDirectory)'
         Contents: |
-          src/**
-          requirements.txt
-          requirements-dev.txt
+          docker-compose.yml
+          docker-compose.deploy.yml
         TargetFolder: '$(Build.ArtifactStagingDirectory)/drop'
         CleanTargetFolder: true
 
-    # 3. Publicar la carpeta 'drop' en Azure DevOps
     - task: PublishBuildArtifacts@1
       displayName: 'Publicar Artefacto (Drop)'
       inputs:
