@@ -127,8 +127,8 @@ stages:
 
     # 3. PUBLICAMOS EL ARTEFACTO
     - task: PublishBuildArtifacts@1
-      displayName: 'Publicar Artefacto (Drop)'
+      displayName: 'Publicar Artefacto (Deploy Info)'
       inputs:
         PathtoPublish: '$(Build.ArtifactStagingDirectory)/drop'
-        ArtifactName: 'api-odc-mba3-drop'
+        ArtifactName: 'deploy-info'
         publishLocation: 'Container'
