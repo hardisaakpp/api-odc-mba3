@@ -32,3 +32,13 @@ def test_insert_retorna_true():
     resultado = repo.insert_or_update({"sku": "SKU-NUEVO", "item_code": "IC2"})
 
     assert resultado is True
+
+
+def test_update_retorna_false_si_no_afecta_filas():
+    repo = _repo_con_conn_mock()
+    repo.find_by_sku = MagicMock(return_value={"sku": "SKU1"})
+    repo.conn.cursor.return_value.rowcount = 0
+
+    resultado = repo.insert_or_update({"sku": "SKU1", "item_code": "IC1"})
+
+    assert resultado is False

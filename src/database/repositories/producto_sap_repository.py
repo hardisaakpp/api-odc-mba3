@@ -162,6 +162,11 @@ class ProductoSAPRepository:
                 cursor.execute(sql, values)
                 self.conn.commit()
                 logger.debug(f"✅ Producto SAP cache actualizado: {sku}")
+                affected_rows = cursor.rowcount
+                if affected_rows in (-1, None):
+                    return True
+                if isinstance(affected_rows, int):
+                    return affected_rows > 0
                 return True
             else:
                 # INSERTAR
@@ -197,6 +202,11 @@ class ProductoSAPRepository:
                 cursor.execute(sql, values)
                 self.conn.commit()
                 logger.debug(f"✅ Producto SAP cache insertado: {sku}")
+                affected_rows = cursor.rowcount
+                if affected_rows in (-1, None):
+                    return True
+                if isinstance(affected_rows, int):
+                    return affected_rows > 0
                 return True
                 
         except Exception as e:

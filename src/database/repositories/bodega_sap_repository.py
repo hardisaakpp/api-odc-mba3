@@ -194,7 +194,7 @@ class BodegaSAPRepository:
                 cursor.execute(sql, values)
                 self.conn.commit()
                 logger.debug(f"✅ Bodega/Tienda SAP cache actualizada: {whs_code_normalized}")
-                return True
+                return cursor.rowcount != -1
             else:
                 # INSERTAR
                 sql = """

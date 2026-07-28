@@ -4,7 +4,7 @@ Servicio para consultar SAP y poblar el cache de productos.
 
 import logging
 from enum import Enum, auto
-from typing import Literal, Optional, Dict, Any, List, Union
+from typing import Literal, Optional, Dict, Any, List, Union, Tuple
 
 from src.config import SAP_CACHE_DAYS, ENABLE_SAP_QUERIES, USE_MIDDLEWARE_PRODUCTO_INFO
 from ..connection import get_db_connection
@@ -254,6 +254,55 @@ class SAPService:
                 except Exception:
                     pass
 
+    def _preparar_pendientes(
+        self,
+        skus_validos: List[str],
+        force_refresh: bool,
+        repository: "ProductoSAPRepository",
+    ) -> Tuple[Dict[str, Optional[Dict[str, Any]]], List[str]]:
+        """Separa los SKUs resueltos por cache de los que deben consultarse en SAP."""
+        resultados: Dict[str, Optional[Dict[str, Any]]] = {}
+        pendientes: List[str] = []
+        for sku in skus_validos:
+            cached = self._consultar_cache(repository, sku, force_refresh)
+            if cached is not None:
+                resultados[sku] = cached
+            else:
+                pendientes.append(sku)
+        return resultados, pendientes
+
+    def _consultar_batch_middleware(
+        self, pendientes: List[str]
+    ) -> Tuple[Dict[str, Optional[Dict[str, Any]]], bool]:
+        """Consulta el batch del middleware y devuelve los resultados mapeados."""
+        resueltos_batch: Dict[str, Optional[Dict[str, Any]]] = {}
+        if not pendientes or not USE_MIDDLEWARE_PRODUCTO_INFO:
+            return resueltos_batch, False
+
+        items = SAPServiceLayerClient().get_items_batch(pendientes)
+        if items is None:
+            return resueltos_batch, True
+
+        for sku in pendientes:
+            if sku in items:
+                resueltos_batch[sku] = self._mapear_item_batch_a_sap_info(items[sku])
+        return resueltos_batch, False
+
+    def _resolver_sku_batch(
+        self,
+        sku: str,
+        resueltos_batch: Dict[str, Optional[Dict[str, Any]]],
+        middleware_confirmado_no_disponible: bool,
+        repository: "ProductoSAPRepository",
+        force_refresh: bool,
+    ) -> Optional[Dict[str, Any]]:
+        """Resuelve un SKU pendiente usando batch, fallback a OPENQUERY o fallback individual."""
+        if sku in resueltos_batch:
+            return self._procesar_sap_info(sku, resueltos_batch[sku], repository)
+        if middleware_confirmado_no_disponible:
+            return self._procesar_sap_info(sku, self.sap_client.get_producto_info(sku), repository)
+        return self.get_or_fetch_producto_info(sku, force_refresh)
+
     @staticmethod
     def _mapear_item_batch_a_sap_info(item: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """Traduce una entrada de get_items_batch() al mismo formato que _consultar_producto_via_middleware."""
@@ -295,45 +344,25 @@ class SAPService:
             return {sku: None for sku in skus}
 
         conn = None
-        pendientes: List[str] = []
         try:
             conn = get_db_connection()
             repository = ProductoSAPRepository(conn)
+            resultados, pendientes = self._preparar_pendientes(
+                skus_validos, force_refresh, repository
+            )
 
-            for sku in skus_validos:
-                cached = self._consultar_cache(repository, sku, force_refresh)
-                if cached is not None:
-                    resultados[sku] = cached
-                else:
-                    pendientes.append(sku)
-
-            resueltos_batch: Dict[str, Optional[Dict[str, Any]]] = {}
-            middleware_confirmado_no_disponible = False
-            if pendientes and USE_MIDDLEWARE_PRODUCTO_INFO:
-                items = SAPServiceLayerClient().get_items_batch(pendientes)
-                if items is None:
-                    # El batch confirmó que el middleware no responde ahora mismo (caído,
-                    # o SAP tan saturado que ni el propio batch resolvió a tiempo). No
-                    # tiene sentido que cada SKU reintente el middleware individualmente:
-                    # bajo SAP saturado cada intento pagaría de nuevo la espera de
-                    # QueueAfterSeconds del job-queue (~10s) antes de rendirse — directo
-                    # a OPENQUERY para todos los pendientes.
-                    middleware_confirmado_no_disponible = True
-                else:
-                    for sku in pendientes:
-                        if sku in items:
-                            resueltos_batch[sku] = self._mapear_item_batch_a_sap_info(items[sku])
+            resueltos_batch, middleware_confirmado_no_disponible = (
+                self._consultar_batch_middleware(pendientes)
+            )
 
             for sku in pendientes:
-                if sku in resueltos_batch:
-                    resultados[sku] = self._procesar_sap_info(sku, resueltos_batch[sku], repository)
-                elif middleware_confirmado_no_disponible:
-                    resultados[sku] = self._procesar_sap_info(sku, self.sap_client.get_producto_info(sku), repository)
-                else:
-                    # Flag apagada, o el batch SÍ respondió pero este código puntual no
-                    # vino (chunk aislado fallido/encolado): vale la pena su propia
-                    # oportunidad individual, camino de siempre.
-                    resultados[sku] = self.get_or_fetch_producto_info(sku, force_refresh)
+                resultados[sku] = self._resolver_sku_batch(
+                    sku,
+                    resueltos_batch,
+                    middleware_confirmado_no_disponible,
+                    repository,
+                    force_refresh,
+                )
 
         except Exception as e:
             logger.error(f"❌ Error al obtener batch de productos SAP: {e}", exc_info=True)

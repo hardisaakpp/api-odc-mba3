@@ -10,8 +10,10 @@ SAPServiceLayerClient() en sap_service_layer_client.py.
 Maneja la autenticacion y el envio de ordenes de compra (Purchase Orders) e Inventory
 Transfer Requests a SAP Business One usando Service Layer REST API directamente.
 
-Incluye soporte para fallback automatico de TLS cuando el servidor SAP solo soporta
-versiones antiguas de TLS (1.0, 1.1) debido a configuraciones obsoletas.
+Usa TLS 1.2+ (default); si la conexion con requests falla, reintenta una vez via curl
+como ultimo recurso. Hasta 2026-07 tambien reintentaba con TLS 1.1/1.0 para servidores
+SAP obsoletos; se quito tras confirmar en logs de produccion (~7 semanas, 125
+autenticaciones) que el servidor SAP actual siempre negocia TLS 1.2+.
 """
 
 import logging
@@ -41,65 +43,46 @@ from src.exceptions import SAPDataMasterError
 
 logger = logging.getLogger(__name__)
 
+JSON_CONTENT_TYPE = "application/json"
+SESSION_ERROR_MESSAGE = "❌ No se pudo establecer sesión con SAP Service Layer"
+
 
 class TLSAdapter(HTTPAdapter):
     """
-    Adaptador HTTP personalizado que permite especificar la versión de TLS.
-    
-    Útil para conectarse a servidores SAP Service Layer que solo soportan
-    versiones antiguas de TLS (1.0, 1.1) debido a configuraciones obsoletas.
+    Adaptador HTTP personalizado para conectarse a SAP Service Layer con TLS 1.2+ (default),
+    con opción de deshabilitar la verificación SSL (self.verify_ssl, solo desarrollo/pruebas).
+
+    NOTA: hasta 2026-07 soportaba forzar TLS 1.0/1.1 para servidores SAP obsoletos. Se quitó
+    tras confirmar en logs de producción (~7 semanas, 125 autenticaciones) que el servidor SAP
+    actual siempre negocia TLS 1.2+ y nunca requirió ese fallback.
     """
-    
-    def __init__(self, ssl_version=None, verify_ssl=True, **kwargs):
-        self.ssl_version = ssl_version
+
+    def __init__(self, verify_ssl=True, **kwargs):
         self.verify_ssl = verify_ssl
         super().__init__(**kwargs)
-    
-    def init_poolmanager(self, *args, **kwargs):
-        # Crear contexto SSL personalizado
+
+    def _apply_verify_ssl_settings(self, ctx):
+        if self.verify_ssl:
+            return
+        ctx.verify_mode = ssl.CERT_NONE
+        # Permitir ciphers antiguos cuando se deshabilita verificación
+        # (necesario para servidores SAP con configuraciones obsoletas)
+        try:
+            ctx.set_ciphers('DEFAULT:@SECLEVEL=1')
+        except (AttributeError, ssl.SSLError):
+            # Si no se puede configurar, continuar sin cambios
+            pass
+
+    def _create_ssl_context(self) -> ssl.SSLContext:
+        """Crea un contexto SSL con TLS 1.2+ como mínimo y la configuración de verificación."""
         ctx = ssl.create_default_context()
-        
-        if self.ssl_version:
-            # Intentar configurar versión específica de TLS
-            try:
-                if self.ssl_version == ssl.PROTOCOL_TLSv1:
-                    # TLS 1.0 - usar el mínimo soportado (puede no estar disponible en Python 3.10+)
-                    try:
-                        ctx.minimum_version = ssl.TLSVersion.MINIMUM_SUPPORTED
-                        ctx.maximum_version = ssl.TLSVersion.MINIMUM_SUPPORTED
-                    except AttributeError:
-                        # Python < 3.7, usar protocolo directamente
-                        ctx = ssl.SSLContext(ssl.PROTOCOL_TLSv1)
-                elif self.ssl_version == ssl.PROTOCOL_TLSv1_1:
-                    # TLS 1.1 - puede no estar disponible
-                    try:
-                        ctx.minimum_version = ssl.TLSVersion.MINIMUM_SUPPORTED
-                    except AttributeError:
-                        try:
-                            ctx = ssl.SSLContext(ssl.PROTOCOL_TLSv1_1)
-                        except AttributeError:
-                            # TLS 1.1 no disponible, usar mínimo
-                            pass
-                else:
-                    ctx.minimum_version = ssl.TLSVersion.TLSv1_2
-            except (AttributeError, ValueError) as e:
-                # Si falla, usar contexto por defecto
-                logger.debug(f"⚠️ No se pudo configurar TLS específico: {e}")
-                ctx = ssl.create_default_context()
-        
-        # Deshabilitar verificación si es necesario
-        if not self.verify_ssl:
-            ctx.check_hostname = False
-            ctx.verify_mode = ssl.CERT_NONE
-            # Permitir ciphers antiguos cuando se deshabilita verificación
-            # (necesario para servidores SAP con configuraciones obsoletas)
-            try:
-                ctx.set_ciphers('DEFAULT:@SECLEVEL=1')
-            except (AttributeError, ssl.SSLError):
-                # Si no se puede configurar, continuar sin cambios
-                pass
-        
-        kwargs['ssl_context'] = ctx
+        self._apply_verify_ssl_settings(ctx)
+        if hasattr(ssl.TLSVersion, "TLSv1_2"):
+            ctx.minimum_version = ssl.TLSVersion.TLSv1_2
+        return ctx
+
+    def init_poolmanager(self, *args, **kwargs):
+        kwargs['ssl_context'] = self._create_ssl_context()
         return super().init_poolmanager(*args, **kwargs)
 
 
@@ -142,90 +125,50 @@ class DirectSAPServiceLayerClient:
         # Renovar sesión si expira en menos de 5 minutos
         return ahora_naive() < (self.session_expires - timedelta(minutes=5))
     
-    def _create_session_with_tls(self, tls_version: Optional[ssl._SSLMethod] = None, tls_name: str = "default") -> requests.Session:
-        """
-        Crea una sesión de requests con una versión específica de TLS.
-        
-        Args:
-            tls_version: Versión de TLS a usar (ssl.PROTOCOL_TLSv1, etc.) o None para default
-            tls_name: Nombre descriptivo de la versión TLS para logging
-            
-        Returns:
-            Sesión de requests configurada
-        """
+    def _create_session(self) -> requests.Session:
+        """Crea una sesión de requests con TLS 1.2+ (default)."""
         session = requests.Session()
-        
-        if tls_version:
-            # Usar adaptador personalizado con TLS específico
-            adapter = TLSAdapter(ssl_version=tls_version, verify_ssl=self.verify_ssl)
-            session.mount('https://', adapter)
-            logger.debug(f"🔐 Sesión creada con TLS {tls_name}")
-        else:
-            # Sesión por defecto (intenta TLS 1.2+)
-            logger.debug("🔐 Sesión creada con TLS por defecto (1.2+)")
-        
-        # Configurar verificación SSL
+        adapter = TLSAdapter(verify_ssl=self.verify_ssl)
+        session.mount('https://', adapter)
         session.verify = self.verify_ssl
-        
         return session
-    
+
     def _try_request_with_fallback(self, method: str, url: str, **kwargs) -> Tuple[Optional[requests.Response], Optional[str]]:
         """
-        Intenta realizar una petición HTTP con fallback automático de TLS.
-        
-        Intenta en este orden:
-        1. TLS 1.2+ (default)
-        2. TLS 1.1 (si está disponible)
-        3. TLS 1.0 (para servidores SAP obsoletos)
-        4. curl como último recurso
-        
+        Intenta realizar una petición HTTP con TLS 1.2+ (default); si falla por SSL/conexión,
+        usa curl como último recurso.
+
+        NOTA: hasta 2026-07 reintentaba con TLS 1.1/1.0 para servidores SAP obsoletos. Se quitó
+        tras confirmar en logs de producción (~7 semanas, 125 autenticaciones) que el servidor
+        SAP actual siempre negocia TLS 1.2+ y nunca requirió ese fallback.
+
         Args:
             method: Método HTTP (GET, POST, etc.)
             url: URL a la que hacer la petición
             **kwargs: Argumentos adicionales para requests (json, headers, etc.)
-            
+
         Returns:
             Tupla (Response, tls_version_usada) o (None, None) si todos los intentos fallan
         """
-        # Lista de versiones TLS a intentar (en orden de preferencia)
-        tls_attempts = [
-            (None, "1.2+ (default)"),
-            (ssl.PROTOCOL_TLSv1_1, "1.1"),
-            (ssl.PROTOCOL_TLSv1, "1.0"),
-        ]
-        
         last_error = None
-        
-        for tls_version, tls_name in tls_attempts:
-            try:
-                session = self._create_session_with_tls(tls_version, tls_name)
-                logger.debug(f"🔄 Intentando conexión con TLS {tls_name}...")
-                
-                # Realizar la petición
-                response = session.request(method, url, timeout=self.timeout, **kwargs)
-                
-                # Si llegamos aquí, la conexión fue exitosa
-                if self.working_tls_version != tls_name:
-                    logger.info(f"✅ Conexión exitosa usando TLS {tls_name}")
-                    self.working_tls_version = tls_name
-                    self.working_session = session
-                
-                return response, tls_name
-                
-            except (requests.exceptions.SSLError, requests.exceptions.ConnectionError) as e:
-                last_error = e
-                logger.debug(f"⚠️ TLS {tls_name} falló: {str(e)[:100]}")
-                continue
-            except Exception as e:
-                # Otros errores (timeout, etc.) no son problemas de TLS
-                last_error = e
-                logger.debug(f"⚠️ Error con TLS {tls_name}: {str(e)[:100]}")
-                # Si no es un error de SSL, retornar el error
-                if not isinstance(e, (requests.exceptions.SSLError, requests.exceptions.ConnectionError)):
-                    raise
-        
-        # Si todos los intentos con requests fallaron, intentar con curl como último recurso
-        logger.warning("⚠️ Todos los intentos con requests fallaron, intentando con curl...")
+
+        try:
+            session = self._create_session()
+            response = session.request(method, url, timeout=self.timeout, **kwargs)
+
+            if self.working_tls_version != "1.2+ (default)":
+                logger.info("✅ Conexión exitosa usando TLS 1.2+ (default)")
+                self.working_tls_version = "1.2+ (default)"
+                self.working_session = session
+
+            return response, "1.2+ (default)"
+
+        except (requests.exceptions.SSLError, requests.exceptions.ConnectionError) as e:
+            last_error = e
+            logger.debug(f"⚠️ TLS 1.2+ (default) falló: {str(e)[:100]}")
+
+        # Si requests falló por SSL/conexión, intentar con curl como último recurso
+        logger.warning("⚠️ Conexión con requests falló, intentando con curl...")
         try:
             response = self._try_request_with_curl(method, url, **kwargs)
             if response:
@@ -234,7 +177,7 @@ class DirectSAPServiceLayerClient:
         except Exception as e:
             logger.error(f"❌ Fallback con curl también falló: {e}")
             last_error = e
-        
+
         logger.error(f"❌ Todos los métodos de conexión fallaron. Último error: {last_error}")
         return None, None
     
@@ -364,7 +307,7 @@ class DirectSAPServiceLayerClient:
                 "POST",
                 url,
                 json=payload,
-                headers={"Content-Type": "application/json"}
+                headers={"Content-Type": JSON_CONTENT_TYPE}
             )
             
             if response is None:
@@ -422,6 +365,16 @@ class DirectSAPServiceLayerClient:
     def _is_transient_http_status(status_code: int) -> bool:
         return status_code in (502, 503, 504)
 
+    def _should_retry(self, attempt: int, max_attempts: int) -> bool:
+        return attempt < max_attempts - 1
+
+    def _wait_and_log_retry(self, attempt: int, max_attempts: int, reason: str) -> None:
+        wait = self.retry_backoff_seconds * (2**attempt)
+        logger.warning(
+            f"⚠️ {reason} (intento {attempt + 1}/{max_attempts}), reintento en {wait:.1f}s..."
+        )
+        time.sleep(wait)
+
     def _get_request_with_transient_retries(
         self,
         url: str,
@@ -442,35 +395,32 @@ class DirectSAPServiceLayerClient:
                 else:
                     response, _ = self._try_request_with_fallback("GET", url, headers=headers)
                     if response is None:
-                        if attempt < max_attempts - 1:
-                            wait = self.retry_backoff_seconds * (2**attempt)
-                            logger.warning(
-                                f"⚠️ {operation_label}: sin respuesta (intento {attempt + 1}/{max_attempts}), "
-                                f"reintento en {wait:.1f}s..."
+                        if self._should_retry(attempt, max_attempts):
+                            self._wait_and_log_retry(
+                                attempt,
+                                max_attempts,
+                                f"{operation_label}: sin respuesta",
                             )
-                            time.sleep(wait)
                             continue
                         return None
 
                 if self._is_transient_http_status(response.status_code):
-                    if attempt < max_attempts - 1:
-                        wait = self.retry_backoff_seconds * (2**attempt)
-                        logger.warning(
-                            f"⚠️ {operation_label}: HTTP {response.status_code} "
-                            f"(intento {attempt + 1}/{max_attempts}), reintento en {wait:.1f}s..."
+                    if self._should_retry(attempt, max_attempts):
+                        self._wait_and_log_retry(
+                            attempt,
+                            max_attempts,
+                            f"{operation_label}: HTTP {response.status_code}",
                         )
-                        time.sleep(wait)
                         continue
                 return response
 
             except requests.exceptions.RequestException as e:
-                if self._is_transient_request_exception(e) and attempt < max_attempts - 1:
-                    wait = self.retry_backoff_seconds * (2**attempt)
-                    logger.warning(
-                        f"⚠️ {operation_label}: error transitorio ({e!s}) "
-                        f"(intento {attempt + 1}/{max_attempts}), reintento en {wait:.1f}s..."
+                if self._is_transient_request_exception(e) and self._should_retry(attempt, max_attempts):
+                    self._wait_and_log_retry(
+                        attempt,
+                        max_attempts,
+                        f"{operation_label}: error transitorio ({e!s})",
                     )
-                    time.sleep(wait)
                     continue
                 logger.error(f"❌ {operation_label}: error de conexión (sin más reintentos): {e}")
                 return None
@@ -504,41 +454,136 @@ class DirectSAPServiceLayerClient:
                         headers=headers,
                     )
                     if response is None:
-                        if attempt < max_attempts - 1:
-                            wait = self.retry_backoff_seconds * (2**attempt)
-                            logger.warning(
-                                f"⚠️ {operation_label}: sin respuesta (intento {attempt + 1}/{max_attempts}), "
-                                f"reintento en {wait:.1f}s..."
+                        if self._should_retry(attempt, max_attempts):
+                            self._wait_and_log_retry(
+                                attempt,
+                                max_attempts,
+                                f"{operation_label}: sin respuesta",
                             )
-                            time.sleep(wait)
                             continue
                         return None
 
                 if self._is_transient_http_status(response.status_code):
-                    if attempt < max_attempts - 1:
-                        wait = self.retry_backoff_seconds * (2**attempt)
-                        logger.warning(
-                            f"⚠️ {operation_label}: HTTP {response.status_code} "
-                            f"(intento {attempt + 1}/{max_attempts}), reintento en {wait:.1f}s..."
+                    if self._should_retry(attempt, max_attempts):
+                        self._wait_and_log_retry(
+                            attempt,
+                            max_attempts,
+                            f"{operation_label}: HTTP {response.status_code}",
                         )
-                        time.sleep(wait)
                         continue
                 return response
 
             except requests.exceptions.RequestException as e:
-                if self._is_transient_request_exception(e) and attempt < max_attempts - 1:
-                    wait = self.retry_backoff_seconds * (2**attempt)
-                    logger.warning(
-                        f"⚠️ {operation_label}: error transitorio ({e!s}) "
-                        f"(intento {attempt + 1}/{max_attempts}), reintento en {wait:.1f}s..."
+                if self._is_transient_request_exception(e) and self._should_retry(attempt, max_attempts):
+                    self._wait_and_log_retry(
+                        attempt,
+                        max_attempts,
+                        f"{operation_label}: error transitorio ({e!s})",
                     )
-                    time.sleep(wait)
                     continue
                 logger.error(f"❌ {operation_label}: error de conexión (sin más reintentos): {e}")
                 return None
 
         return None
     
+    def _get_stock_from_warehouses(
+        self,
+        item_code: str,
+        warehouse_code: str,
+        warehouses: List[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        """Extrae la información de stock para la bodega solicitada a partir de la colección de bodegas."""
+        if not warehouses:
+            raise SAPDataMasterError(
+                item_code=item_code,
+                warehouse_code=warehouse_code,
+                error_type="no_warehouse_info",
+                available_warehouses=[],
+            )
+
+        warehouse_info = None
+        available_warehouses = []
+        for warehouse in warehouses:
+            warehouse_code_value = warehouse.get("WarehouseCode", "")
+            available_warehouses.append(warehouse_code_value)
+            if warehouse_code_value.upper() == warehouse_code.upper():
+                warehouse_info = warehouse
+                break
+
+        logger.info(
+            f"🔍 {item_code} → Búsqueda {warehouse_code}: "
+            f"{'ENCONTRADA' if warehouse_info else f'NO ENCONTRADA (entre {len(available_warehouses)} bodegas)'}"
+        )
+
+        if not warehouse_info:
+            raise SAPDataMasterError(
+                item_code=item_code,
+                warehouse_code=warehouse_code,
+                error_type="warehouse_not_found",
+                available_warehouses=available_warehouses,
+            )
+
+        in_stock_raw = float(warehouse_info.get("InStock") or 0)
+        is_committed = float(warehouse_info.get("IsCommited") or 0)
+        in_stock = in_stock_raw - is_committed
+        uom_code = warehouse_info.get("UomCode")
+        locked = warehouse_info.get("Locked")
+
+        if uom_code is None:
+            logger.warning(f"⚠️ {item_code}: UomCode=NULL - validación en unidades base")
+
+        if locked == "tYES":
+            logger.warning(
+                f"⚠️ {item_code} en {warehouse_code} está BLOQUEADO (Locked=tYES). "
+                f"Stock disponible: {in_stock} (InStock={in_stock_raw}, Comprometido={is_committed})"
+            )
+
+        logger.info(
+            f"✅ Stock disponible calculado: {item_code} en {warehouse_code} = {in_stock} "
+            f"(InStock={in_stock_raw}, Comprometido={is_committed}, "
+            f"UomCode={uom_code if uom_code else 'NULL'}, "
+            f"Locked={locked if locked else 'NULL'})"
+        )
+
+        return {
+            "InStock": in_stock,
+            "UomCode": uom_code,
+            "WarehouseCode": warehouse_code,
+            "Locked": locked,
+            "IsCommited": is_committed,
+        }
+
+    def _log_stock_error(self, item_code: str, warehouse_code: str, url: str, response: requests.Response) -> None:
+        """Registra el detalle de un error HTTP al consultar stock."""
+        logger.error(
+            f"❌ ERROR HTTP de SAP al consultar stock de {item_code}:\n"
+            f"   URL consultada: {url}\n"
+            f"   Status Code: {response.status_code}\n"
+            f"   Headers de respuesta: {dict(response.headers)}\n"
+            f"   Texto de respuesta (primeros 500 chars): {response.text[:500]}"
+        )
+
+        error_msg = f"Error al consultar stock: {response.status_code}"
+        try:
+            error_body = response.json()
+            logger.error(
+                f"❌ RESPUESTA CRUDA DE ERROR de SAP (JSON):\n"
+                f"   {error_body}"
+            )
+            error_detail = error_body.get("error", {})
+            if isinstance(error_detail.get("message"), dict):
+                error_msg = error_detail.get("message", {}).get("value", error_msg)
+            elif isinstance(error_detail.get("message"), str):
+                error_msg = error_detail.get("message", error_msg)
+        except Exception as json_error:
+            logger.error(
+                f"❌ No se pudo parsear respuesta de error como JSON: {json_error}\n"
+                f"   Respuesta completa (primeros 1000 chars): {response.text[:1000]}"
+            )
+            error_msg = f"{error_msg} - {response.text[:200]}"
+
+        logger.error(f"❌ Error procesado: {error_msg}")
+
     def create_purchase_order(self, purchase_order_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """
         Crea una orden de compra (Purchase Order) en SAP.
@@ -571,13 +616,13 @@ class DirectSAPServiceLayerClient:
             return None
         
         if not self._ensure_session():
-            logger.error("❌ No se pudo establecer sesión con SAP Service Layer")
+            logger.error(SESSION_ERROR_MESSAGE)
             return None
         
         try:
             url = f"{self.base_url}/PurchaseOrders"
             headers = {
-                "Content-Type": "application/json",
+                "Content-Type": JSON_CONTENT_TYPE,
                 "Cookie": f"B1SESSION={self.session_id}",
             }
             logger.info(f"📤 POST {url} (Purchase Orders)")
@@ -698,14 +743,14 @@ class DirectSAPServiceLayerClient:
             return None
         
         if not self._ensure_session():
-            logger.error("❌ No se pudo establecer sesión con SAP Service Layer")
+            logger.error(SESSION_ERROR_MESSAGE)
             return None
         
         try:
             # ⚠️ CORRECCIÓN CRÍTICA: Usar endpoint correcto de Service Layer
             url = f"{self.base_url}/InventoryTransferRequests"
             headers = {
-                "Content-Type": "application/json",
+                "Content-Type": JSON_CONTENT_TYPE,
                 "Cookie": f"B1SESSION={self.session_id}"
             }
             
@@ -794,7 +839,7 @@ class DirectSAPServiceLayerClient:
             return []
 
         if not self._ensure_session():
-            logger.error("❌ No se pudo establecer sesión con SAP Service Layer para consultar ITR")
+            logger.error(f"{SESSION_ERROR_MESSAGE} para consultar ITR")
             return []
 
         try:
@@ -810,7 +855,7 @@ class DirectSAPServiceLayerClient:
             )
 
             headers = {
-                "Content-Type": "application/json",
+                "Content-Type": JSON_CONTENT_TYPE,
                 "Cookie": f"B1SESSION={self.session_id}",
                 "Prefer": "odata.maxpagesize=500",
             }
@@ -882,25 +927,19 @@ class DirectSAPServiceLayerClient:
             return None
         
         if not self._ensure_session():
-            logger.error("❌ No se pudo establecer sesión con SAP Service Layer")
+            logger.error(SESSION_ERROR_MESSAGE)
             return None
         
         try:
-            # Escapar caracteres especiales para OData
             item_code_escaped = item_code.replace("'", "''")
-            
-            # ⭐ CORRECCIÓN SAP B1 9.3: Usar GET /Items('X') completo
-            # El endpoint de navegación /Items('X')/ItemWarehouseInfoCollection 
-            # no funciona correctamente en algunas versiones de SAP B1
             url = f"{self.base_url}/Items('{item_code_escaped}')"
-            
             headers = {
-                "Content-Type": "application/json",
-                "Cookie": f"B1SESSION={self.session_id}"
+                "Content-Type": JSON_CONTENT_TYPE,
+                "Cookie": f"B1SESSION={self.session_id}",
             }
-            
+
             logger.debug(f"🔍 Consultando stock de {item_code} en {warehouse_code}...")
-            
+
             response = self._get_request_with_transient_retries(
                 url,
                 headers,
@@ -909,133 +948,18 @@ class DirectSAPServiceLayerClient:
             if response is None:
                 logger.error("❌ No se pudo consultar stock en SAP")
                 return None
-            
+
             if response.status_code == 200:
                 data = response.json()
-                
-                # ⭐ CORRECCIÓN: Extraer ItemWarehouseInfoCollection del objeto Item
-                # SAP B1 9.3 retorna el array embebido, NO dentro de "value"
                 warehouses = data.get("ItemWarehouseInfoCollection", [])
-                
-                # 🔍 LOGGING COMPACTO: Solo conteo de bodegas (no listar las 210+)
                 logger.debug(
                     f"🔍 {item_code} → ItemWarehouseInfoCollection: "
                     f"{'VACÍO' if not warehouses else f'{len(warehouses)} bodega(s)'}"
                 )
-                
-                if not warehouses:
-                    # ❌ CORTAR FLUJO: Lanzar excepción de dominio en lugar de retornar stock 0.0
-                    # ❌ NO loguear aquí - se logueará una sola vez agrupado en el servicio
-                    raise SAPDataMasterError(
-                        item_code=item_code,
-                        warehouse_code=warehouse_code,
-                        error_type="no_warehouse_info",
-                        available_warehouses=[]
-                    )
-                
-                # ⭐ Filtrar en el cliente por WarehouseCode (SAP no permite filtro en navegación)
-                warehouse_info = None
-                bodegas_encontradas = []
-                for wh in warehouses:
-                    whs_code = wh.get("WarehouseCode", "")
-                    bodegas_encontradas.append(whs_code)
-                    if whs_code.upper() == warehouse_code.upper():
-                        warehouse_info = wh
-                        break
-                
-                # 🔍 LOGGING COMPACTO: Resultado de búsqueda de bodega (sin listar las 210+)
-                logger.info(
-                    f"🔍 {item_code} → Búsqueda {warehouse_code}: "
-                    f"{'ENCONTRADA' if warehouse_info else f'NO ENCONTRADA (entre {len(bodegas_encontradas)} bodegas)'}"
-                )
-                
-                if not warehouse_info:
-                    # ❌ CORTAR FLUJO: Lanzar excepción de dominio en lugar de retornar stock 0.0
-                    # ❌ NO loguear aquí - se logueará una sola vez agrupado en el servicio
-                    raise SAPDataMasterError(
-                        item_code=item_code,
-                        warehouse_code=warehouse_code,
-                        error_type="warehouse_not_found",
-                        available_warehouses=bodegas_encontradas
-                    )
-                
-                # 🔍 LOGGING COMPACTO: Información de bodega encontrada
-                logger.info(
-                    f"✅ {item_code} en {warehouse_code}: "
-                    f"InStock={warehouse_info.get('InStock', 'N/A')}, "
-                    f"Comprometido={warehouse_info.get('IsCommited', 'N/A')}, "
-                    f"UomCode={warehouse_info.get('UomCode', 'NULL')}, "
-                    f"Locked={warehouse_info.get('Locked', 'NULL')}"
-                )
-                
-                # ⭐ AJUSTE: Calcular stock disponible descontando comprometido
-                # SAP puede devolver null en InStock/IsCommited; "or 0" maneja None
-                in_stock_raw = float(warehouse_info.get("InStock") or 0)
-                is_committed = float(warehouse_info.get("IsCommited") or 0)
-                in_stock = in_stock_raw - is_committed
-                
-                uom_code = warehouse_info.get("UomCode")  # Puede ser None
-                locked = warehouse_info.get("Locked")  # tYES/tNO
-                
-                # 🔍 DIAGNÓSTICO: Análisis de UomCode (solo si es NULL)
-                if uom_code is None:
-                    logger.warning(
-                        f"⚠️ {item_code}: UomCode=NULL - validación en unidades base"
-                    )
-                
-                # ⭐ VALIDACIÓN: Verificar si está bloqueado
-                if locked == "tYES":
-                    logger.warning(
-                        f"⚠️ {item_code} en {warehouse_code} está BLOQUEADO (Locked=tYES). "
-                        f"Stock disponible: {in_stock} (InStock={in_stock_raw}, Comprometido={is_committed})"
-                    )
-                
-                logger.info(
-                    f"✅ Stock disponible calculado: {item_code} en {warehouse_code} = {in_stock} "
-                    f"(InStock={in_stock_raw}, Comprometido={is_committed}, "
-                    f"UomCode={uom_code if uom_code else 'NULL'}, "
-                    f"Locked={locked if locked else 'NULL'})"
-                )
-                
-                return {
-                    "InStock": in_stock,  # Stock disponible (descontando comprometido)
-                    "UomCode": uom_code,
-                    "WarehouseCode": warehouse_code,
-                    "Locked": locked,
-                    "IsCommited": is_committed
-                }
-            else:
-                # 🔍 LOGGING DIAGNÓSTICO: Error HTTP de SAP
-                logger.error(
-                    f"❌ ERROR HTTP de SAP al consultar stock de {item_code}:\n"
-                    f"   URL consultada: {url}\n"
-                    f"   Status Code: {response.status_code}\n"
-                    f"   Headers de respuesta: {dict(response.headers)}\n"
-                    f"   Texto de respuesta (primeros 500 chars): {response.text[:500]}"
-                )
-                
-                # Procesar error de SAP
-                error_msg = f"Error al consultar stock: {response.status_code}"
-                try:
-                    error_body = response.json()
-                    logger.error(
-                        f"❌ RESPUESTA CRUDA DE ERROR de SAP (JSON):\n"
-                        f"   {error_body}"
-                    )
-                    error_detail = error_body.get("error", {})
-                    if isinstance(error_detail.get("message"), dict):
-                        error_msg = error_detail.get("message", {}).get("value", error_msg)
-                    elif isinstance(error_detail.get("message"), str):
-                        error_msg = error_detail.get("message", error_msg)
-                except Exception as json_error:
-                    logger.error(
-                        f"❌ No se pudo parsear respuesta de error como JSON: {json_error}\n"
-                        f"   Respuesta completa (primeros 1000 chars): {response.text[:1000]}"
-                    )
-                    error_msg = f"{error_msg} - {response.text[:200]}"
-                
-                logger.error(f"❌ Error procesado: {error_msg}")
-                return None
+                return self._get_stock_from_warehouses(item_code, warehouse_code, warehouses)
+
+            self._log_stock_error(item_code, warehouse_code, url, response)
+            return None
                 
         except SAPDataMasterError:
             # Propagar errores de datos maestros para que el llamador pueda manejarlos
@@ -1071,7 +995,7 @@ class DirectSAPServiceLayerClient:
             return None
         
         if not self._ensure_session():
-            logger.error("❌ No se pudo establecer sesión con SAP Service Layer")
+            logger.error(SESSION_ERROR_MESSAGE)
             return None
         
         try:
@@ -1081,7 +1005,7 @@ class DirectSAPServiceLayerClient:
             url = f"{self.base_url}/BusinessPartners('{card_code_escaped}')"
             
             headers = {
-                "Content-Type": "application/json",
+                "Content-Type": JSON_CONTENT_TYPE,
                 "Cookie": f"B1SESSION={self.session_id}"
             }
             
@@ -1166,7 +1090,7 @@ class DirectSAPServiceLayerClient:
             return None
         
         if not self._ensure_session():
-            logger.error("❌ No se pudo establecer sesión con SAP Service Layer")
+            logger.error(SESSION_ERROR_MESSAGE)
             return None
         
         try:
@@ -1176,7 +1100,7 @@ class DirectSAPServiceLayerClient:
             url = f"{self.base_url}/Items('{item_code_escaped}')"
             
             headers = {
-                "Content-Type": "application/json",
+                "Content-Type": JSON_CONTENT_TYPE,
                 "Cookie": f"B1SESSION={self.session_id}"
             }
             
@@ -1345,8 +1269,8 @@ class DirectSAPServiceLayerClient:
 
     def validate_purchase_order_batch(
         self,
-        card_code,
-        lines,
+        card_code: Optional[str],
+        lines: List[Dict[str, str]],
     ):
         """No disponible en el cliente directo; el caller hace fallback linea por linea."""
         logger.debug("(direct) validate_purchase_order_batch no disponible en modo directo (sin middleware)")

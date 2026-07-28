@@ -101,6 +101,21 @@ def test_sap_service_layer_result_should_retry_connection_message_without_status
     )
 
 
+def test_sap_service_layer_result_should_retry_middleware_unreachable():
+    # Mensaje real emitido por SAPServiceLayerClient._post() cuando el middleware no responde
+    # (create_purchase_order / create_stock_transfer), sin status_code en el dict.
+    assert (
+        sap_service_layer_result_should_retry(
+            {"success": False, "error": "No se pudo conectar con el middleware SAP"}
+        )
+        is True
+    )
+
+
+def test_mensaje_sugiere_reintento_transitorio_middleware_unreachable():
+    assert mensaje_sugiere_reintento_transitorio("No se pudo conectar con el middleware SAP") is True
+
+
 def test_retry_operation_stops_early_when_not_retryable():
     calls = {"n": 0}
 

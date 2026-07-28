@@ -299,6 +299,64 @@ def _procesar_oc_individual(oc_repo, log_repo, oc_sap_service, proceso_id, usern
     return detalle_resultado, success, error
 
 
+def _procesar_oc_en_lista(
+    oc_repo,
+    log_repo,
+    oc_sap_service,
+    proceso_id,
+    username,
+    source,
+    oc_id_item,
+    proveedor,
+    referencia,
+):
+    detalle_resultado, success, error = _procesar_oc_individual(
+        oc_repo,
+        log_repo,
+        oc_sap_service,
+        proceso_id,
+        username,
+        source,
+        oc_id_item,
+        proveedor,
+        referencia,
+    )
+    return detalle_resultado, success, error
+
+
+def _registrar_error_en_lista(oc_repo, log_repo, proceso_id, username, source, oc_id_item, proveedor_fallback, error):
+    try:
+        log_repo.guardar_log(SAPLogEntry(
+            proceso_id=proceso_id,
+            nivel_log="ERROR",
+            mensaje=f"Error al procesar ODC {oc_id_item[:8]}...: {str(error)}",
+            usuario=username,
+            fuente=source,
+            oc_id=oc_id_item,
+            proveedor=proveedor_fallback,
+            error_source="BACKEND",
+            success=False
+        ))
+    except Exception:
+        pass
+
+
+def _detalles_error_en_lista(oc_id_item, proveedor_fallback, error):
+    return {
+        "oc_id": oc_id_item,
+        "proveedor": proveedor_fallback,
+        "success": False,
+        "doc_entry": None,
+        "doc_num": None,
+        "error": str(error),
+        "error_message": str(error),  # Alias para compatibilidad con frontend
+        "error_code": None,
+        "error_source": "BACKEND",
+        "sap_response": None,
+        "sap_error_details": None
+    }
+
+
 def _procesar_lista_ocs(oc_repo, log_repo, oc_sap_service, proceso_id, username, source, oc_ids_a_procesar):
     detalles = []
     enviadas = 0
@@ -309,8 +367,16 @@ def _procesar_lista_ocs(oc_repo, log_repo, oc_sap_service, proceso_id, username,
             proveedor = oc_info.get("proveedor") if oc_info else "UNKNOWN"
             referencia = oc_info.get("referencia_despacho") if oc_info else None
 
-            detalle_resultado, success, error = _procesar_oc_individual(
-                oc_repo, log_repo, oc_sap_service, proceso_id, username, source, oc_id_item, proveedor, referencia
+            detalle_resultado, success, error = _procesar_oc_en_lista(
+                oc_repo,
+                log_repo,
+                oc_sap_service,
+                proceso_id,
+                username,
+                source,
+                oc_id_item,
+                proveedor,
+                referencia,
             )
             detalles.append(detalle_resultado)
             if success:
@@ -322,33 +388,17 @@ def _procesar_lista_ocs(oc_repo, log_repo, oc_sap_service, proceso_id, username,
             errores += 1
             logger.error(f"❌ Error al procesar ODC {oc_id_item[:8]}...: {e}", exc_info=True)
             proveedor_fallback = proveedor if 'proveedor' in locals() else "UNKNOWN"
-            try:
-                log_repo.guardar_log(SAPLogEntry(
-                    proceso_id=proceso_id,
-                    nivel_log="ERROR",
-                    mensaje=f"Error al procesar ODC {oc_id_item[:8]}...: {str(e)}",
-                    usuario=username,
-                    fuente=source,
-                    oc_id=oc_id_item,
-                    proveedor=proveedor_fallback,
-                    error_source="BACKEND",
-                    success=False
-                ))
-            except Exception:
-                pass
-            detalles.append({
-                "oc_id": oc_id_item,
-                "proveedor": proveedor_fallback,
-                "success": False,
-                "doc_entry": None,
-                "doc_num": None,
-                "error": str(e),
-                "error_message": str(e),  # Alias para compatibilidad con frontend
-                "error_code": None,
-                "error_source": "BACKEND",
-                "sap_response": None,
-                "sap_error_details": None
-            })
+            _registrar_error_en_lista(
+                oc_repo,
+                log_repo,
+                proceso_id,
+                username,
+                source,
+                oc_id_item,
+                proveedor_fallback,
+                e,
+            )
+            detalles.append(_detalles_error_en_lista(oc_id_item, proveedor_fallback, e))
     return detalles, enviadas, errores
 
 

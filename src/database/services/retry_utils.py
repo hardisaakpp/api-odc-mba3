@@ -96,6 +96,8 @@ def _es_error_transporte(err: str, err_l: str) -> bool:
         return True
     if "no se pudo establecer conexión" in err_l:
         return True
+    if "no se pudo conectar" in err_l:
+        return True
     if "timeout" in err_l:
         return True
     if "timed out" in err_l:
@@ -193,6 +195,7 @@ def mensaje_sugiere_reintento_transitorio(mensaje: Optional[str]) -> bool:
         "sin respuesta",
         "no se pudo establecer conexión",
         "no se pudo establecer conexion",
+        "no se pudo conectar",
         # Regla operativa: permitir reenvío manual en errores de presupuesto de RL.
         "presupuesto excedido rl",
         "código sap: -1116",
