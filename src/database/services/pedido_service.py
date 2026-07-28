@@ -176,24 +176,32 @@ class PedidoService:
         codigos: List[str],
     ) -> tuple:
         """
-        Consulta cada código vía middleware (GET /api/v1/items/{code}).
+        Consulta los códigos en una sola llamada batch al middleware
+        (GET /api/v1/items/batch, en vez de N GET /api/v1/items/{code}).
 
         Returns:
             (resueltos, pendientes): `resueltos` con el mismo formato que
             get_productos_info_batch (los campos que consume el enriquecimiento);
-            `pendientes` son los códigos que el middleware no pudo resolver y
+            `pendientes` son los códigos que el middleware no pudo resolver
+            (batch deshabilitado, chunk fallido/encolado, o error puntual) y
             deben consultarse por OPENQUERY. Un 404 confirmado NO es pendiente:
             es resolución definitiva (igual que OPENQUERY sin fila).
         """
         client = SAPServiceLayerClient()
         resueltos: Dict[str, Dict[str, Any]] = {}
         pendientes: List[str] = []
-        for i, codigo in enumerate(codigos):
-            item = client.get_item(codigo)
+
+        items = client.get_items_batch(codigos)
+        if items is None:
+            # Middleware caído/deshabilitado: ningún código se pudo resolver
+            return resueltos, list(codigos)
+
+        for codigo in codigos:
+            item = items.get(codigo)
             if item is None:
-                # Middleware caído/deshabilitado: no insistir con el resto
-                pendientes.extend(codigos[i:])
-                break
+                # No vino en el batch (chunk fallido/encolado): fallback a OPENQUERY
+                pendientes.append(codigo)
+                continue
             if item.get("_error"):
                 if item.get("_error_type") == "no_existe":
                     continue

@@ -97,6 +97,12 @@ class TestSkuExisteEnSap:
 
 
 class TestConsultarProductosSapPedido:
+    """
+    _consultar_productos_via_middleware resuelve los códigos con UNA sola llamada
+    batch (get_items_batch) en vez de N llamadas get_item — mismo contrato de
+    (resueltos, pendientes) para el caller, solo cambia cómo se obtiene.
+    """
+
     def test_middleware_resuelve_todos_sin_openquery(self):
         service = PedidoService()
         with patch(
@@ -106,13 +112,14 @@ class TestConsultarProductosSapPedido:
         ) as mock_mw, patch(
             "src.database.services.pedido_service.SAPClient"
         ) as mock_oq:
-            mock_mw.return_value.get_item.side_effect = [
-                _item_ok("A1", "Prod A", "X1"),
-                _item_ok("B2", "Prod B", "X2"),
-            ]
+            mock_mw.return_value.get_items_batch.return_value = {
+                "A1": _item_ok("A1", "Prod A", "X1"),
+                "B2": _item_ok("B2", "Prod B", "X2"),
+            }
             resultado = service._consultar_productos_sap(["A1", "B2"])
         assert resultado["A1"]["ItemName"] == "Prod A"
         assert resultado["B2"]["U_IXX_PACK"] == "X2"
+        mock_mw.return_value.get_items_batch.assert_called_once_with(["A1", "B2"])
         mock_oq.assert_not_called()
 
     def test_404_confirmado_no_va_a_openquery(self):
@@ -124,13 +131,13 @@ class TestConsultarProductosSapPedido:
         ) as mock_mw, patch(
             "src.database.services.pedido_service.SAPClient"
         ) as mock_oq:
-            mock_mw.return_value.get_item.return_value = _item_no_existe()
+            mock_mw.return_value.get_items_batch.return_value = {"NOEXISTE": _item_no_existe()}
             resultado = service._consultar_productos_sap(["NOEXISTE"])
         assert resultado == {}
         mock_oq.assert_not_called()
 
-    def test_middleware_caido_todo_el_resto_va_a_openquery(self):
-        """Al primer fallo de conexión, no se insiste código por código."""
+    def test_batch_no_disponible_todo_va_a_openquery(self):
+        """Batch deshabilitado/no disponible (None): todos los códigos van a OPENQUERY en un solo batch."""
         service = PedidoService()
         with patch(
             "src.database.services.pedido_service.USE_MIDDLEWARE_SKU_LOOKUP", True
@@ -139,19 +146,31 @@ class TestConsultarProductosSapPedido:
         ) as mock_mw, patch(
             "src.database.services.pedido_service.SAPClient"
         ) as mock_oq:
-            mock_mw.return_value.get_item.side_effect = [
-                _item_ok("A1", "Prod A", "X1"),
-                None,  # cae el middleware en el segundo código
-            ]
+            mock_mw.return_value.get_items_batch.return_value = None
             mock_oq.return_value.get_productos_info_batch.return_value = {
+                "A1": {"ItemCode": "A1", "ItemName": "Prod A", "U_IXX_PACK": "X1"},
                 "B2": {"ItemCode": "B2", "ItemName": "Prod B", "U_IXX_PACK": "X2"},
                 "C3": {"ItemCode": "C3", "ItemName": "Prod C", "U_IXX_PACK": "X3"},
             }
             resultado = service._consultar_productos_sap(["A1", "B2", "C3"])
 
-        assert mock_mw.return_value.get_item.call_count == 2  # no insistió con C3
-        mock_oq.return_value.get_productos_info_batch.assert_called_once_with(["B2", "C3"])
+        mock_oq.return_value.get_productos_info_batch.assert_called_once_with(["A1", "B2", "C3"])
         assert set(resultado.keys()) == {"A1", "B2", "C3"}
+
+    def test_codigo_ausente_del_batch_va_a_openquery(self):
+        """Un código que no vino en el resultado del batch (chunk fallido/encolado) cae a OPENQUERY solo para ese código."""
+        service = PedidoService()
+        with patch(
+            "src.database.services.pedido_service.USE_MIDDLEWARE_SKU_LOOKUP", True
+        ), patch(
+            "src.database.services.pedido_service.SAPServiceLayerClient"
+        ) as mock_mw, patch(
+            "src.database.services.pedido_service.SAPClient"
+        ) as mock_oq:
+            mock_mw.return_value.get_items_batch.return_value = {"A1": _item_ok("A1", "Prod A", "X1")}
+            mock_oq.return_value.get_productos_info_batch.return_value = {}
+            service._consultar_productos_sap(["A1", "B2"])
+        mock_oq.return_value.get_productos_info_batch.assert_called_once_with(["B2"])
 
     def test_error_generico_solo_ese_codigo_va_a_openquery(self):
         service = PedidoService()
@@ -162,10 +181,10 @@ class TestConsultarProductosSapPedido:
         ) as mock_mw, patch(
             "src.database.services.pedido_service.SAPClient"
         ) as mock_oq:
-            mock_mw.return_value.get_item.side_effect = [
-                _item_error_generico(),
-                _item_ok("B2", "Prod B", "X2"),
-            ]
+            mock_mw.return_value.get_items_batch.return_value = {
+                "A1": _item_error_generico(),
+                "B2": _item_ok("B2", "Prod B", "X2"),
+            }
             mock_oq.return_value.get_productos_info_batch.return_value = {}
             service._consultar_productos_sap(["A1", "B2"])
         mock_oq.return_value.get_productos_info_batch.assert_called_once_with(["A1"])

@@ -256,10 +256,22 @@ class PedidoSAPValidator:
 
         sap_service = SAPService()
 
+        # Resuelve todos los códigos con UNA sola llamada batch al middleware (en vez de
+        # N llamadas GET /items/{code}) — los que ya están en cache local no la necesitan;
+        # los que el batch no pudo resolver caen a get_or_fetch_producto_info uno por uno
+        # dentro del propio get_or_fetch_productos_batch (mismo fallback a OPENQUERY de siempre).
+        codigos_no_vacios = [c.strip() for c in codigos_productos if c and c.strip()]
+        productos_info = (
+            sap_service.get_or_fetch_productos_batch(codigos_no_vacios, force_refresh=not usar_cache)
+            if codigos_no_vacios else {}
+        )
+
         for codigo in codigos_productos:
             try:
-                tipo, det = self._procesar_un_codigo_con_sugerencias(
-                    codigo, sap_service, sap_obligatorio, usar_cache, incluir_sugerencias, limite_sugerencias
+                codigo_clean = codigo.strip() if codigo else ""
+                producto_info = productos_info.get(codigo_clean) if codigo_clean else None
+                tipo, det = self._procesar_producto_con_sugerencias(
+                    codigo_clean, producto_info, sap_obligatorio, incluir_sugerencias, limite_sugerencias
                 )
                 detalle[codigo] = det
                 self._clasificar_tipo_codigo(tipo, codigo, validos, no_encontrados, errores, warnings)
@@ -281,12 +293,11 @@ class PedidoSAPValidator:
             "detalle": detalle
         }
 
-    def _procesar_un_codigo_con_sugerencias(
-        self, codigo: str, sap_service: Any, sap_obligatorio: bool,
-        usar_cache: bool, incluir_sugerencias: bool, limite_sugerencias: int
+    def _procesar_producto_con_sugerencias(
+        self, codigo_clean: str, producto_info: Optional[Dict[str, Any]], sap_obligatorio: bool,
+        incluir_sugerencias: bool, limite_sugerencias: int
     ):
-        """Normaliza, consulta SAP y agrega MBA3/sugerencias para un código; retorna (tipo, detalle_dict)."""
-        codigo_clean = codigo.strip() if codigo else ""
+        """Agrega MBA3/sugerencias al resultado ya resuelto (individual o batch) de un código; retorna (tipo, detalle_dict)."""
         if not codigo_clean:
             return "no_encontrado", {
                 "existe": False,
@@ -296,7 +307,6 @@ class PedidoSAPValidator:
                 "mba3": None,
                 "sugerencias_sap": []
             }
-        producto_info = sap_service.get_or_fetch_producto_info(codigo_clean, force_refresh=not usar_cache)
         resultado_codigo = self._procesar_resultado_producto(codigo_clean, producto_info, sap_obligatorio)
         detalle_base = resultado_codigo["detalle"]
         if resultado_codigo["tipo"] == "valido":

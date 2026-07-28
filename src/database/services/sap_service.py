@@ -4,7 +4,7 @@ Servicio para consultar SAP y poblar el cache de productos.
 
 import logging
 from enum import Enum, auto
-from typing import Literal, Optional, Dict, Any, Union
+from typing import Literal, Optional, Dict, Any, List, Union
 
 from src.config import SAP_CACHE_DAYS, ENABLE_SAP_QUERIES, USE_MIDDLEWARE_PRODUCTO_INFO
 from ..connection import get_db_connection
@@ -118,6 +118,75 @@ class SAPService:
             "grupo_articulos": producto.get("grupo_articulos"),
         }
 
+    def _procesar_sap_info(
+        self, sku: str, sap_info: Optional[Dict[str, Any]], repository: "ProductoSAPRepository"
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Aplica las validaciones (existe/activo/coincide con MBA3) sobre `sap_info` ya
+        obtenido (de una consulta individual o de un batch) y cachea el resultado.
+
+        Extraído de get_or_fetch_producto_info para que get_or_fetch_productos_batch
+        pueda reutilizar exactamente la misma lógica de validación y cacheo por SKU,
+        sin importar si `sap_info` vino de una llamada individual o de un batch.
+
+        IMPORTANTE: Si el SKU de MBA3 no coincide con el ItemCode de SAP, retorna un
+        error de mismatch para evitar realizar conversiones incorrectas.
+
+        Returns: mismo shape que get_or_fetch_producto_info (ver ese docstring).
+        """
+        if not sap_info:
+            logger.debug(f"⚠️ SKU no encontrado en SAP: {sku}")
+            return {"_error": True, "_error_type": "no_existe", "_sku": sku, "_item_code_sap": None}
+
+        # ✅ VALIDACIÓN: Ítems inactivos en SAP se consideran no válidos para carga/ITR (generan sugerencias)
+        valid_for = (sap_info.get("validFor") or sap_info.get("ValidFor") or "N").strip().upper()
+        if valid_for != "Y":
+            logger.warning(f"⚠️ SKU existe en SAP pero está Inactivo (validFor={valid_for}): {sku}")
+            return {"_error": True, "_error_type": "inactivo", "_sku": sku, "_item_code_sap": sap_info.get("ItemCode")}
+
+        # ✅ VALIDACIÓN: Verificar que el SKU de MBA3 coincida con el ItemCode de SAP
+        item_code_sap = sap_info.get("ItemCode", "").strip()
+        sku_normalized = sku.strip()
+        if item_code_sap.lower() != sku_normalized.lower():
+            logger.warning(
+                f"⚠️ MISMATCH detectado: SKU MBA3='{sku_normalized}' "
+                f"no coincide con ItemCode SAP='{item_code_sap}'. "
+                f"No se realizarán conversiones para este producto."
+            )
+            return {"_error": True, "_error_type": "mismatch", "_sku": sku_normalized, "_item_code_sap": item_code_sap}
+
+        # Obtener unidad de conversión desde pack_conversion
+        pack_sap = sap_info.get("U_IXX_PACK")
+        unidad_conversion = None
+        if pack_sap:
+            unidad_conversion = repository.get_unidad_conversion_by_pack(pack_sap)
+
+        producto_data = {
+            "sku": sku,
+            "item_code": sap_info.get("ItemCode", sku),
+            "item_name": sap_info.get("ItemName"),
+            "pack_sap": pack_sap,
+            "unidad_conversion": unidad_conversion,
+            "pack_id": pack_sap,  # pack_id es igual a pack_sap
+            "grupo_articulos": sap_info.get("ItmsGrpNam"),
+        }
+
+        # Guardar/actualizar en cache
+        try:
+            repository.insert_or_update(producto_data)
+            logger.info(
+                f"✅ Información SAP obtenida y cacheada para {sku}: "
+                f"Pack={pack_sap}, Unidad={unidad_conversion}, Grupo={producto_data.get('grupo_articulos')}"
+            )
+        except Exception as cache_error:
+            # Log específico del error de cache, pero continuar retornando la información
+            logger.warning(
+                f"⚠️ Error al guardar en cache para {sku}: {cache_error}. "
+                f"Continuando sin cachear, pero retornando información SAP obtenida."
+            )
+
+        return producto_data
+
     def get_or_fetch_producto_info(self, sku: str, force_refresh: bool = False) -> Optional[Dict[str, Any]]:
         """
         Obtiene información de un producto desde el cache o consulta SAP si es necesario.
@@ -173,59 +242,7 @@ class SAPService:
             # (middleware primero, fallback a OPENQUERY)
             logger.debug(f"🔍 Consultando SAP para SKU: {sku}")
             sap_info = self._consultar_producto_sap(sku)
-
-            if not sap_info:
-                logger.debug(f"⚠️ SKU no encontrado en SAP: {sku}")
-                return {"_error": True, "_error_type": "no_existe", "_sku": sku, "_item_code_sap": None}
-
-            # ✅ VALIDACIÓN: Ítems inactivos en SAP se consideran no válidos para carga/ITR (generan sugerencias)
-            valid_for = (sap_info.get("validFor") or sap_info.get("ValidFor") or "N").strip().upper()
-            if valid_for != "Y":
-                logger.warning(f"⚠️ SKU existe en SAP pero está Inactivo (validFor={valid_for}): {sku}")
-                return {"_error": True, "_error_type": "inactivo", "_sku": sku, "_item_code_sap": sap_info.get("ItemCode")}
-
-            # ✅ VALIDACIÓN: Verificar que el SKU de MBA3 coincida con el ItemCode de SAP
-            item_code_sap = sap_info.get("ItemCode", "").strip()
-            sku_normalized = sku.strip()
-            if item_code_sap.lower() != sku_normalized.lower():
-                logger.warning(
-                    f"⚠️ MISMATCH detectado: SKU MBA3='{sku_normalized}' "
-                    f"no coincide con ItemCode SAP='{item_code_sap}'. "
-                    f"No se realizarán conversiones para este producto."
-                )
-                return {"_error": True, "_error_type": "mismatch", "_sku": sku_normalized, "_item_code_sap": item_code_sap}
-
-            # Obtener unidad de conversión desde pack_conversion
-            pack_sap = sap_info.get("U_IXX_PACK")
-            unidad_conversion = None
-            if pack_sap:
-                unidad_conversion = repository.get_unidad_conversion_by_pack(pack_sap)
-
-            producto_data = {
-                "sku": sku,
-                "item_code": sap_info.get("ItemCode", sku),
-                "item_name": sap_info.get("ItemName"),
-                "pack_sap": pack_sap,
-                "unidad_conversion": unidad_conversion,
-                "pack_id": pack_sap,  # pack_id es igual a pack_sap
-                "grupo_articulos": sap_info.get("ItmsGrpNam"),
-            }
-
-            # Guardar/actualizar en cache
-            try:
-                repository.insert_or_update(producto_data)
-                logger.info(
-                    f"✅ Información SAP obtenida y cacheada para {sku}: "
-                    f"Pack={pack_sap}, Unidad={unidad_conversion}, Grupo={producto_data.get('grupo_articulos')}"
-                )
-            except Exception as cache_error:
-                # Log específico del error de cache, pero continuar retornando la información
-                logger.warning(
-                    f"⚠️ Error al guardar en cache para {sku}: {cache_error}. "
-                    f"Continuando sin cachear, pero retornando información SAP obtenida."
-                )
-
-            return producto_data
+            return self._procesar_sap_info(sku, sap_info, repository)
 
         except Exception as e:
             logger.error(f"❌ Error al obtener información SAP para {sku}: {e}", exc_info=True)
@@ -236,6 +253,104 @@ class SAPService:
                     conn.close()
                 except Exception:
                     pass
+
+    @staticmethod
+    def _mapear_item_batch_a_sap_info(item: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Traduce una entrada de get_items_batch() al mismo formato que _consultar_producto_via_middleware."""
+        if item.get("_error"):
+            return None  # no_existe confirmado por el middleware
+        return {
+            "ItemCode": item.get("ItemCode"),
+            "ItemName": item.get("ItemName"),
+            "U_IXX_PACK": item.get("U_IXX_PACK"),
+            "ItmsGrpNam": item.get("ItmsGrpNam"),
+            "validFor": "Y" if item.get("Valid") == "tYES" else "N",
+        }
+
+    def get_or_fetch_productos_batch(
+        self, skus: List[str], force_refresh: bool = False
+    ) -> Dict[str, Optional[Dict[str, Any]]]:
+        """
+        Versión batch de get_or_fetch_producto_info: resuelve varios SKUs con UNA sola
+        llamada al middleware (GET /api/v1/items/batch) en vez de N.
+
+        Un solo intento, sin polling — misma filosofía que el resto de los métodos
+        `*_batch` del cliente middleware. Los SKUs que ya están en cache local no
+        tocan el middleware (igual que hoy). Los que sí necesitan SAP se resuelven
+        con el batch cuando USE_MIDDLEWARE_PRODUCTO_INFO está activo; cualquier SKU
+        que el batch no pudo resolver (middleware deshabilitado, chunk fallido, SAP
+        saturado) cae a get_or_fetch_producto_info uno por uno — el mismo camino de
+        siempre, con su propio fallback a OPENQUERY.
+
+        Returns:
+            Dict sku -> mismo shape que get_or_fetch_producto_info (por sku).
+        """
+        resultados: Dict[str, Optional[Dict[str, Any]]] = {}
+        skus_validos = [s for s in skus if s and s.strip()]
+        if not skus_validos:
+            return {sku: None for sku in skus}
+
+        if not self.enabled:
+            logger.debug("⏭️ Servicio SAP deshabilitado para batch de productos")
+            return {sku: None for sku in skus}
+
+        conn = None
+        pendientes: List[str] = []
+        try:
+            conn = get_db_connection()
+            repository = ProductoSAPRepository(conn)
+
+            for sku in skus_validos:
+                cached = self._consultar_cache(repository, sku, force_refresh)
+                if cached is not None:
+                    resultados[sku] = cached
+                else:
+                    pendientes.append(sku)
+
+            resueltos_batch: Dict[str, Optional[Dict[str, Any]]] = {}
+            middleware_confirmado_no_disponible = False
+            if pendientes and USE_MIDDLEWARE_PRODUCTO_INFO:
+                items = SAPServiceLayerClient().get_items_batch(pendientes)
+                if items is None:
+                    # El batch confirmó que el middleware no responde ahora mismo (caído,
+                    # o SAP tan saturado que ni el propio batch resolvió a tiempo). No
+                    # tiene sentido que cada SKU reintente el middleware individualmente:
+                    # bajo SAP saturado cada intento pagaría de nuevo la espera de
+                    # QueueAfterSeconds del job-queue (~10s) antes de rendirse — directo
+                    # a OPENQUERY para todos los pendientes.
+                    middleware_confirmado_no_disponible = True
+                else:
+                    for sku in pendientes:
+                        if sku in items:
+                            resueltos_batch[sku] = self._mapear_item_batch_a_sap_info(items[sku])
+
+            for sku in pendientes:
+                if sku in resueltos_batch:
+                    resultados[sku] = self._procesar_sap_info(sku, resueltos_batch[sku], repository)
+                elif middleware_confirmado_no_disponible:
+                    resultados[sku] = self._procesar_sap_info(sku, self.sap_client.get_producto_info(sku), repository)
+                else:
+                    # Flag apagada, o el batch SÍ respondió pero este código puntual no
+                    # vino (chunk aislado fallido/encolado): vale la pena su propia
+                    # oportunidad individual, camino de siempre.
+                    resultados[sku] = self.get_or_fetch_producto_info(sku, force_refresh)
+
+        except Exception as e:
+            logger.error(f"❌ Error al obtener batch de productos SAP: {e}", exc_info=True)
+            for sku in skus_validos:
+                if sku not in resultados:
+                    resultados[sku] = self.get_or_fetch_producto_info(sku, force_refresh)
+        finally:
+            if conn:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+
+        for sku in skus:
+            if sku not in resultados:
+                resultados[sku] = None
+        return resultados
     
     def get_unidad_conversion(self, sku: str) -> Optional[float]:
         """

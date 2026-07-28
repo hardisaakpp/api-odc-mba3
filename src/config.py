@@ -172,6 +172,16 @@ SAP_CACHE_DAYS = int(os.getenv("SAP_CACHE_DAYS", "30"))
 # URL del SAP Middleware (reemplaza conexión directa a SAP Service Layer)
 SAP_MIDDLEWARE_URL = os.getenv("SAP_MIDDLEWARE_URL", "http://localhost:8011")
 
+# Selecciona la implementación que devuelve SAPServiceLayerClient():
+# - true (default): usa el middleware .NET (comportamiento actual).
+# - false: restaura la conexión directa a SAP Service Layer que se usaba antes de
+#   integrar el middleware (DirectSAPServiceLayerClient), reutilizando las credenciales
+#   SAP_SERVICE_LAYER_* de abajo. Pensado para desarrollo: permite seguir probando
+#   Purchase Orders/Inventory Transfer Requests mientras se resuelve algún problema
+#   puntual del middleware, sin dejar de tener el middleware disponible para cuando
+#   se reactive (no reemplaza al middleware, es un modo de prueba alternable).
+SAP_USE_MIDDLEWARE = os.getenv("SAP_USE_MIDDLEWARE", "true").lower() == "true"
+
 # Prevalidación de ODC en una sola llamada batch al middleware
 # (POST /api/v1/validations/purchase-order) en lugar de N requests por línea.
 # Si el batch falla o está deshabilitado, se usa la validación línea por línea.

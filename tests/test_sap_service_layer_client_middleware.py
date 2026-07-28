@@ -6,11 +6,14 @@ Usa mocks de requests para no depender del middleware real.
 
 from unittest.mock import MagicMock, patch
 
-from src.database.clients.sap_service_layer_client import SAPServiceLayerClient
+from src.database.clients.sap_service_layer_client import _MiddlewareSAPServiceLayerClient
 
 
 def _client():
-    client = SAPServiceLayerClient()
+    # Se instancia la implementación middleware directamente (no vía la factory
+    # SAPServiceLayerClient()) para que estos tests prueben siempre el cliente
+    # middleware, sin depender del flag SAP_USE_MIDDLEWARE del .env cargado.
+    client = _MiddlewareSAPServiceLayerClient()
     client.enabled = True
     return client
 
@@ -197,3 +200,77 @@ class TestExtraerErrorSapEmbebido:
         assert resultado is not None
         assert resultado["success"] is False
         assert resultado["error_code"] == -2028
+
+
+class TestGetItemsBatch:
+    """POST /api/v1/items/batch: un solo intento por chunk, sin polling."""
+
+    @staticmethod
+    def _item(code, name="Producto", group_name="R-MEDIAS"):
+        return {
+            "itemCode": code, "itemName": name, "purchaseItem": True,
+            "salesItem": True, "inventoryItem": True, "valid": True, "frozen": False,
+            "itemType": "itItems", "packCode": "X3", "groupCode": 103,
+            "groupName": group_name, "preferredVendorCode": None,
+        }
+
+    def test_lista_vacia_no_llama_http(self):
+        client = _client()
+        with patch.object(client, "_post") as mock_post:
+            result = client.get_items_batch([])
+        assert result == {}
+        mock_post.assert_not_called()
+
+    def test_mixto_encontrados_y_no_encontrados(self):
+        client = _client()
+        data = {"items": [self._item("A1"), self._item("B2")], "notFound": ["C3"]}
+        with patch.object(client, "_post", return_value=_mock_response(200, data)):
+            result = client.get_items_batch(["A1", "B2", "C3"])
+        assert result["A1"]["ItemName"] == "Producto"
+        assert result["A1"]["ItmsGrpNam"] == "R-MEDIAS"
+        assert result["B2"]["ItemCode"] == "B2"
+        assert result["C3"] == {
+            "_error": True, "_error_type": "no_existe",
+            "_error_message": "Item 'C3' no existe en SAP",
+        }
+
+    def test_particiona_en_chunks_de_100(self):
+        client = _client()
+        codigos = [f"I{i:03d}" for i in range(150)]  # 2 chunks: 100, 50
+        with patch.object(client, "_get_items_batch_chunk", return_value=None) as mock_chunk:
+            client.get_items_batch(codigos)
+        assert mock_chunk.call_count == 2
+        tamanos = [len(call.args[0]) for call in mock_chunk.call_args_list]
+        assert tamanos == [100, 50]
+
+    def test_chunk_no_disponible_202_no_aparece_en_resultado(self):
+        """202 (encolado, SAP lento/saturado): mismo tratamiento que cualquier no-200, un solo intento."""
+        client = _client()
+        response = _mock_response(202, {"jobId": "abc", "status": "ENCOLADO"})
+        with patch.object(client, "_post", return_value=response):
+            result = client.get_items_batch(["A1"])
+        assert result is None  # único chunk, y no se resolvió
+
+    def test_un_chunk_falla_otro_ok_solo_los_resueltos_aparecen(self):
+        client = _client()
+        codigos = [f"I{i:03d}" for i in range(150)]  # 2 chunks: 100, 50
+        respuestas = [
+            None,  # primer chunk (100 codigos) no disponible
+            {"items": [self._item("I100")], "notFound": []},  # segundo chunk (50 codigos) ok
+        ]
+        with patch.object(client, "_get_items_batch_chunk", side_effect=respuestas):
+            result = client.get_items_batch(codigos)
+        assert result is not None
+        assert "I100" in result
+        assert "I000" not in result  # del chunk que fallo, ausente (no un error explicito)
+
+    def test_todos_los_chunks_fallan_retorna_none(self):
+        client = _client()
+        with patch.object(client, "_get_items_batch_chunk", return_value=None):
+            result = client.get_items_batch(["A1", "B2"])
+        assert result is None
+
+    def test_deshabilitado_retorna_none(self):
+        client = _client()
+        client.enabled = False
+        assert client.get_items_batch(["A1"]) is None

@@ -1,8 +1,19 @@
 """
-Cliente para el SAP Middleware API.
+Cliente para hablar con SAP Business One: middleware .NET o conexión directa.
 
-Reemplaza la conexión directa a SAP Business One Service Layer.
-El middleware gestiona sesiones SAP, throttling, reintentos y circuit breaker internamente.
+SAPServiceLayerClient() es una factory (no una clase) que, según SAP_USE_MIDDLEWARE
+(.env), devuelve una de dos implementaciones con la misma interfaz pública:
+
+- _MiddlewareSAPServiceLayerClient (default, SAP_USE_MIDDLEWARE=true): habla con el
+  middleware .NET, que gestiona sesiones SAP, throttling, reintentos y circuit
+  breaker internamente.
+- DirectSAPServiceLayerClient (SAP_USE_MIDDLEWARE=false, en sap_service_layer_client_direct.py):
+  conexión directa a SAP Service Layer, como funcionaba antes de integrar el
+  middleware. Pensado para desarrollo, para poder seguir probando la app mientras se
+  resuelve algún problema puntual del middleware.
+
+Todos los callers existentes siguen haciendo simplemente `SAPServiceLayerClient()`
+sin cambios.
 """
 
 import json
@@ -15,13 +26,15 @@ from src.config import (
     SAP_MIDDLEWARE_URL,
     ENABLE_SAP_SERVICE_LAYER,
     SAP_SERVICE_LAYER_TIMEOUT,
+    SAP_USE_MIDDLEWARE,
 )
 from src.exceptions import SAPDataMasterError
+from .sap_service_layer_client_direct import DirectSAPServiceLayerClient
 
 logger = logging.getLogger(__name__)
 
 
-class SAPServiceLayerClient:
+class _MiddlewareSAPServiceLayerClient:
     """Cliente para el SAP Middleware API."""
 
     def __init__(self):
@@ -193,6 +206,14 @@ class SAPServiceLayerClient:
             "toWarehouse": stock_transfer_data.get("ToWarehouse"),
             "docDate": stock_transfer_data.get("DocDate"),
             "comments": stock_transfer_data.get("Comments"),
+            # Series (serie de numeración) y U_ODC (nº de OC origen, UDF) son requeridos por
+            # la TN custom de SAP para InventoryTransferRequests: sin ellos la validación
+            # SBO_SP_TRANSACTIONNOTIFICATION falla con "1299 no data found". El flujo directo
+            # (DirectSAPServiceLayerClient) los envía verbatim y por eso funciona; aquí hay que
+            # reenviarlos explícitamente al middleware (que los mapea a Series/U_ODC en el
+            # payload a SAP y los omite si llegan nulos). El middleware acepta camelCase.
+            "series": stock_transfer_data.get("Series"),
+            "uOdc": stock_transfer_data.get("U_ODC"),
             "lines": lines,
         }
 
@@ -261,6 +282,32 @@ class SAPServiceLayerClient:
 
     # ─── Items ─────────────────────────────────────────────────────────────────
 
+    @classmethod
+    def _map_item_data(cls, data: Dict[str, Any]) -> Dict[str, Any]:
+        """Traduce la respuesta de ítem del middleware (GET /items/{code} o /items/batch) al shape SAP clásico."""
+        return {
+            "ItemCode": data.get("itemCode"),
+            "ItemName": data.get("itemName"),
+            "PurchaseItem": cls._bool_to_tyes(data.get("purchaseItem")),
+            "SalesItem": cls._bool_to_tyes(data.get("salesItem")),
+            "InventoryItem": cls._bool_to_tyes(data.get("inventoryItem")),
+            "Valid": cls._bool_to_tyes(data.get("valid")),
+            "Frozen": cls._bool_to_tyes(data.get("frozen")),
+            "ItemType": data.get("itemType"),
+            "U_IXX_PACK": data.get("packCode"),
+            "ItmsGrpCod": data.get("groupCode"),
+            "ItmsGrpNam": data.get("groupName"),
+            "CardCode": data.get("preferredVendorCode") or None,
+        }
+
+    @staticmethod
+    def _item_no_existe(item_code: str) -> Dict[str, Any]:
+        return {
+            "_error": True,
+            "_error_type": "no_existe",
+            "_error_message": f"Item '{item_code}' no existe en SAP",
+        }
+
     def get_item(self, item_code: str) -> Optional[Dict[str, Any]]:
         """Consulta un artículo en SAP via middleware."""
         if not self.enabled:
@@ -275,39 +322,88 @@ class SAPServiceLayerClient:
 
         if response.status_code == 200:
             data = response.json()
-            is_purchase = data.get("purchaseItem")
-            is_valid = data.get("valid")
-            is_frozen = data.get("frozen")
             logger.info(
                 f"✅ Item encontrado: {item_code} - "
-                f"Comprable={is_purchase}, Valid={is_valid}, Frozen={is_frozen}"
+                f"Comprable={data.get('purchaseItem')}, Valid={data.get('valid')}, Frozen={data.get('frozen')}"
             )
-            return {
-                "ItemCode": data.get("itemCode"),
-                "ItemName": data.get("itemName"),
-                "PurchaseItem": self._bool_to_tyes(is_purchase),
-                "SalesItem": self._bool_to_tyes(data.get("salesItem")),
-                "InventoryItem": self._bool_to_tyes(data.get("inventoryItem")),
-                "Valid": self._bool_to_tyes(is_valid),
-                "Frozen": self._bool_to_tyes(is_frozen),
-                "ItemType": data.get("itemType"),
-                "U_IXX_PACK": data.get("packCode"),
-                "ItmsGrpCod": data.get("groupCode"),
-                "ItmsGrpNam": data.get("groupName"),
-                "CardCode": data.get("preferredVendorCode") or None,
-            }
+            return self._map_item_data(data)
 
         if response.status_code == 404:
             logger.warning(f"⚠️ Item no encontrado: {item_code}")
-            return {
-                "_error": True,
-                "_error_type": "no_existe",
-                "_error_message": f"Item '{item_code}' no existe en SAP",
-            }
+            return self._item_no_existe(item_code)
 
         error_msg = self._problem_detail(response)
         logger.error(f"❌ Error al consultar Item {item_code}: {error_msg}")
         return {"_error": True, "_error_type": "error", "_error_message": error_msg}
+
+    _ITEMS_BATCH_CHUNK_SIZE = 100
+
+    def _get_items_batch_chunk(self, codes: List[str]) -> Optional[Dict[str, Any]]:
+        response = self._post("/api/v1/items/batch", {"itemCodes": codes})
+        if response is None:
+            return None
+        if response.status_code == 200:
+            return response.json()
+        # Incluye 202 (el middleware encoló el trabajo porque SAP está lento/saturado):
+        # un solo intento, sin poll — igual que validate_warehouses_batch y
+        # validate_purchase_order_batch, cualquier cosa que no sea 200 inmediato se
+        # trata como "no disponible ahora" y el caller resuelve estos códigos por su
+        # camino habitual (uno por uno, o fallback a OPENQUERY).
+        logger.warning(
+            f"⏭️ Batch de items no disponible ahora (HTTP {response.status_code}): "
+            f"{self._problem_detail(response)}. {len(codes)} código(s) de este chunk "
+            f"se resolverán por el camino habitual."
+        )
+        return None
+
+    def get_items_batch(self, item_codes: List[str]) -> Optional[Dict[str, Dict[str, Any]]]:
+        """
+        Consulta múltiples ítems en una sola llamada al middleware (en chunks de 100,
+        límite del endpoint) en vez de una llamada GET /items/{code} por código.
+
+        Un solo intento por chunk, sin polling — misma filosofía que
+        validate_warehouses_batch/validate_purchase_order_batch: si el middleware
+        encola el trabajo (202) o falla, esos códigos simplemente no aparecen en el
+        resultado y el caller debe resolverlos por su camino habitual.
+
+        Returns:
+            Dict item_code -> mismo shape que get_item() (incluye entradas "no existe"
+            para los códigos que el middleware reportó en `notFound`). Los códigos cuyo
+            chunk falló están simplemente ausentes del dict — tratarlos como si
+            get_item(codigo) hubiera devuelto None. None solo si NINGÚN chunk pudo
+            resolverse (mismo contrato que validate_warehouses_batch cuando
+            chunks_ok == 0).
+        """
+        if not self.enabled:
+            logger.debug("⏭️ Batch de items deshabilitado")
+            return None
+        if not item_codes:
+            return {}
+
+        chunks = [
+            item_codes[i:i + self._ITEMS_BATCH_CHUNK_SIZE]
+            for i in range(0, len(item_codes), self._ITEMS_BATCH_CHUNK_SIZE)
+        ]
+        resultado: Dict[str, Dict[str, Any]] = {}
+        chunks_ok = 0
+        for chunk in chunks:
+            data = self._get_items_batch_chunk(chunk)
+            if data is None:
+                continue
+            chunks_ok += 1
+            for item in data.get("items", []):
+                item_code = item.get("itemCode")
+                if item_code:
+                    resultado[item_code] = self._map_item_data(item)
+            for codigo in data.get("notFound", []):
+                resultado[codigo] = self._item_no_existe(codigo)
+
+        if chunks_ok == 0:
+            return None
+        logger.info(
+            f"✅ Batch de items: {len(resultado)}/{len(item_codes)} código(s) resueltos vía middleware"
+        )
+        return resultado
 
     def get_stock_by_warehouse(self, item_code: str, warehouse_code: str) -> Optional[Dict[str, Any]]:
         """
@@ -579,3 +675,18 @@ class SAPServiceLayerClient:
     def logout(self) -> bool:
         """No-op: el middleware gestiona las sesiones SAP internamente."""
         return True
+
+
+def SAPServiceLayerClient():
+    """
+    Factory: elige la implementación según SAP_USE_MIDDLEWARE (.env).
+
+    - true (default): _MiddlewareSAPServiceLayerClient — habla con el middleware .NET.
+    - false: DirectSAPServiceLayerClient — conexión directa a SAP Service Layer, como
+      funcionaba antes de integrar el middleware. Útil en desarrollo para aislar si un
+      problema es del middleware o de SAP mismo, sin dejar de tener el middleware
+      disponible para cuando se reactive.
+    """
+    if SAP_USE_MIDDLEWARE:
+        return _MiddlewareSAPServiceLayerClient()
+    return DirectSAPServiceLayerClient()
