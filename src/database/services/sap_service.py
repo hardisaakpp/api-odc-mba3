@@ -316,6 +316,27 @@ class SAPService:
             "validFor": "Y" if item.get("Valid") == "tYES" else "N",
         }
 
+    def _completar_pendientes_con_fallback_individual(
+        self,
+        skus_validos: List[str],
+        resultados: Dict[str, Optional[Dict[str, Any]]],
+        force_refresh: bool,
+    ) -> None:
+        """Rellena (in-place) los SKUs que quedaron sin resolver tras un error del batch."""
+        for sku in skus_validos:
+            if sku not in resultados:
+                resultados[sku] = self.get_or_fetch_producto_info(sku, force_refresh)
+
+    @staticmethod
+    def _rellenar_faltantes_con_none(
+        skus: List[str],
+        resultados: Dict[str, Optional[Dict[str, Any]]],
+    ) -> None:
+        """Rellena (in-place) con None cualquier SKU original que nunca se resolvió (ej. duplicados)."""
+        for sku in skus:
+            if sku not in resultados:
+                resultados[sku] = None
+
     def get_or_fetch_productos_batch(
         self, skus: List[str], force_refresh: bool = False
     ) -> Dict[str, Optional[Dict[str, Any]]]:
@@ -366,9 +387,7 @@ class SAPService:
 
         except Exception as e:
             logger.error(f"❌ Error al obtener batch de productos SAP: {e}", exc_info=True)
-            for sku in skus_validos:
-                if sku not in resultados:
-                    resultados[sku] = self.get_or_fetch_producto_info(sku, force_refresh)
+            self._completar_pendientes_con_fallback_individual(skus_validos, resultados, force_refresh)
         finally:
             if conn:
                 try:
@@ -376,9 +395,7 @@ class SAPService:
                 except Exception:
                     pass
 
-        for sku in skus:
-            if sku not in resultados:
-                resultados[sku] = None
+        self._rellenar_faltantes_con_none(skus, resultados)
         return resultados
     
     def get_unidad_conversion(self, sku: str) -> Optional[float]:

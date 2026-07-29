@@ -22,7 +22,7 @@ import subprocess
 import json
 import time
 import requests
-from typing import List, Optional, Dict, Any, Tuple, Union
+from typing import Callable, List, Optional, Dict, Any, Tuple, Union
 from datetime import datetime, timedelta
 
 from src.utils.timezone import ahora_naive
@@ -375,6 +375,54 @@ class DirectSAPServiceLayerClient:
         )
         time.sleep(wait)
 
+    def _should_retry_and_wait(self, attempt: int, max_attempts: int, reason: str) -> bool:
+        """Si quedan intentos, espera con backoff y logea; retorna si corresponde reintentar."""
+        if not self._should_retry(attempt, max_attempts):
+            return False
+        self._wait_and_log_retry(attempt, max_attempts, reason)
+        return True
+
+    def _request_with_transient_retries(
+        self,
+        execute: Callable[[requests.Session], requests.Response],
+        fallback: Callable[[], Tuple[Optional[requests.Response], Optional[str]]],
+        *,
+        operation_label: str,
+    ) -> Optional[requests.Response]:
+        """
+        Ejecuta una petición con reintentos ante fallos transitorios (segfaults en SL, proxies, etc.).
+
+        Usa `execute` si ya hay una working_session; si no, `fallback`
+        (_try_request_with_fallback) para negociar/reintentar TLS.
+        """
+        max_attempts = 1 + max(0, self.transient_retries)
+        for attempt in range(max_attempts):
+            try:
+                if self.working_session:
+                    response = execute(self.working_session)
+                else:
+                    response, _ = fallback()
+                    if response is None:
+                        if self._should_retry_and_wait(attempt, max_attempts, f"{operation_label}: sin respuesta"):
+                            continue
+                        return None
+
+                if self._is_transient_http_status(response.status_code):
+                    if self._should_retry_and_wait(
+                        attempt, max_attempts, f"{operation_label}: HTTP {response.status_code}"
+                    ):
+                        continue
+                return response
+
+            except requests.exceptions.RequestException as e:
+                reason = f"{operation_label}: error transitorio ({e!s})"
+                if self._is_transient_request_exception(e) and self._should_retry_and_wait(attempt, max_attempts, reason):
+                    continue
+                logger.error(f"❌ {operation_label}: error de conexión (sin más reintentos): {e}")
+                return None
+
+        return None
+
     def _get_request_with_transient_retries(
         self,
         url: str,
@@ -382,50 +430,12 @@ class DirectSAPServiceLayerClient:
         *,
         operation_label: str = "SAP SL GET",
     ) -> Optional[requests.Response]:
-        """
-        Ejecuta GET con reintentos ante fallos transitorios (segfaults en SL, proxies, etc.).
-        """
-        max_attempts = 1 + max(0, self.transient_retries)
-        for attempt in range(max_attempts):
-            try:
-                if self.working_session:
-                    response = self.working_session.get(
-                        url, headers=headers, timeout=self.timeout
-                    )
-                else:
-                    response, _ = self._try_request_with_fallback("GET", url, headers=headers)
-                    if response is None:
-                        if self._should_retry(attempt, max_attempts):
-                            self._wait_and_log_retry(
-                                attempt,
-                                max_attempts,
-                                f"{operation_label}: sin respuesta",
-                            )
-                            continue
-                        return None
-
-                if self._is_transient_http_status(response.status_code):
-                    if self._should_retry(attempt, max_attempts):
-                        self._wait_and_log_retry(
-                            attempt,
-                            max_attempts,
-                            f"{operation_label}: HTTP {response.status_code}",
-                        )
-                        continue
-                return response
-
-            except requests.exceptions.RequestException as e:
-                if self._is_transient_request_exception(e) and self._should_retry(attempt, max_attempts):
-                    self._wait_and_log_retry(
-                        attempt,
-                        max_attempts,
-                        f"{operation_label}: error transitorio ({e!s})",
-                    )
-                    continue
-                logger.error(f"❌ {operation_label}: error de conexión (sin más reintentos): {e}")
-                return None
-
-        return None
+        """Ejecuta GET con reintentos ante fallos transitorios (segfaults en SL, proxies, etc.)."""
+        return self._request_with_transient_retries(
+            lambda session: session.get(url, headers=headers, timeout=self.timeout),
+            lambda: self._try_request_with_fallback("GET", url, headers=headers),
+            operation_label=operation_label,
+        )
 
     def _post_json_with_transient_retries(
         self,
@@ -436,55 +446,11 @@ class DirectSAPServiceLayerClient:
         operation_label: str = "SAP SL POST",
     ) -> Optional[requests.Response]:
         """POST JSON con reintentos ante fallos transitorios."""
-        max_attempts = 1 + max(0, self.transient_retries)
-        for attempt in range(max_attempts):
-            try:
-                if self.working_session:
-                    response = self.working_session.post(
-                        url,
-                        json=json_data,
-                        headers=headers,
-                        timeout=self.timeout,
-                    )
-                else:
-                    response, _ = self._try_request_with_fallback(
-                        "POST",
-                        url,
-                        json=json_data,
-                        headers=headers,
-                    )
-                    if response is None:
-                        if self._should_retry(attempt, max_attempts):
-                            self._wait_and_log_retry(
-                                attempt,
-                                max_attempts,
-                                f"{operation_label}: sin respuesta",
-                            )
-                            continue
-                        return None
-
-                if self._is_transient_http_status(response.status_code):
-                    if self._should_retry(attempt, max_attempts):
-                        self._wait_and_log_retry(
-                            attempt,
-                            max_attempts,
-                            f"{operation_label}: HTTP {response.status_code}",
-                        )
-                        continue
-                return response
-
-            except requests.exceptions.RequestException as e:
-                if self._is_transient_request_exception(e) and self._should_retry(attempt, max_attempts):
-                    self._wait_and_log_retry(
-                        attempt,
-                        max_attempts,
-                        f"{operation_label}: error transitorio ({e!s})",
-                    )
-                    continue
-                logger.error(f"❌ {operation_label}: error de conexión (sin más reintentos): {e}")
-                return None
-
-        return None
+        return self._request_with_transient_retries(
+            lambda session: session.post(url, json=json_data, headers=headers, timeout=self.timeout),
+            lambda: self._try_request_with_fallback("POST", url, json=json_data, headers=headers),
+            operation_label=operation_label,
+        )
     
     def _get_stock_from_warehouses(
         self,
@@ -862,38 +828,39 @@ class DirectSAPServiceLayerClient:
 
             logger.info(f"🔍 GET InventoryTransferRequests (filter: '{comment_filter}')")
 
-            if self.working_session:
-                response = self.working_session.get(url, headers=headers, timeout=self.timeout)
-            else:
-                response, _ = self._try_request_with_fallback("GET", url, headers=headers)
-                if response is None:
-                    logger.warning("⚠️ No se pudo consultar ITR en SAP")
-                    return []
+            response = self._get_request_with_transient_retries(
+                url,
+                headers,
+                operation_label="GET InventoryTransferRequests",
+            )
+            if response is None:
+                logger.warning("⚠️ No se pudo consultar ITR en SAP")
+                return []
 
-            if response.status_code == 200:
-                data = response.json()
-                items = data.get("value", [])
-                logger.info(f"✅ ITR encontrados: {len(items)}")
-                return [
-                    {
-                        "doc_num": item.get("DocNum"),
-                        "doc_entry": item.get("DocEntry"),
-                        "to_warehouse": item.get("ToWarehouse"),
-                        "from_warehouse": item.get("FromWarehouse"),
-                        "comments": item.get("Comments"),
-                    }
-                    for item in items
-                ]
-            else:
+            if response.status_code != 200:
                 logger.warning(
                     f"⚠️ Error al consultar ITR: {response.status_code} - "
                     f"{response.text[:500] if response.text else 'Sin detalle'}"
                 )
                 return []
 
+            items = response.json().get("value", [])
+            logger.info(f"✅ ITR encontrados: {len(items)}")
+            return [self._map_itr_item(item) for item in items]
+
         except Exception as e:
             logger.warning(f"⚠️ Error al consultar Inventory Transfer Requests: {e}")
             return []
+
+    @staticmethod
+    def _map_itr_item(item: Dict[str, Any]) -> Dict[str, Any]:
+        return {
+            "doc_num": item.get("DocNum"),
+            "doc_entry": item.get("DocEntry"),
+            "to_warehouse": item.get("ToWarehouse"),
+            "from_warehouse": item.get("FromWarehouse"),
+            "comments": item.get("Comments"),
+        }
 
     def get_stock_by_warehouse(
         self, 

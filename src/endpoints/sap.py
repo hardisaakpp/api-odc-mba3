@@ -324,7 +324,7 @@ def _procesar_oc_en_lista(
     return detalle_resultado, success, error
 
 
-def _registrar_error_en_lista(oc_repo, log_repo, proceso_id, username, source, oc_id_item, proveedor_fallback, error):
+def _registrar_error_en_lista(log_repo, proceso_id, username, source, oc_id_item, proveedor_fallback, error):
     try:
         log_repo.guardar_log(SAPLogEntry(
             proceso_id=proceso_id,
@@ -389,7 +389,6 @@ def _procesar_lista_ocs(oc_repo, log_repo, oc_sap_service, proceso_id, username,
             logger.error(f"❌ Error al procesar ODC {oc_id_item[:8]}...: {e}", exc_info=True)
             proveedor_fallback = proveedor if 'proveedor' in locals() else "UNKNOWN"
             _registrar_error_en_lista(
-                oc_repo,
                 log_repo,
                 proceso_id,
                 username,
