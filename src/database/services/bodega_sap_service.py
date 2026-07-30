@@ -5,7 +5,7 @@ Servicio para consultar SAP y poblar el cache de bodegas/tiendas.
 import logging
 from typing import Optional, Dict, Any, List
 
-from src.config import SAP_CACHE_DAYS, ENABLE_SAP_QUERIES, USE_MIDDLEWARE_WAREHOUSES
+from src.config import SAP_CACHE_DAYS, ENABLE_SAP_QUERIES, SAP_USE_MIDDLEWARE
 from ..connection import get_db_connection
 from ..clients.sap_client import SAPClient
 from ..clients.sap_service_layer_client import SAPServiceLayerClient
@@ -163,8 +163,8 @@ class BodegaSAPService:
         return True, self._bodega_desde_batch_item(item)
 
     def _consultar_bodega_sap(self, whs_code: str) -> Optional[Dict[str, Any]]:
-        """Consulta una bodega en SAP: middleware (si USE_MIDDLEWARE_WAREHOUSES) con fallback a OPENQUERY."""
-        if USE_MIDDLEWARE_WAREHOUSES:
+        """Consulta una bodega en SAP: middleware (si SAP_USE_MIDDLEWARE) con fallback a OPENQUERY."""
+        if SAP_USE_MIDDLEWARE:
             disponible, bodega_info = self._consultar_bodega_middleware(whs_code)
             if disponible:
                 return bodega_info
@@ -175,7 +175,7 @@ class BodegaSAPService:
 
     def _obtener_todas_bodegas_sap(self) -> List[Dict[str, Any]]:
         """Obtiene el catálogo completo de bodegas: middleware si está habilitado, si no OPENQUERY."""
-        if USE_MIDDLEWARE_WAREHOUSES:
+        if SAP_USE_MIDDLEWARE:
             bodegas = self.sap_sl_client.get_all_warehouses()
             if bodegas is not None:
                 return bodegas
@@ -294,7 +294,7 @@ class BodegaSAPService:
         repository: BodegaSAPRepository,
         codigos: List[str],
     ) -> tuple:
-        if USE_MIDDLEWARE_WAREHOUSES:
+        if SAP_USE_MIDDLEWARE:
             resultado_batch = self._consultar_sap_codigos_middleware(repository, codigos)
             if resultado_batch is not None:
                 return resultado_batch

@@ -60,7 +60,7 @@ class TestSkuExisteViaMiddleware:
 class TestSkuExisteEnSap:
     def test_middleware_resuelve_no_llama_openquery(self):
         with patch(
-            "src.endpoints.ordenes_compra.USE_MIDDLEWARE_SKU_LOOKUP", True
+            "src.endpoints.ordenes_compra.SAP_USE_MIDDLEWARE", True
         ), patch(
             "src.endpoints.ordenes_compra.SAPServiceLayerClient"
         ) as mock_mw, patch(
@@ -72,7 +72,7 @@ class TestSkuExisteEnSap:
 
     def test_middleware_caido_hace_fallback_a_openquery(self):
         with patch(
-            "src.endpoints.ordenes_compra.USE_MIDDLEWARE_SKU_LOOKUP", True
+            "src.endpoints.ordenes_compra.SAP_USE_MIDDLEWARE", True
         ), patch(
             "src.endpoints.ordenes_compra.SAPServiceLayerClient"
         ) as mock_mw, patch(
@@ -85,7 +85,7 @@ class TestSkuExisteEnSap:
 
     def test_flag_apagada_usa_solo_openquery(self):
         with patch(
-            "src.endpoints.ordenes_compra.USE_MIDDLEWARE_SKU_LOOKUP", False
+            "src.endpoints.ordenes_compra.SAP_USE_MIDDLEWARE", False
         ), patch(
             "src.endpoints.ordenes_compra.SAPServiceLayerClient"
         ) as mock_mw, patch(
@@ -106,7 +106,7 @@ class TestConsultarProductosSapPedido:
     def test_middleware_resuelve_todos_sin_openquery(self):
         service = PedidoService()
         with patch(
-            "src.database.services.pedido_service.USE_MIDDLEWARE_SKU_LOOKUP", True
+            "src.database.services.pedido_service.SAP_USE_MIDDLEWARE", True
         ), patch(
             "src.database.services.pedido_service.SAPServiceLayerClient"
         ) as mock_mw, patch(
@@ -125,7 +125,7 @@ class TestConsultarProductosSapPedido:
     def test_404_confirmado_no_va_a_openquery(self):
         service = PedidoService()
         with patch(
-            "src.database.services.pedido_service.USE_MIDDLEWARE_SKU_LOOKUP", True
+            "src.database.services.pedido_service.SAP_USE_MIDDLEWARE", True
         ), patch(
             "src.database.services.pedido_service.SAPServiceLayerClient"
         ) as mock_mw, patch(
@@ -140,7 +140,7 @@ class TestConsultarProductosSapPedido:
         """Batch deshabilitado/no disponible (None): todos los códigos van a OPENQUERY en un solo batch."""
         service = PedidoService()
         with patch(
-            "src.database.services.pedido_service.USE_MIDDLEWARE_SKU_LOOKUP", True
+            "src.database.services.pedido_service.SAP_USE_MIDDLEWARE", True
         ), patch(
             "src.database.services.pedido_service.SAPServiceLayerClient"
         ) as mock_mw, patch(
@@ -161,7 +161,7 @@ class TestConsultarProductosSapPedido:
         """Un código que no vino en el resultado del batch (chunk fallido/encolado) cae a OPENQUERY solo para ese código."""
         service = PedidoService()
         with patch(
-            "src.database.services.pedido_service.USE_MIDDLEWARE_SKU_LOOKUP", True
+            "src.database.services.pedido_service.SAP_USE_MIDDLEWARE", True
         ), patch(
             "src.database.services.pedido_service.SAPServiceLayerClient"
         ) as mock_mw, patch(
@@ -175,7 +175,7 @@ class TestConsultarProductosSapPedido:
     def test_error_generico_solo_ese_codigo_va_a_openquery(self):
         service = PedidoService()
         with patch(
-            "src.database.services.pedido_service.USE_MIDDLEWARE_SKU_LOOKUP", True
+            "src.database.services.pedido_service.SAP_USE_MIDDLEWARE", True
         ), patch(
             "src.database.services.pedido_service.SAPServiceLayerClient"
         ) as mock_mw, patch(
@@ -192,7 +192,7 @@ class TestConsultarProductosSapPedido:
     def test_flag_apagada_usa_solo_openquery(self):
         service = PedidoService()
         with patch(
-            "src.database.services.pedido_service.USE_MIDDLEWARE_SKU_LOOKUP", False
+            "src.database.services.pedido_service.SAP_USE_MIDDLEWARE", False
         ), patch(
             "src.database.services.pedido_service.SAPServiceLayerClient"
         ) as mock_mw, patch(

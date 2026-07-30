@@ -22,7 +22,7 @@ from src.database.connection import get_db_connection, get_db_connection_context
 from src.database.clients.sap_client import SAPClient
 from src.database.clients.sap_service_layer_client import SAPServiceLayerClient
 from src.database.services.stock_transfer_service import StockTransferService, redis_lock_reintento_st
-from src.config import USE_MIDDLEWARE_SKU_LOOKUP
+from src.config import SAP_USE_MIDDLEWARE
 from src.security.jwt_auth import verify_jwt_token, require_permission, require_any_permission
 
 logger = logging.getLogger(__name__)
@@ -82,10 +82,10 @@ def _sku_existe_via_middleware(sku_clean: str) -> Optional[bool]:
 
 def _sku_existe_en_sap(sku_clean: str) -> bool:
     """
-    Verifica si un SKU existe en SAP: middleware primero (USE_MIDDLEWARE_SKU_LOOKUP),
+    Verifica si un SKU existe en SAP: middleware primero (SAP_USE_MIDDLEWARE),
     con fallback automático a OPENQUERY si el middleware no responde.
     """
-    if USE_MIDDLEWARE_SKU_LOOKUP:
+    if SAP_USE_MIDDLEWARE:
         existe = _sku_existe_via_middleware(sku_clean)
         if existe is not None:
             return existe
@@ -563,7 +563,7 @@ async def _validar_sku_sap(nuevo_sku_clean: str) -> bool:
     logger.info(f"🔍 Validando SKU en SAP: {nuevo_sku_clean}")
 
     def _validar():
-        # Dispatcher middleware -> fallback OPENQUERY (USE_MIDDLEWARE_SKU_LOOKUP)
+        # Dispatcher middleware -> fallback OPENQUERY (SAP_USE_MIDDLEWARE)
         return _sku_existe_en_sap(nuevo_sku_clean)
 
     try:

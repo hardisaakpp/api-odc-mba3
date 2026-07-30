@@ -6,7 +6,7 @@ import logging
 from enum import Enum, auto
 from typing import Literal, Optional, Dict, Any, List, Union, Tuple
 
-from src.config import SAP_CACHE_DAYS, ENABLE_SAP_QUERIES, USE_MIDDLEWARE_PRODUCTO_INFO
+from src.config import SAP_CACHE_DAYS, ENABLE_SAP_QUERIES, SAP_USE_MIDDLEWARE
 from ..connection import get_db_connection
 from ..clients.sap_client import SAPClient
 from ..clients.sap_service_layer_client import SAPServiceLayerClient
@@ -64,10 +64,10 @@ class SAPService:
     def _consultar_producto_sap(self, sku: str) -> Optional[Dict[str, Any]]:
         """
         Consulta info del producto en SAP: middleware primero
-        (USE_MIDDLEWARE_PRODUCTO_INFO), con fallback automático a OPENQUERY
+        (SAP_USE_MIDDLEWARE), con fallback automático a OPENQUERY
         si el middleware no responde.
         """
-        if USE_MIDDLEWARE_PRODUCTO_INFO:
+        if SAP_USE_MIDDLEWARE:
             resultado = self._consultar_producto_via_middleware(sku)
             if resultado is not _SIN_RESPUESTA_MIDDLEWARE:
                 return resultado
@@ -276,7 +276,7 @@ class SAPService:
     ) -> Tuple[Dict[str, Optional[Dict[str, Any]]], bool]:
         """Consulta el batch del middleware y devuelve los resultados mapeados."""
         resueltos_batch: Dict[str, Optional[Dict[str, Any]]] = {}
-        if not pendientes or not USE_MIDDLEWARE_PRODUCTO_INFO:
+        if not pendientes or not SAP_USE_MIDDLEWARE:
             return resueltos_batch, False
 
         items = SAPServiceLayerClient().get_items_batch(pendientes)
@@ -347,7 +347,7 @@ class SAPService:
         Un solo intento, sin polling — misma filosofía que el resto de los métodos
         `*_batch` del cliente middleware. Los SKUs que ya están en cache local no
         tocan el middleware (igual que hoy). Los que sí necesitan SAP se resuelven
-        con el batch cuando USE_MIDDLEWARE_PRODUCTO_INFO está activo; cualquier SKU
+        con el batch cuando SAP_USE_MIDDLEWARE está activo; cualquier SKU
         que el batch no pudo resolver (middleware deshabilitado, chunk fallido, SAP
         saturado) cae a get_or_fetch_producto_info uno por uno — el mismo camino de
         siempre, con su propio fallback a OPENQUERY.

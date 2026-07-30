@@ -187,18 +187,9 @@ SAP_USE_MIDDLEWARE = os.getenv("SAP_USE_MIDDLEWARE", "true").lower() == "true"
 # Si el batch falla o está deshabilitado, se usa la validación línea por línea.
 USE_BATCH_VALIDATION = os.getenv("USE_BATCH_VALIDATION", "false").lower() == "true"
 
-# Bodegas: usar GET/POST /api/v1/warehouses(/validate) del middleware en lugar de
-# OPENQUERY directo a HANA. Si el middleware no responde, cae a OPENQUERY.
-USE_MIDDLEWARE_WAREHOUSES = os.getenv("USE_MIDDLEWARE_WAREHOUSES", "false").lower() == "true"
-
-# Búsqueda de SKU exacto: usar GET /api/v1/items/{itemCode} del middleware en lugar de
-# OPENQUERY directo a HANA. Si el middleware no responde, cae a OPENQUERY.
-USE_MIDDLEWARE_SKU_LOOKUP = os.getenv("USE_MIDDLEWARE_SKU_LOOKUP", "false").lower() == "true"
-
-# Info de producto en cache-miss (get_or_fetch_producto_info): usar el middleware
-# en lugar de OPENQUERY. Alimenta validación de pedidos y facturación (regla de
-# medias por grupo de artículos). Si el middleware no responde, cae a OPENQUERY.
-USE_MIDDLEWARE_PRODUCTO_INFO = os.getenv("USE_MIDDLEWARE_PRODUCTO_INFO", "false").lower() == "true"
+# Bodegas, búsqueda de SKU e info de producto en cache-miss usan la misma
+# SAP_USE_MIDDLEWARE: si el middleware no responde (o está desactivado), caen
+# automáticamente a OPENQUERY directo a HANA.
 
 # Reconciliación automática de Solicitudes de Transferencia (ITR) pendientes.
 # Automatiza el botón manual "Reintentar ST": una tarea Celery periódica reintenta
@@ -306,6 +297,12 @@ HIDE_SWAGGER_IN_PROD = os.getenv("HIDE_SWAGGER_IN_PROD", "true").lower() == "tru
 # ============================================================================
 logger = logging.getLogger(__name__)
 _CONFIG_INCOMPLETA_MSG = "⚠️ CONFIGURACIÓN INCOMPLETA (Desarrollo)"
+
+logger.info(
+    "🔌 Canal SAP: %s (SAP_USE_MIDDLEWARE=%s)",
+    "middleware .NET" if SAP_USE_MIDDLEWARE else "directo/OPENQUERY",
+    SAP_USE_MIDDLEWARE,
+)
 
 # Validar configuraciones crÃ­ticas en producciÃ³n
 if ENVIRONMENT == "production":

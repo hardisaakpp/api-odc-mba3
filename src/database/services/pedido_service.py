@@ -32,7 +32,7 @@ from src.utils.audit_context import AuditContext, ORIGEN_WEB
 from .pedido_formato_processor import PedidoFormatoProcessor
 from ..clients.sap_client import SAPClient
 from ..clients.sap_service_layer_client import SAPServiceLayerClient
-from src.config import ENABLE_SAP_QUERIES, USE_MIDDLEWARE_SKU_LOOKUP
+from src.config import ENABLE_SAP_QUERIES, SAP_USE_MIDDLEWARE
 
 logger = logging.getLogger(__name__)
 
@@ -217,13 +217,13 @@ class PedidoService:
     def _consultar_productos_sap(self, codigos: List[str]) -> Dict[str, Dict[str, Any]]:
         """
         Consulta información de productos en SAP: middleware primero
-        (USE_MIDDLEWARE_SKU_LOOKUP), con fallback automático a OPENQUERY
+        (SAP_USE_MIDDLEWARE), con fallback automático a OPENQUERY
         para los códigos que el middleware no pudo resolver.
         """
         pendientes = list(codigos)
         resultados: Dict[str, Dict[str, Any]] = {}
 
-        if USE_MIDDLEWARE_SKU_LOOKUP:
+        if SAP_USE_MIDDLEWARE:
             resultados, pendientes = self._consultar_productos_via_middleware(codigos)
             if pendientes:
                 logger.warning(

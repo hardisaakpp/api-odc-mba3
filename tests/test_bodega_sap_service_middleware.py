@@ -1,7 +1,7 @@
 """
 Tests de los dispatchers middleware/OPENQUERY en BodegaSAPService.
 
-Cubre la selección de vía según USE_MIDDLEWARE_WAREHOUSES y el fallback
+Cubre la selección de vía según SAP_USE_MIDDLEWARE y el fallback
 a OPENQUERY cuando el middleware no está disponible.
 """
 
@@ -57,7 +57,7 @@ class TestConsultarBodegaSapDispatcher:
     def test_flag_apagado_usa_openquery_directo(self):
         service = _service()
         service.sap_client.get_bodega_info.return_value = {"WhsCode": "RL-CD", "WhsName": "X"}
-        with patch("src.database.services.bodega_sap_service.USE_MIDDLEWARE_WAREHOUSES", False):
+        with patch("src.database.services.bodega_sap_service.SAP_USE_MIDDLEWARE", False):
             resultado = service._consultar_bodega_sap("RL-CD")
         assert resultado == {"WhsCode": "RL-CD", "WhsName": "X"}
         service.sap_sl_client.validate_warehouses_batch.assert_not_called()
@@ -67,7 +67,7 @@ class TestConsultarBodegaSapDispatcher:
         service.sap_sl_client.validate_warehouses_batch.return_value = {
             "warehouses": [{"whsCode": "RL-CD", "exists": True, "whsName": "X"}]
         }
-        with patch("src.database.services.bodega_sap_service.USE_MIDDLEWARE_WAREHOUSES", True):
+        with patch("src.database.services.bodega_sap_service.SAP_USE_MIDDLEWARE", True):
             resultado = service._consultar_bodega_sap("RL-CD")
         assert resultado == {"WhsCode": "RL-CD", "WhsName": "X"}
         service.sap_client.get_bodega_info.assert_not_called()
@@ -76,7 +76,7 @@ class TestConsultarBodegaSapDispatcher:
         service = _service()
         service.sap_sl_client.validate_warehouses_batch.return_value = None
         service.sap_client.get_bodega_info.return_value = {"WhsCode": "RL-CD", "WhsName": "X"}
-        with patch("src.database.services.bodega_sap_service.USE_MIDDLEWARE_WAREHOUSES", True):
+        with patch("src.database.services.bodega_sap_service.SAP_USE_MIDDLEWARE", True):
             resultado = service._consultar_bodega_sap("RL-CD")
         assert resultado == {"WhsCode": "RL-CD", "WhsName": "X"}
         service.sap_client.get_bodega_info.assert_called_once()
@@ -86,7 +86,7 @@ class TestObtenerTodasBodegasSapDispatcher:
     def test_flag_encendido_usa_middleware(self):
         service = _service()
         service.sap_sl_client.get_all_warehouses.return_value = [{"WhsCode": "RL-CD", "WhsName": "X"}]
-        with patch("src.database.services.bodega_sap_service.USE_MIDDLEWARE_WAREHOUSES", True):
+        with patch("src.database.services.bodega_sap_service.SAP_USE_MIDDLEWARE", True):
             resultado = service._obtener_todas_bodegas_sap()
         assert resultado == [{"WhsCode": "RL-CD", "WhsName": "X"}]
         service.sap_client.get_todas_bodegas.assert_not_called()
@@ -95,7 +95,7 @@ class TestObtenerTodasBodegasSapDispatcher:
         service = _service()
         service.sap_sl_client.get_all_warehouses.return_value = None
         service.sap_client.get_todas_bodegas.return_value = [{"WhsCode": "RL-CD", "WhsName": "X"}]
-        with patch("src.database.services.bodega_sap_service.USE_MIDDLEWARE_WAREHOUSES", True):
+        with patch("src.database.services.bodega_sap_service.SAP_USE_MIDDLEWARE", True):
             resultado = service._obtener_todas_bodegas_sap()
         assert resultado == [{"WhsCode": "RL-CD", "WhsName": "X"}]
 
@@ -108,7 +108,7 @@ class TestConsultarSapCodigosDispatcher:
     def test_flag_apagado_usa_loop_openquery(self):
         service = _service()
         service.sap_client.get_bodega_info.return_value = {"WhsName": "X"}
-        with patch("src.database.services.bodega_sap_service.USE_MIDDLEWARE_WAREHOUSES", False):
+        with patch("src.database.services.bodega_sap_service.SAP_USE_MIDDLEWARE", False):
             resultado, nuevos = service._consultar_sap_codigos(self._repo(), ["RL-CD"])
         assert resultado["RL-CD"]["encontrado"] is True
         assert resultado["RL-CD"]["fuente"] == "sap"
@@ -123,7 +123,7 @@ class TestConsultarSapCodigosDispatcher:
                 {"whsCode": "NOEXISTE", "exists": False, "errorType": "not_found"},
             ]
         }
-        with patch("src.database.services.bodega_sap_service.USE_MIDDLEWARE_WAREHOUSES", True):
+        with patch("src.database.services.bodega_sap_service.SAP_USE_MIDDLEWARE", True):
             resultado, nuevos = service._consultar_sap_codigos(repo, ["RL-CD", "NOEXISTE"])
         assert resultado["RL-CD"]["encontrado"] is True
         assert resultado["RL-CD"]["fuente"] == "middleware"
@@ -135,7 +135,7 @@ class TestConsultarSapCodigosDispatcher:
         service = _service()
         service.sap_sl_client.validate_warehouses_batch.return_value = None
         service.sap_client.get_bodega_info.return_value = {"WhsName": "X"}
-        with patch("src.database.services.bodega_sap_service.USE_MIDDLEWARE_WAREHOUSES", True):
+        with patch("src.database.services.bodega_sap_service.SAP_USE_MIDDLEWARE", True):
             resultado, nuevos = service._consultar_sap_codigos(self._repo(), ["RL-CD"])
         assert resultado["RL-CD"]["encontrado"] is True
         assert resultado["RL-CD"]["fuente"] == "sap"

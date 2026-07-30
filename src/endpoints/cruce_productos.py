@@ -21,7 +21,7 @@ from src.database.services.producto_staging_sync_service import ProductoStagingS
 from src.database.services.proceso_estado_service import ProcesoEstadoService
 from src.database.repositories.sync_control_repository import SyncControlRepository
 from src.security.jwt_auth import verify_jwt_token, require_permission
-from src.config import SAP_LINKED_SERVER, SAP_DATABASE, ENABLE_SAP_QUERIES, USE_MIDDLEWARE_SKU_LOOKUP
+from src.config import SAP_LINKED_SERVER, SAP_DATABASE, ENABLE_SAP_QUERIES, SAP_USE_MIDDLEWARE
 from src.database.connection import get_sap_db_connection, get_db_connection
 from src.database.clients.sap_service_layer_client import SAPServiceLayerClient
 
@@ -606,7 +606,7 @@ async def _buscar_sku_sap_handler(sku: str):
                 detail="Consultas SAP están deshabilitadas. Configura ENABLE_SAP_QUERIES=true en .env"
             )
 
-        if USE_MIDDLEWARE_SKU_LOOKUP:
+        if SAP_USE_MIDDLEWARE:
             resultado = await _buscar_sku_via_middleware(sku_clean)
             if resultado is not None:
                 return resultado

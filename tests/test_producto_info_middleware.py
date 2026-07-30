@@ -1,7 +1,7 @@
 """
 Tests de la migración a middleware de SAPService.get_or_fetch_producto_info
 (cache-miss): dispatcher `_consultar_producto_sap` con flag
-USE_MIDDLEWARE_PRODUCTO_INFO y fallback a OPENQUERY.
+SAP_USE_MIDDLEWARE y fallback a OPENQUERY.
 
 Punto crítico: aquí None es una respuesta VÁLIDA ("no existe en SAP",
 definitiva) — el sentinel _SIN_RESPUESTA_MIDDLEWARE distingue ese caso del
@@ -68,7 +68,7 @@ class TestConsultarProductoSap:
     def test_middleware_resuelve_no_llama_openquery(self):
         service = SAPService()
         with patch(
-            "src.database.services.sap_service.USE_MIDDLEWARE_PRODUCTO_INFO", True
+            "src.database.services.sap_service.SAP_USE_MIDDLEWARE", True
         ), patch(
             "src.database.services.sap_service.SAPServiceLayerClient"
         ) as mock_mw, patch.object(service, "sap_client") as mock_oq:
@@ -82,7 +82,7 @@ class TestConsultarProductoSap:
         """No existe en SAP (confirmado por middleware) NO debe disparar fallback."""
         service = SAPService()
         with patch(
-            "src.database.services.sap_service.USE_MIDDLEWARE_PRODUCTO_INFO", True
+            "src.database.services.sap_service.SAP_USE_MIDDLEWARE", True
         ), patch(
             "src.database.services.sap_service.SAPServiceLayerClient"
         ) as mock_mw, patch.object(service, "sap_client") as mock_oq:
@@ -96,7 +96,7 @@ class TestConsultarProductoSap:
     def test_middleware_caido_hace_fallback_a_openquery(self):
         service = SAPService()
         with patch(
-            "src.database.services.sap_service.USE_MIDDLEWARE_PRODUCTO_INFO", True
+            "src.database.services.sap_service.SAP_USE_MIDDLEWARE", True
         ), patch(
             "src.database.services.sap_service.SAPServiceLayerClient"
         ) as mock_mw, patch.object(service, "sap_client") as mock_oq:
@@ -109,7 +109,7 @@ class TestConsultarProductoSap:
     def test_flag_apagada_usa_solo_openquery(self):
         service = SAPService()
         with patch(
-            "src.database.services.sap_service.USE_MIDDLEWARE_PRODUCTO_INFO", False
+            "src.database.services.sap_service.SAP_USE_MIDDLEWARE", False
         ), patch(
             "src.database.services.sap_service.SAPServiceLayerClient"
         ) as mock_mw, patch.object(service, "sap_client") as mock_oq:
@@ -157,7 +157,7 @@ class TestGetOrFetchProductosBatch:
         with patch("src.database.services.sap_service.get_db_connection"), \
              patch("src.database.services.sap_service.ProductoSAPRepository"), \
              patch.object(service, "_consultar_cache", return_value=None), \
-             patch("src.database.services.sap_service.USE_MIDDLEWARE_PRODUCTO_INFO", True), \
+             patch("src.database.services.sap_service.SAP_USE_MIDDLEWARE", True), \
              patch("src.database.services.sap_service.SAPServiceLayerClient") as mock_mw, \
              patch.object(service, "_procesar_sap_info", return_value={"sku": "A1", "item_code": "A1"}) as mock_procesar:
             mock_mw.return_value.get_items_batch.return_value = {
@@ -174,7 +174,7 @@ class TestGetOrFetchProductosBatch:
         with patch("src.database.services.sap_service.get_db_connection"), \
              patch("src.database.services.sap_service.ProductoSAPRepository"), \
              patch.object(service, "_consultar_cache", return_value=None), \
-             patch("src.database.services.sap_service.USE_MIDDLEWARE_PRODUCTO_INFO", False), \
+             patch("src.database.services.sap_service.SAP_USE_MIDDLEWARE", False), \
              patch("src.database.services.sap_service.SAPServiceLayerClient") as mock_mw, \
              patch.object(service, "get_or_fetch_producto_info", return_value={"sku": "A1"}) as mock_individual:
             resultado = service.get_or_fetch_productos_batch(["A1"])
@@ -192,7 +192,7 @@ class TestGetOrFetchProductosBatch:
         with patch("src.database.services.sap_service.get_db_connection"), \
              patch("src.database.services.sap_service.ProductoSAPRepository"), \
              patch.object(service, "_consultar_cache", return_value=None), \
-             patch("src.database.services.sap_service.USE_MIDDLEWARE_PRODUCTO_INFO", True), \
+             patch("src.database.services.sap_service.SAP_USE_MIDDLEWARE", True), \
              patch("src.database.services.sap_service.SAPServiceLayerClient") as mock_mw, \
              patch.object(service, "sap_client") as mock_oq, \
              patch.object(service, "get_or_fetch_producto_info") as mock_individual, \
@@ -212,7 +212,7 @@ class TestGetOrFetchProductosBatch:
         with patch("src.database.services.sap_service.get_db_connection"), \
              patch("src.database.services.sap_service.ProductoSAPRepository"), \
              patch.object(service, "_consultar_cache", return_value=None), \
-             patch("src.database.services.sap_service.USE_MIDDLEWARE_PRODUCTO_INFO", True), \
+             patch("src.database.services.sap_service.SAP_USE_MIDDLEWARE", True), \
              patch("src.database.services.sap_service.SAPServiceLayerClient") as mock_mw, \
              patch.object(service, "_procesar_sap_info", return_value={"sku": "A1"}), \
              patch.object(service, "get_or_fetch_producto_info", return_value={"sku": "B2"}) as mock_individual:
@@ -230,7 +230,7 @@ class TestGetOrFetchProductosBatch:
         with patch("src.database.services.sap_service.get_db_connection"), \
              patch("src.database.services.sap_service.ProductoSAPRepository"), \
              patch.object(service, "_consultar_cache", return_value=None), \
-             patch("src.database.services.sap_service.USE_MIDDLEWARE_PRODUCTO_INFO", True), \
+             patch("src.database.services.sap_service.SAP_USE_MIDDLEWARE", True), \
              patch("src.database.services.sap_service.SAPServiceLayerClient") as mock_mw, \
              patch.object(service, "get_or_fetch_producto_info") as mock_individual:
             mock_mw.return_value.get_items_batch.return_value = {

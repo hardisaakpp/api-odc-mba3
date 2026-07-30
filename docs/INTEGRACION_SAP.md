@@ -17,18 +17,20 @@ Regla práctica para decidir el canal de una operación nueva:
 | Búsqueda difusa/`LIKE` sobre el catálogo (ej. SKUs similares) | `OPENQUERY` (es en esencia una lectura bulk filtrada) |
 | Endpoint de diagnóstico explícito (`/sap/test`, `/sap/test/direct`) | Cualquiera — es intencional, no es flujo de negocio |
 
-**Patrón de migración obligatorio** para todo punto que hoy siga en `OPENQUERY` y debiera pasar a middleware: agregar un flag en `.env` con default `false`, un dispatcher que intente middleware primero y haga *fallback* automático a `OPENQUERY` si el middleware no responde, y activar el flag solo en `.env.develop` tras verificación en vivo — nunca tocar `.env.production` sin decisión explícita. Ver [CALIDAD_CODIGO_SONAR.md](CALIDAD_CODIGO_SONAR.md) para el estándar de calidad de ese código.
+**Patrón de migración obligatorio** para todo punto que hoy siga en `OPENQUERY` y debiera pasar a middleware: un dispatcher que intente middleware primero (gateado por `SAP_USE_MIDDLEWARE`) y haga *fallback* automático a `OPENQUERY` si el middleware no responde. Ver [CALIDAD_CODIGO_SONAR.md](CALIDAD_CODIGO_SONAR.md) para el estándar de calidad de ese código.
 
 ### Estado de la migración (auditoría en curso)
 
-✅ **Ya migrados** (middleware primero, fallback a OPENQUERY):
-- Bodega puntual — `bodega_sap_service.py` (`_consultar_bodega_sap`), flag `USE_MIDDLEWARE_WAREHOUSES`
-- Catálogo/validación batch de bodegas — `bodega_sap_service.py`, flag `USE_MIDDLEWARE_WAREHOUSES`
-- SKU exacto (cruce de productos) — `cruce_productos.py` (`_buscar_sku_sap_handler`), flag `USE_MIDDLEWARE_SKU_LOOKUP`
-- Prevalidación de OC (proveedor + artículos) — `oc_sap_service.py` (`_precheck_batch`), flag `USE_BATCH_VALIDATION`
-- Validación de existencia de SKU al reasignarlo en una línea de OC — `ordenes_compra.py` (`_sku_existe_en_sap`), flag `USE_MIDDLEWARE_SKU_LOOKUP`
-- Enriquecimiento de detalles de pedido (descripcion_sap/pack) — `pedido_service.py` (`_consultar_productos_sap`), flag `USE_MIDDLEWARE_SKU_LOOKUP`. Nota: sigue siendo una llamada HTTP por SKU único (el endpoint batch del middleware de validación no expone `itemName`/`packCode`); si algún día se necesita un batch real de datos de catálogo, pedirlo como extensión al middleware.
-- Info de producto en cache-miss — `sap_service.py` (`_consultar_producto_sap`), flag `USE_MIDDLEWARE_PRODUCTO_INFO`. Alimenta validación de pedidos y facturación (regla de medias por `ItmsGrpNam`). El middleware ya expone `groupName` (verificado en vivo: `GET /api/v1/items/{code}` → `"groupName": "R-MEDIAS"`); un 404 confirmado se trata como "no existe" definitivo (sin fallback), distinguido del "middleware caído" mediante sentinel.
+✅ **Ya migrados** (middleware primero, fallback a OPENQUERY, todos gateados por `SAP_USE_MIDDLEWARE`):
+- Bodega puntual — `bodega_sap_service.py` (`_consultar_bodega_sap`)
+- Catálogo/validación batch de bodegas — `bodega_sap_service.py`
+- SKU exacto (cruce de productos) — `cruce_productos.py` (`_buscar_sku_sap_handler`)
+- Prevalidación de OC (proveedor + artículos) — `oc_sap_service.py` (`_precheck_batch`), flag `USE_BATCH_VALIDATION` (independiente, no es middleware-vs-OPENQUERY sino batch-vs-línea-por-línea; ambas rutas ya pasan por `SAP_USE_MIDDLEWARE`)
+- Validación de existencia de SKU al reasignarlo en una línea de OC — `ordenes_compra.py` (`_sku_existe_en_sap`)
+- Enriquecimiento de detalles de pedido (descripcion_sap/pack) — `pedido_service.py` (`_consultar_productos_sap`). Nota: sigue siendo una llamada HTTP por SKU único (el endpoint batch del middleware de validación no expone `itemName`/`packCode`); si algún día se necesita un batch real de datos de catálogo, pedirlo como extensión al middleware.
+- Info de producto en cache-miss — `sap_service.py` (`_consultar_producto_sap`). Alimenta validación de pedidos y facturación (regla de medias por `ItmsGrpNam`). El middleware ya expone `groupName` (verificado en vivo: `GET /api/v1/items/{code}` → `"groupName": "R-MEDIAS"`); un 404 confirmado se trata como "no existe" definitivo (sin fallback), distinguido del "middleware caído" mediante sentinel.
+
+Nota histórica: hasta 2026-07 estos puntos tenían flags propios (`USE_MIDDLEWARE_WAREHOUSES`, `USE_MIDDLEWARE_SKU_LOOKUP`, `USE_MIDDLEWARE_PRODUCTO_INFO`), todos con default `false`, independientes de `SAP_USE_MIDDLEWARE` (que solo gateaba el envío de OC/ITR). Se consolidaron en `SAP_USE_MIDDLEWARE` para que un solo flag controle middleware-vs-directo en toda la app, como paso previo a implementar un fallback automático por salud/saturación del middleware (middleware → Service Layer directo → OPENQUERY solo para lecturas).
 
 Con esto, **la migración de consultas puntuales a middleware está completa**: no quedan puntos de negocio que consulten OPENQUERY sin alternativa de middleware. OPENQUERY queda solo como fallback automático y para las excepciones bulk documentadas arriba.
 
@@ -132,9 +134,8 @@ ADD precio_unitario_sap DECIMAL(18, 4) NULL;
 ```env
 # Middleware (canal por defecto — ver Principio Arquitectónico)
 SAP_MIDDLEWARE_URL=http://localhost:8011
-USE_BATCH_VALIDATION=false          # Prevalidación de OC (proveedor + artículos) vía middleware
-USE_MIDDLEWARE_WAREHOUSES=false     # Bodegas (puntual, catálogo y validación batch) vía middleware
-USE_MIDDLEWARE_SKU_LOOKUP=false     # SKU exacto (cruce de productos) vía middleware
+SAP_USE_MIDDLEWARE=true             # Middleware vs Service Layer directo — gatea TODO lo anterior (envío de OC/ITR, bodegas, SKU, info de producto)
+USE_BATCH_VALIDATION=false          # Prevalidación de OC (proveedor + artículos): batch vs línea por línea (independiente)
 
 # SAP HANA (Consultas) — solo sync bulk de staging + puntos pendientes de migrar
 SAP_LINKED_SERVER=MYHANADB

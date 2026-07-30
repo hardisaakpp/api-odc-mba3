@@ -1216,13 +1216,14 @@ class DirectSAPServiceLayerClient:
         return result
     
     # -- Capacidades agregadas despues de la migracion a middleware --------
-    # (get_all_warehouses / validate_warehouses_batch / validate_purchase_order_batch)
-    # No existian en el flujo directo original. Retornan None (mismo contrato que
-    # "middleware no disponible") para que los callers (BodegaSAPService, ordenes_compra)
-    # hagan su fallback ya existente a OPENQUERY / validacion linea por linea. Estas
-    # rutas ademas estan detras de sus propios flags (USE_MIDDLEWARE_WAREHOUSES,
-    # USE_BATCH_VALIDATION), que por defecto son false, asi que en la practica no
-    # deberian invocarse en modo directo.
+    # (get_all_warehouses / validate_warehouses_batch / validate_purchase_order_batch /
+    # get_items_batch) No existian en el flujo directo original. Retornan None (mismo
+    # contrato que "middleware no disponible") para que los callers (BodegaSAPService,
+    # ordenes_compra, sap_service, pedido_service) hagan su fallback ya existente a
+    # OPENQUERY / validacion linea por linea. Como esta clase solo se instancia cuando
+    # SAP_USE_MIDDLEWARE=false, el fallback se dispara siempre que el modo directo esta
+    # activo (validate_purchase_order_batch ademas respeta USE_BATCH_VALIDATION, que es
+    # independiente de este flag).
 
     def get_all_warehouses(self) -> Optional[List[Dict[str, Any]]]:
         """No disponible en el cliente directo; el caller hace fallback a OPENQUERY."""
