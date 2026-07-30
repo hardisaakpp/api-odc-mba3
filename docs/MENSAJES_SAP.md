@@ -165,6 +165,19 @@ Estos mensajes son generados por el backend cuando hay problemas antes de enviar
 | `-5004` | Invalid field value | Valor de campo inválido |
 | `-5005` | Missing required field | Campo requerido faltante |
 | `-5006` | Duplicate key | Clave duplicada |
+| `-1116` | El artículo (`{ItemCode}`) tiene una cantidad que NO es múltiplo de `{N}` | La cantidad de una línea de un Inventory Transfer Request no respeta el múltiplo de empaque (packaging/UoM) configurado en el maestro de artículos de SAP. Ver caso conocido abajo. |
+
+### Caso conocido: `-1116` "cantidad que NO es múltiplo de 12" en Solicitudes de Transferencia
+
+**Contexto:** El 2026-07-29, 4 Solicitudes de Transferencia (Inventory Transfer Requests) para el artículo `MTF728.9` fallaron repetidamente con este error, incluso al usar "Reintentar ST" desde la UI (el log marca el error como no reintentable — `retry_operation` se detiene tras el primer intento).
+
+**Diagnóstico:** Se investigó si el mapper que arma el JSON del Inventory Transfer Request ([sap_stock_transfer_mapper.py](../src/database/mappers/sap_stock_transfer_mapper.py), función `_build_transfer_lines` usada por `to_sap_stock_transfer`) generaba múltiples renglones `StockTransferLines` para el mismo `ItemCode` (un pedido puede tener varios `pedido_detalle_id` que resuelven al mismo `item_code_sap` de SAP), cada uno con una cantidad fraccionaria de docena, y que SAP valida el múltiplo de empaque por renglón individual en vez de por el total agregado por artículo.
+
+**Causa raíz real:** se corrigió la configuración de datos maestros del artículo directamente en SAP y, sin ningún cambio de código, el reintento funcionó. Esto confirma que el origen fue una configuración incorrecta del packaging/UoM del artículo en el maestro de SAP, **no** un bug de agregación de líneas en el mapper.
+
+**Recomendación al depurar un caso similar:**
+1. Verificar primero la configuración de empaque/UoM del artículo en el maestro de SAP antes de sospechar del código.
+2. Si el error persiste tras corregir datos maestros, considerar que `_build_transfer_lines` no agrupa por `ItemCode` (a diferencia de `_aggregate_by_sku`, usado en el flujo hermano `to_sap_inventory_transfer_requests_by_bodega` del mismo archivo) — eso podría producir renglones fraccionarios individualmente inválidos aunque la suma por tienda sí sea múltiplo del empaque.
 
 ## Recomendaciones para el Frontend
 
