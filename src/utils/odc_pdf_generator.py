@@ -36,6 +36,7 @@ from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import cm, mm
 from reportlab.platypus import (
+    KeepTogether,
     Paragraph,
     SimpleDocTemplate,
     Spacer,
@@ -439,8 +440,11 @@ def _build_product_table(
     ]
     data.append(total_row)
 
-    # Anchos de columna
-    col_widths = [1.0 * cm, 3.0 * cm, 3.0 * cm, 4.0 * cm, 1.8 * cm, 2.2 * cm, 2.5 * cm]
+    # Anchos de columna: se usa el ancho útil completo de la página (18 cm con
+    # los márgenes actuales) y se amplía la columna Descripción para reducir
+    # el ajuste de línea, que era la principal causa de filas más altas de lo
+    # necesario y, por tanto, de páginas adicionales en órdenes con pocos ítems.
+    col_widths = [0.8 * cm, 2.3 * cm, 2.3 * cm, 6.0 * cm, 1.7 * cm, 2.2 * cm, 2.7 * cm]
 
     table = Table(data, colWidths=col_widths, repeatRows=1)
 
@@ -453,9 +457,9 @@ def _build_product_table(
         ("FONTSIZE", (0, 0), (-1, 0), 7),
         ("ALIGN", (0, 0), (-1, 0), "CENTER"),
         ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-        # Padding
-        ("TOPPADDING", (0, 0), (-1, -1), 4),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+        # Padding (reducido de 4 a 3 para compactar filas sin afectar legibilidad)
+        ("TOPPADDING", (0, 0), (-1, -1), 3),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
         ("LEFTPADDING", (0, 0), (-1, -1), 4),
         ("RIGHTPADDING", (0, 0), (-1, -1), 4),
         # Bordes
@@ -637,33 +641,36 @@ def generar_odc_pdf(
         # ── 2. Información de cabecera (proveedor | comprador) ───────────
         header_table = _build_header_info(oc_cabecera, pedido_info, styles)
         elements.append(header_table)
-        elements.append(Spacer(1, 6 * mm))
+        elements.append(Spacer(1, 4 * mm))
 
         # ── 3. Tabla de productos ────────────────────────────────────────
         elements.append(Paragraph("Detalle de la Orden de Compra", styles["section_title"]))
         product_table = _build_product_table(oc_detalles, styles)
         elements.append(product_table)
-        elements.append(Spacer(1, 6 * mm))
+        elements.append(Spacer(1, 4 * mm))
 
-        # ── 4. Resumen financiero ────────────────────────────────────────
+        # ── 4, 5 y 6. Resumen financiero, firmas y pie de página ──────────
+        # Se agrupan en un único bloque con KeepTogether para que, si no caben
+        # en el espacio restante de la página actual, se muevan juntos a la
+        # siguiente en lugar de quedar fragmentados (p. ej. resumen en una
+        # página y firmas solas en la siguiente, dejándola casi en blanco).
         subtotal = sum(float(d.get("total_linea", 0) or 0) for d in oc_detalles)
         summary_table = _build_financial_summary(subtotal, descuento_pct, styles)
-        elements.append(summary_table)
-        elements.append(Spacer(1, 12 * mm))
-
-        # ── 5. Sección de firmas ─────────────────────────────────────────
         firma_table = _build_signature_section(proveedor_nombre, proveedor_code, styles)
-        elements.append(firma_table)
-        elements.append(Spacer(1, 8 * mm))
-
-        # ── 6. Pie de página ─────────────────────────────────────────────
         fecha_gen = ahora_naive().strftime("%Y-%m-%d %H:%M:%S")
-        elements.append(
-            Paragraph(
-                f"Documento generado autom&aacute;ticamente &mdash; {COMPRADOR_RAZON_SOCIAL} &mdash; {fecha_gen}",
-                styles["footer"],
-            )
+        footer_paragraph = Paragraph(
+            f"Documento generado autom&aacute;ticamente &mdash; {COMPRADOR_RAZON_SOCIAL} &mdash; {fecha_gen}",
+            styles["footer"],
         )
+
+        cierre = [
+            summary_table,
+            Spacer(1, 6 * mm),
+            firma_table,
+            Spacer(1, 4 * mm),
+            footer_paragraph,
+        ]
+        elements.append(KeepTogether(cierre))
 
         # Construir PDF
         doc.build(elements)

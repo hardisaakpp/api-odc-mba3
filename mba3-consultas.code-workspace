@@ -1,0 +1,16 @@
+{
+	"folders": [
+		{
+			"path": "."
+		},
+		{
+			"path": "../scnexus-front"
+		},
+		{
+			"path": "../middleware"
+		}
+	],
+	"settings": {
+		"powershell.cwd": "mba3-consultas"
+	}
+}
