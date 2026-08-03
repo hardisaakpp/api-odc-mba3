@@ -303,6 +303,68 @@ except Exception:
 
 ---
 
+## S5332 — Uso de protocolo HTTP inseguro ("Using http protocol is insecure")
+
+**Regla:** Sonar marca como Security Hotspot cualquier string literal que empiece con
+`http://` (no `https://`). Es una regla puramente léxica: no distingue si ese string es
+una URL a la que la app realmente se conecta, o solo un identificador/constante que por
+convención usa ese prefijo.
+
+### Caso real: default de una URL de servicio (`CORE_API_URL`, `SAP_MIDDLEWARE_URL`, etc.)
+
+Cuando el literal SÍ es una URL a la que la app hace requests (ej. `os.getenv("CORE_API_URL",
+"http://210.17.1.59:5053")`), **no cambiar el default a `https://` sin antes verificar que el
+servidor real lo soporta**. Un Security Hotspot que toca un servicio de autenticación/permisos
+cae en la "zona gris" de `docs/sonarqube-review-policy.md` (sección 3) y requiere aprobación
+explícita antes de aplicarse.
+
+Antes de decidir, comprobar el soporte TLS del servidor real:
+
+```bash
+curl -k -m 6 -sS -o /dev/null -w "status:%{http_code}\n" http://<host>:<puerto>/
+curl -k -m 6 -sS -o /dev/null -w "status:%{http_code}\n" https://<host>:<puerto>/
+echo | openssl s_client -connect <host>:<puerto> -servername <host>
+```
+
+- Si `https://` completa el handshake TLS → el servidor sí soporta HTTPS, se puede corregir
+  el default con seguridad.
+- Si `https://` falla (timeout, o el error típico `tls_get_more_records: packet length too
+  long` de OpenSSL, que indica que el "TLS ClientHello" fue interpretado como texto plano por
+  un servidor HTTP) → el servidor **no** soporta HTTPS en ese puerto. Forzar el cambio
+  rompería la integración real. No tocar el código: marcar el hallazgo como **Won't Fix** en
+  SonarQube, motivo "servidor en red interna sin TLS configurado en este puerto (verificado
+  con curl/openssl)".
+
+### Caso real: literal que parece URL pero es un identificador fijo (falso positivo)
+
+Los **claim-type URIs de WS-Identity / WS-Federation** (convención de Microsoft/ASP.NET,
+usados en tokens JWT del Core de AD) usan `http://` como parte del identificador — no son
+endpoints de red y **siempre** llevan ese esquema literal, nunca `https://`:
+
+```python
+# Esto NO es una URL a la que se conecta la app — es la KEY con la que el Core
+# identifica el claim dentro del JWT. Cambiarla a https:// rompe el lookup porque
+# ya no coincide con lo que realmente envía el Core.
+possible_id_keys = [
+    'sub',
+    'http://schemas.xmlsoap.org/ws/2005/05/identity/claims/nameidentifier',
+    'http://schemas.microsoft.com/ws/2008/06/identity/claims/nameidentifier',
+]
+```
+
+No modificar. Marcar como **Won't Fix / False Positive** en SonarQube, motivo: "claim-type
+URI de WS-Identity, no es un endpoint de red; el esquema `http://` es parte fija del
+identificador y debe coincidir con lo que emite el Core".
+
+### Cómo distinguir los dos casos
+
+| Pregunta | Si la respuesta es sí... |
+|---|---|
+| ¿El literal se usa en `requests.get/post`, `os.getenv` para una URL base, o similar? | Es una URL real → verificar soporte HTTPS antes de tocar (caso 1). |
+| ¿El literal se usa como *key* de diccionario, comparación de claim/namespace, o en una lista de "posibles nombres de campo"? | Es un identificador, no un endpoint → falso positivo (caso 2). |
+
+---
+
 ## Checklist antes de hacer commit
 
 1. **CC nueva función > 15?** → extraer helpers antes de commitear.
@@ -316,6 +378,8 @@ except Exception:
 7. **`import X` sin usar X?** → quitar el import.
 8. **`except X as e:` sin usar `e`?** → quitar el `as e`.
 9. **`except:`?** → especificar `except Exception:`.
+10. **Literal `"http://..."` marcado por Sonar?** → distinguir si es una URL real (verificar
+    HTTPS con el servidor antes de tocar) o un identificador/claim-key (falso positivo, no tocar).
 
 ---
 

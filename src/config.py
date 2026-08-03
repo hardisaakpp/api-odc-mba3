@@ -273,7 +273,8 @@ JWT_AUDIENCE = os.getenv('JWT_AUDIENCE', 'SCNexus.Users')
 # URL base del Core para llamadas a la API de permisos y otros servicios
 # El Core gestiona la integraciÃ³n con Active Directory y asigna permisos
 # a usuarios y roles de AD segÃºn las pÃ¡ginas a las que pueden tener acceso
-CORE_API_URL = os.getenv("CORE_API_URL", "http://210.17.1.59:5053")
+# IMPORTANTE: Configurar en .env (sin default por seguridad, ver validaciÃ³n abajo)
+CORE_API_URL = os.getenv("CORE_API_URL", "")
 CORE_API_TIMEOUT = int(os.getenv("CORE_API_TIMEOUT", "30"))  # Timeout en segundos
 
 # Habilitar autenticaciÃ³n JWT (requiere token vÃ¡lido del Core)
@@ -323,11 +324,15 @@ if ENVIRONMENT == "production":
             "Configura en .env"
         )
     
-    # Validar JWT_SECRET si JWT está habilitado
+    # Validar JWT_SECRET y CORE_API_URL si JWT está habilitado
     if ENABLE_JWT_AUTH:
         if not JWT_SECRET:
             raise ValueError(
                 "JWT_SECRET debe configurarse en .env en produccion. No puede estar vacio."
+            )
+        if not CORE_API_URL:
+            raise ValueError(
+                "CORE_API_URL debe configurarse en .env en produccion. No puede estar vacio."
             )
         if JWT_SECRET == 'clave_super_secreta_para_jwt_12345':
             logger.warning(
