@@ -7,6 +7,7 @@ NO Stock Transfer Orders. Las Inventory Transfer Requests son solicitudes que NO
 solo crean una solicitud que debe ser procesada posteriormente.
 """
 
+import contextlib
 import json
 import logging
 from typing import Dict, Any, List, Optional, Tuple
@@ -19,8 +20,10 @@ from src.config import (
     SAP_ITR_RETRY_MAX_JITTER_SECONDS,
 )
 from .retry_utils import retry_operation, sap_service_layer_result_should_retry
+from .proceso_estado_service import get_redis_client
 from ..connection import get_db_connection_context
 from ..repositories.pedido_repository import PedidoRepository
+from ..repositories.orden_compra_repository import OrdenCompraRepository
 from ..repositories.distribucion_confirmada_repository import DistribucionConfirmadaRepository
 from ..repositories.pedido_sap_procesamiento_repository import PedidoSAPProcesamientoRepository
 from ..repositories.solicitud_transferencia_repository import SolicitudTransferenciaRepository
@@ -30,6 +33,33 @@ from ..services.bodega_sap_service import BodegaSAPService
 from src.exceptions import SAPDataMasterError
 
 logger = logging.getLogger(__name__)
+
+_LOCK_REINTENTO_ST_TIMEOUT_SEGUNDOS = 120.0
+
+
+@contextlib.contextmanager
+def redis_lock_reintento_st(oc_id: str, blocking_timeout: float = 120.0):
+    """
+    Lock distribuido (Redis) para serializar reintentos de ST por oc_id.
+
+    Necesario porque el endpoint manual (proceso FastAPI) y la reconciliación
+    automática (proceso Celery) no comparten memoria; un lock en memoria
+    (threading.Lock) solo protege dentro de un mismo proceso.
+
+    Yields True si se obtuvo el lock, False si no (el caller debe omitir la ejecución).
+    """
+    client = get_redis_client()
+    lock = client.lock(f"lock:reintento-st:{oc_id}", timeout=_LOCK_REINTENTO_ST_TIMEOUT_SEGUNDOS)
+    acquired = False
+    try:
+        acquired = lock.acquire(blocking=True, blocking_timeout=blocking_timeout)
+        yield acquired
+    finally:
+        if acquired:
+            try:
+                lock.release()
+            except Exception:
+                pass
 
 
 class StockTransferService:
@@ -730,7 +760,7 @@ class StockTransferService:
             return None, True
 
         # ⭐ VALIDACIÓN 4: Validar que la tienda pertenezca a la bodega origen
-        bodega_tienda = self.obtener_bodega_de_tienda(tienda_codigo)
+        bodega_tienda = self.obtener_bodega_de_tienda(tienda_codigo_upper)
         if bodega_tienda is None:
             logger.warning(
                 f"⚠️ Omitiendo distribución: No se pudo determinar la bodega de la tienda '{tienda_codigo}'. "
@@ -787,6 +817,10 @@ class StockTransferService:
             (lista_de_entries, cantidad_omitidas)
         """
         pedido_detalle_id = producto_dist.get("pedido_detalle_id")
+        if pedido_detalle_id is None:
+            logger.warning(f"⚠️ producto_dist sin pedido_detalle_id: {producto_dist.get('codigo_producto')}")
+            return [], 0
+
         procesamiento = mapa_procesamientos.get(pedido_detalle_id)
 
         if not procesamiento:
@@ -887,6 +921,74 @@ class StockTransferService:
             )
         return distribucion_filtrada
 
+    def _buscar_itrs_existentes_en_sap(
+        self, comentario_exacto: str, bodega_origen: str
+    ) -> Dict[str, Dict[str, Any]]:
+        """
+        Verificación preventiva de duplicados: consulta a SAP qué ITRs ya existen
+        para este pedido/OC antes de reintentar crearlas.
+
+        Cubre el caso en que SAP creó el ITR pero la confirmación se perdió
+        (timeout, caída) y nuestra BD quedó en Error: sin esto, el reintento
+        crearía un duplicado.
+
+        Matching estricto (los tres a la vez) para evitar falsos positivos por
+        substring (ej. "Pedido P-12.4" vs "Pedido P-12.48"):
+        - Comments igual EXACTO al comentario que nosotros mismos construimos
+        - FromWarehouse igual a la bodega origen
+        - ToWarehouse se usa como clave del mapa retornado
+
+        Returns:
+            {to_warehouse_normalizado: {"doc_num": ..., "doc_entry": ...}}.
+            Vacío si no hay coincidencias o si la consulta falla (no bloqueante:
+            el caller sigue con la creación normal, que es el comportamiento actual).
+        """
+        try:
+            itrs = self.sap_client.get_inventory_transfer_requests_by_comment(comentario_exacto)
+        except Exception as e:
+            logger.warning(f"⚠️ No se pudo verificar ITRs existentes en SAP (no bloqueante): {e}")
+            return {}
+
+        bodega_norm = bodega_origen.strip().upper()
+        comentario_norm = comentario_exacto.strip()
+        existentes: Dict[str, Dict[str, Any]] = {}
+        for itr in itrs or []:
+            if str(itr.get("comments") or "").strip() != comentario_norm:
+                continue
+            if str(itr.get("from_warehouse") or "").strip().upper() != bodega_norm:
+                continue
+            to_wh = str(itr.get("to_warehouse") or "").strip().upper()
+            if to_wh and itr.get("doc_entry"):
+                existentes[to_wh] = {
+                    "doc_num": itr.get("doc_num"),
+                    "doc_entry": itr.get("doc_entry"),
+                }
+        if existentes:
+            logger.info(
+                f"♻️ ITRs ya existentes en SAP detectadas (no se duplicarán): "
+                f"{sorted(existentes.keys())}"
+            )
+        return existentes
+
+    @staticmethod
+    def _resultado_desde_itr_existente(
+        tienda_id: str,
+        tienda_codigo: str,
+        tienda_nombre: Optional[str],
+        itr_existente: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Resultado por tienda cuando el ITR ya existía en SAP (mismo shape que uno creado)."""
+        return {
+            "tienda_id": tienda_id,
+            "tienda_codigo": tienda_codigo,
+            "tienda_nombre": tienda_nombre,
+            "success": True,
+            "doc_entry": itr_existente.get("doc_entry"),
+            "doc_num": itr_existente.get("doc_num"),
+            "error": None,
+            "recuperada": True,
+        }
+
     def _enviar_itrs_a_sap(
         self,
         stock_transfers_json: List[Dict[str, Any]],
@@ -894,12 +996,30 @@ class StockTransferService:
         bodega_origen: str,
         mapeo_nombre_tienda: Dict[str, str],
         result: Dict[str, Any],
+        itrs_existentes: Optional[Dict[str, Dict[str, Any]]] = None,
     ) -> None:
         """Envía cada ITR a SAP con reintento y actualiza result con los resultados por tienda."""
         tiendas_list = list(distribucion_por_tienda.keys())
+        itrs_existentes = itrs_existentes or {}
         for idx, stock_transfer_json in enumerate(stock_transfers_json):
             tienda_codigo = stock_transfer_json.get("ToWarehouse", "N/A")
             tienda_id = tiendas_list[idx]
+
+            itr_existente = itrs_existentes.get(tienda_codigo.strip().upper())
+            if itr_existente:
+                tienda_nombre_rec = mapeo_nombre_tienda.get(tienda_codigo.strip().upper())
+                result["resultados"].append(
+                    self._resultado_desde_itr_existente(
+                        tienda_id, tienda_codigo, tienda_nombre_rec, itr_existente
+                    )
+                )
+                result["transferencias_creadas"] += 1
+                logger.info(
+                    f"♻️ ITR ya existía en SAP, no se duplicó: {bodega_origen} → {tienda_codigo} "
+                    f"(DocEntry={itr_existente.get('doc_entry')}, DocNum={itr_existente.get('doc_num')})"
+                )
+                continue
+
             logger.debug(
                 f"🔄 Enviando ITR {idx+1}/{len(stock_transfers_json)} a SAP: "
                 f"{bodega_origen} → {tienda_codigo}..."
@@ -1010,6 +1130,7 @@ class StockTransferService:
         usuario_id: Optional[str] = None,
         serie: Optional[int] = None,
         tiendas_destino_filtro: Optional[List[str]] = None,
+        verificar_ya_existente_en_sap: bool = False,
     ) -> Dict[str, Any]:
         """
         Crea Solicitudes de Transferencia (Inventory Transfer Requests) en SAP desde la distribución confirmada de un pedido.
@@ -1047,6 +1168,10 @@ class StockTransferService:
             usuario_id: ID del usuario que genera las transferencias
             tiendas_destino_filtro: Lista opcional de códigos de tienda destino a procesar.
                                   Si se envía, solo se intentan esas tiendas (útil para reintento parcial).
+            verificar_ya_existente_en_sap: Si True, antes de crear consulta a SAP qué ITRs ya
+                                  existen para este pedido/OC (verificación preventiva de duplicados);
+                                  las encontradas se adoptan (doc_num/doc_entry) en vez de recrearse.
+                                  Pensado para reintentos; el envío original no lo necesita.
 
         Returns:
             Diccionario con el resultado:
@@ -1155,13 +1280,24 @@ class StockTransferService:
                     )
                     return result
 
+                # Verificación preventiva de duplicados (solo reintentos): si SAP creó
+                # el ITR pero la confirmación se perdió, adoptarlo en vez de recrearlo.
+                itrs_existentes = None
+                if verificar_ya_existente_en_sap:
+                    comentario_esperado = SAPStockTransferMapper.build_comentario_transferencia(
+                        oc_doc_num, pedido_cabecera.get("numero_pedido", "N/A")
+                    )
+                    itrs_existentes = self._buscar_itrs_existentes_en_sap(
+                        comentario_esperado, bodega_origen
+                    )
+
                 # 7. Crear cada Inventory Transfer Request en SAP (POST /InventoryTransferRequests)
                 logger.info(
                     f"📤 Enviando {len(stock_transfers_json)} Inventory Transfer Request(s) a SAP..."
                 )
                 self._enviar_itrs_a_sap(
                     stock_transfers_json, distribucion_por_tienda, bodega_origen,
-                    mapeo_nombre_tienda, result
+                    mapeo_nombre_tienda, result, itrs_existentes=itrs_existentes
                 )
 
                 # 8. Determinar éxito general y loguear resultado REAL
@@ -1179,3 +1315,157 @@ class StockTransferService:
             logger.error(f"❌ Error al crear Solicitudes de Transferencia: {e}", exc_info=True)
             result["error"] = str(e)
             return result
+
+    @staticmethod
+    def _resolver_tiendas_objetivo(
+        st_repo: SolicitudTransferenciaRepository, oc_id: str
+    ) -> Tuple[List[str], str]:
+        """Tiendas pendientes de reintento (idempotente) y de dónde salió la lista."""
+        tiendas_objetivo = st_repo.get_tiendas_pendientes_reintento_st(oc_id)
+        if tiendas_objetivo:
+            return tiendas_objetivo, "detalle"
+        tiendas_fallback = st_repo.get_tiendas_fallidas_desde_resultado_json_fallback(oc_id)
+        return tiendas_fallback, ("resultado_json" if tiendas_fallback else "ninguno")
+
+    @staticmethod
+    def _parse_oc_doc_num(numero_oc_sap_raw: Any) -> Optional[int]:
+        if numero_oc_sap_raw is None:
+            return None
+        try:
+            return int(numero_oc_sap_raw)
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _obtener_numero_pedido(pedido_id: str, conn: Any) -> Optional[str]:
+        """Número de pedido legible para notificaciones; None si falla (no bloqueante)."""
+        try:
+            pedido_data = PedidoRepository(conn).get_pedido_completo(pedido_id)
+            if pedido_data and pedido_data.get("cabecera"):
+                return pedido_data["cabecera"].get("numero_pedido")
+        except Exception:
+            pass
+        return None
+
+    @staticmethod
+    def _notificar_st_creadas_en_reintento(
+        oc_id: str,
+        oc_cabecera: Dict[str, Any],
+        resultado_st: Dict[str, Any],
+        pedido_numero: Optional[str],
+        origen: str,
+    ) -> None:
+        """
+        Notifica a El Rayo (+ MABEL TRADING) los códigos de ST recién creados en un reintento.
+
+        Mismo correo que el envío original (send_oc_ready_for_dispatch_notification):
+        el flujo inicial solo lo dispara una vez al crear la ODC, así que sin esto,
+        las ITR que se crean recién en un reintento (manual o automático) nunca
+        llegaban a El Rayo con sus códigos.
+        """
+        from src.utils.email_notifier import send_oc_ready_for_dispatch_notification
+
+        try:
+            enviado = send_oc_ready_for_dispatch_notification(
+                oc_cabecera=oc_cabecera,
+                doc_num=oc_cabecera.get("numero_oc_sap"),
+                doc_entry=oc_cabecera.get("doc_entry"),
+                solicitudes_transferencia=resultado_st,
+                pedido_numero=pedido_numero,
+            )
+            if enviado:
+                logger.info(
+                    f"📧 Notificación a El Rayo enviada tras reintento ST ({origen}) para OC {oc_id[:8]}..."
+                )
+            else:
+                logger.warning(
+                    f"⚠️ No se pudo notificar a El Rayo tras reintento ST ({origen}) para OC {oc_id[:8]}..."
+                )
+        except Exception as e:
+            logger.warning(f"⚠️ Error al notificar a El Rayo tras reintento ST ({origen}): {e}")
+
+    def reintentar_pendientes(
+        self,
+        oc_id: str,
+        usuario_id: str,
+        origen: str = "manual",
+    ) -> Dict[str, Any]:
+        """
+        Reintenta únicamente las Solicitudes de Transferencia (ITR) pendientes de una OC ya ENVIADA.
+
+        Compartido por el endpoint manual (POST /ordenes-compra/{oc_id}/reintentar-st) y por
+        la reconciliación automática (Celery). Idempotente: solo reintenta tiendas sin ITR ya
+        creado en algún intento previo (ver SolicitudTransferenciaRepository.get_tiendas_pendientes_reintento_st).
+
+        Args:
+            oc_id: UUID de la orden de compra.
+            usuario_id: Identificador de quién dispara el reintento (usuario o "celery-beat").
+            origen: Solo para logging ("manual" | "automatico").
+
+        Returns:
+            {"status": ..., "message": ..., "oc_id": ..., ...} — ver cada rama para el detalle.
+            status: "no_encontrada" | "estado_invalido" | "sin_pedido" | "no_pendientes" | "success" | "partial"
+        """
+        with get_db_connection_context() as conn:
+            oc_repo = OrdenCompraRepository(conn)
+            st_repo = SolicitudTransferenciaRepository(conn)
+
+            oc_cabecera = oc_repo.get_existing_cabecera(oc_id)
+            if not oc_cabecera:
+                return {"status": "no_encontrada", "message": "Orden de compra no encontrada", "oc_id": oc_id}
+
+            estado = str(oc_cabecera.get("estado") or "").strip().upper()
+            if estado != "ENVIADA":
+                return {
+                    "status": "estado_invalido",
+                    "message": f"Solo se puede reintentar ST cuando la ODC está ENVIADA (estado actual: {estado or 'N/A'})",
+                    "oc_id": oc_id,
+                }
+
+            tiendas_objetivo, origen_lista = self._resolver_tiendas_objetivo(st_repo, oc_id)
+            if not tiendas_objetivo:
+                return {
+                    "status": "no_pendientes",
+                    "message": "No hay Solicitudes de Transferencia pendientes para reintentar "
+                               "(todas las tiendas ya tienen ITR o no hay registro de fallas).",
+                    "oc_id": oc_id,
+                    "reintentadas": 0,
+                    "origen_lista_tiendas": origen_lista,
+                }
+
+            pedido_id = oc_cabecera.get("pedido_id")
+            if not pedido_id:
+                return {
+                    "status": "sin_pedido",
+                    "message": "La ODC no tiene pedido_id asociado para reconstruir ST.",
+                    "oc_id": oc_id,
+                }
+
+            pedido_numero = self._obtener_numero_pedido(pedido_id, conn)
+
+        logger.info(
+            f"🔁 Reintento ST ({origen}) para OC {oc_id[:8]}...: "
+            f"{len(tiendas_objetivo)} tienda(s) objetivo"
+        )
+        resultado_st = self.crear_solicitudes_transferencia_desde_pedido(
+            pedido_id=str(pedido_id),
+            oc_doc_num=self._parse_oc_doc_num(oc_cabecera.get("numero_oc_sap")),
+            oc_id=oc_id,
+            bodega_origen=oc_cabecera.get("codigo_bodega"),
+            usuario_id=usuario_id,
+            tiendas_destino_filtro=tiendas_objetivo,
+            verificar_ya_existente_en_sap=True,
+        )
+
+        if resultado_st.get("transferencias_creadas", 0) > 0:
+            self._notificar_st_creadas_en_reintento(oc_id, oc_cabecera, resultado_st, pedido_numero, origen)
+
+        return {
+            "status": "success" if resultado_st.get("success") else "partial",
+            "message": "Reintento ST ejecutado.",
+            "oc_id": oc_id,
+            "origen_lista_tiendas": origen_lista,
+            "tiendas_objetivo": tiendas_objetivo,
+            "tiendas_count": len(tiendas_objetivo),
+            "resultado_st": resultado_st,
+        }

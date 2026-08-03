@@ -215,17 +215,10 @@ class MBA3Client:
 
         return token
 
-    def _try_single_login_payload(self, i: int, payload: dict, url: str, headers: dict, timeout: int, codigo: str, total: int) -> Optional[str]:
+    def _attempt_login_safe(self, i: int, payload: dict, url: str, headers: dict, timeout: int, codigo: str, total: int) -> Optional[str]:
+        """Ejecuta un intento de login con manejo de errores. Returns None para probar siguiente payload."""
         try:
-            token = self._attempt_login(i, payload, url, headers, timeout, codigo, total)
-            if token is None:
-                return None
-            self.token = token
-            if ENVIRONMENT == "development":
-                logger.debug(f"✅ Login exitoso. JWT obtenido (primeros 20 caracteres): {token[:20]}...")
-            else:
-                logger.info("✅ Login exitoso. JWT obtenido")
-            return token
+            return self._attempt_login(i, payload, url, headers, timeout, codigo, total)
         except requests.exceptions.ConnectionError as e:
             raise MBA3ConnectionError(_build_connection_error_msg(url, e))
         except requests.exceptions.Timeout:
@@ -238,6 +231,13 @@ class MBA3Client:
         except Exception as e:
             _handle_generic_exception(e, url, i, total)
             return None
+
+    @staticmethod
+    def _log_login_exitoso(token: str) -> None:
+        if ENVIRONMENT == "development":
+            logger.debug(f"✅ Login exitoso. JWT obtenido (primeros 20 caracteres): {token[:20]}...")
+        else:
+            logger.info("✅ Login exitoso. JWT obtenido")
 
     def login(self, codigo: str, pwd: str, timeout: int = 10) -> str:
         """
@@ -280,8 +280,10 @@ class MBA3Client:
         logger.info(f"🔐 Intentando login con código: {codigo[:3]}***")
 
         for i, payload in enumerate(payloads_to_try, 1):
-            token = self._try_single_login_payload(i, payload, url, headers, timeout, codigo, total)
+            token = self._attempt_login_safe(i, payload, url, headers, timeout, codigo, total)
             if token is not None:
+                self.token = token
+                self._log_login_exitoso(token)
                 return token
 
         raise ValueError(f"Error en login después de {total} intentos")

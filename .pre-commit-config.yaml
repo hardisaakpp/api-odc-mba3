@@ -1,0 +1,12 @@
+# Hooks locales (solo entorno de desarrollo). Instalación:
+#   pip install -r requirements-dev.txt
+#   pre-commit install
+#
+# En cada commit se valida Ruff solo sobre archivos staged (no instala nada en producción).
+# Para autocorregir en local: ruff check --fix … (no usar --fix en CI ni en Docker).
+
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.15.10
+    hooks:
+      - id: ruff

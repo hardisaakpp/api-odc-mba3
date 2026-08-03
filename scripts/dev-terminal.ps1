@@ -154,10 +154,13 @@ switch ($Mode) {
                 & (Join-Path $BackendRoot "run-dev.ps1")
             }
             "worker" {
-                celery -A src.celery_app worker --loglevel=info --pool=solo
+                # python -m celery en vez del launcher celery.exe: el .exe pip-instalado
+                # graba en el propio binario la ruta absoluta del python.exe usado al
+                # instalar; si el venv se copió/movió de carpeta, ese launcher queda roto.
+                python -m celery -A src.celery_app worker --loglevel=info --pool=solo
             }
             "beat" {
-                celery -A src.celery_app beat --loglevel=info
+                python -m celery -A src.celery_app beat --loglevel=info
             }
         }
     }

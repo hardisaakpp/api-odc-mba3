@@ -63,8 +63,14 @@ class SAPStockTransferMapper:
         return [{"ItemCode": k, "Quantity": v} for k, v in agg.items()]
 
     @staticmethod
-    def _build_comentario_transferencia(oc_doc_num: Optional[int], numero_pedido: str) -> str:
-        """Construye el comentario base para un Inventory Transfer Request."""
+    def build_comentario_transferencia(oc_doc_num: Optional[int], numero_pedido: str) -> str:
+        """
+        Construye el comentario base para un Inventory Transfer Request.
+
+        Público porque además de armar el payload, sirve como clave de negocio derivada:
+        la verificación preventiva de duplicados (StockTransferService) reconstruye este
+        mismo texto para preguntar a SAP si el ITR ya existe antes de reintentar.
+        """
         base = f"Transferencia desde OC {oc_doc_num}" if oc_doc_num else "Transferencia desde pedido"
         return f"{base} - Pedido {numero_pedido}"
 
@@ -137,7 +143,7 @@ class SAPStockTransferMapper:
         fecha = ahora_naive().strftime("%Y-%m-%d")
 
         numero_pedido = pedido_data.get("numero_pedido", "N/A")
-        comentario_base = SAPStockTransferMapper._build_comentario_transferencia(oc_doc_num, numero_pedido)
+        comentario_base = SAPStockTransferMapper.build_comentario_transferencia(oc_doc_num, numero_pedido)
 
         stock_transfers = []
         bodega_origen_upper = bodega_origen.strip().upper()

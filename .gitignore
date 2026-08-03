@@ -59,6 +59,11 @@ celerybeat-schedule-wal
 # IDE y herramientas locales
 .vs/
 .idea/
+
+# Visual Studio Code
+.vscode/
+
+# Cursor IDE
 .cursor/
 .claude/
 .sonarlint/

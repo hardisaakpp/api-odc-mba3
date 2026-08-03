@@ -193,11 +193,8 @@ class BodegaSAPRepository:
                 
                 cursor.execute(sql, values)
                 self.conn.commit()
-                if cursor.rowcount == 0:
-                    logger.warning(f"⚠️ Sin filas actualizadas para bodega {whs_code_normalized}")
-                    return False
                 logger.debug(f"✅ Bodega/Tienda SAP cache actualizada: {whs_code_normalized}")
-                return True
+                return cursor.rowcount != -1
             else:
                 # INSERTAR
                 sql = """

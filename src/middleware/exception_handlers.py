@@ -183,11 +183,11 @@ async def _general_exception_handler(request: Request, exc: Exception):
 
 def setup_exception_handlers(app: FastAPI):
     """Configura los exception handlers para la aplicación."""
-    app.add_exception_handler(RequestValidationError, _validation_exception_handler)
-    app.add_exception_handler(HTTPException, _http_exception_handler)
-    app.add_exception_handler(ValueError, _value_error_handler)
-    app.add_exception_handler(QueryValidationError, _query_validation_error_handler)
-    app.add_exception_handler(MBA3ConnectionError, _mba3_connection_error_handler)
-    app.add_exception_handler(MBA3QueryError, _mba3_query_error_handler)
-    app.add_exception_handler(BusinessException, _business_exception_handler)
+    app.add_exception_handler(RequestValidationError, _validation_exception_handler)  # type: ignore[arg-type]
+    app.add_exception_handler(HTTPException, _http_exception_handler)  # type: ignore[arg-type]
+    app.add_exception_handler(ValueError, _value_error_handler)  # type: ignore[arg-type]
+    app.add_exception_handler(QueryValidationError, _query_validation_error_handler)  # type: ignore[arg-type]
+    app.add_exception_handler(MBA3ConnectionError, _mba3_connection_error_handler)  # type: ignore[arg-type]
+    app.add_exception_handler(MBA3QueryError, _mba3_query_error_handler)  # type: ignore[arg-type]
+    app.add_exception_handler(BusinessException, _business_exception_handler)  # type: ignore[arg-type]
     app.add_exception_handler(Exception, _general_exception_handler)

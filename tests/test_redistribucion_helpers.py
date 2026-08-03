@@ -1,6 +1,6 @@
 """Tests unitarios para helpers de redistribución."""
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 import pytest
 from fastapi import HTTPException
@@ -177,8 +177,7 @@ def test_generar_excel_reporte_diferencias():
         "diferencias_productos": [{"codigo": "C1"}],
         "diferencias_tiendas": [{"tienda": "T1"}],
     }
-    pedido_data = {"cabecera": {"numero_pedido": "P-1"}}
-    output = generar_excel_reporte_diferencias(diferencias, pedido_data)
+    output = generar_excel_reporte_diferencias(diferencias)
     assert output.getbuffer().nbytes > 0
 
 

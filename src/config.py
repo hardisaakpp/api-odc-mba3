@@ -170,7 +170,35 @@ SAP_CACHE_DAYS = int(os.getenv("SAP_CACHE_DAYS", "30"))
 # No hardcodear credenciales en servicios; usar variables de entorno.
 
 # URL del SAP Middleware (reemplaza conexión directa a SAP Service Layer)
-SAP_MIDDLEWARE_URL = os.getenv("SAP_MIDDLEWARE_URL", "http://localhost:5250")
+SAP_MIDDLEWARE_URL = os.getenv("SAP_MIDDLEWARE_URL", "http://localhost:8011")
+
+# Selecciona la implementación que devuelve SAPServiceLayerClient():
+# - true (default): usa el middleware .NET (comportamiento actual).
+# - false: restaura la conexión directa a SAP Service Layer que se usaba antes de
+#   integrar el middleware (DirectSAPServiceLayerClient), reutilizando las credenciales
+#   SAP_SERVICE_LAYER_* de abajo. Pensado para desarrollo: permite seguir probando
+#   Purchase Orders/Inventory Transfer Requests mientras se resuelve algún problema
+#   puntual del middleware, sin dejar de tener el middleware disponible para cuando
+#   se reactive (no reemplaza al middleware, es un modo de prueba alternable).
+SAP_USE_MIDDLEWARE = os.getenv("SAP_USE_MIDDLEWARE", "true").lower() == "true"
+
+# Prevalidación de ODC en una sola llamada batch al middleware
+# (POST /api/v1/validations/purchase-order) en lugar de N requests por línea.
+# Si el batch falla o está deshabilitado, se usa la validación línea por línea.
+USE_BATCH_VALIDATION = os.getenv("USE_BATCH_VALIDATION", "false").lower() == "true"
+
+# Bodegas, búsqueda de SKU e info de producto en cache-miss usan la misma
+# SAP_USE_MIDDLEWARE: si el middleware no responde (o está desactivado), caen
+# automáticamente a OPENQUERY directo a HANA.
+
+# Reconciliación automática de Solicitudes de Transferencia (ITR) pendientes.
+# Automatiza el botón manual "Reintentar ST": una tarea Celery periódica reintenta
+# las transferencias que quedaron pendientes por una caída transitoria de SAP.
+# Si tras RECONCILIAR_ST_ESCALAMIENTO_HORAS sigue pendiente, notifica a técnicos por
+# correo y deja de reintentar automáticamente esa OC (el botón manual sigue disponible).
+ENABLE_RECONCILIACION_ST_AUTOMATICA = os.getenv("ENABLE_RECONCILIACION_ST_AUTOMATICA", "false").lower() == "true"
+RECONCILIAR_ST_INTERVALO_MINUTOS = int(os.getenv("RECONCILIAR_ST_INTERVALO_MINUTOS", "5"))
+RECONCILIAR_ST_ESCALAMIENTO_HORAS = float(os.getenv("RECONCILIAR_ST_ESCALAMIENTO_HORAS", "1"))
 
 # URL base (sin /Login). Prioridad: SAP_SL_BASE_URL > SAP_SERVICE_LAYER_URL
 _sl_url = os.getenv("SAP_SL_BASE_URL") or os.getenv("SAP_SERVICE_LAYER_URL", "http://localhost:50001/b1s/v1")
@@ -245,7 +273,8 @@ JWT_AUDIENCE = os.getenv('JWT_AUDIENCE', 'SCNexus.Users')
 # URL base del Core para llamadas a la API de permisos y otros servicios
 # El Core gestiona la integraciÃ³n con Active Directory y asigna permisos
 # a usuarios y roles de AD segÃºn las pÃ¡ginas a las que pueden tener acceso
-CORE_API_URL = os.getenv("CORE_API_URL", "http://192.168.2.12:8080")
+# IMPORTANTE: Configurar en .env (sin default por seguridad, ver validaciÃ³n abajo)
+CORE_API_URL = os.getenv("CORE_API_URL", "")
 CORE_API_TIMEOUT = int(os.getenv("CORE_API_TIMEOUT", "30"))  # Timeout en segundos
 
 # Habilitar autenticaciÃ³n JWT (requiere token vÃ¡lido del Core)
@@ -270,6 +299,12 @@ HIDE_SWAGGER_IN_PROD = os.getenv("HIDE_SWAGGER_IN_PROD", "true").lower() == "tru
 logger = logging.getLogger(__name__)
 _CONFIG_INCOMPLETA_MSG = "⚠️ CONFIGURACIÓN INCOMPLETA (Desarrollo)"
 
+logger.info(
+    "🔌 Canal SAP: %s (SAP_USE_MIDDLEWARE=%s)",
+    "middleware .NET" if SAP_USE_MIDDLEWARE else "directo/OPENQUERY",
+    SAP_USE_MIDDLEWARE,
+)
+
 # Validar configuraciones crÃ­ticas en producciÃ³n
 if ENVIRONMENT == "production":
     # Validar MBA3
@@ -289,11 +324,15 @@ if ENVIRONMENT == "production":
             "Configura en .env"
         )
     
-    # Validar JWT_SECRET si JWT está habilitado
+    # Validar JWT_SECRET y CORE_API_URL si JWT está habilitado
     if ENABLE_JWT_AUTH:
         if not JWT_SECRET:
             raise ValueError(
                 "JWT_SECRET debe configurarse en .env en produccion. No puede estar vacio."
+            )
+        if not CORE_API_URL:
+            raise ValueError(
+                "CORE_API_URL debe configurarse en .env en produccion. No puede estar vacio."
             )
         if JWT_SECRET == 'clave_super_secreta_para_jwt_12345':
             logger.warning(
@@ -372,6 +411,14 @@ MIGRATE_DATE_FILTER_DAYS = int(_migrate_days)
 
 # URL de Redis para Celery (broker y backend)
 REDIS_URL = os.getenv('REDIS_URL', 'redis://localhost:6379/0')
+
+# Sincronizacion nocturna de maestros de productos (MBA3 + SAP -> tablas staging
+# del cruce de productos). Deshabilitada por defecto (2026-07): la homologacion
+# masiva ya concluyo y el cruce de productos tiene sincronizacion manual desde la
+# UI, asi que la nocturna solo consumiria recursos (lee catalogos completos de
+# ambos ERPs, hasta 30 min). Para reactivarla: ENABLE_SYNC_PRODUCTOS_AUTOMATICA=true
+# en .env y reiniciar celery-beat. Ver docs/CELERY_QUICKSTART.md.
+ENABLE_SYNC_PRODUCTOS_AUTOMATICA = os.getenv("ENABLE_SYNC_PRODUCTOS_AUTOMATICA", "false").lower() == "true"
 
 # Horario de sincronizaciÃ³n de productos (hora en formato 24h)
 SYNC_PRODUCTOS_HOUR = int(os.getenv('SYNC_PRODUCTOS_HOUR', '3'))  # Default: 3:00 AM

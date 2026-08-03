@@ -514,3 +514,56 @@ class SolicitudTransferenciaRepository:
         if not oc_ids:
             return {}
         return {str(oid): self.get_st_pendiente_reintento_count(str(oid)) for oid in oc_ids}
+
+    def get_oc_ids_con_tiendas_pendientes(self) -> List[str]:
+        """
+        OCs en estado ENVIADA cuyo último batch ST tiene al menos una tienda en Error
+        sin ITR ya creado en ningún intento previo (misma idempotencia que
+        get_tiendas_pendientes_reintento_st, pero calculada para todas las OCs a la vez).
+
+        Candidatas a reconciliación automática (tarea Celery periódica).
+        """
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute(
+                """
+                WITH latest AS (
+                    SELECT
+                        st.solicitud_transferencia_id,
+                        st.oc_id,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY st.oc_id
+                            ORDER BY st.creado_fecha DESC, st.solicitud_transferencia_id DESC
+                        ) AS rn
+                    FROM solicitud_transferencia st
+                    INNER JOIN orden_compra_cabecera oc ON oc.oc_id = st.oc_id
+                    WHERE oc.estado = 'ENVIADA'
+                ),
+                latest_error_tiendas AS (
+                    SELECT DISTINCT l.oc_id, d.tienda_codigo
+                    FROM latest l
+                    INNER JOIN solicitud_transferencia_detalle d
+                        ON d.solicitud_transferencia_id = l.solicitud_transferencia_id
+                    WHERE l.rn = 1 AND d.estado = 'Error'
+                ),
+                ok_tiendas AS (
+                    SELECT DISTINCT st.oc_id, d.tienda_codigo
+                    FROM solicitud_transferencia st
+                    INNER JOIN solicitud_transferencia_detalle d
+                        ON d.solicitud_transferencia_id = st.solicitud_transferencia_id
+                    WHERE d.estado = 'Creada' AND d.doc_entry IS NOT NULL
+                )
+                SELECT DISTINCT e.oc_id
+                FROM latest_error_tiendas e
+                LEFT JOIN ok_tiendas o
+                    ON o.oc_id = e.oc_id
+                    AND UPPER(LTRIM(RTRIM(o.tienda_codigo))) = UPPER(LTRIM(RTRIM(e.tienda_codigo)))
+                WHERE o.tienda_codigo IS NULL
+                """
+            )
+            oc_ids = [str(row[0]) for row in cursor.fetchall() if row[0]]
+            cursor.close()
+            return oc_ids
+        except Exception as e:
+            logger.warning(f"No se pudo obtener OCs con ST pendientes: {e}")
+            return []

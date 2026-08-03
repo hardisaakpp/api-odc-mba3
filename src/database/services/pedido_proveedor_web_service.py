@@ -523,7 +523,7 @@ class PedidoProveedorWebService:
     def _persistir_respuesta(
         self,
         conn: Any,
-        respuesta_repo: Any,
+        respuesta_repo: PedidoRespuestaRepository,
         pedido_id: str,
         respuesta_id: Optional[str],
         ya_existia_respuesta: bool,

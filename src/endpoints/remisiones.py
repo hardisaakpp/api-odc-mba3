@@ -68,7 +68,7 @@ def _contar_resultados(result) -> int:
     return 0
 
 
-def _guardar_remisiones(result) -> dict:
+def _guardar_remisiones(result) -> dict | None:
     try:
         return MBA3Service.save_remisiones_to_database(result, upsert=True)
     except Exception as save_error:

@@ -20,9 +20,25 @@ from src.database.repositories.envio_odc_sap_repository import EnvioODCSAPReposi
 from src.database.repositories.sap_integration_log_repository import SAPIntegrationLogRepository
 from src.database.connection import get_db_connection, get_db_connection_context
 from src.database.clients.sap_client import SAPClient
+from src.database.clients.sap_service_layer_client import SAPServiceLayerClient
+from src.database.services.stock_transfer_service import StockTransferService, redis_lock_reintento_st
+from src.config import SAP_USE_MIDDLEWARE
 from src.security.jwt_auth import verify_jwt_token, require_permission, require_any_permission
 
 logger = logging.getLogger(__name__)
+
+# Traduce el status interno de StockTransferService.reintentar_pendientes a HTTP + status externo.
+_RETRY_ST_STATUS_HTTP = {
+    "no_encontrada": 404,
+    "estado_invalido": 400,
+    "sin_pedido": 400,
+}
+_RETRY_ST_STATUS_EXTERNO = {
+    "no_encontrada": "error",
+    "estado_invalido": "error",
+    "sin_pedido": "error",
+    "no_pendientes": "success",
+}
 
 # Permisos (evita duplicación de literales)
 _PERM_ODCSAP = 'odcsap.view'
@@ -34,16 +50,50 @@ _MSG_OC_NO_ENCONTRADA = "Orden de compra no encontrada"
 # Descripciones reutilizadas (OpenAPI)
 _DESC_OC_ID = "UUID de la orden de compra"
 
-# Evita doble envío concurrente de reintento ITR para la misma OC.
-_itr_retry_locks_guard = threading.Lock()
-_itr_retry_locks_by_oc_id: Dict[str, threading.Lock] = {}
 
 
-def _lock_reintento_st_por_oc_id(oc_id: str) -> threading.Lock:
-    with _itr_retry_locks_guard:
-        if oc_id not in _itr_retry_locks_by_oc_id:
-            _itr_retry_locks_by_oc_id[oc_id] = threading.Lock()
-        return _itr_retry_locks_by_oc_id[oc_id]
+def _traducir_resultado_reintento_st(resultado: Dict[str, Any]) -> Dict[str, Any]:
+    """Traduce el dict de reintentar_pendientes al contrato HTTP ya usado por el frontend."""
+    status_interno = resultado.get("status", "error")
+    status_code = _RETRY_ST_STATUS_HTTP.get(status_interno, 200)
+    body = dict(resultado)
+    body["status"] = _RETRY_ST_STATUS_EXTERNO.get(status_interno, status_interno)
+    return {"status_code": status_code, "body": body}
+
+
+def _sku_existe_via_middleware(sku_clean: str) -> Optional[bool]:
+    """
+    Verifica vía middleware (GET /api/v1/items/{code}) si un SKU existe en SAP.
+
+    Returns:
+        True si existe, False si el middleware confirmó que no existe (404),
+        None si el middleware no está disponible y el caller debe hacer
+        fallback a OPENQUERY.
+    """
+    item = SAPServiceLayerClient().get_item(sku_clean)
+    if item is None:
+        return None  # sin conexión al middleware: fallback
+    if item.get("_error"):
+        if item.get("_error_type") == "no_existe":
+            return False
+        return None  # otro error del middleware: fallback a OPENQUERY
+    return True
+
+
+def _sku_existe_en_sap(sku_clean: str) -> bool:
+    """
+    Verifica si un SKU existe en SAP: middleware primero (SAP_USE_MIDDLEWARE),
+    con fallback automático a OPENQUERY si el middleware no responde.
+    """
+    if SAP_USE_MIDDLEWARE:
+        existe = _sku_existe_via_middleware(sku_clean)
+        if existe is not None:
+            return existe
+        logger.warning(
+            f"⚠️ Middleware no disponible para validar SKU {sku_clean}; fallback a OPENQUERY"
+        )
+    sap_client = SAPClient()
+    return sap_client.get_producto_info(sku_clean) is not None
 
 # ============================================================================
 # Sistema de Caché para /ordenes-compra
@@ -165,16 +215,6 @@ def _coerce_int(value: Any, default: int) -> int:
         return int(value)
     except (ValueError, TypeError):
         return default
-
-
-def _coerce_int_opt(value: Any) -> Optional[int]:
-    """Convierte value a int o None si no es posible."""
-    if value is None:
-        return None
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return None
 
 
 def _parse_fecha_param(value: Optional[str], campo: str, fin_dia: bool = False):
@@ -495,115 +535,27 @@ def _construir_mensaje_delete_multiple(eliminadas, total_solicitadas, no_encontr
     return mensaje
 
 
-def _resolver_tiendas_retry_st(st_repo, oc_id):
-    """Determina las tiendas objetivo del reintento ST. Retorna (tiendas, origen_lista)."""
-    tiendas_objetivo = st_repo.get_tiendas_pendientes_reintento_st(oc_id)
-    origen_lista = "detalle"
-    if not tiendas_objetivo:
-        tiendas_objetivo = st_repo.get_tiendas_fallidas_desde_resultado_json_fallback(oc_id)
-        origen_lista = "resultado_json" if tiendas_objetivo else "ninguno"
-    return tiendas_objetivo, origen_lista
-
-
-def _crear_st_retry(oc_cabecera, oc_id, username, tiendas_objetivo, origen_lista, pedido_id):
-    """Reconstruye y crea las Solicitudes de Transferencia para el reintento ST."""
-    bodega_origen = oc_cabecera.get("codigo_bodega")
-    oc_doc_num = _coerce_int_opt(oc_cabecera.get("numero_oc_sap"))
-
-    from src.database.services.stock_transfer_service import StockTransferService
-    st_service = StockTransferService()
-    resultado = st_service.crear_solicitudes_transferencia_desde_pedido(
-        pedido_id=str(pedido_id),
-        oc_doc_num=oc_doc_num,
-        oc_id=oc_id,
-        bodega_origen=bodega_origen,
-        usuario_id=username,
-        tiendas_destino_filtro=tiendas_objetivo,
-    )
-
-    try:
-        invalidate_ordenes_compra_cache()
-    except Exception:
-        pass
-
-    return {
-        "status_code": 200,
-        "body": {
-            "status": "success" if resultado.get("success") else "partial",
-            "message": "Reintento ST ejecutado.",
-            "oc_id": oc_id,
-            "origen_lista_tiendas": origen_lista,
-            "tiendas_objetivo": tiendas_objetivo,
-            "tiendas_count": len(tiendas_objetivo),
-            "resultado_st": resultado,
-        },
-    }
-
-
-def _procesar_retry_st(conn, oc_id, username):
-    """Valida la OC y ejecuta el reintento ST. Retorna dict con status_code/body."""
-    oc_repo = OrdenCompraRepository(conn)
-    st_repo = SolicitudTransferenciaRepository(conn)
-
-    oc_cabecera = oc_repo.get_existing_cabecera(oc_id)
-    if not oc_cabecera:
-        return {"status_code": 404, "body": {"status": "error", "message": _MSG_OC_NO_ENCONTRADA}}
-
-    estado = str(oc_cabecera.get("estado") or "").strip().upper()
-    if estado != "ENVIADA":
-        return {
-            "status_code": 400,
-            "body": {
-                "status": "error",
-                "message": f"Solo se puede reintentar ST cuando la ODC está ENVIADA (estado actual: {estado or 'N/A'})",
-            },
-        }
-
-    # Idempotente: solo tiendas aún en error en el último batch, sin duplicar ITR ya creadas en intentos previos.
-    tiendas_objetivo, origen_lista = _resolver_tiendas_retry_st(st_repo, oc_id)
-
-    if not tiendas_objetivo:
-        return {
-            "status_code": 200,
-            "body": {
-                "status": "success",
-                "message": "No hay Solicitudes de Transferencia pendientes para reintentar (todas las tiendas ya tienen ITR o no hay registro de fallas).",
-                "oc_id": oc_id,
-                "reintentadas": 0,
-                "origen_lista_tiendas": origen_lista,
-            },
-        }
-
-    pedido_id = oc_cabecera.get("pedido_id")
-    if not pedido_id:
-        return {
-            "status_code": 400,
-            "body": {
-                "status": "error",
-                "message": "La ODC no tiene pedido_id asociado para reconstruir ST.",
-            },
-        }
-
-    return _crear_st_retry(oc_cabecera, oc_id, username, tiendas_objetivo, origen_lista, pedido_id)
-
-
 def _retry_st_only(oc_id, username):
-    """Adquiere el lock por OC y ejecuta el reintento ST de forma idempotente."""
-    oc_lock = _lock_reintento_st_por_oc_id(oc_id)
-    if not oc_lock.acquire(blocking=True, timeout=120):
-        return {
-            "status_code": 409,
-            "body": {
-                "status": "error",
-                "message": "Otro reintento de ST está en curso para esta OC. Espere unos segundos e intente de nuevo.",
-                "oc_id": oc_id,
-            },
-        }
-    try:
-        with get_db_connection_context() as conn:
-            return _procesar_retry_st(conn, oc_id, username)
-    finally:
-        oc_lock.release()
+    """Adquiere el lock distribuido por OC y ejecuta el reintento ST de forma idempotente."""
+    with redis_lock_reintento_st(oc_id, blocking_timeout=120.0) as acquired:
+        if not acquired:
+            return {
+                "status_code": 409,
+                "body": {
+                    "status": "error",
+                    "message": "Otro reintento de ST está en curso para esta OC. Espere unos segundos e intente de nuevo.",
+                    "oc_id": oc_id,
+                },
+            }
+        resultado = StockTransferService().reintentar_pendientes(
+            oc_id, usuario_id=username, origen="manual"
+        )
+        if resultado.get("status") in ("success", "partial"):
+            try:
+                invalidate_ordenes_compra_cache()
+            except Exception:
+                pass
+        return _traducir_resultado_reintento_st(resultado)
 
 
 async def _validar_sku_sap(nuevo_sku_clean: str) -> bool:
@@ -611,9 +563,8 @@ async def _validar_sku_sap(nuevo_sku_clean: str) -> bool:
     logger.info(f"🔍 Validando SKU en SAP: {nuevo_sku_clean}")
 
     def _validar():
-        sap_client = SAPClient()
-        producto_info = sap_client.get_producto_info(nuevo_sku_clean)
-        return producto_info is not None
+        # Dispatcher middleware -> fallback OPENQUERY (SAP_USE_MIDDLEWARE)
+        return _sku_existe_en_sap(nuevo_sku_clean)
 
     try:
         return await asyncio.to_thread(_validar)

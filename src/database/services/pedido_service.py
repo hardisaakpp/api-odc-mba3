@@ -31,7 +31,8 @@ from .pedido_sap_validator_helper import PedidoSAPValidatorHelper
 from src.utils.audit_context import AuditContext, ORIGEN_WEB
 from .pedido_formato_processor import PedidoFormatoProcessor
 from ..clients.sap_client import SAPClient
-from src.config import ENABLE_SAP_QUERIES
+from ..clients.sap_service_layer_client import SAPServiceLayerClient
+from src.config import ENABLE_SAP_QUERIES, SAP_USE_MIDDLEWARE
 
 logger = logging.getLogger(__name__)
 
@@ -170,6 +171,70 @@ class PedidoService:
                 logger.debug(f"✅ Enriquecido pack para {codigo}: {pack_sap}")
         return enriquecidos
 
+    @staticmethod
+    def _consultar_productos_via_middleware(
+        codigos: List[str],
+    ) -> tuple:
+        """
+        Consulta los códigos en una sola llamada batch al middleware
+        (GET /api/v1/items/batch, en vez de N GET /api/v1/items/{code}).
+
+        Returns:
+            (resueltos, pendientes): `resueltos` con el mismo formato que
+            get_productos_info_batch (los campos que consume el enriquecimiento);
+            `pendientes` son los códigos que el middleware no pudo resolver
+            (batch deshabilitado, chunk fallido/encolado, o error puntual) y
+            deben consultarse por OPENQUERY. Un 404 confirmado NO es pendiente:
+            es resolución definitiva (igual que OPENQUERY sin fila).
+        """
+        client = SAPServiceLayerClient()
+        resueltos: Dict[str, Dict[str, Any]] = {}
+        pendientes: List[str] = []
+
+        items = client.get_items_batch(codigos)
+        if items is None:
+            # Middleware caído/deshabilitado: ningún código se pudo resolver
+            return resueltos, list(codigos)
+
+        for codigo in codigos:
+            item = items.get(codigo)
+            if item is None:
+                # No vino en el batch (chunk fallido/encolado): fallback a OPENQUERY
+                pendientes.append(codigo)
+                continue
+            if item.get("_error"):
+                if item.get("_error_type") == "no_existe":
+                    continue
+                pendientes.append(codigo)
+                continue
+            resueltos[codigo] = {
+                "ItemCode": item.get("ItemCode"),
+                "ItemName": item.get("ItemName"),
+                "U_IXX_PACK": item.get("U_IXX_PACK"),
+            }
+        return resueltos, pendientes
+
+    def _consultar_productos_sap(self, codigos: List[str]) -> Dict[str, Dict[str, Any]]:
+        """
+        Consulta información de productos en SAP: middleware primero
+        (SAP_USE_MIDDLEWARE), con fallback automático a OPENQUERY
+        para los códigos que el middleware no pudo resolver.
+        """
+        pendientes = list(codigos)
+        resultados: Dict[str, Dict[str, Any]] = {}
+
+        if SAP_USE_MIDDLEWARE:
+            resultados, pendientes = self._consultar_productos_via_middleware(codigos)
+            if pendientes:
+                logger.warning(
+                    f"⚠️ Middleware no resolvió {len(pendientes)} SKUs; fallback a OPENQUERY"
+                )
+
+        if pendientes:
+            resultados.update(SAPClient().get_productos_info_batch(pendientes))
+
+        return resultados
+
     def _enriquecer_detalles_con_sap(
         self,
         detalles_con_tiendas: List[Dict[str, Any]]
@@ -227,10 +292,9 @@ class PedidoService:
             return detalles_con_tiendas
         
         logger.info(f"🔍 Consultando SAP para enriquecer {len(codigos_a_consultar)} productos únicos")
-        
-        # Consultar SAP en batch
-        sap_client = SAPClient()
-        productos_sap = sap_client.get_productos_info_batch(codigos_a_consultar)
+
+        # Consultar SAP: middleware primero, fallback a OPENQUERY
+        productos_sap = self._consultar_productos_sap(codigos_a_consultar)
         
         # Enriquecer detalles con información de SAP
         detalles_enriquecidos = detalles_con_tiendas.copy()

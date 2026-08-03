@@ -121,6 +121,13 @@ services:
         "worker",
         "--loglevel=info",
         "--pool=prefork",
+        # Sin -Q el worker solo consume la cola por defecto ('celery') y las
+        # tareas de Beat enrutadas a 'maintenance' quedan huerfanas en Redis.
+        "-Q",
+        "celery,maintenance",
+        # Tareas I/O-bound contra SAP/SQL Server: 2 slots para pico interactivo
+        # + 1 para programadas. Tambien limita presion concurrente sobre SAP.
+        "--concurrency=3",
       ]
 
   celery-beat:

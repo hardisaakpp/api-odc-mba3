@@ -357,18 +357,22 @@ class HomologacionService:
                 except Exception:
                     pass
 
+    _MSG_PRECIO_MBA3 = 'El precio unitario MBA3 debe ser mayor o igual a 0'
+    _MSG_PRECIO_SAP = 'El precio unitario SAP debe ser mayor o igual a 0'
+    _MSG_CANTIDAD_DOCENA_MBA3 = 'La cantidad docena MBA3 debe ser mayor o igual a 0'
+    _MSG_CANTIDAD_PACK_SAP = 'La cantidad pack SAP debe ser mayor o igual a 0'
+
     @staticmethod
-    def _validar_campos_homologacion(data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        """Valida campos numéricos y estado. Retorna error dict o None si es válido."""
-        campos_numericos = [
-            ('precio_unitario_mba3', 'El precio unitario MBA3 debe ser mayor o igual a 0'),
-            ('precio_unitario_sap', 'El precio unitario SAP debe ser mayor o igual a 0'),
-            ('cantidad_docena_mba3', 'La cantidad docena MBA3 debe ser mayor o igual a 0'),
-            ('cantidad_pack_sap', 'La cantidad pack SAP debe ser mayor o igual a 0'),
-        ]
-        for campo, mensaje in campos_numericos:
+    def _validar_campos_numericos(data: Dict[str, Any], campos: list) -> Optional[Dict[str, Any]]:
+        """Valida que los campos numéricos indicados sean >= 0. Retorna error dict o None."""
+        for campo, mensaje in campos:
             if campo in data and data[campo] is not None and data[campo] < 0:
                 return {"status": "error", "message": mensaje, "error_code": "VALIDATION_ERROR"}
+        return None
+
+    @staticmethod
+    def _validar_estado_homologacion(data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Valida que 'estado', si viene en data, sea uno de los valores permitidos."""
         if 'estado' in data and data['estado'] not in ['PENDIENTE', 'HOMOLOGADO', 'ERROR']:
             return {
                 "status": "error",
@@ -405,7 +409,12 @@ class HomologacionService:
                     "error_code": "VALIDATION_ERROR"
                 }
 
-            error = self._validar_campos_homologacion(data)
+            error = self._validar_campos_numericos(data, [
+                ('precio_unitario_mba3', self._MSG_PRECIO_MBA3),
+                ('precio_unitario_sap', self._MSG_PRECIO_SAP),
+                ('cantidad_docena_mba3', self._MSG_CANTIDAD_DOCENA_MBA3),
+                ('cantidad_pack_sap', self._MSG_CANTIDAD_PACK_SAP),
+            ])
             if error:
                 return error
 
@@ -462,7 +471,13 @@ class HomologacionService:
             repository = HomologacionRepository(conn)
             
             # Validar datos
-            error = self._validar_campos_homologacion(data)
+            error = self._validar_campos_numericos(data, [
+                ('precio_unitario_sap', self._MSG_PRECIO_SAP),
+                ('cantidad_pack_sap', self._MSG_CANTIDAD_PACK_SAP),
+            ])
+            if error:
+                return error
+            error = self._validar_estado_homologacion(data)
             if error:
                 return error
 

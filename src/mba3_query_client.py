@@ -430,8 +430,9 @@ class MBA3APIClient:
 
     def _handle_http_exception(self, e: Exception) -> None:
         error_detail = ""
-        if hasattr(e, 'response') and getattr(e, 'response'):
-            resp_text = getattr(e.response, 'text', '')
+        response = getattr(e, 'response', None)
+        if response:
+            resp_text = getattr(response, 'text', '')
             error_detail = resp_text[:1000] if resp_text else "Sin respuesta"
         error_msg = f"Error HTTP al comunicarse con MBA3: {str(e)}. Respuesta: {error_detail}"
         logger.error(error_msg, exc_info=True)

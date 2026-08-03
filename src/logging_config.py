@@ -206,6 +206,12 @@ def setup_logging() -> None:
     business_logger.addHandler(business_handler)
     business_logger.setLevel(logging.INFO)
     
+    # Celery/Kombu registran a nivel DEBUG el loop interno del worker (heartbeats,
+    # gossip, timer de ETA) cada ~1s; con LOG_LEVEL=DEBUG en desarrollo eso inunda
+    # la consola. Se mantiene en INFO independientemente del nivel del root logger.
+    logging.getLogger('celery').setLevel(logging.INFO)
+    logging.getLogger('kombu').setLevel(logging.INFO)
+
     # Log de inicio
     logging.info("✅ Sistema de logging configurado")
     logging.info(f"   📁 Directorio de logs: {LOG_DIR}")

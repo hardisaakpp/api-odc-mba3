@@ -5,9 +5,10 @@ Servicio para consultar SAP y poblar el cache de bodegas/tiendas.
 import logging
 from typing import Optional, Dict, Any, List
 
-from src.config import SAP_CACHE_DAYS, ENABLE_SAP_QUERIES
+from src.config import SAP_CACHE_DAYS, ENABLE_SAP_QUERIES, SAP_USE_MIDDLEWARE
 from ..connection import get_db_connection
 from ..clients.sap_client import SAPClient
+from ..clients.sap_service_layer_client import SAPServiceLayerClient
 from ..repositories.bodega_sap_repository import BodegaSAPRepository
 
 logger = logging.getLogger(__name__)
@@ -15,10 +16,11 @@ logger = logging.getLogger(__name__)
 
 class BodegaSAPService:
     """Servicio para gestionar consultas a SAP y cache de bodegas/tiendas."""
-    
+
     def __init__(self):
         """Inicializa el servicio SAP."""
         self.sap_client = SAPClient()
+        self.sap_sl_client = SAPServiceLayerClient()
         self.enabled = ENABLE_SAP_QUERIES
     
     def _es_bodega_central(self, whs_code: str) -> bool:
@@ -91,8 +93,8 @@ class BodegaSAPService:
             
             # Cache no válido o force_refresh=True, consultar SAP
             logger.debug(f"🔍 Consultando SAP para bodega/tienda: {whs_code_normalized}")
-            sap_info = self.sap_client.get_bodega_info(whs_code_normalized)
-            
+            sap_info = self._consultar_bodega_sap(whs_code_normalized)
+
             if not sap_info:
                 logger.debug(f"⚠️ Bodega/Tienda no encontrada en SAP: {whs_code_normalized}")
                 return None
@@ -135,6 +137,51 @@ class BodegaSAPService:
                 except Exception:
                     pass
     
+    @staticmethod
+    def _bodega_desde_batch_item(item: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+        """Traduce un elemento de /warehouses/validate al formato {WhsCode, WhsName}."""
+        if not item or not item.get("exists"):
+            return None
+        return {"WhsCode": item.get("whsCode"), "WhsName": item.get("whsName")}
+
+    def _consultar_bodega_middleware(self, whs_code: str) -> tuple:
+        """
+        Consulta una bodega vía middleware (batch de 1 código).
+
+        Returns (disponible, bodega_info):
+        - disponible=False: el middleware no respondió; el caller debe hacer fallback.
+        - disponible=True, bodega_info=None: SAP respondió que la bodega no existe.
+        - disponible=True, bodega_info={...}: bodega encontrada.
+        """
+        batch = self.sap_sl_client.validate_warehouses_batch([whs_code])
+        if batch is None:
+            return False, None
+        items = batch.get("warehouses") or []
+        item = items[0] if items else None
+        if item and item.get("errorType") == "connection_error":
+            return False, None
+        return True, self._bodega_desde_batch_item(item)
+
+    def _consultar_bodega_sap(self, whs_code: str) -> Optional[Dict[str, Any]]:
+        """Consulta una bodega en SAP: middleware (si SAP_USE_MIDDLEWARE) con fallback a OPENQUERY."""
+        if SAP_USE_MIDDLEWARE:
+            disponible, bodega_info = self._consultar_bodega_middleware(whs_code)
+            if disponible:
+                return bodega_info
+            logger.warning(
+                f"⚠️ Middleware de bodegas no disponible para {whs_code}; fallback a OPENQUERY"
+            )
+        return self.sap_client.get_bodega_info(whs_code)
+
+    def _obtener_todas_bodegas_sap(self) -> List[Dict[str, Any]]:
+        """Obtiene el catálogo completo de bodegas: middleware si está habilitado, si no OPENQUERY."""
+        if SAP_USE_MIDDLEWARE:
+            bodegas = self.sap_sl_client.get_all_warehouses()
+            if bodegas is not None:
+                return bodegas
+            logger.warning("⚠️ Middleware de bodegas no disponible; fallback a OPENQUERY")
+        return self.sap_client.get_todas_bodegas()
+
     def _llenar_desde_cache(
         self,
         repository: BodegaSAPRepository,
@@ -163,11 +210,64 @@ class BodegaSAPService:
             a_consultar.append(codigo)
         return resultado, a_consultar
 
-    def _consultar_sap_codigos(
+    def _registrar_bodega_encontrada(
+        self, repository: BodegaSAPRepository, codigo: str, whs_name: Optional[str], fuente: str
+    ) -> Dict[str, Any]:
+        """Cachea una bodega encontrada y arma su entrada de resultado. Efecto: escribe en `repository`."""
+        es_bodega_central = self._es_bodega_central(codigo)
+        bodega_data = {
+            "whs_code": codigo,
+            "whs_name": whs_name,
+            "es_bodega": es_bodega_central,
+            "activo": True,
+        }
+        try:
+            repository.insert_or_update(bodega_data)
+        except Exception as cache_error:
+            logger.warning(f"⚠️ Error al guardar en caché {codigo}: {cache_error}")
+        return {
+            "WhsCode": codigo,
+            "WhsName": whs_name,
+            "es_bodega": es_bodega_central,
+            "encontrado": True,
+            "fuente": fuente,
+        }
+
+    def _consultar_sap_codigos_middleware(
         self,
         repository: BodegaSAPRepository,
         codigos: List[str],
-    ):
+    ) -> Optional[tuple]:
+        """Valida códigos de bodega con una sola llamada batch. None si el middleware no está disponible."""
+        batch = self.sap_sl_client.validate_warehouses_batch(codigos)
+        if batch is None:
+            return None
+
+        items_por_codigo = {item.get("whsCode"): item for item in (batch.get("warehouses") or [])}
+        resultado = {}
+        nuevos_en_cache = []
+        for codigo in codigos:
+            item = items_por_codigo.get(codigo)
+            if item is None or item.get("errorType") == "connection_error":
+                resultado[codigo] = {
+                    "WhsCode": codigo, "encontrado": False,
+                    "error": "conexión con middleware", "fuente": "middleware",
+                }
+                continue
+            if not item.get("exists"):
+                resultado[codigo] = {"WhsCode": codigo, "encontrado": False, "fuente": "middleware"}
+                continue
+            resultado[codigo] = self._registrar_bodega_encontrada(
+                repository, codigo, item.get("whsName"), "middleware"
+            )
+            nuevos_en_cache.append(codigo)
+        return resultado, nuevos_en_cache
+
+    def _consultar_sap_codigos_openquery(
+        self,
+        repository: BodegaSAPRepository,
+        codigos: List[str],
+    ) -> tuple:
         resultado = {}
         nuevos_en_cache = []
         for codigo in codigos:
@@ -178,31 +278,31 @@ class BodegaSAPService:
                 logger.warning(f"⚠️ Error al consultar SAP para {codigo}: {e}")
                 resultado[codigo] = {"WhsCode": codigo, "encontrado": False, "error": str(e), "fuente": "sap"}
                 continue
-            if sap_info:
-                es_bodega_central = self._es_bodega_central(codigo)
-                bodega_data = {
-                    "whs_code": codigo,
-                    "whs_name": sap_info.get("WhsName"),
-                    "es_bodega": es_bodega_central,
-                    "activo": True
-                }
-                try:
-                    repository.insert_or_update(bodega_data)
-                    nuevos_en_cache.append(codigo)
-                except Exception as cache_error:
-                    logger.warning(f"⚠️ Error al guardar en caché {codigo}: {cache_error}")
-                resultado[codigo] = {
-                    "WhsCode": codigo,
-                    "WhsName": sap_info.get("WhsName"),
-                    "es_bodega": es_bodega_central,
-                    "encontrado": True,
-                    "fuente": "sap"
-                }
-                logger.debug(f"✅ Código {codigo} encontrado en SAP y guardado en caché")
-            else:
+            if not sap_info:
                 resultado[codigo] = {"WhsCode": codigo, "encontrado": False, "fuente": "sap"}
                 logger.debug(f"⚠️ Código {codigo} NO encontrado en SAP")
+                continue
+            resultado[codigo] = self._registrar_bodega_encontrada(
+                repository, codigo, sap_info.get("WhsName"), "sap"
+            )
+            nuevos_en_cache.append(codigo)
+            logger.debug(f"✅ Código {codigo} encontrado en SAP y guardado en caché")
         return resultado, nuevos_en_cache
+
+    def _consultar_sap_codigos(
+        self,
+        repository: BodegaSAPRepository,
+        codigos: List[str],
+    ) -> tuple:
+        if SAP_USE_MIDDLEWARE:
+            resultado_batch = self._consultar_sap_codigos_middleware(repository, codigos)
+            if resultado_batch is not None:
+                return resultado_batch
+            logger.warning(
+                f"⚠️ Middleware de bodegas no disponible para batch de {len(codigos)} código(s); "
+                "fallback a OPENQUERY"
+            )
+        return self._consultar_sap_codigos_openquery(repository, codigos)
 
     def validate_codigos_bodegas_tiendas(
         self,
@@ -318,7 +418,7 @@ class BodegaSAPService:
             
             # Cache no válido o force_refresh=True, consultar SAP
             logger.debug("🔍 Consultando SAP para obtener TODAS las bodegas/tiendas")
-            todas_bodegas_sap = self.sap_client.get_todas_bodegas()
+            todas_bodegas_sap = self._obtener_todas_bodegas_sap()
             
             if not todas_bodegas_sap:
                 logger.warning("⚠️ No se pudieron obtener bodegas desde SAP")

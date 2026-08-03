@@ -310,7 +310,8 @@ async def _get_table_preferences(table_id: str, user: Dict) -> PreferencesRespon
             conn.close()
 
 
-def _validate_save_table_request(request_body: SavePreferencesRequest):
+def _extraer_preferences_del_body(request_body: SavePreferencesRequest):
+    """Valida que el request body contenga 'preferences' y lo retorna. Lanza HTTPException 400 si falta."""
     if not request_body:
         logger.error("❌ Request body es None o vacío")
         raise HTTPException(
@@ -325,9 +326,11 @@ def _validate_save_table_request(request_body: SavePreferencesRequest):
             detail="El campo 'preferences' es requerido en el request body"
         )
 
-    prefs = request_body.preferences
-    logger.debug(f"   Preferences recibidas: visibleColumns={prefs.visibleColumns if prefs else None}, columnOrder={prefs.columnOrder if prefs else None}")
+    return request_body.preferences
 
+
+def _validar_columnas_preferences(prefs) -> None:
+    """Valida que visibleColumns y columnOrder existan, sean listas y no estén vacías."""
     if not hasattr(prefs, 'visibleColumns') or prefs.visibleColumns is None:
         logger.warning("⚠️ visibleColumns es None o no existe")
         raise HTTPException(
@@ -370,8 +373,6 @@ def _validate_save_table_request(request_body: SavePreferencesRequest):
             detail="Debe haber al menos una columna en columnOrder"
         )
 
-    return prefs
-
 
 async def _save_table_preferences(table_id: str, request_body: SavePreferencesRequest, user: Dict):
     logger.info(f"🔍 POST /api/users/preferences/{table_id}: Iniciado")
@@ -386,7 +387,10 @@ async def _save_table_preferences(table_id: str, request_body: SavePreferencesRe
         logger.error(f"❌ Error al obtener user_id: {e.detail}")
         raise
 
-    prefs = _validate_save_table_request(request_body)
+    prefs = _extraer_preferences_del_body(request_body)
+    logger.debug(f"   Preferences recibidas: visibleColumns={prefs.visibleColumns if prefs else None}, columnOrder={prefs.columnOrder if prefs else None}")
+
+    _validar_columnas_preferences(prefs)
 
     try:
         # Usar context manager para garantizar transacción y cierre de conexión

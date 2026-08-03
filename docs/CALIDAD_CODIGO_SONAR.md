@@ -122,6 +122,62 @@ return {"ok": True}
 - El parámetro forma parte de una firma de callback que un framework invoca (FastAPI, Celery).  
   En ese caso cambiar a `_nombre` para indicar que es intencional.
 - La variable se usa como efecto secundario (ej. context manager sin `as`).
+- **El parámetro existe para mantener paridad de firma entre implementaciones intercambiables**
+  (ej. un cliente "directo" y un cliente "middleware" del mismo servicio, seleccionados por
+  factory/flag, donde el caller no sabe cuál de los dos está usando). Si una implementación
+  no necesita el parámetro pero la otra sí, quitarlo rompe la interfaz duck-typed aunque cada
+  archivo compile solo. Ejemplo real (`sap_service_layer_client_direct.py` vs
+  `sap_service_layer_client.py`):
+
+  ```python
+  # El cliente directo no usa warehouse_codes, pero el cliente middleware sí —
+  # la firma debe coincidir para que ambos sean intercambiables.
+  def validate_warehouses_batch(self, warehouse_codes: List[str]) -> Optional[Dict[str, Any]]:
+      """No disponible en el cliente directo; el caller hace fallback a OPENQUERY."""
+      return None
+  ```
+
+  En estos casos: no tocar el código. Marcar el hallazgo como **Won't Fix** en SonarQube
+  citando el motivo (ver `docs/sonarqube-review-policy.md`, sección 4).
+
+---
+
+## S1066 — Ifs anidados que se pueden fusionar (collapsible if)
+
+**Regla:** si un `if` interno es la única sentencia del `if` externo y ambos no tienen
+lógica adicional que dependa de evaluarlos por separado, fusionar con `and`.
+
+```python
+# MAL
+if self._is_transient_http_status(response.status_code):
+    if self._should_retry_and_wait(attempt, max_attempts, motivo):
+        continue
+return response
+
+# BIEN — se puede fusionar porque ninguno de los dos ifs tiene un branch
+# distinto que dependa de evaluarlos por separado
+if self._is_transient_http_status(response.status_code) and self._should_retry_and_wait(
+    attempt, max_attempts, motivo
+):
+    continue
+return response
+```
+
+### Cuándo NO fusionar
+
+Si el `if` externo, al ser verdadero pero el interno falso, debe hacer algo **distinto**
+de "seguir de largo" (ej. un `return` propio), fusionar cambia el comportamiento — no aplicar
+la regla en ese caso.
+
+```python
+# NO fusionar: si response is None y ya no quedan reintentos, hace return None
+# explícito. Fusionado con "and", ese caso caería al siguiente if y accedería a
+# response.status_code sobre None → AttributeError.
+if response is None:
+    if self._should_retry_and_wait(attempt, max_attempts, motivo):
+        continue
+    return None
+```
 
 ---
 
@@ -247,16 +303,83 @@ except Exception:
 
 ---
 
+## S5332 — Uso de protocolo HTTP inseguro ("Using http protocol is insecure")
+
+**Regla:** Sonar marca como Security Hotspot cualquier string literal que empiece con
+`http://` (no `https://`). Es una regla puramente léxica: no distingue si ese string es
+una URL a la que la app realmente se conecta, o solo un identificador/constante que por
+convención usa ese prefijo.
+
+### Caso real: default de una URL de servicio (`CORE_API_URL`, `SAP_MIDDLEWARE_URL`, etc.)
+
+Cuando el literal SÍ es una URL a la que la app hace requests (ej. `os.getenv("CORE_API_URL",
+"http://210.17.1.59:5053")`), **no cambiar el default a `https://` sin antes verificar que el
+servidor real lo soporta**. Un Security Hotspot que toca un servicio de autenticación/permisos
+cae en la "zona gris" de `docs/sonarqube-review-policy.md` (sección 3) y requiere aprobación
+explícita antes de aplicarse.
+
+Antes de decidir, comprobar el soporte TLS del servidor real:
+
+```bash
+curl -k -m 6 -sS -o /dev/null -w "status:%{http_code}\n" http://<host>:<puerto>/
+curl -k -m 6 -sS -o /dev/null -w "status:%{http_code}\n" https://<host>:<puerto>/
+echo | openssl s_client -connect <host>:<puerto> -servername <host>
+```
+
+- Si `https://` completa el handshake TLS → el servidor sí soporta HTTPS, se puede corregir
+  el default con seguridad.
+- Si `https://` falla (timeout, o el error típico `tls_get_more_records: packet length too
+  long` de OpenSSL, que indica que el "TLS ClientHello" fue interpretado como texto plano por
+  un servidor HTTP) → el servidor **no** soporta HTTPS en ese puerto. Forzar el cambio
+  rompería la integración real. No tocar el código: marcar el hallazgo como **Won't Fix** en
+  SonarQube, motivo "servidor en red interna sin TLS configurado en este puerto (verificado
+  con curl/openssl)".
+
+### Caso real: literal que parece URL pero es un identificador fijo (falso positivo)
+
+Los **claim-type URIs de WS-Identity / WS-Federation** (convención de Microsoft/ASP.NET,
+usados en tokens JWT del Core de AD) usan `http://` como parte del identificador — no son
+endpoints de red y **siempre** llevan ese esquema literal, nunca `https://`:
+
+```python
+# Esto NO es una URL a la que se conecta la app — es la KEY con la que el Core
+# identifica el claim dentro del JWT. Cambiarla a https:// rompe el lookup porque
+# ya no coincide con lo que realmente envía el Core.
+possible_id_keys = [
+    'sub',
+    'http://schemas.xmlsoap.org/ws/2005/05/identity/claims/nameidentifier',
+    'http://schemas.microsoft.com/ws/2008/06/identity/claims/nameidentifier',
+]
+```
+
+No modificar. Marcar como **Won't Fix / False Positive** en SonarQube, motivo: "claim-type
+URI de WS-Identity, no es un endpoint de red; el esquema `http://` es parte fija del
+identificador y debe coincidir con lo que emite el Core".
+
+### Cómo distinguir los dos casos
+
+| Pregunta | Si la respuesta es sí... |
+|---|---|
+| ¿El literal se usa en `requests.get/post`, `os.getenv` para una URL base, o similar? | Es una URL real → verificar soporte HTTPS antes de tocar (caso 1). |
+| ¿El literal se usa como *key* de diccionario, comparación de claim/namespace, o en una lista de "posibles nombres de campo"? | Es un identificador, no un endpoint → falso positivo (caso 2). |
+
+---
+
 ## Checklist antes de hacer commit
 
 1. **CC nueva función > 15?** → extraer helpers antes de commitear.
-2. **Parámetros en la firma que no aparecen en el cuerpo?** → eliminar o prefijo `_`.
+2. **Parámetros en la firma que no aparecen en el cuerpo?** → eliminar o prefijo `_`,
+   salvo que sea para mantener paridad de interfaz con otra implementación intercambiable.
 3. **Variables asignadas pero no leídas?** → eliminar.
-4. **Mismo string literal ≥ 3 veces en el archivo?** → constante.
-5. **`f"..."` sin `{}`?** → quitar la `f`.
-6. **`import X` sin usar X?** → quitar el import.
-7. **`except X as e:` sin usar `e`?** → quitar el `as e`.
-8. **`except:`?** → especificar `except Exception:`.
+4. **`if` anidado donde el interno es la única sentencia del externo?** → fusionar con `and`,
+   salvo que el externo tenga un `return`/comportamiento propio cuando el interno es falso.
+5. **Mismo string literal ≥ 3 veces en el archivo?** → constante.
+6. **`f"..."` sin `{}`?** → quitar la `f`.
+7. **`import X` sin usar X?** → quitar el import.
+8. **`except X as e:` sin usar `e`?** → quitar el `as e`.
+9. **`except:`?** → especificar `except Exception:`.
+10. **Literal `"http://..."` marcado por Sonar?** → distinguir si es una URL real (verificar
+    HTTPS con el servidor antes de tocar) o un identificador/claim-key (falso positivo, no tocar).
 
 ---
 
