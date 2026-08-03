@@ -45,6 +45,7 @@ logger = logging.getLogger(__name__)
 
 JSON_CONTENT_TYPE = "application/json"
 SESSION_ERROR_MESSAGE = "❌ No se pudo establecer sesión con SAP Service Layer"
+TLS_DEFAULT_LABEL = "1.2+ (default)"
 
 
 class TLSAdapter(HTTPAdapter):
@@ -156,12 +157,12 @@ class DirectSAPServiceLayerClient:
             session = self._create_session()
             response = session.request(method, url, timeout=self.timeout, **kwargs)
 
-            if self.working_tls_version != "1.2+ (default)":
+            if self.working_tls_version != TLS_DEFAULT_LABEL:
                 logger.info("✅ Conexión exitosa usando TLS 1.2+ (default)")
-                self.working_tls_version = "1.2+ (default)"
+                self.working_tls_version = TLS_DEFAULT_LABEL
                 self.working_session = session
 
-            return response, "1.2+ (default)"
+            return response, TLS_DEFAULT_LABEL
 
         except (requests.exceptions.SSLError, requests.exceptions.ConnectionError) as e:
             last_error = e
@@ -382,6 +383,18 @@ class DirectSAPServiceLayerClient:
         self._wait_and_log_retry(attempt, max_attempts, reason)
         return True
 
+    @staticmethod
+    def _execute_attempt(
+        session: Optional[requests.Session],
+        execute: Callable[[requests.Session], requests.Response],
+        fallback: Callable[[], Tuple[Optional[requests.Response], Optional[str]]],
+    ) -> Optional[requests.Response]:
+        """Ejecuta un intento de petición usando la working_session si existe, o el fallback de TLS."""
+        if session:
+            return execute(session)
+        response, _ = fallback()
+        return response
+
     def _request_with_transient_retries(
         self,
         execute: Callable[[requests.Session], requests.Response],
@@ -398,28 +411,24 @@ class DirectSAPServiceLayerClient:
         max_attempts = 1 + max(0, self.transient_retries)
         for attempt in range(max_attempts):
             try:
-                if self.working_session:
-                    response = execute(self.working_session)
-                else:
-                    response, _ = fallback()
-                    if response is None:
-                        if self._should_retry_and_wait(attempt, max_attempts, f"{operation_label}: sin respuesta"):
-                            continue
-                        return None
-
-                if self._is_transient_http_status(response.status_code):
-                    if self._should_retry_and_wait(
-                        attempt, max_attempts, f"{operation_label}: HTTP {response.status_code}"
-                    ):
-                        continue
-                return response
-
+                response = self._execute_attempt(self.working_session, execute, fallback)
             except requests.exceptions.RequestException as e:
                 reason = f"{operation_label}: error transitorio ({e!s})"
                 if self._is_transient_request_exception(e) and self._should_retry_and_wait(attempt, max_attempts, reason):
                     continue
                 logger.error(f"❌ {operation_label}: error de conexión (sin más reintentos): {e}")
                 return None
+
+            if response is None:
+                if self._should_retry_and_wait(attempt, max_attempts, f"{operation_label}: sin respuesta"):
+                    continue
+                return None
+
+            if self._is_transient_http_status(response.status_code) and self._should_retry_and_wait(
+                attempt, max_attempts, f"{operation_label}: HTTP {response.status_code}"
+            ):
+                continue
+            return response
 
         return None
 
@@ -519,7 +528,7 @@ class DirectSAPServiceLayerClient:
             "IsCommited": is_committed,
         }
 
-    def _log_stock_error(self, item_code: str, warehouse_code: str, url: str, response: requests.Response) -> None:
+    def _log_stock_error(self, item_code: str, url: str, response: requests.Response) -> None:
         """Registra el detalle de un error HTTP al consultar stock."""
         logger.error(
             f"❌ ERROR HTTP de SAP al consultar stock de {item_code}:\n"
@@ -925,7 +934,7 @@ class DirectSAPServiceLayerClient:
                 )
                 return self._get_stock_from_warehouses(item_code, warehouse_code, warehouses)
 
-            self._log_stock_error(item_code, warehouse_code, url, response)
+            self._log_stock_error(item_code, url, response)
             return None
                 
         except SAPDataMasterError:

@@ -122,6 +122,62 @@ return {"ok": True}
 - El parámetro forma parte de una firma de callback que un framework invoca (FastAPI, Celery).  
   En ese caso cambiar a `_nombre` para indicar que es intencional.
 - La variable se usa como efecto secundario (ej. context manager sin `as`).
+- **El parámetro existe para mantener paridad de firma entre implementaciones intercambiables**
+  (ej. un cliente "directo" y un cliente "middleware" del mismo servicio, seleccionados por
+  factory/flag, donde el caller no sabe cuál de los dos está usando). Si una implementación
+  no necesita el parámetro pero la otra sí, quitarlo rompe la interfaz duck-typed aunque cada
+  archivo compile solo. Ejemplo real (`sap_service_layer_client_direct.py` vs
+  `sap_service_layer_client.py`):
+
+  ```python
+  # El cliente directo no usa warehouse_codes, pero el cliente middleware sí —
+  # la firma debe coincidir para que ambos sean intercambiables.
+  def validate_warehouses_batch(self, warehouse_codes: List[str]) -> Optional[Dict[str, Any]]:
+      """No disponible en el cliente directo; el caller hace fallback a OPENQUERY."""
+      return None
+  ```
+
+  En estos casos: no tocar el código. Marcar el hallazgo como **Won't Fix** en SonarQube
+  citando el motivo (ver `docs/sonarqube-review-policy.md`, sección 4).
+
+---
+
+## S1066 — Ifs anidados que se pueden fusionar (collapsible if)
+
+**Regla:** si un `if` interno es la única sentencia del `if` externo y ambos no tienen
+lógica adicional que dependa de evaluarlos por separado, fusionar con `and`.
+
+```python
+# MAL
+if self._is_transient_http_status(response.status_code):
+    if self._should_retry_and_wait(attempt, max_attempts, motivo):
+        continue
+return response
+
+# BIEN — se puede fusionar porque ninguno de los dos ifs tiene un branch
+# distinto que dependa de evaluarlos por separado
+if self._is_transient_http_status(response.status_code) and self._should_retry_and_wait(
+    attempt, max_attempts, motivo
+):
+    continue
+return response
+```
+
+### Cuándo NO fusionar
+
+Si el `if` externo, al ser verdadero pero el interno falso, debe hacer algo **distinto**
+de "seguir de largo" (ej. un `return` propio), fusionar cambia el comportamiento — no aplicar
+la regla en ese caso.
+
+```python
+# NO fusionar: si response is None y ya no quedan reintentos, hace return None
+# explícito. Fusionado con "and", ese caso caería al siguiente if y accedería a
+# response.status_code sobre None → AttributeError.
+if response is None:
+    if self._should_retry_and_wait(attempt, max_attempts, motivo):
+        continue
+    return None
+```
 
 ---
 
@@ -250,13 +306,16 @@ except Exception:
 ## Checklist antes de hacer commit
 
 1. **CC nueva función > 15?** → extraer helpers antes de commitear.
-2. **Parámetros en la firma que no aparecen en el cuerpo?** → eliminar o prefijo `_`.
+2. **Parámetros en la firma que no aparecen en el cuerpo?** → eliminar o prefijo `_`,
+   salvo que sea para mantener paridad de interfaz con otra implementación intercambiable.
 3. **Variables asignadas pero no leídas?** → eliminar.
-4. **Mismo string literal ≥ 3 veces en el archivo?** → constante.
-5. **`f"..."` sin `{}`?** → quitar la `f`.
-6. **`import X` sin usar X?** → quitar el import.
-7. **`except X as e:` sin usar `e`?** → quitar el `as e`.
-8. **`except:`?** → especificar `except Exception:`.
+4. **`if` anidado donde el interno es la única sentencia del externo?** → fusionar con `and`,
+   salvo que el externo tenga un `return`/comportamiento propio cuando el interno es falso.
+5. **Mismo string literal ≥ 3 veces en el archivo?** → constante.
+6. **`f"..."` sin `{}`?** → quitar la `f`.
+7. **`import X` sin usar X?** → quitar el import.
+8. **`except X as e:` sin usar `e`?** → quitar el `as e`.
+9. **`except:`?** → especificar `except Exception:`.
 
 ---
 
