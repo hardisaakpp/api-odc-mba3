@@ -80,6 +80,19 @@ if ($includeFrontend) {
     }
 }
 
+# Start-Process -ArgumentList (array) no cita automáticamente elementos con espacios al
+# construir la línea de comandos del proceso hijo: una ruta con espacios (ej. rutas bajo
+# "OneDrive - MABEL TRADING S.A") se parte en varios argumentos y powershell.exe falla al
+# resolver -File, cerrando la ventana de inmediato pese a -NoExit.
+function ConvertTo-QuotedArg {
+    param([string]$Value)
+    if ([string]::IsNullOrEmpty($Value)) { return $Value }
+    if ($Value -match '\s' -and -not ($Value.StartsWith('"') -and $Value.EndsWith('"'))) {
+        return '"' + $Value + '"'
+    }
+    return $Value
+}
+
 function Start-Mba3Window {
     param(
         [Parameter(Mandatory)][ValidateSet("api", "worker", "beat", "frontend")][string]$Mode,
@@ -91,14 +104,15 @@ function Start-Mba3Window {
         "beat" { "MBA3 Celery beat" }
         "frontend" { "scnexus-front" }
     }
+    $quotedSubScript = ConvertTo-QuotedArg $SubScript
     if ($Mode -eq "frontend") {
         Start-Process powershell.exe -ArgumentList @(
             "-NoExit",
             "-NoLogo",
             "-ExecutionPolicy", "Bypass",
-            "-File", $SubScript,
+            "-File", $quotedSubScript,
             "-Mode", "frontend",
-            "-FrontendRoot", $FrontendPath
+            "-FrontendRoot", (ConvertTo-QuotedArg $FrontendPath)
         ) -WorkingDirectory $FrontendPath
     }
     else {
@@ -106,7 +120,7 @@ function Start-Mba3Window {
             "-NoExit",
             "-NoLogo",
             "-ExecutionPolicy", "Bypass",
-            "-File", $SubScript,
+            "-File", $quotedSubScript,
             "-Mode", $Mode
         ) -WorkingDirectory $BackendRoot
     }
@@ -134,15 +148,15 @@ function Add-WtPowerShellTab {
     $out = [System.Collections.Generic.List[string]]::new()
     $out.Add("nt")
     $out.Add("-d")
-    $out.Add($StartingDirectory)
+    $out.Add((ConvertTo-QuotedArg $StartingDirectory))
     $out.Add("powershell.exe")
     $out.Add("-NoExit")
     $out.Add("-NoLogo")
     $out.Add("-ExecutionPolicy")
     $out.Add("Bypass")
     $out.Add("-File")
-    $out.Add($SubScript)
-    foreach ($a in $DevTerminalArgs) { $out.Add($a) }
+    $out.Add((ConvertTo-QuotedArg $SubScript))
+    foreach ($a in $DevTerminalArgs) { $out.Add((ConvertTo-QuotedArg $a)) }
     return $out.ToArray()
 }
 

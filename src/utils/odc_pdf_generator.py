@@ -5,8 +5,8 @@ Genera un documento PDF profesional con la información de la ODC
 para enviar al proveedor adjunto al correo de notificación.
 
 Estructura del PDF:
-  - Cabecera con número de ODC
-  - Información del proveedor y comprador (2 columnas)
+  - Tarjeta de cabecera: banner "ORDEN DE COMPRA N.° X" + proveedor/cliente
+    (2 columnas) + fechas de creación, entrega y generación
   - Tabla de productos (con código de barras, SKU, descripción, cantidad, costo, total)
   - Resumen financiero (subtotal, descuento, impuesto, total)
   - Sección de firmas (Gerente de Marca, Gerente Financiero)
@@ -31,10 +31,11 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from reportlab.lib import colors
-from reportlab.lib.enums import TA_CENTER, TA_RIGHT
+from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_RIGHT
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import cm, mm
+from reportlab.pdfbase.pdfmetrics import stringWidth
 from reportlab.platypus import (
     KeepTogether,
     Paragraph,
@@ -59,16 +60,28 @@ _ASSETS_DIR = Path(__file__).resolve().parent.parent / "assets"
 LOGO_PATH = _ASSETS_DIR / "roland_logo.png"
 
 # ─── Colores corporativos ────────────────────────────────────────────────────
-COLOR_HEADER_BG = colors.HexColor("#1a5276")
-COLOR_HEADER_TEXT = colors.white
-COLOR_TABLE_HEADER_BG = colors.HexColor("#2c3e50")
-COLOR_TABLE_HEADER_TEXT = colors.white
-COLOR_ROW_ALT = colors.HexColor("#f8f9fa")
+# Un único acento navy se reutiliza en el banner de título, el encabezado de
+# la tabla de productos y la fila de TOTAL del resumen financiero.
+COLOR_ACCENT = colors.HexColor("#173650")
+COLOR_ACCENT_TEXT = colors.white
+COLOR_ROW_ALT = colors.HexColor("#eef2f6")
 COLOR_ROW_WHITE = colors.white
 COLOR_BORDER = colors.HexColor("#bdc3c7")
 COLOR_TEXT_DARK = colors.HexColor("#2c3e50")
 COLOR_TEXT_MUTED = colors.HexColor("#7f8c8d")
-COLOR_ACCENT_GREEN = colors.HexColor("#27ae60")
+
+# ─── Tipografía ───────────────────────────────────────────────────────────────
+# Solo dos tamaños de letra en todo el documento: el "grande" es exactamente
+# 1pt mayor que el "pequeño". La jerarquía visual se logra con negrita/color,
+# no con más tamaños de fuente.
+FONT_SIZE_SMALL = 7
+FONT_SIZE_LARGE = FONT_SIZE_SMALL + 1
+
+# Interlineado (leading) explícito y ajustado: si no se fija, ReportLab hereda
+# un valor fijo de 12pt del estilo "Normal" sin importar el tamaño de fuente,
+# lo que deja el texto de 7-8pt con un espaciado interlineal excesivo (~1.7x).
+LEADING_SMALL = FONT_SIZE_SMALL + 1
+LEADING_LARGE = FONT_SIZE_LARGE + 1
 
 
 def _format_number(value: float, decimals: int = 4, use_thousands: bool = True) -> str:
@@ -98,6 +111,24 @@ def _format_number(value: float, decimals: int = 4, use_thousands: bool = True) 
 def _format_currency(value: float, decimals: int = 4) -> str:
     """Formatea un valor monetario."""
     return _format_number(value, decimals=decimals, use_thousands=True)
+
+
+# Padding horizontal (izq. + der.) aplicado a las celdas de la tabla de
+# productos; se reutiliza aquí para calcular el ancho de columna necesario.
+_TABLE_CELL_H_PADDING = 8
+_TABLE_CELL_WIDTH_BUFFER = 3
+
+
+def _max_text_width(candidates: List[tuple]) -> float:
+    """Ancho máximo (en puntos) entre pares (texto, fuente, tamaño)."""
+    if not candidates:
+        return 0.0
+    return max(stringWidth(text, font_name, font_size) for text, font_name, font_size in candidates)
+
+
+def _content_col_width(candidates: List[tuple], h_padding: float = _TABLE_CELL_H_PADDING) -> float:
+    """Ancho de columna que se ajusta al contenido: máximo texto + padding + margen."""
+    return _max_text_width(candidates) + h_padding + _TABLE_CELL_WIDTH_BUFFER
 
 
 def _format_date(date_value: Any) -> str:
@@ -150,64 +181,87 @@ def _get_styles() -> Dict[str, ParagraphStyle]:
     styles = getSampleStyleSheet()
 
     custom = {
-        "odc_title": ParagraphStyle(
-            "odc_title",
-            parent=styles["Heading1"],
-            fontSize=18,
-            textColor=COLOR_HEADER_BG,
-            alignment=TA_CENTER,
-            spaceAfter=4 * mm,
+        "card_title": ParagraphStyle(
+            "card_title",
+            parent=styles["Normal"],
+            fontSize=FONT_SIZE_LARGE,
+            leading=LEADING_LARGE,
+            textColor=COLOR_ACCENT_TEXT,
             fontName="Helvetica-Bold",
         ),
-        "section_title": ParagraphStyle(
-            "section_title",
-            parent=styles["Heading2"],
-            fontSize=11,
-            textColor=COLOR_HEADER_BG,
-            spaceBefore=6 * mm,
-            spaceAfter=3 * mm,
+        "card_label": ParagraphStyle(
+            "card_label",
+            parent=styles["Normal"],
+            fontSize=FONT_SIZE_LARGE,
+            leading=LEADING_LARGE,
+            textColor=COLOR_TEXT_DARK,
             fontName="Helvetica-Bold",
+            spaceAfter=2,
         ),
-        "label": ParagraphStyle(
-            "label",
+        "card_value": ParagraphStyle(
+            "card_value",
             parent=styles["Normal"],
-            fontSize=8,
-            textColor=COLOR_TEXT_MUTED,
-            fontName="Helvetica",
-        ),
-        "value": ParagraphStyle(
-            "value",
-            parent=styles["Normal"],
-            fontSize=9,
+            fontSize=FONT_SIZE_LARGE,
+            leading=LEADING_LARGE,
             textColor=COLOR_TEXT_DARK,
             fontName="Helvetica-Bold",
         ),
-        "value_normal": ParagraphStyle(
-            "value_normal",
+        "card_value_normal": ParagraphStyle(
+            "card_value_normal",
             parent=styles["Normal"],
-            fontSize=9,
+            fontSize=FONT_SIZE_SMALL,
+            leading=LEADING_SMALL,
+            textColor=COLOR_TEXT_DARK,
+            fontName="Helvetica",
+        ),
+        "card_meta": ParagraphStyle(
+            "card_meta",
+            parent=styles["Normal"],
+            fontSize=FONT_SIZE_SMALL,
+            leading=LEADING_SMALL,
             textColor=COLOR_TEXT_DARK,
             fontName="Helvetica",
         ),
         "table_header": ParagraphStyle(
             "table_header",
             parent=styles["Normal"],
-            fontSize=7,
-            textColor=COLOR_TABLE_HEADER_TEXT,
+            fontSize=FONT_SIZE_SMALL,
+            leading=LEADING_SMALL,
+            textColor=COLOR_ACCENT_TEXT,
             fontName="Helvetica-Bold",
             alignment=TA_CENTER,
+        ),
+        "table_header_left": ParagraphStyle(
+            "table_header_left",
+            parent=styles["Normal"],
+            fontSize=FONT_SIZE_SMALL,
+            leading=LEADING_SMALL,
+            textColor=COLOR_ACCENT_TEXT,
+            fontName="Helvetica-Bold",
+            alignment=TA_LEFT,
+        ),
+        "table_header_right": ParagraphStyle(
+            "table_header_right",
+            parent=styles["Normal"],
+            fontSize=FONT_SIZE_SMALL,
+            leading=LEADING_SMALL,
+            textColor=COLOR_ACCENT_TEXT,
+            fontName="Helvetica-Bold",
+            alignment=TA_RIGHT,
         ),
         "table_cell": ParagraphStyle(
             "table_cell",
             parent=styles["Normal"],
-            fontSize=7,
+            fontSize=FONT_SIZE_SMALL,
+            leading=LEADING_SMALL,
             textColor=COLOR_TEXT_DARK,
             fontName="Helvetica",
         ),
         "table_cell_right": ParagraphStyle(
             "table_cell_right",
             parent=styles["Normal"],
-            fontSize=7,
+            fontSize=FONT_SIZE_SMALL,
+            leading=LEADING_SMALL,
             textColor=COLOR_TEXT_DARK,
             fontName="Helvetica",
             alignment=TA_RIGHT,
@@ -215,7 +269,8 @@ def _get_styles() -> Dict[str, ParagraphStyle]:
         "table_cell_center": ParagraphStyle(
             "table_cell_center",
             parent=styles["Normal"],
-            fontSize=7,
+            fontSize=FONT_SIZE_SMALL,
+            leading=LEADING_SMALL,
             textColor=COLOR_TEXT_DARK,
             fontName="Helvetica",
             alignment=TA_CENTER,
@@ -223,22 +278,25 @@ def _get_styles() -> Dict[str, ParagraphStyle]:
         "table_cell_bold": ParagraphStyle(
             "table_cell_bold",
             parent=styles["Normal"],
-            fontSize=7,
+            fontSize=FONT_SIZE_SMALL,
+            leading=LEADING_SMALL,
             textColor=COLOR_TEXT_DARK,
             fontName="Helvetica-Bold",
         ),
         "summary_label": ParagraphStyle(
             "summary_label",
             parent=styles["Normal"],
-            fontSize=9,
+            fontSize=FONT_SIZE_SMALL,
+            leading=LEADING_SMALL,
             textColor=COLOR_TEXT_DARK,
-            fontName="Helvetica-Bold",
+            fontName="Helvetica",
             alignment=TA_RIGHT,
         ),
         "summary_value": ParagraphStyle(
             "summary_value",
             parent=styles["Normal"],
-            fontSize=9,
+            fontSize=FONT_SIZE_SMALL,
+            leading=LEADING_SMALL,
             textColor=COLOR_TEXT_DARK,
             fontName="Helvetica",
             alignment=TA_RIGHT,
@@ -246,23 +304,26 @@ def _get_styles() -> Dict[str, ParagraphStyle]:
         "summary_total_label": ParagraphStyle(
             "summary_total_label",
             parent=styles["Normal"],
-            fontSize=10,
-            textColor=COLOR_HEADER_BG,
+            fontSize=FONT_SIZE_LARGE,
+            leading=LEADING_LARGE,
+            textColor=COLOR_ACCENT_TEXT,
             fontName="Helvetica-Bold",
             alignment=TA_RIGHT,
         ),
         "summary_total_value": ParagraphStyle(
             "summary_total_value",
             parent=styles["Normal"],
-            fontSize=10,
-            textColor=COLOR_HEADER_BG,
+            fontSize=FONT_SIZE_LARGE,
+            leading=LEADING_LARGE,
+            textColor=COLOR_ACCENT_TEXT,
             fontName="Helvetica-Bold",
             alignment=TA_RIGHT,
         ),
         "firma_empresa": ParagraphStyle(
             "firma_empresa",
             parent=styles["Normal"],
-            fontSize=9,
+            fontSize=FONT_SIZE_LARGE,
+            leading=LEADING_LARGE,
             textColor=COLOR_TEXT_DARK,
             fontName="Helvetica-Bold",
             alignment=TA_CENTER,
@@ -270,7 +331,8 @@ def _get_styles() -> Dict[str, ParagraphStyle]:
         "firma_ruc": ParagraphStyle(
             "firma_ruc",
             parent=styles["Normal"],
-            fontSize=7,
+            fontSize=FONT_SIZE_SMALL,
+            leading=LEADING_SMALL,
             textColor=COLOR_TEXT_MUTED,
             fontName="Helvetica",
             alignment=TA_CENTER,
@@ -278,7 +340,8 @@ def _get_styles() -> Dict[str, ParagraphStyle]:
         "firma_cargo": ParagraphStyle(
             "firma_cargo",
             parent=styles["Normal"],
-            fontSize=8,
+            fontSize=FONT_SIZE_SMALL,
+            leading=LEADING_SMALL,
             textColor=COLOR_TEXT_DARK,
             fontName="Helvetica",
             alignment=TA_CENTER,
@@ -286,7 +349,8 @@ def _get_styles() -> Dict[str, ParagraphStyle]:
         "footer": ParagraphStyle(
             "footer",
             parent=styles["Normal"],
-            fontSize=7,
+            fontSize=FONT_SIZE_SMALL,
+            leading=LEADING_SMALL,
             textColor=COLOR_TEXT_MUTED,
             fontName="Helvetica",
             alignment=TA_CENTER,
@@ -298,9 +362,10 @@ def _get_styles() -> Dict[str, ParagraphStyle]:
 def _build_header_info(
     oc_cabecera: Dict[str, Any],
     pedido_info: Optional[Dict[str, Any]],
+    numero_oc_sap: Any,
     styles: Dict[str, ParagraphStyle],
 ) -> Table:
-    """Construye la tabla de información de cabecera (proveedor | comprador)."""
+    """Construye la tarjeta de cabecera: banner de título, proveedor/cliente y fechas."""
     proveedor_code = oc_cabecera.get("proveedor", "N/A")
     referencia = oc_cabecera.get("referencia_despacho", "N/A")
     fecha_creacion = oc_cabecera.get("fecha_generacion") or oc_cabecera.get("created_at")
@@ -320,63 +385,59 @@ def _build_header_info(
     else:
         proveedor_nombre = proveedor_code
 
-    # Columna izquierda: Proveedor
-    left_data = [
-        [Paragraph("Proveedor", styles["label"])],
-        [Paragraph(str(proveedor_nombre), styles["value"])],
-        [Paragraph(f"RUC: {proveedor_code}", styles["value_normal"])],
-        [Spacer(1, 3 * mm)],
-        [Paragraph("Plazo de pago", styles["label"])],
-        [Paragraph(str(forma_pago), styles["value_normal"])],
-        [Spacer(1, 3 * mm)],
-        [Paragraph("Comentario", styles["label"])],
-        [Paragraph(f"PEDIDO {referencia}", styles["value_normal"])],
-        [Spacer(1, 3 * mm)],
-        [Paragraph("Fecha y hora de generaci&oacute;n", styles["label"])],
-        [Paragraph(_format_datetime(fecha_hora_generacion), styles["value_normal"])],
+    proveedor_cell = [
+        Paragraph("PROVEEDOR", styles["card_label"]),
+        Paragraph(str(proveedor_nombre), styles["card_value"]),
+        Paragraph(f"RUC: {proveedor_code} | Plazo: {forma_pago}", styles["card_value_normal"]),
+        Paragraph(f"PEDIDO {referencia}", styles["card_value_normal"]),
     ]
-    left_table = Table(left_data, colWidths=[8 * cm])
-    left_table.setStyle(TableStyle([
-        ("VALIGN", (0, 0), (-1, -1), "TOP"),
-        ("TOPPADDING", (0, 0), (-1, -1), 1),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 1),
-    ]))
-
-    # Columna derecha: Comprador
-    right_data = [
-        [Paragraph("Raz&oacute;n Social", styles["label"])],
-        [Paragraph(COMPRADOR_RAZON_SOCIAL, styles["value"])],
-        [Paragraph(f"RUC: {COMPRADOR_RUC}", styles["value_normal"])],
-        [Paragraph(COMPRADOR_DIRECCION, styles["value_normal"])],
-        [Spacer(1, 3 * mm)],
-        [Paragraph("Fecha de Creaci&oacute;n", styles["label"])],
-        [Paragraph(_format_date(fecha_creacion), styles["value_normal"])],
-        [Paragraph("Fecha de Entrega", styles["label"])],
-        [Paragraph(str(fecha_entrega), styles["value_normal"])],
+    cliente_cell = [
+        Paragraph("CLIENTE", styles["card_label"]),
+        Paragraph(COMPRADOR_RAZON_SOCIAL, styles["card_value"]),
+        Paragraph(f"RUC: {COMPRADOR_RUC}", styles["card_value_normal"]),
+        Paragraph(COMPRADOR_DIRECCION, styles["card_value_normal"]),
     ]
-    right_table = Table(right_data, colWidths=[8 * cm])
-    right_table.setStyle(TableStyle([
-        ("VALIGN", (0, 0), (-1, -1), "TOP"),
-        ("TOPPADDING", (0, 0), (-1, -1), 1),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 1),
-    ]))
-
-    # Tabla contenedora de 2 columnas
-    header_table = Table(
-        [[left_table, right_table]],
-        colWidths=[9 * cm, 9 * cm],
+    fechas_cell = Paragraph(
+        f"<b>Creaci&oacute;n:</b> {_format_date(fecha_creacion)}"
+        f"&nbsp;&nbsp;&nbsp;&nbsp;<b>Entrega:</b> {fecha_entrega}"
+        f"&nbsp;&nbsp;&nbsp;&nbsp;<b>Generado:</b> {_format_datetime(fecha_hora_generacion)}",
+        styles["card_meta"],
     )
-    header_table.setStyle(TableStyle([
-        ("VALIGN", (0, 0), (-1, -1), "TOP"),
-        ("BOX", (0, 0), (-1, -1), 0.5, COLOR_BORDER),
-        ("LINEBELOW", (0, 0), (-1, 0), 0.5, COLOR_BORDER),
-        ("LEFTPADDING", (0, 0), (-1, -1), 8),
-        ("RIGHTPADDING", (0, 0), (-1, -1), 8),
-        ("TOPPADDING", (0, 0), (-1, -1), 6),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+
+    data = [
+        [Paragraph(f"ORDEN DE COMPRA N.&deg; {numero_oc_sap}", styles["card_title"]), ""],
+        [proveedor_cell, cliente_cell],
+        [fechas_cell, ""],
+    ]
+
+    table = Table(data, colWidths=[9 * cm, 9 * cm])
+    table.setStyle(TableStyle([
+        ("SPAN", (0, 0), (-1, 0)),
+        ("SPAN", (0, 2), (-1, 2)),
+        # Banner de título
+        ("BACKGROUND", (0, 0), (-1, 0), COLOR_ACCENT),
+        ("VALIGN", (0, 0), (-1, 0), "MIDDLE"),
+        ("TOPPADDING", (0, 0), (-1, 0), 6),
+        ("BOTTOMPADDING", (0, 0), (-1, 0), 6),
+        ("LEFTPADDING", (0, 0), (-1, 0), 10),
+        ("RIGHTPADDING", (0, 0), (-1, 0), 10),
+        # Fila proveedor | cliente
+        ("VALIGN", (0, 1), (-1, 1), "TOP"),
+        ("TOPPADDING", (0, 1), (-1, 1), 6),
+        ("BOTTOMPADDING", (0, 1), (-1, 1), 6),
+        ("LEFTPADDING", (0, 1), (-1, 2), 10),
+        ("RIGHTPADDING", (0, 1), (-1, 2), 10),
+        ("LINEAFTER", (0, 1), (0, 1), 0.5, COLOR_BORDER),
+        # Fila de fechas
+        ("VALIGN", (0, 2), (-1, 2), "MIDDLE"),
+        ("TOPPADDING", (0, 2), (-1, 2), 5),
+        ("BOTTOMPADDING", (0, 2), (-1, 2), 5),
+        ("LINEABOVE", (0, 2), (-1, 2), 0.5, COLOR_BORDER),
+        # Marco exterior de la tarjeta
+        ("BOX", (0, 0), (-1, -1), 0.75, COLOR_BORDER),
     ]))
 
-    return header_table
+    return table
 
 
 def _build_product_table(
@@ -387,18 +448,29 @@ def _build_product_table(
     # Encabezados
     headers = [
         Paragraph("#", styles["table_header"]),
-        Paragraph("C&oacute;digo de Barras", styles["table_header"]),
-        Paragraph("SKU", styles["table_header"]),
-        Paragraph("Descripci&oacute;n", styles["table_header"]),
-        Paragraph("Cant.", styles["table_header"]),
-        Paragraph("Costo", styles["table_header"]),
-        Paragraph("Total", styles["table_header"]),
+        Paragraph("C&oacute;d. Barras", styles["table_header_left"]),
+        Paragraph("SKU", styles["table_header_left"]),
+        Paragraph("Descripci&oacute;n", styles["table_header_left"]),
+        Paragraph("Cant.", styles["table_header_right"]),
+        Paragraph("Costo", styles["table_header_right"]),
+        Paragraph("Total", styles["table_header_right"]),
     ]
 
     data = [headers]
 
     total_cantidad = 0.0
     total_valor = 0.0
+
+    # Textos planos de #, Código de Barras, SKU, Cant., Costo y Total, para
+    # calcular más abajo el ancho mínimo de columna que evita el ajuste de
+    # línea (wrap) en cada una. Descripción es la única columna "flexible":
+    # recibe todo el espacio que las demás no necesitan.
+    idx_texts = []
+    barcode_texts = []
+    sku_texts = []
+    cant_texts = []
+    costo_texts = []
+    total_texts = []
 
     for idx, detalle in enumerate(oc_detalles, 1):
         sku = detalle.get("sku_sap", "N/A")
@@ -411,64 +483,109 @@ def _build_product_table(
         total_cantidad += cantidad
         total_valor += total_linea
 
+        idx_text = str(idx)
+        barcode_text = str(codigo_barras)
+        sku_text = str(sku)
+        cant_text = f"{cantidad:,.0f}".replace(",", ".")
+        costo_text = _format_number(precio_unit, decimals=5, use_thousands=False)
+        total_text = _format_currency(total_linea, decimals=4)
+
+        idx_texts.append(idx_text)
+        barcode_texts.append(barcode_text)
+        sku_texts.append(sku_text)
+        cant_texts.append(cant_text)
+        costo_texts.append(costo_text)
+        total_texts.append(total_text)
+
         row = [
-            Paragraph(str(idx), styles["table_cell_center"]),
-            Paragraph(str(codigo_barras), styles["table_cell"]),
-            Paragraph(str(sku), styles["table_cell_bold"]),
+            Paragraph(idx_text, styles["table_cell_center"]),
+            Paragraph(barcode_text, styles["table_cell"]),
+            Paragraph(sku_text, styles["table_cell_bold"]),
             Paragraph(str(descripcion), styles["table_cell"]),
-            Paragraph(f"{cantidad:,.0f}".replace(",", "."), styles["table_cell_right"]),
-            Paragraph(_format_number(precio_unit, decimals=5, use_thousands=False), styles["table_cell_right"]),
-            Paragraph(_format_currency(total_linea, decimals=4), styles["table_cell_right"]),
+            Paragraph(cant_text, styles["table_cell_right"]),
+            Paragraph(costo_text, styles["table_cell_right"]),
+            Paragraph(total_text, styles["table_cell_right"]),
         ]
         data.append(row)
 
     # Fila de TOTAL
+    total_cant_text = f"{total_cantidad:,.0f}".replace(",", ".")
+    total_valor_text = _format_currency(total_valor, decimals=4)
     total_row = [
         "",
         "",
         "",
-        Paragraph("<b>TOTAL:</b>", styles["table_cell_bold"]),
-        Paragraph(
-            f"<b>{total_cantidad:,.0f}</b>".replace(",", "."),
-            styles["table_cell_right"],
-        ),
+        Paragraph("<b>TOTAL</b>", styles["table_cell_bold"]),
+        Paragraph(f"<b>{total_cant_text}</b>", styles["table_cell_right"]),
         "",
-        Paragraph(
-            f"<b>{_format_currency(total_valor, decimals=4)}</b>",
-            styles["table_cell_right"],
-        ),
+        Paragraph(f"<b>{total_valor_text}</b>", styles["table_cell_right"]),
     ]
     data.append(total_row)
 
-    # Anchos de columna: se usa el ancho útil completo de la página (18 cm con
-    # los márgenes actuales) y se amplía la columna Descripción para reducir
-    # el ajuste de línea, que era la principal causa de filas más altas de lo
-    # necesario y, por tanto, de páginas adicionales en órdenes con pocos ítems.
-    col_widths = [0.8 * cm, 2.3 * cm, 2.3 * cm, 6.0 * cm, 1.7 * cm, 2.2 * cm, 2.7 * cm]
+    # Anchos de columna: el ancho útil de página es fijo (18 cm con los
+    # márgenes actuales). Todas las columnas salvo Descripción se ajustan al
+    # contenido real (encabezado + valores, incluida la fila TOTAL en
+    # negrita donde aplica) para ocupar solo una línea; Descripción es la
+    # única columna flexible y recibe todo el espacio restante.
+    normal_font = styles["table_cell"].fontName
+    normal_size = styles["table_cell"].fontSize
+    bold_font = styles["table_cell_bold"].fontName
+    header_font = styles["table_header"].fontName
+    header_size = styles["table_header"].fontSize
+
+    w_idx = _content_col_width(
+        [("#", header_font, header_size)]
+        + [(t, normal_font, normal_size) for t in idx_texts]
+    )
+    w_barcode = _content_col_width(
+        [("Cód. Barras", header_font, header_size)]
+        + [(t, normal_font, normal_size) for t in barcode_texts]
+    )
+    w_sku = _content_col_width(
+        [("SKU", header_font, header_size)]
+        + [(t, bold_font, normal_size) for t in sku_texts]
+    )
+    w_cant = _content_col_width(
+        [("Cant.", header_font, header_size)]
+        + [(t, normal_font, normal_size) for t in cant_texts]
+        + [(total_cant_text, bold_font, normal_size)]
+    )
+    w_costo = _content_col_width(
+        [("Costo", header_font, header_size)]
+        + [(t, normal_font, normal_size) for t in costo_texts]
+    )
+    w_total = _content_col_width(
+        [("Total", header_font, header_size)]
+        + [(t, normal_font, normal_size) for t in total_texts]
+        + [(total_valor_text, bold_font, normal_size)]
+    )
+
+    usable_width = 18 * cm
+    w_desc = max(usable_width - (w_idx + w_barcode + w_sku + w_cant + w_costo + w_total), 3 * cm)
+
+    col_widths = [w_idx, w_barcode, w_sku, w_desc, w_cant, w_costo, w_total]
 
     table = Table(data, colWidths=col_widths, repeatRows=1)
 
     # Estilo de la tabla
     style_cmds = [
         # Encabezado
-        ("BACKGROUND", (0, 0), (-1, 0), COLOR_TABLE_HEADER_BG),
-        ("TEXTCOLOR", (0, 0), (-1, 0), COLOR_TABLE_HEADER_TEXT),
+        ("BACKGROUND", (0, 0), (-1, 0), COLOR_ACCENT),
         ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-        ("FONTSIZE", (0, 0), (-1, 0), 7),
-        ("ALIGN", (0, 0), (-1, 0), "CENTER"),
+        ("FONTSIZE", (0, 0), (-1, 0), FONT_SIZE_SMALL),
         ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-        # Padding (reducido de 4 a 3 para compactar filas sin afectar legibilidad)
-        ("TOPPADDING", (0, 0), (-1, -1), 3),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+        # Padding (compactado para reducir la altura de fila)
+        ("TOPPADDING", (0, 0), (-1, -1), 2),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
         ("LEFTPADDING", (0, 0), (-1, -1), 4),
         ("RIGHTPADDING", (0, 0), (-1, -1), 4),
         # Bordes
         ("BOX", (0, 0), (-1, -1), 0.5, COLOR_BORDER),
-        ("LINEBELOW", (0, 0), (-1, 0), 1, COLOR_TABLE_HEADER_BG),
+        ("LINEBELOW", (0, 0), (-1, 0), 1, COLOR_ACCENT),
         ("GRID", (0, 0), (-1, -2), 0.25, COLOR_BORDER),
         # Fila total
-        ("LINEABOVE", (0, -1), (-1, -1), 1, COLOR_TABLE_HEADER_BG),
-        ("BACKGROUND", (0, -1), (-1, -1), colors.HexColor("#eaf2f8")),
+        ("LINEABOVE", (0, -1), (-1, -1), 1, COLOR_ACCENT),
+        ("BACKGROUND", (0, -1), (-1, -1), COLOR_ROW_ALT),
         ("FONTNAME", (0, -1), (-1, -1), "Helvetica-Bold"),
     ]
 
@@ -492,39 +609,70 @@ def _build_financial_summary(
     impuesto = base_imponible * TASA_IVA
     total = base_imponible + impuesto
 
+    subtotal_text = _format_currency(subtotal, decimals=4)
+    descuento_text = f"{_format_number(descuento_pct, decimals=2, use_thousands=False)}%"
+    impuesto_text = _format_currency(impuesto, decimals=4)
+    total_text = _format_currency(total, decimals=4)
+
     data = [
         [
             Paragraph("Sub Total", styles["summary_label"]),
-            Paragraph(_format_currency(subtotal, decimals=4), styles["summary_value"]),
+            Paragraph(subtotal_text, styles["summary_value"]),
         ],
         [
             Paragraph("Descuento", styles["summary_label"]),
-            Paragraph(f"%{_format_number(descuento_pct, decimals=2, use_thousands=False)}", styles["summary_value"]),
+            Paragraph(descuento_text, styles["summary_value"]),
         ],
         [
             Paragraph("Impuesto", styles["summary_label"]),
-            Paragraph(_format_currency(impuesto, decimals=4), styles["summary_value"]),
+            Paragraph(impuesto_text, styles["summary_value"]),
         ],
         [
-            Paragraph("<b>Total</b>", styles["summary_total_label"]),
-            Paragraph(f"<b>{_format_currency(total, decimals=4)}</b>", styles["summary_total_value"]),
+            Paragraph("TOTAL", styles["summary_total_label"]),
+            Paragraph(total_text, styles["summary_total_value"]),
         ],
     ]
 
+    # Anchos de columna ajustados al contenido real (evita el espacio en
+    # blanco sobrante que dejaba un ancho fijo mayor al necesario).
+    label_font = styles["summary_label"].fontName
+    label_size = styles["summary_label"].fontSize
+    total_label_font = styles["summary_total_label"].fontName
+    total_label_size = styles["summary_total_label"].fontSize
+    h_padding = 12  # LEFTPADDING + RIGHTPADDING de esta tabla (6 + 6)
+
+    w_label = _content_col_width(
+        [
+            ("Sub Total", label_font, label_size),
+            ("Descuento", label_font, label_size),
+            ("Impuesto", label_font, label_size),
+            ("TOTAL", total_label_font, total_label_size),
+        ],
+        h_padding=h_padding,
+    )
+    w_value = _content_col_width(
+        [
+            (subtotal_text, label_font, label_size),
+            (descuento_text, label_font, label_size),
+            (impuesto_text, label_font, label_size),
+            (total_text, total_label_font, total_label_size),
+        ],
+        h_padding=h_padding,
+    )
+
     # Tabla alineada a la derecha
-    col_widths = [5 * cm, 4 * cm]
+    col_widths = [w_label, w_value]
     table = Table(data, colWidths=col_widths, hAlign="RIGHT")
     table.setStyle(TableStyle([
         ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-        ("TOPPADDING", (0, 0), (-1, -1), 4),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
         ("LEFTPADDING", (0, 0), (-1, -1), 6),
         ("RIGHTPADDING", (0, 0), (-1, -1), 6),
-        ("BOX", (0, 0), (-1, -1), 0.5, COLOR_BORDER),
-        ("GRID", (0, 0), (-1, -1), 0.25, COLOR_BORDER),
-        # Fila Total resaltada
-        ("LINEABOVE", (0, -1), (-1, -1), 1, COLOR_HEADER_BG),
-        ("BACKGROUND", (0, -1), (-1, -1), colors.HexColor("#eaf2f8")),
+        ("TOPPADDING", (0, 0), (-1, -2), 2),
+        ("BOTTOMPADDING", (0, 0), (-1, -2), 2),
+        # Fila TOTAL resaltada con el mismo acento navy del banner/encabezado
+        ("BACKGROUND", (0, -1), (-1, -1), COLOR_ACCENT),
+        ("TOPPADDING", (0, -1), (-1, -1), 6),
+        ("BOTTOMPADDING", (0, -1), (-1, -1), 6),
     ]))
 
     return table
@@ -535,39 +683,28 @@ def _build_signature_section(
     proveedor_ruc: str,
     styles: Dict[str, ParagraphStyle],
 ) -> Table:
-    """Construye la sección de firmas."""
-    # Línea de firma (simulada)
-    linea = "_" * 35
+    """Construye la sección de firmas, con una línea real (no subrayado de texto)."""
 
-    left_firma = [
-        [Paragraph(COMPRADOR_RAZON_SOCIAL, styles["firma_empresa"])],
-        [Paragraph(COMPRADOR_RUC, styles["firma_ruc"])],
-        [Spacer(1, 15 * mm)],
-        [Paragraph(linea, styles["firma_cargo"])],
-        [Paragraph("Gerente de Marca", styles["firma_cargo"])],
-    ]
-    left_table = Table(left_firma, colWidths=[8 * cm])
-    left_table.setStyle(TableStyle([
-        ("ALIGN", (0, 0), (-1, -1), "CENTER"),
-        ("VALIGN", (0, 0), (-1, -1), "TOP"),
-        ("TOPPADDING", (0, 0), (-1, -1), 1),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 1),
-    ]))
+    def _firma_columna(empresa: str, ruc: str, cargo: str) -> Table:
+        data = [
+            [Paragraph(empresa, styles["firma_empresa"])],
+            [Paragraph(ruc, styles["firma_ruc"])],
+            [Spacer(1, 9 * mm)],
+            [""],
+            [Paragraph(cargo, styles["firma_cargo"])],
+        ]
+        col_table = Table(data, colWidths=[8 * cm])
+        col_table.setStyle(TableStyle([
+            ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+            ("TOPPADDING", (0, 0), (-1, -1), 1),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 1),
+            ("LINEBELOW", (0, 3), (0, 3), 0.75, colors.black),
+        ]))
+        return col_table
 
-    right_firma = [
-        [Paragraph(str(proveedor_nombre), styles["firma_empresa"])],
-        [Paragraph(str(proveedor_ruc), styles["firma_ruc"])],
-        [Spacer(1, 15 * mm)],
-        [Paragraph(linea, styles["firma_cargo"])],
-        [Paragraph("Gerente Financiero", styles["firma_cargo"])],
-    ]
-    right_table = Table(right_firma, colWidths=[8 * cm])
-    right_table.setStyle(TableStyle([
-        ("ALIGN", (0, 0), (-1, -1), "CENTER"),
-        ("VALIGN", (0, 0), (-1, -1), "TOP"),
-        ("TOPPADDING", (0, 0), (-1, -1), 1),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 1),
-    ]))
+    left_table = _firma_columna(COMPRADOR_RAZON_SOCIAL, COMPRADOR_RUC, "Gerente de Marca")
+    right_table = _firma_columna(str(proveedor_nombre), str(proveedor_ruc), "Gerente Financiero")
 
     firma_table = Table(
         [[left_table, right_table]],
@@ -634,22 +771,17 @@ def generar_odc_pdf(
 
         elements = []
 
-        # ── 1. Título de la ODC ──────────────────────────────────────────
-        elements.append(Paragraph(f"ODC {numero_oc_sap}", styles["odc_title"]))
-        elements.append(Spacer(1, 4 * mm))
-
-        # ── 2. Información de cabecera (proveedor | comprador) ───────────
-        header_table = _build_header_info(oc_cabecera, pedido_info, styles)
+        # ── 1. Tarjeta de cabecera (banner + proveedor/cliente + fechas) ──
+        header_table = _build_header_info(oc_cabecera, pedido_info, numero_oc_sap, styles)
         elements.append(header_table)
         elements.append(Spacer(1, 4 * mm))
 
-        # ── 3. Tabla de productos ────────────────────────────────────────
-        elements.append(Paragraph("Detalle de la Orden de Compra", styles["section_title"]))
+        # ── 2. Tabla de productos ────────────────────────────────────────
         product_table = _build_product_table(oc_detalles, styles)
         elements.append(product_table)
         elements.append(Spacer(1, 4 * mm))
 
-        # ── 4, 5 y 6. Resumen financiero, firmas y pie de página ──────────
+        # ── 3, 4 y 5. Resumen financiero, firmas y pie de página ──────────
         # Se agrupan en un único bloque con KeepTogether para que, si no caben
         # en el espacio restante de la página actual, se muevan juntos a la
         # siguiente en lugar de quedar fragmentados (p. ej. resumen en una
@@ -665,9 +797,9 @@ def generar_odc_pdf(
 
         cierre = [
             summary_table,
-            Spacer(1, 6 * mm),
-            firma_table,
             Spacer(1, 4 * mm),
+            firma_table,
+            Spacer(1, 3 * mm),
             footer_paragraph,
         ]
         elements.append(KeepTogether(cierre))
