@@ -28,8 +28,8 @@ class MBAExportConfig:
     """Configuración para exportación a formato MBA.
     
     Valores por defecto para El Rayo: código cliente CLI1795, moneda US (dólar).
-    Otros campos pueden venir del pedido (fecha_pedido, fecha_entrega, mensaje como
-    Orden Compra Cliente, codigo_interno, costo_doc_sin_iva como Precio Final).
+    Otros campos pueden venir del pedido (fecha_pedido, fecha_entrega, numero_pedido
+    como Orden Compra Cliente, codigo_interno, costo_doc_sin_iva como Precio Final).
     
     Columnas fijas en el TXT: A=secuencial, B=número pedido (agrupa líneas), C=CLI1795,
     G=moneda (US), AI/35=secuencial.
@@ -177,7 +177,7 @@ Número secuencial de registro\tValor temporal de pedido, marca el bloque que co
         return {
             "fecha_pedido": fd(cabecera.get("fecha_pedido")),
             "fecha_entrega": fd(cabecera.get("fecha_entrega")),
-            "orden_compra_cliente": (cabecera.get("mensaje") or "").strip(),
+            "orden_compra_cliente": (cabecera.get("numero_pedido") or "").strip(),
             "bodega": config.bodega or cabecera.get("origen_traslado") or "",
             "codigo_cliente": (config.codigo_cliente or "CLI1795").strip(),
             "moneda": (config.moneda or "US").strip(),
@@ -280,7 +280,7 @@ Número secuencial de registro\tValor temporal de pedido, marca el bloque que co
                         config.vendedor,  # 9. Vendedor
                         "",  # 10. Pedido Manual
                         "",  # 11. Contrato
-                        orden_compra_cliente,  # 12. Orden Compra Cliente (mensaje del pedido)
+                        orden_compra_cliente,  # 12. Orden Compra Cliente (numero_pedido, ej. "PEDIDO ROLAND NO.")
                         "",  # 13. Cotización Original
                         "",  # 14. Medio Captura
                         "",  # 15. Transporte

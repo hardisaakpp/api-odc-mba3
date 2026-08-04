@@ -14,7 +14,7 @@ from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
 
 from src.database.connection import get_db_connection_context
 from src.database.repositories.pedido_repository import PedidoRepository
-from src.database.pedido_estados import ESTADO_GESTIONAR_PEDIDO
+from src.database.pedido_estados import ESTADO_GESTIONAR_PEDIDO, ESTADO_REDISTRIBUCION
 from src.security.jwt_auth import verify_jwt_token, require_permission, require_any_permission
 
 logger = logging.getLogger(__name__)
@@ -228,7 +228,18 @@ def _logic_exportar_pedido_plano_mba(pedido_id: str, codigo_cliente: str, codigo
                     raise ValueError(f"Pedido no encontrado: {pedido_id}")
                 pedido_id_real = pedido["cabecera"]["pedido_id"]
                 numero_pedido = pedido_id
-        
+
+        cabecera = pedido.get("cabecera", {})
+        estado_id = cabecera.get("estado_id")
+        if estado_id != ESTADO_REDISTRIBUCION:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "error": "estado_no_permitido",
+                    "message": f"El pedido debe estar en estado CONFIRMADO POR EL RAYO para generar el TXT MBA3. Estado actual: {cabecera.get('estado_nombre', 'Desconocido')}"
+                }
+            )
+
         config = MBAExportConfig(
             codigo_cliente=codigo_cliente, codigo_subcliente=codigo_subcliente, moneda=moneda,
             bodega=bodega, vendedor=vendedor, numero_pedido_temporal=numero_pedido_mba,
@@ -250,6 +261,8 @@ def _logic_exportar_pedido_plano_mba(pedido_id: str, codigo_cliente: str, codigo
             headers={"Content-Disposition": f'attachment; filename="{filename}"'})
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"❌ Error al exportar pedido plano para MBA: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Error interno al exportar pedido: {str(e)}")
@@ -399,7 +412,7 @@ def register_exportacion_endpoints(app: FastAPI):
         
         ## Parámetros de configuración (valores por defecto para "Descargar para MBA")
         
-        Del sistema se toman: Fecha Pedido, Fecha Entrega, Orden Compra Cliente (mensaje),
+        Del sistema se toman: Fecha Pedido, Fecha Entrega, Orden Compra Cliente (número de pedido),
         Código Producto, Precio Final. Columnas fijas: A=secuencial, B=número pedido (agrupa),
         C=CLI1795, G=moneda US, AI=secuencial.
         

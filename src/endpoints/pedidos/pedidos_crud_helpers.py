@@ -84,6 +84,7 @@ def enrich_pedido_with_ui_flags(pedido: Dict[str, Any]) -> None:
     - puede_cancelar_por_el_rayo: bool - Si El Rayo puede cancelar el pedido
     - puede_cancelar_pedido: bool - Si MABEL puede cancelar el pedido
     - puede_descargar_csv: bool - Si se puede descargar CSV (solo estado REDISTRIBUCION)
+    - puede_generar_txt_mba3: bool - Si se puede generar el TXT MBA3 (solo estado REDISTRIBUCION / "CONFIRMADO POR EL RAYO")
     - puede_confirmar_redistribucion: bool - Si se puede confirmar para redistribución
     - puede_finalizar: bool - Si se puede marcar como finalizado (solo DESPACHAR_Y_FACTURAR)
     
@@ -103,6 +104,7 @@ def enrich_pedido_with_ui_flags(pedido: Dict[str, Any]) -> None:
     pedido["puede_cancelar_por_el_rayo"] = estado_id in ESTADOS_PUEDE_CANCELAR_POR_EL_RAYO
     pedido["puede_cancelar_pedido"] = estado_id is not None and estado_id < ESTADO_LIMITE_CANCELAR_PEDIDO
     pedido["puede_descargar_csv"] = estado_id == ESTADO_REDISTRIBUCION
+    pedido["puede_generar_txt_mba3"] = estado_id == ESTADO_REDISTRIBUCION
     pedido["puede_confirmar_redistribucion"] = estado_id in ESTADOS_PUEDE_CONFIRMAR_REDISTRIBUCION
     pedido["puede_finalizar"] = estado_id == ESTADO_DESPACHAR_Y_FACTURAR
 

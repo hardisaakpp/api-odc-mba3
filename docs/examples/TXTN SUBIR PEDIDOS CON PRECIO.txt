@@ -1,0 +1,75 @@
+ENTERPRISE SOFTWARE SOLUTIONS																																		
+																																		
+FORMATO PARA IMPORTACIÓN :		PEDIDOS DE CLIENTES																																
+																																		
+Las columnas que son tipo fecha	 deben ingresarse según la configuración regional del computador																																	
+Las columnas de tipo numérico entero son sin decimales																																		
+Las primeras 19 FILAS incluida la linea azul se eliminaran automaticamente en el proceso de Importación																																		
+																																		
+Campo Obligatorio	Debe ingresar un valor en forma obligatoria																																	
+Campo Relacionado	Implica que el código y descripción deben estar previamente creados																																	
+Campo Opcional	Puede tener o no un valor para el proceso de importación																																	
+																																		
+1	2	3	4	5	6	7	8	9	10	11	12	13	14	15	16	17	18	19	20	21	22	23	24	25	26	27	28	29	30	31	32	33	34	35
+Numero	Número Pedido 	Código Cliente	Código SubCliente	Fecha Pedido	Fecha Entrega	Moneda	Bodega	Vendedor	Pedido Manual	Contrato	Orden Compra Cliente	Cotización Original	Medio Captura	Transporte	Nombre Solicitante	Memo	Registro Editable por otro Usuario	Confirmado	Sucursal	Código Producto	 Cantidad Pedido 	BackOrder	    Precio Final    	Aplica Impuesto 1	Departamento	Centro Costo	Proyecto	Subproyecto	Análisis 1	Análisis 2	Análisis 3	Precio Solicitado	Aplica Impuesto 2	Numero
+Integer	Numérico Entero	Alfa-numérico	Alfa-numérico	Fecha	Fecha	Alfa-numérico	Alfa-numérico	Alfa-numérico	Alfa-numérico	Alfa-numérico	Alfa-numérico	Entero Largo	Alfa-numérico	Alfa-numérico	Alfa-numérico	Texto	Booleano	Booleano	Texto	Alfa-numérico	 Real 	Booleano	    Real    	Booleano	Numérico Entero	Numérico Entero	Alfa-numérico	Alfa-numérico	Alfa-numérico	Alfa-numérico	Alfa-numérico	Real	Booleano	Integer
+		8	8	IMPORTANTE	IMPORTANTE	5	5	5	20	10	20		5	5	20				3	20							5	5	15	15	15			
+Número secuencial de registro	Valor temporal de pedido	 marca el bloque que corresponde a cada	 este campo NO se almacenara en la Base de Datos		Si no dispone de Subclientes se debera dejar en Blanco este Campo	FORMATO DE FECHA DD/MM/YYYY	 si el Campo NO lleva Datos llenarlo con 00/00/0000	FORMATO DE FECHA DD/MM/YYYY	 si el Campo NO lleva Datos llenarlo con 00/00/0000								Campo relacionado con informacion de Medios de Captura	 verifica la existencia del código respectivo	Campo relacionado con informacion de Transporte	 verifica la existencia del código respectivo			VALORES POSIBLES TRUE/FALSE	VALORES POSIBLES TRUE/FALSE	En este campo se debe registrar hasta 3 caracteres siempre			ESTA COLUMNA SIEMPRE TOMARA EL VALOR FALSE		VALORES POSIBLES TRUE/FALSE				
+"Se aplicará el Impuesto 1 si en la Ficha del Producto tiene marcado aplicar Impuesto y si en la Ficha del Cliente lo permite."""									VALORES POSIBLES TRUE/FALSE																									
+"Se aplicará el Impuesto 2 si en la Ficha del Producto tiene marcado aplicar Impuesto y si en la Ficha del Cliente lo permite."""	Número secuencial de registro																																	
+1	1	CLI1795		2/2/2026	2/2/2026	US	BPT	mrz			PROL-02.45.2026						TRUE	FALSE	PRI	R275.1012	2	FALSE	15.46	TRUE								0	FALSE	1
+2	1	CLI1795		2/2/2026	2/2/2026	US	BPT	mrz			PROL-02.45.2026						TRUE	FALSE	PRI	R5126.1012-2	2	FALSE	21.45	TRUE								0	FALSE	2
+3	1	CLI1795		2/2/2026	2/2/2026	US	BPT	mrz			PROL-02.45.2026						TRUE	FALSE	PRI	R5126.1012-4	2	FALSE	21.45	TRUE								0	FALSE	3
+4	1	CLI1795		2/2/2026	2/2/2026	US	BPT	mrz			PROL-02.45.2026						TRUE	FALSE	PRI	R5126.911-2	2	FALSE	21.45	TRUE								0	FALSE	4
+5	1	CLI1795		2/2/2026	2/2/2026	US	BPT	mrz			PROL-02.45.2026						TRUE	FALSE	PRI	R5126.911-3	2	FALSE	21.45	TRUE								0	FALSE	5
+6	1	CLI1795		2/2/2026	2/2/2026	US	BPT	mrz			PROL-02.45.2026						TRUE	FALSE	PRI	R5126.911-4	2	FALSE	21.45	TRUE								0	FALSE	6
+7	1	CLI1795		2/2/2026	2/2/2026	US	BPT	mrz			PROL-02.45.2026						TRUE	FALSE	PRI	R5269.911.GR	2	FALSE	28.6	TRUE								0	FALSE	7
+8	1	CLI1795		2/2/2026	2/2/2026	US	BPT	mrz			PROL-02.45.2026						TRUE	FALSE	PRI	R5269.911.MR	2	FALSE	28.6	TRUE								0	FALSE	8
+9	1	CLI1795		2/2/2026	2/2/2026	US	BPT	mrz			PROL-02.45.2026						TRUE	FALSE	PRI	R5269.911.NG	2	FALSE	28.6	TRUE								0	FALSE	9
+10	1	CLI1795		2/2/2026	2/2/2026	US	BPT	mrz			PROL-02.45.2026						TRUE	FALSE	PRI	R5270.911.BL	2	FALSE	36.75	TRUE								0	FALSE	10
+11	1	CLI1795		2/2/2026	2/2/2026	US	BPT	mrz			PROL-02.45.2026						TRUE	FALSE	PRI	R5270.911.NG	2	FALSE	36.75	TRUE								0	FALSE	11
+12	1	CLI1795		2/2/2026	2/2/2026	US	BPT	mrz			PROL-02.45.2026						TRUE	FALSE	PRI	R5270.911.RD	2	FALSE	36.75	TRUE								0	FALSE	12
+14	1	CLI1795		2/2/2026	2/2/2026	US	BPT	mrz			PROL-02.45.2026						TRUE	FALSE	PRI	R5271.911.CR	2	FALSE	28.6	TRUE								0	FALSE	14
+15	1	CLI1795		2/2/2026	2/2/2026	US	BPT	mrz			PROL-02.45.2026						TRUE	FALSE	PRI	R5271.911.NG	2	FALSE	28.6	TRUE								0	FALSE	15
+16	1	CLI1795		2/2/2026	2/2/2026	US	BPT	mrz			PROL-02.45.2026						TRUE	FALSE	PRI	R5271.911.RD	2	FALSE	28.6	TRUE								0	FALSE	16
+17	1	CLI1795		2/2/2026	2/2/2026	US	BPT	mrz			PROL-02.45.2026						TRUE	FALSE	PRI	R5272.911.CL	2	FALSE	26.2	TRUE								0	FALSE	17
+18	1	CLI1795		2/2/2026	2/2/2026	US	BPT	mrz			PROL-02.45.2026						TRUE	FALSE	PRI	R5272.911.NG	2	FALSE	26.2	TRUE								0	FALSE	18
+19	1	CLI1795		2/2/2026	2/2/2026	US	BPT	mrz			PROL-02.45.2026						TRUE	FALSE	PRI	R5272.911.RD	2	FALSE	26.2	TRUE								0	FALSE	19
+20	1	CLI1795		2/2/2026	2/2/2026	US	BPT	mrz			PROL-02.45.2026						TRUE	FALSE	PRI	R5273.911.GR	2	FALSE	26.2	TRUE								0	FALSE	20
+21	1	CLI1795		2/2/2026	2/2/2026	US	BPT	mrz			PROL-02.45.2026						TRUE	FALSE	PRI	R5273.911.NG	2	FALSE	26.2	TRUE								0	FALSE	21
+22	1	CLI1795		2/2/2026	2/2/2026	US	BPT	mrz			PROL-02.45.2026						TRUE	FALSE	PRI	R5273.911.RD	2	FALSE	26.2	TRUE								0	FALSE	22
+23	1	CLI1795		2/2/2026	2/2/2026	US	BPT	mrz			PROL-02.45.2026						TRUE	FALSE	PRI	R5274.911.BL	2	FALSE	38.5	TRUE								0	FALSE	23
+24	1	CLI1795		2/2/2026	2/2/2026	US	BPT	mrz			PROL-02.45.2026						TRUE	FALSE	PRI	R5274.911.NG	2	FALSE	38.5	TRUE								0	FALSE	24
+25	1	CLI1795		2/2/2026	2/2/2026	US	BPT	mrz			PROL-02.45.2026						TRUE	FALSE	PRI	R5275.911.BL	2	FALSE	26.2	TRUE								0	FALSE	25
+26	1	CLI1795		2/2/2026	2/2/2026	US	BPT	mrz			PROL-02.45.2026						TRUE	FALSE	PRI	R5275.911.CL	2	FALSE	26.2	TRUE								0	FALSE	26
+27	1	CLI1795		2/2/2026	2/2/2026	US	BPT	mrz			PROL-02.45.2026						TRUE	FALSE	PRI	R5275.911.NG	2	FALSE	26.2	TRUE								0	FALSE	27
+28	1	CLI1795		2/2/2026	2/2/2026	US	BPT	mrz			PROL-02.45.2026						TRUE	FALSE	PRI	R5276.911.CL	2	FALSE	26.2	TRUE								0	FALSE	28
+29	1	CLI1795		2/2/2026	2/2/2026	US	BPT	mrz			PROL-02.45.2026						TRUE	FALSE	PRI	R5276.911.NG	2	FALSE	26.2	TRUE								0	FALSE	29
+30	1	CLI1795		2/2/2026	2/2/2026	US	BPT	mrz			PROL-02.45.2026						TRUE	FALSE	PRI	R5276.911.RD	2	FALSE	26.2	TRUE								0	FALSE	30
+31	1	CLI1795		2/2/2026	2/2/2026	US	BPT	mrz			PROL-02.45.2026						TRUE	FALSE	PRI	R5277.911.GR	2	FALSE	28.6	TRUE								0	FALSE	31
+32	1	CLI1795		2/2/2026	2/2/2026	US	BPT	mrz			PROL-02.45.2026						TRUE	FALSE	PRI	R5277.911.NG	2	FALSE	28.6	TRUE								0	FALSE	32
+33	1	CLI1795		2/2/2026	2/2/2026	US	BPT	mrz			PROL-02.45.2026						TRUE	FALSE	PRI	R5277.911.RD	2	FALSE	28.6	TRUE								0	FALSE	33
+34	1	CLI1795		2/2/2026	2/2/2026	US	BPT	mrz			PROL-02.45.2026						TRUE	FALSE	PRI	R5278.911.GR	2	FALSE	28.6	TRUE								0	FALSE	34
+35	1	CLI1795		2/2/2026	2/2/2026	US	BPT	mrz			PROL-02.45.2026						TRUE	FALSE	PRI	R5278.911.NG	2	FALSE	28.6	TRUE								0	FALSE	35
+36	1	CLI1795		2/2/2026	2/2/2026	US	BPT	mrz			PROL-02.45.2026						TRUE	FALSE	PRI	R5278.911.SM	2	FALSE	28.6	TRUE								0	FALSE	36
+37	1	CLI1795		2/2/2026	2/2/2026	US	BPT	mrz			PROL-02.45.2026						TRUE	FALSE	PRI	R5279.911.CL	2	FALSE	28.9	TRUE								0	FALSE	37
+38	1	CLI1795		2/2/2026	2/2/2026	US	BPT	mrz			PROL-02.45.2026						TRUE	FALSE	PRI	R5279.911.NG	2	FALSE	28.9	TRUE								0	FALSE	38
+39	1	CLI1795		2/2/2026	2/2/2026	US	BPT	mrz			PROL-02.45.2026						TRUE	FALSE	PRI	R5279.911.SM	2	FALSE	28.9	TRUE								0	FALSE	39
+40	1	CLI1795		2/2/2026	2/2/2026	US	BPT	mrz			PROL-02.45.2026						TRUE	FALSE	PRI	R5280.911.GR	2	FALSE	28.9	TRUE								0	FALSE	40
+41	1	CLI1795		2/2/2026	2/2/2026	US	BPT	mrz			PROL-02.45.2026						TRUE	FALSE	PRI	R5280.911.MR	2	FALSE	28.9	TRUE								0	FALSE	41
+42	1	CLI1795		2/2/2026	2/2/2026	US	BPT	mrz			PROL-02.45.2026						TRUE	FALSE	PRI	R5280.911.NG	2	FALSE	28.9	TRUE								0	FALSE	42
+43	1	CLI1795		2/2/2026	2/2/2026	US	BPT	mrz			PROL-02.45.2026						TRUE	FALSE	PRI	R5281.1012.GR	2	FALSE	26.2	TRUE								0	FALSE	43
+44	1	CLI1795		2/2/2026	2/2/2026	US	BPT	mrz			PROL-02.45.2026						TRUE	FALSE	PRI	R5281.1012.NG	2	FALSE	26.2	TRUE								0	FALSE	44
+45	1	CLI1795		2/2/2026	2/2/2026	US	BPT	mrz			PROL-02.45.2026						TRUE	FALSE	PRI	R5281.1012.VE	2	FALSE	26.2	TRUE								0	FALSE	45
+46	1	CLI1795		2/2/2026	2/2/2026	US	BPT	mrz			PROL-02.45.2026						TRUE	FALSE	PRI	R5282.1012.BL	2	FALSE	28.6	TRUE								0	FALSE	46
+47	1	CLI1795		2/2/2026	2/2/2026	US	BPT	mrz			PROL-02.45.2026						TRUE	FALSE	PRI	R5282.1012.CL	2	FALSE	28.6	TRUE								0	FALSE	47
+48	1	CLI1795		2/2/2026	2/2/2026	US	BPT	mrz			PROL-02.45.2026						TRUE	FALSE	PRI	R5282.1012.NG	2	FALSE	28.6	TRUE								0	FALSE	48
+49	1	CLI1795		2/2/2026	2/2/2026	US	BPT	mrz			PROL-02.45.2026						TRUE	FALSE	PRI	R5283.1012.CL	2	FALSE	39.2	TRUE								0	FALSE	49
+50	1	CLI1795		2/2/2026	2/2/2026	US	BPT	mrz			PROL-02.45.2026						TRUE	FALSE	PRI	R5283.1012.GR	2	FALSE	39.2	TRUE								0	FALSE	50
+51	1	CLI1795		2/2/2026	2/2/2026	US	BPT	mrz			PROL-02.45.2026						TRUE	FALSE	PRI	R5283.1012.NG	2	FALSE	39.2	TRUE								0	FALSE	51
+52	1	CLI1795		2/2/2026	2/2/2026	US	BPT	mrz			PROL-02.45.2026						TRUE	FALSE	PRI	R5284.1012.GR	2	FALSE	26.2	TRUE								0	FALSE	52
+53	1	CLI1795		2/2/2026	2/2/2026	US	BPT	mrz			PROL-02.45.2026						TRUE	FALSE	PRI	R5284.1012.NG	2	FALSE	26.2	TRUE								0	FALSE	53
+54	1	CLI1795		2/2/2026	2/2/2026	US	BPT	mrz			PROL-02.45.2026						TRUE	FALSE	PRI	R5284.1012.VE	2	FALSE	26.2	TRUE								0	FALSE	54
+55	1	CLI1795		2/2/2026	2/2/2026	US	BPT	mrz			PROL-02.45.2026						TRUE	FALSE	PRI	R5285.1012.GR	2	FALSE	28.6	TRUE								0	FALSE	55
+56	1	CLI1795		2/2/2026	2/2/2026	US	BPT	mrz			PROL-02.45.2026						TRUE	FALSE	PRI	R5285.1012.NG	2	FALSE	28.6	TRUE								0	FALSE	56
+57	1	CLI1795		2/2/2026	2/2/2026	US	BPT	mrz			PROL-02.45.2026						TRUE	FALSE	PRI	R5285.1012.NGV	2	FALSE	28.6	TRUE								0	FALSE	57
