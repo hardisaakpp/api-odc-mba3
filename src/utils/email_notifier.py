@@ -265,8 +265,15 @@ def _extract_transferencias_data(solicitudes_transferencia):
         success = resultado.get("success", False)
         doc_num_transf = resultado.get("doc_num", "N/A")
         error = resultado.get("error")
-        doc_info = f"DocNum: {doc_num_transf}" if success else f"Error: {error or 'Desconocido'}"
-        estado_txt = "Creada" if success else "Error"
+        if success:
+            estado_txt = "Creada"
+            doc_info = f"DocNum: {doc_num_transf}"
+        elif resultado.get("queued"):
+            estado_txt = "Encolada"
+            doc_info = "SAP saturado, en cola (no es un error definitivo)"
+        else:
+            estado_txt = "Error"
+            doc_info = f"Error: {error or 'Desconocido'}"
         lineas_texto.append(f"  {tienda_codigo}\t{tienda_nombre}\t{estado_txt}\t{doc_info}")
     return total, exitosas, fallidas, "\n".join(lineas_texto)
 
@@ -285,6 +292,9 @@ def _build_filas_tabla_despacho(solicitudes_transferencia):
         if success:
             badge = '<span style="display:inline-block;background-color:#d4edda;color:#155724;padding:3px 10px;border-radius:12px;font-size:12px;font-weight:600;">Creada</span>'
             info_html = f'<span style="font-family:Consolas,monospace;font-weight:600;color:#1a5276;">{doc_num_transf}</span>'
+        elif resultado.get("queued"):
+            badge = '<span style="display:inline-block;background-color:#fff3cd;color:#856404;padding:3px 10px;border-radius:12px;font-size:12px;font-weight:600;">Encolada</span>'
+            info_html = '<span style="color:#856404;">SAP saturado, en cola (no es un error definitivo)</span>'
         else:
             badge = '<span style="display:inline-block;background-color:#f8d7da;color:#721c24;padding:3px 10px;border-radius:12px;font-size:12px;font-weight:600;">Error</span>'
             info_html = f'<span style="color:#721c24;">{error or "Desconocido"}</span>'

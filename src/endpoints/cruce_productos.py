@@ -772,19 +772,29 @@ async def _obtener_estado_sincronizacion_handler():
         raise HTTPException(status_code=500, detail=f"Error al obtener estado: {str(e)}")
 
 
+def _encolar_cruce_productos(user_id: str) -> dict:
+    """
+    Crea el registro de proceso y encola la tarea en Celery.
+
+    Bloqueante (SQL Server + Redis): debe invocarse via asyncio.to_thread para
+    no congelar el event loop si alguno de los dos responde lento.
+    """
+    estado_service = ProcesoEstadoService()
+    process_id = estado_service.crear_proceso(user_id=user_id)
+    from src.tasks.celery_cruce_productos import ejecutar_cruce_productos
+    ejecutar_cruce_productos.delay(process_id, user_id)
+    logger.info(f"🚀 Cruce iniciado: {process_id} (usuario: {user_id})")
+    return {
+        "status": "success",
+        "process_id": process_id,
+        "message": "Cruce iniciado. Usa GET /cruce-productos/stream/{process_id} para ver progreso."
+    }
+
+
 async def _iniciar_cruce_productos_handler(user: dict):
     user_id = user.get('id') or user.get('username', 'unknown')
     try:
-        estado_service = ProcesoEstadoService()
-        process_id = estado_service.crear_proceso(user_id=user_id)
-        from src.tasks.celery_cruce_productos import ejecutar_cruce_productos
-        ejecutar_cruce_productos.delay(process_id, user_id)
-        logger.info(f"🚀 Cruce iniciado: {process_id} (usuario: {user_id})")
-        return {
-            "status": "success",
-            "process_id": process_id,
-            "message": "Cruce iniciado. Usa GET /cruce-productos/stream/{process_id} para ver progreso."
-        }
+        return await asyncio.to_thread(_encolar_cruce_productos, user_id)
     except HTTPException:
         raise
     except Exception as e:

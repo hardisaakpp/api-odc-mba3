@@ -160,6 +160,29 @@ class TestReintentarPendientes:
         assert resultado["status"] == "partial"
         mock_notificar.assert_not_called()
 
+    def test_todas_las_tiendas_en_cola_no_se_reenvia_y_status_en_cola(self):
+        """HTTP 202 (job SAP en curso): no reenviar, informar 'en_cola', no 'success' engañoso."""
+        oc_repo = MagicMock()
+        oc_repo.get_existing_cabecera.return_value = {
+            "estado": "ENVIADA", "pedido_id": "pedido-1", "codigo_bodega": "RL-CD",
+        }
+        st_repo = MagicMock()
+        st_repo.get_tiendas_pendientes_reintento_st.return_value = ["TRL-PSC"]
+        service = _service()
+        with self._mock_conn_context(oc_repo, st_repo):
+            with patch.object(
+                service, "crear_solicitudes_transferencia_desde_pedido",
+                return_value={
+                    "success": True, "transferencias_creadas": 0,
+                    "tiendas_en_cola": ["TRL-PSC"],
+                },
+            ), patch.object(
+                service, "_notificar_st_creadas_en_reintento"
+            ) as mock_notificar:
+                resultado = service.reintentar_pendientes("oc-1", "user1")
+        assert resultado["status"] == "en_cola"
+        mock_notificar.assert_not_called()
+
 
 class TestNotificarStCreadasEnReintento:
     """
@@ -293,6 +316,7 @@ class TestEnviarItrsConVerificacionPrevia:
             "total_tiendas": 1,
             "transferencias_creadas": 0,
             "transferencias_errores": 0,
+            "transferencias_encoladas": 0,
             "resultados": [],
         }
 
@@ -341,6 +365,34 @@ class TestEnviarItrsConVerificacionPrevia:
         assert result["transferencias_creadas"] == 1
         assert result["resultados"][0]["doc_entry"] == 400
 
+    def test_itr_encolada_202_no_cuenta_como_error(self):
+        """HTTP 202 (job SAP en curso) no es un error definitivo: no incrementa
+        transferencias_errores, se registra aparte con su job_id."""
+        service = _service()
+        result = self._result_inicial()
+        with patch.object(
+            service, "_enviar_itr_con_reintento",
+            return_value={
+                "success": False,
+                "response": {"success": False, "queued": True, "job_id": "job-123", "error": "SAP saturado"},
+                "attempts": 1,
+                "error": "SAP saturado",
+            },
+        ):
+            service._enviar_itrs_a_sap(
+                stock_transfers_json=[{"ToWarehouse": "TRL-PSC"}],
+                distribucion_por_tienda={"tid-1": []},
+                bodega_origen="RL-CD",
+                mapeo_nombre_tienda={},
+                result=result,
+            )
+        assert result["transferencias_errores"] == 0
+        assert result["transferencias_encoladas"] == 1
+        resultado_tienda = result["resultados"][0]
+        assert resultado_tienda["success"] is False
+        assert resultado_tienda["queued"] is True
+        assert resultado_tienda["job_id"] == "job-123"
+
     def test_sin_mapa_es_comportamiento_actual(self):
         service = _service()
         result = self._result_inicial()
@@ -362,6 +414,108 @@ class TestEnviarItrsConVerificacionPrevia:
             )
         mock_enviar.assert_called_once()
         assert result["transferencias_creadas"] == 1
+
+
+class TestResolverJobsEncoladosPendientes:
+    """
+    Antes de reintentar, resuelve tiendas 'Encolada' (HTTP 202) consultando el
+    job real en vez de reenviar a ciegas (evita ITR duplicada en SAP).
+    """
+
+    def _service_con_job_status(self, pendientes, job_status_por_id):
+        service = _service()
+        service.sap_client = MagicMock()
+        service.sap_client.get_job_status.side_effect = lambda job_id: job_status_por_id.get(job_id)
+        st_repo = MagicMock()
+        st_repo.get_tiendas_encoladas_con_job_id.return_value = pendientes
+        return service, st_repo
+
+    def test_job_completado_se_adopta(self):
+        service, st_repo = self._service_con_job_status(
+            pendientes={"TRL-PSC": "job-1"},
+            job_status_por_id={
+                "job-1": {"status": "COMPLETADO", "result": {"docEntry": 400, "docNum": 500}},
+            },
+        )
+        with patch(
+            "src.database.services.stock_transfer_service.SolicitudTransferenciaRepository",
+            return_value=st_repo,
+        ):
+            adoptadas, en_cola = service._resolver_jobs_encolados_pendientes(
+                MagicMock(), "oc-1", ["TRL-PSC"]
+            )
+        assert adoptadas == {"TRL-PSC": {"doc_num": 500, "doc_entry": 400}}
+        assert en_cola == set()
+
+    def test_job_aun_encolado_no_se_reenvia(self):
+        service, st_repo = self._service_con_job_status(
+            pendientes={"TRL-PSC": "job-1"},
+            job_status_por_id={"job-1": {"status": "ENCOLADO"}},
+        )
+        with patch(
+            "src.database.services.stock_transfer_service.SolicitudTransferenciaRepository",
+            return_value=st_repo,
+        ):
+            adoptadas, en_cola = service._resolver_jobs_encolados_pendientes(
+                MagicMock(), "oc-1", ["TRL-PSC"]
+            )
+        assert adoptadas == {}
+        assert en_cola == {"TRL-PSC"}
+
+    def test_job_procesando_no_se_reenvia(self):
+        service, st_repo = self._service_con_job_status(
+            pendientes={"TRL-PSC": "job-1"},
+            job_status_por_id={"job-1": {"status": "PROCESANDO"}},
+        )
+        with patch(
+            "src.database.services.stock_transfer_service.SolicitudTransferenciaRepository",
+            return_value=st_repo,
+        ):
+            _, en_cola = service._resolver_jobs_encolados_pendientes(MagicMock(), "oc-1", ["TRL-PSC"])
+        assert en_cola == {"TRL-PSC"}
+
+    def test_job_error_queda_libre_para_reintento_normal(self):
+        service, st_repo = self._service_con_job_status(
+            pendientes={"TRL-PSC": "job-1"},
+            job_status_por_id={"job-1": {"status": "ERROR", "error": "SAP saturado: se agotaron los reintentos."}},
+        )
+        with patch(
+            "src.database.services.stock_transfer_service.SolicitudTransferenciaRepository",
+            return_value=st_repo,
+        ):
+            adoptadas, en_cola = service._resolver_jobs_encolados_pendientes(
+                MagicMock(), "oc-1", ["TRL-PSC"]
+            )
+        assert adoptadas == {}
+        assert en_cola == set()
+
+    def test_job_no_consultable_queda_libre_para_reintento_normal(self):
+        """get_job_status devuelve None (middleware caído/job expirado): no bloquear el reintento."""
+        service, st_repo = self._service_con_job_status(
+            pendientes={"TRL-PSC": "job-1"},
+            job_status_por_id={},
+        )
+        with patch(
+            "src.database.services.stock_transfer_service.SolicitudTransferenciaRepository",
+            return_value=st_repo,
+        ):
+            adoptadas, en_cola = service._resolver_jobs_encolados_pendientes(
+                MagicMock(), "oc-1", ["TRL-PSC"]
+            )
+        assert adoptadas == {}
+        assert en_cola == set()
+
+    def test_sin_pendientes_no_llama_get_job_status(self):
+        service, st_repo = self._service_con_job_status(pendientes={}, job_status_por_id={})
+        with patch(
+            "src.database.services.stock_transfer_service.SolicitudTransferenciaRepository",
+            return_value=st_repo,
+        ):
+            adoptadas, en_cola = service._resolver_jobs_encolados_pendientes(
+                MagicMock(), "oc-1", ["TRL-PSC"]
+            )
+        assert adoptadas == {} and en_cola == set()
+        service.sap_client.get_job_status.assert_not_called()
 
 
 class TestRedisLockReintentoSt:

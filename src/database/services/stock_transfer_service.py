@@ -933,6 +933,50 @@ class StockTransferService:
             )
         return distribucion_filtrada
 
+    def _resolver_jobs_encolados_pendientes(
+        self, conn, oc_id: str, tiendas_destino_filtro: List[str]
+    ) -> Tuple[Dict[str, Dict[str, Any]], set]:
+        """
+        Antes de reintentar, resuelve tiendas cuyo último intento quedó 'Encolada'
+        (HTTP 202 del middleware): consulta GET /api/v1/jobs/{job_id} en vez de
+        reenviar la creación a ciegas — el job original todavía puede completarse
+        en segundo plano, y reenviar crearía una ITR duplicada en SAP.
+
+        Returns:
+            (itrs_adoptadas, tiendas_en_cola)
+            itrs_adoptadas: {tienda_norm: {"doc_num", "doc_entry"}} — jobs
+                COMPLETADO, se adoptan (mismo shape que _buscar_itrs_existentes_en_sap).
+            tiendas_en_cola: tiendas (normalizadas) cuyo job sigue ENCOLADO/PROCESANDO;
+                no se reintentan este ciclo.
+            Tiendas cuyo job resultó ERROR (o ya no se pudo consultar) no aparecen en
+            ninguno de los dos: quedan libres para un intento de creación normal.
+        """
+        st_repo = SolicitudTransferenciaRepository(conn)
+        pendientes = st_repo.get_tiendas_encoladas_con_job_id(oc_id, tiendas_destino_filtro)
+        adoptadas: Dict[str, Dict[str, Any]] = {}
+        en_cola: set = set()
+        for tienda_norm, job_id in pendientes.items():
+            job = self.sap_client.get_job_status(job_id)
+            if not job:
+                continue
+            status = str(job.get("status") or "").upper()
+            if status == "COMPLETADO":
+                resultado_job = job.get("result") or {}
+                doc_entry = resultado_job.get("docEntry")
+                doc_num = resultado_job.get("docNum")
+                if doc_entry:
+                    adoptadas[tienda_norm] = {"doc_num": doc_num, "doc_entry": doc_entry}
+                    logger.info(
+                        f"♻️ Job SAP encolado COMPLETADO para {tienda_norm}: "
+                        f"ITR adoptada (DocEntry={doc_entry}, DocNum={doc_num})"
+                    )
+            elif status in ("ENCOLADO", "PROCESANDO"):
+                en_cola.add(tienda_norm)
+                logger.info(f"⏳ Job SAP aún {status} para {tienda_norm}: se omite este ciclo")
+            # status == "ERROR" (o desconocido/no consultable): no hacer nada especial,
+            # la tienda queda libre para un intento de creación normal.
+        return adoptadas, en_cola
+
     def _buscar_itrs_existentes_en_sap(
         self, comentario_exacto: str, bodega_origen: str
     ) -> Dict[str, Dict[str, Any]]:
@@ -1063,6 +1107,19 @@ class StockTransferService:
                 logger.info(
                     f"✅ Inventory Transfer Request CREADO en SAP: {bodega_origen} → {tienda_codigo} "
                     f"(DocEntry={resultado_tienda['doc_entry']}, DocNum={resultado_tienda['doc_num']})"
+                )
+            elif isinstance(sap_response, dict) and sap_response.get("queued"):
+                # ⏳ SAP saturado: el middleware encoló la petición (HTTP 202). No es un
+                # error definitivo — se guarda el job_id para consultar su estado real
+                # antes de reintentar (evita crear una ITR duplicada).
+                resultado_tienda["queued"] = True
+                resultado_tienda["job_id"] = sap_response.get("job_id")
+                resultado_tienda["error"] = envio_result.get("error") or sap_response.get("error")
+                resultado_tienda["attempts"] = envio_result.get("attempts")
+                result["transferencias_encoladas"] += 1
+                logger.info(
+                    f"⏳ Inventory Transfer Request ENCOLADA en SAP (no es error definitivo): "
+                    f"{bodega_origen} → {tienda_codigo} (jobId={resultado_tienda['job_id']})"
                 )
             else:
                 error_msg = envio_result.get("error") or "No se recibió respuesta de SAP"
@@ -1214,6 +1271,7 @@ class StockTransferService:
             "total_tiendas": 0,
             "transferencias_creadas": 0,
             "transferencias_errores": 0,
+            "transferencias_encoladas": 0,
             "resultados": []
         }
 
@@ -1249,6 +1307,33 @@ class StockTransferService:
                         "No hay distribución válida por tienda para crear transferencias. "
                         "Las Solicitudes de Transferencia se crean desde bodega origen hacia tiendas, no hacia bodegas."
                     )
+
+                # Antes de reintentar, resolver tiendas cuyo último intento quedó
+                # 'Encolada' (HTTP 202): consultar el job real en vez de reenviar a
+                # ciegas (evita ITR duplicada si el job original sigue en curso).
+                itrs_adoptadas_por_job: Dict[str, Dict[str, Any]] = {}
+                if verificar_ya_existente_en_sap and oc_id and tiendas_destino_filtro:
+                    itrs_adoptadas_por_job, tiendas_en_cola = self._resolver_jobs_encolados_pendientes(
+                        conn, oc_id, tiendas_destino_filtro
+                    )
+                    if tiendas_en_cola:
+                        tiendas_destino_filtro = [
+                            t for t in tiendas_destino_filtro
+                            if t.strip().upper() not in tiendas_en_cola
+                        ]
+                        logger.info(
+                            f"⏳ {len(tiendas_en_cola)} tienda(s) con job SAP aún en cola, "
+                            f"se omiten este ciclo (no se reenvían): {sorted(tiendas_en_cola)}"
+                        )
+                        if not tiendas_destino_filtro:
+                            result["success"] = True
+                            result["total_tiendas"] = 0
+                            result["tiendas_en_cola"] = sorted(tiendas_en_cola)
+                            logger.info(
+                                "⏳ Todas las tiendas objetivo del reintento siguen con job SAP "
+                                "en cola; nada que hacer este ciclo."
+                            )
+                            return result
 
                 # Reintento parcial opcional: procesar solo tiendas destino indicadas.
                 if tiendas_destino_filtro:
@@ -1305,6 +1390,8 @@ class StockTransferService:
                     itrs_existentes = self._buscar_itrs_existentes_en_sap(
                         comentario_esperado, bodega_origen
                     )
+                    if itrs_adoptadas_por_job:
+                        itrs_existentes.update(itrs_adoptadas_por_job)
 
                 # 7. Crear cada Inventory Transfer Request en SAP (POST /InventoryTransferRequests)
                 logger.info(
@@ -1419,7 +1506,9 @@ class StockTransferService:
 
         Returns:
             {"status": ..., "message": ..., "oc_id": ..., ...} — ver cada rama para el detalle.
-            status: "no_encontrada" | "estado_invalido" | "sin_pedido" | "no_pendientes" | "success" | "partial"
+            status: "no_encontrada" | "estado_invalido" | "sin_pedido" | "no_pendientes" | "success" | "partial" | "en_cola"
+            ("en_cola": todas las tiendas objetivo siguen con un job SAP en curso — HTTP 202 —,
+            no se reenvió nada este ciclo para evitar ITR duplicadas.)
         """
         with get_db_connection_context() as conn:
             oc_repo = OrdenCompraRepository(conn)
@@ -1475,9 +1564,20 @@ class StockTransferService:
         if resultado_st.get("transferencias_creadas", 0) > 0:
             self._notificar_st_creadas_en_reintento(oc_id, oc_cabecera, resultado_st, pedido_numero, origen)
 
+        if resultado_st.get("tiendas_en_cola"):
+            status = "en_cola"
+            message = (
+                "Las tiendas objetivo siguen con una Solicitud de Transferencia en "
+                "cola en SAP (saturación temporal); no se reenvió nada para evitar "
+                "duplicados. Intenta de nuevo en unos minutos."
+            )
+        else:
+            status = "success" if resultado_st.get("success") else "partial"
+            message = "Reintento ST ejecutado."
+
         return {
-            "status": "success" if resultado_st.get("success") else "partial",
-            "message": "Reintento ST ejecutado.",
+            "status": status,
+            "message": message,
             "oc_id": oc_id,
             "origen_lista_tiendas": origen_lista,
             "tiendas_objetivo": tiendas_objetivo,

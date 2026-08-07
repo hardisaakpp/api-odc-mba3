@@ -111,17 +111,21 @@ class SolicitudTransferenciaRepository:
         tienda_codigo = (r.get("tienda_codigo") or "N/A")[:20]
         tienda_nombre = (r.get("tienda_nombre") or "")[:255] if r.get("tienda_nombre") else None
         success = bool(r.get("success", False))
-        estado = "Creada" if success else "Error"
+        if r.get("queued"):
+            estado = "Encolada"
+        else:
+            estado = "Creada" if success else "Error"
         doc_num = r.get("doc_num")
         doc_entry = r.get("doc_entry")
+        job_id = (r.get("job_id") or None)
         error_mensaje = (r.get("error") or "")[:500] if r.get("error") else None
         try:
             cursor.execute(
                 """
                 INSERT INTO solicitud_transferencia_detalle (
                     solicitud_transferencia_id, tienda_codigo, tienda_nombre,
-                    estado, doc_num, doc_entry, error_mensaje
-                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    estado, doc_num, doc_entry, error_mensaje, job_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     str(solicitud_transferencia_id),
@@ -131,6 +135,7 @@ class SolicitudTransferenciaRepository:
                     doc_num,
                     doc_entry,
                     error_mensaje,
+                    job_id,
                 ),
             )
             return True
@@ -251,6 +256,101 @@ class SolicitudTransferenciaRepository:
         except Exception as e:
             logger.warning(f"No se pudo obtener detalle ST por solicitud_id: {e}")
         return out
+
+    def get_resumen_agregado_por_oc_id(self, oc_id: str) -> Dict[str, Any]:
+        """
+        Agrega el resultado de TODAS las Solicitudes de Transferencia (ITR) de una OC,
+        uniendo todos los batches (envío original + reintentos posteriores). Por cada
+        tienda destino se queda con la fila 'Creada' si tuvo éxito en cualquier intento;
+        si nunca tuvo éxito, con la fila más reciente (el error vigente).
+
+        A diferencia de get_detalle_by_solicitud_id (que solo mira un batch puntual),
+        este método evita mostrar un resumen congelado del primer intento cuando un
+        reintento posterior ya completó las tiendas que habían fallado.
+
+        Returns:
+            {
+                "total_tiendas": int,
+                "transferencias_creadas": int,
+                "transferencias_errores": int,
+                "resultados": [{tienda_codigo, tienda_nombre, doc_num, doc_entry, success, error}],
+                "itrs_por_tienda": [{doc_num, tienda_codigo}],
+            }
+        """
+        vacio: Dict[str, Any] = {
+            "total_tiendas": 0,
+            "transferencias_creadas": 0,
+            "transferencias_errores": 0,
+            "resultados": [],
+            "itrs_por_tienda": [],
+        }
+        if not oc_id:
+            return vacio
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute(
+                """
+                WITH agg AS (
+                    SELECT
+                        d.tienda_codigo,
+                        d.tienda_nombre,
+                        d.doc_num,
+                        d.doc_entry,
+                        d.estado,
+                        d.error_mensaje,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY UPPER(LTRIM(RTRIM(d.tienda_codigo)))
+                            ORDER BY
+                                CASE WHEN d.estado = 'Creada' AND d.doc_entry IS NOT NULL THEN 0 ELSE 1 END,
+                                st.creado_fecha DESC,
+                                d.solicitud_transferencia_detalle_id DESC
+                        ) AS rn
+                    FROM solicitud_transferencia_detalle d
+                    INNER JOIN solicitud_transferencia st
+                        ON st.solicitud_transferencia_id = d.solicitud_transferencia_id
+                    WHERE st.oc_id = ?
+                      AND d.tienda_codigo IS NOT NULL
+                      AND LTRIM(RTRIM(d.tienda_codigo)) <> ''
+                )
+                SELECT tienda_codigo, tienda_nombre, doc_num, doc_entry, estado, error_mensaje
+                FROM agg
+                WHERE rn = 1
+                ORDER BY tienda_codigo
+                """,
+                (str(oc_id),),
+            )
+            rows = cursor.fetchall()
+            cursor.close()
+        except Exception as e:
+            logger.warning(f"No se pudo obtener resumen agregado ST por oc_id: {e}")
+            return vacio
+
+        resultados = []
+        itrs_por_tienda = []
+        creadas = 0
+        for row in rows:
+            estado = (row[4] or "").strip()
+            success = estado == "Creada" and row[3] is not None
+            if success:
+                creadas += 1
+            resultados.append({
+                "tienda_codigo": row[0] or "",
+                "tienda_nombre": row[1],
+                "doc_num": row[2],
+                "doc_entry": row[3],
+                "success": success,
+                "error": row[5] if not success else None,
+            })
+            if success and row[2] is not None:
+                itrs_por_tienda.append({"doc_num": row[2], "tienda_codigo": row[0] or ""})
+
+        return {
+            "total_tiendas": len(rows),
+            "transferencias_creadas": creadas,
+            "transferencias_errores": len(rows) - creadas,
+            "resultados": resultados,
+            "itrs_por_tienda": itrs_por_tienda,
+        }
 
     def get_latest_resumen_by_oc_ids(self, oc_ids: List[str]) -> Dict[str, Dict[str, Any]]:
         """
@@ -416,8 +516,13 @@ class SolicitudTransferenciaRepository:
 
     def get_tiendas_pendientes_reintento_st(self, oc_id: str) -> List[str]:
         """
-        Tiendas del último batch aún en Error, excluyendo las que ya tienen ITR OK
-        en cualquier intento previo (idempotencia / anti-duplicado).
+        Tiendas del último batch aún en Error o Encolada, excluyendo las que ya
+        tienen ITR OK en cualquier intento previo (idempotencia / anti-duplicado).
+
+        'Encolada' (job SAP en curso, ver get_tiendas_encoladas_con_job_id) también
+        cuenta como pendiente: el caller (StockTransferService) decide si crea una
+        ITR nueva (Error) o solo consulta el estado del job (Encolada) antes de
+        reenviar, para no duplicar una ITR cuyo job original sigue en curso.
         """
         if not oc_id:
             return []
@@ -433,7 +538,7 @@ class SolicitudTransferenciaRepository:
                 SELECT DISTINCT tienda_codigo
                 FROM solicitud_transferencia_detalle
                 WHERE solicitud_transferencia_id = ?
-                  AND estado = 'Error'
+                  AND estado IN ('Error', 'Encolada')
                   AND tienda_codigo IS NOT NULL
                   AND LTRIM(RTRIM(tienda_codigo)) <> ''
                 """,
@@ -451,6 +556,51 @@ class SolicitudTransferenciaRepository:
             logger.warning(f"No se pudo calcular tiendas pendientes ST: {e}")
             return []
         return candidatas
+
+    def get_tiendas_encoladas_con_job_id(
+        self, oc_id: str, tiendas_codigos: List[str]
+    ) -> Dict[str, str]:
+        """
+        De las tiendas indicadas, cuáles quedaron 'Encolada' (HTTP 202) en el
+        último batch ST de la OC, con su job_id.
+
+        El caller debe consultar GET /api/v1/jobs/{job_id} para cada una antes de
+        decidir si reintenta (evita crear una ITR duplicada si el job original
+        todavía puede completarse en segundo plano).
+
+        Returns:
+            {tienda_codigo_normalizado: job_id}
+        """
+        if not oc_id or not tiendas_codigos:
+            return {}
+        solicitud_id = self._get_latest_solicitud_transferencia_id(oc_id)
+        if not solicitud_id:
+            return {}
+        objetivo_norms = {self._norm_tienda(c) for c in tiendas_codigos if self._norm_tienda(c)}
+        if not objetivo_norms:
+            return {}
+        resultado: Dict[str, str] = {}
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute(
+                """
+                SELECT tienda_codigo, job_id
+                FROM solicitud_transferencia_detalle
+                WHERE solicitud_transferencia_id = ?
+                  AND estado = 'Encolada'
+                  AND job_id IS NOT NULL
+                """,
+                (solicitud_id,),
+            )
+            for row in cursor.fetchall():
+                tienda_norm = self._norm_tienda(row[0])
+                if tienda_norm in objetivo_norms and row[1]:
+                    resultado[tienda_norm] = str(row[1])
+            cursor.close()
+        except Exception as e:
+            logger.warning(f"No se pudo obtener tiendas encoladas con job_id: {e}")
+            return {}
+        return resultado
 
     @staticmethod
     def _filtrar_tiendas_fallidas(resultados: List[Any], ok_norms: set) -> List[str]:
@@ -567,3 +717,58 @@ class SolicitudTransferenciaRepository:
         except Exception as e:
             logger.warning(f"No se pudo obtener OCs con ST pendientes: {e}")
             return []
+
+    def get_doc_num_itr_por_pedido_id(self, pedido_id: str) -> Dict[str, int]:
+        """
+        Mapa tienda_codigo NORMALIZADO (UPPER+TRIM) -> doc_num de la ITR más reciente.
+
+        Escala por solicitud_transferencia.pedido_id para cubrir TODOS los batches del
+        pedido (reintentos incluidos) y el caso oc_id NULL. Desempata con ROW_NUMBER por
+        creado_fecha DESC, de modo que un reintento posterior gana: a diferencia de
+        get_doc_num_itr_por_oc_ids, no usa MIN(doc_num).
+
+        Limitación conocida: las BODEGAS destino (RL-CD, RG-CD, OUT-CD) nunca aparecen
+        aquí porque su flujo de ITR (OCSAPService._enviar_itrs_por_bodega) no persiste
+        el doc_num en base de datos, solo lo devuelve en la respuesta HTTP.
+
+        Args:
+            pedido_id: UUID del pedido.
+
+        Returns:
+            Dict tienda_codigo normalizado -> doc_num (int). Vacío si no hay ITR creadas.
+        """
+        if not pedido_id:
+            return {}
+        out: Dict[str, int] = {}
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute(
+                """
+                WITH itr AS (
+                    SELECT
+                        UPPER(LTRIM(RTRIM(d.tienda_codigo))) AS tienda_norm,
+                        d.doc_num,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY UPPER(LTRIM(RTRIM(d.tienda_codigo)))
+                            ORDER BY st.creado_fecha DESC, d.creado_fecha DESC
+                        ) AS rn
+                    FROM solicitud_transferencia st
+                    INNER JOIN solicitud_transferencia_detalle d
+                        ON d.solicitud_transferencia_id = st.solicitud_transferencia_id
+                    WHERE st.pedido_id = ?
+                      AND d.estado = 'Creada'
+                      AND d.doc_num IS NOT NULL
+                      AND d.tienda_codigo IS NOT NULL
+                      AND LTRIM(RTRIM(d.tienda_codigo)) <> ''
+                )
+                SELECT tienda_norm, doc_num FROM itr WHERE rn = 1
+                """,
+                (str(pedido_id),),
+            )
+            for row in cursor.fetchall():
+                if row[0] and row[1] is not None:
+                    out[self._norm_tienda(row[0])] = int(row[1])
+            cursor.close()
+        except Exception as e:
+            logger.warning(f"No se pudo obtener doc_num ITR por pedido_id: {e}")
+        return out

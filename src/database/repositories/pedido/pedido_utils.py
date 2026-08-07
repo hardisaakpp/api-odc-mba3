@@ -291,22 +291,25 @@ class PedidoUtils:
         row: Any,
         tiene_comentario: bool,
         tiene_campos_modificados: bool,
-        tiendas_distribucion: List[Dict[str, Any]]
+        tiendas_distribucion: List[Dict[str, Any]],
+        tiene_costo_margen: bool = False
     ) -> Dict[str, Any]:
         """
         Construye un diccionario de detalle desde una fila de resultado SQL.
-        
+
         Args:
             row: Tupla con los valores de la fila
             tiene_comentario: Si True, incluye el campo comentario
             tiene_campos_modificados: Si True, incluye campos de modificación manual
             tiendas_distribucion: Lista de distribuciones por tienda
-            
+            tiene_costo_margen: Si True, incluye costo_margen (columna "Costo" informativa
+                para el Margen de Rentabilidad, req. 1.4/1.5, distinta de costo_doc_sin_iva)
+
         Returns:
             Diccionario con los datos del detalle
         """
         pedido_detalle_id = str(row[0])
-        
+
         detalle_dict = {
             "pedido_detalle_id": pedido_detalle_id,
             "codigo_interno": row[1],
@@ -321,13 +324,13 @@ class PedidoUtils:
             "total": float(row[10]) if row[10] else None,
             "tiendas": tiendas_distribucion,
         }
-        
+
         # Agregar comentario si existe en la consulta
         if tiene_comentario and len(row) > 11:
             detalle_dict["comentario"] = row[11] if row[11] else None
         else:
             detalle_dict["comentario"] = None
-        
+
         # Agregar campos de modificación manual si existen en la consulta
         if tiene_campos_modificados and len(row) > 14:
             detalle_dict["costo_modificado_manual"] = bool(row[12])
@@ -338,7 +341,13 @@ class PedidoUtils:
             detalle_dict["costo_modificado_manual"] = False
             detalle_dict["total_modificado_manual"] = False
             detalle_dict["comentario_modificado_manual"] = False
-        
+
+        # Agregar costo_margen si existe en la consulta (columna nueva, req. 1.4/1.5)
+        if tiene_costo_margen and len(row) > 15:
+            detalle_dict["costo_margen"] = float(row[15]) if row[15] else None
+        else:
+            detalle_dict["costo_margen"] = None
+
         return detalle_dict
     
     def obtener_detalles_pedido(
@@ -359,25 +368,27 @@ class PedidoUtils:
         # Orden alfabético por Referencia del Producto (codigo_interno); mismo orden en UI y Excel
         try:
             cursor.execute("""
-                SELECT 
+                SELECT
                     pd.pedido_detalle_id,
                     pd.codigo_interno, pd.descripcion_sap, pd.marca, pd.codigo_barras,
                     pd.pack, pd.costo_doc_sin_iva, pd.descuento_1, pd.pvp,
                     pd.subtotal, pd.total, pd.comentario,
                     ISNULL(pd.costo_modificado_manual, 0) AS costo_modificado_manual,
                     ISNULL(pd.total_modificado_manual, 0) AS total_modificado_manual,
-                    ISNULL(pd.comentario_modificado_manual, 0) AS comentario_modificado_manual
+                    ISNULL(pd.comentario_modificado_manual, 0) AS comentario_modificado_manual,
+                    pd.costo_margen
                 FROM pedido_detalle pd
                 WHERE pd.pedido_id = ?
                 ORDER BY pd.codigo_interno, pd.pedido_detalle_id
             """, (pedido_id,))
             tiene_comentario = True
             tiene_campos_modificados = True
+            tiene_costo_margen = True
         except Exception:
             # Si falla la query anterior (ej. columna inexistente), intentar sin campos opcionales
             try:
                 cursor.execute("""
-                    SELECT 
+                    SELECT
                         pd.pedido_detalle_id,
                         pd.codigo_interno, pd.descripcion_sap, pd.marca, pd.codigo_barras,
                         pd.pack, pd.costo_doc_sin_iva, pd.descuento_1, pd.pvp,
@@ -391,6 +402,7 @@ class PedidoUtils:
                 """, (pedido_id,))
                 tiene_comentario = True
                 tiene_campos_modificados = True
+                tiene_costo_margen = False
             except Exception:
                 try:
                     cursor.execute("""
@@ -405,9 +417,10 @@ class PedidoUtils:
                     """, (pedido_id,))
                     tiene_comentario = True
                     tiene_campos_modificados = False
+                    tiene_costo_margen = False
                 except Exception:
                     cursor.execute("""
-                        SELECT 
+                        SELECT
                             pd.pedido_detalle_id,
                             pd.codigo_interno, pd.descripcion_sap, pd.marca, pd.codigo_barras,
                             pd.pack, pd.costo_doc_sin_iva, pd.descuento_1, pd.pvp,
@@ -418,6 +431,7 @@ class PedidoUtils:
                     """, (pedido_id,))
                     tiene_comentario = False
                     tiene_campos_modificados = False
+                    tiene_costo_margen = False
         
         detalles = []
         for row in cursor.fetchall():
@@ -428,7 +442,8 @@ class PedidoUtils:
             
             # Construir detalle
             detalle_dict = self.construir_detalle_desde_row(
-                row, tiene_comentario, tiene_campos_modificados, tiendas_distribucion
+                row, tiene_comentario, tiene_campos_modificados, tiendas_distribucion,
+                tiene_costo_margen
             )
             
             detalles.append(detalle_dict)

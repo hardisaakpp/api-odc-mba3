@@ -8,7 +8,6 @@ CHANGELOG:
 
 import logging
 import pyodbc
-from datetime import datetime
 from typing import Dict, Any, List, Optional, TYPE_CHECKING
 
 from src.utils.timezone import ahora_naive
@@ -110,13 +109,14 @@ class PedidoDetalleRepository:
                     pvp,
                     subtotal,
                     total,
+                    costo_margen,
                     comentario,
                     orden_linea,
                     creado_por,
                     origen,
                     ip_origen,
                     created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """
                 values = (
                     pedido_detalle_id,
@@ -131,6 +131,7 @@ class PedidoDetalleRepository:
                     datos_detalle.get("pvp"),
                     datos_detalle.get("subtotal"),
                     datos_detalle.get("total"),
+                    datos_detalle.get("costo_margen"),
                     datos_detalle.get("comentario"),
                     orden_linea_val,
                     audit.get_creado_por(),
@@ -153,12 +154,13 @@ class PedidoDetalleRepository:
                     pvp,
                     subtotal,
                     total,
+                    costo_margen,
                     comentario,
                     creado_por,
                     origen,
                     ip_origen,
                     created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """
                 values = (
                     pedido_detalle_id,
@@ -173,6 +175,7 @@ class PedidoDetalleRepository:
                     datos_detalle.get("pvp"),
                     datos_detalle.get("subtotal"),
                     datos_detalle.get("total"),
+                    datos_detalle.get("costo_margen"),
                     datos_detalle.get("comentario"),
                     audit.get_creado_por(),
                     audit.origen,
@@ -194,12 +197,13 @@ class PedidoDetalleRepository:
                     pvp,
                     subtotal,
                     total,
+                    costo_margen,
                     orden_linea,
                     creado_por,
                     origen,
                     ip_origen,
                     created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """
                 values = (
                     pedido_detalle_id,
@@ -214,6 +218,7 @@ class PedidoDetalleRepository:
                     datos_detalle.get("pvp"),
                     datos_detalle.get("subtotal"),
                     datos_detalle.get("total"),
+                    datos_detalle.get("costo_margen"),
                     orden_linea_val,
                     audit.get_creado_por(),
                     audit.origen,
@@ -235,11 +240,12 @@ class PedidoDetalleRepository:
                     pvp,
                     subtotal,
                     total,
+                    costo_margen,
                     creado_por,
                     origen,
                     ip_origen,
                     created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """
                 values = (
                     pedido_detalle_id,
@@ -254,6 +260,7 @@ class PedidoDetalleRepository:
                     datos_detalle.get("pvp"),
                     datos_detalle.get("subtotal"),
                     datos_detalle.get("total"),
+                    datos_detalle.get("costo_margen"),
                     audit.get_creado_por(),
                     audit.origen,
                     audit.ip_origen,

@@ -298,6 +298,7 @@ class PedidoParserDetalle:
     ) -> None:
         mapeo_campos = {
             'costo sin iva': 'costo_doc_sin_iva',
+            'costo margen': 'costo_margen',
             'descuento': 'descuento_1',
             'pvp': 'pvp',
             'subtotal': 'subtotal',

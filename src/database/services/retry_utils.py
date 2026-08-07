@@ -196,6 +196,7 @@ def mensaje_sugiere_reintento_transitorio(mensaje: Optional[str]) -> bool:
         "no se pudo establecer conexión",
         "no se pudo establecer conexion",
         "no se pudo conectar",
+        "sap saturado",
         # Regla operativa: permitir reenvío manual en errores de presupuesto de RL.
         "presupuesto excedido rl",
         "código sap: -1116",

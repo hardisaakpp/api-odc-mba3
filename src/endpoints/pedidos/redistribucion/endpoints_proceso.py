@@ -583,42 +583,56 @@ async def _handle_proceso_sap_sync_fallback(request, numero_pedido: str, request
     return JSONResponse(status_code=200, content=out)
 
 
+def _encolar_proceso_sap(numero_pedido: str, request_body, user_id: str) -> JSONResponse:
+    """
+    Crea el registro de proceso y encola la tarea en Celery.
+
+    Bloqueante (SQL Server + Redis): debe invocarse via asyncio.to_thread para
+    no congelar el event loop si alguno de los dos responde lento.
+    """
+    estado_service = ProcesoEstadoService()
+    process_id = estado_service.crear_proceso_sap(user_id=user_id, numero_pedido=numero_pedido)
+    ajustes_serialized = [
+        a.model_dump() if hasattr(a, "model_dump") else a.dict()
+        for a in request_body.ajustes_detalle
+    ]
+    from src.tasks.celery_proceso_sap import ejecutar_proceso_completo_sap
+    ejecutar_proceso_completo_sap.delay(
+        process_id=process_id,
+        numero_pedido=numero_pedido,
+        user_id=user_id,
+        ajustes_detalle=ajustes_serialized,
+    )
+    logger.info(f"📤 Proceso SAP encolado: {process_id} (pedido: {numero_pedido}, usuario: {user_id})")
+    return JSONResponse(
+        status_code=202,
+        content={
+            "status": "accepted",
+            "process_id": process_id,
+            "message": "Proceso en segundo plano. Consulta el resultado con resultado_url o stream_url.",
+            "resultado_url": f"/api/pedidos/proceso-sap/resultado/{process_id}",
+            "stream_url": f"/api/pedidos/proceso-sap/stream/{process_id}",
+        },
+    )
+
+
 async def _handle_proceso_completo_sap_async(
     request, numero_pedido: str, request_body, force_sync: bool, user: Dict
 ):
     """Handler para proceso completo SAP con Celery y fallback síncrono."""
     user_id = get_user_id(user)
     run_async = not force_sync
-    if run_async and not _celery_workers_available():
+    # to_thread: el ping de inspeccion habla con Redis de forma sincrona y
+    # bloqueante. En el event loop, un Redis lento congela TODA la API.
+    if run_async and not await asyncio.to_thread(_celery_workers_available):
         logger.info(
             "No hay workers Celery disponibles. Ejecutando proceso SAP en primer plano (fallback sync)."
         )
         run_async = False
     if run_async:
         try:
-            estado_service = ProcesoEstadoService()
-            process_id = estado_service.crear_proceso_sap(user_id=user_id, numero_pedido=numero_pedido)
-            ajustes_serialized = [
-                a.model_dump() if hasattr(a, "model_dump") else a.dict()
-                for a in request_body.ajustes_detalle
-            ]
-            from src.tasks.celery_proceso_sap import ejecutar_proceso_completo_sap
-            ejecutar_proceso_completo_sap.delay(
-                process_id=process_id,
-                numero_pedido=numero_pedido,
-                user_id=user_id,
-                ajustes_detalle=ajustes_serialized,
-            )
-            logger.info(f"📤 Proceso SAP encolado: {process_id} (pedido: {numero_pedido}, usuario: {user_id})")
-            return JSONResponse(
-                status_code=202,
-                content={
-                    "status": "accepted",
-                    "process_id": process_id,
-                    "message": "Proceso en segundo plano. Consulta el resultado con resultado_url o stream_url.",
-                    "resultado_url": f"/api/pedidos/proceso-sap/resultado/{process_id}",
-                    "stream_url": f"/api/pedidos/proceso-sap/stream/{process_id}",
-                },
+            return await asyncio.to_thread(
+                _encolar_proceso_sap, numero_pedido, request_body, user_id
             )
         except HTTPException:
             raise

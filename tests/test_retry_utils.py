@@ -15,6 +15,12 @@ def test_mensaje_sugiere_reintento_transitorio_timeout_y_presupuesto_rl():
     assert mensaje_sugiere_reintento_transitorio("Presupuesto excedido RL para el pedido") is True
 
 
+def test_mensaje_sugiere_reintento_transitorio_sap_saturado():
+    assert mensaje_sugiere_reintento_transitorio(
+        "SAP saturado: no se pudo validar en este momento, inténtalo de nuevo en unos segundos"
+    ) is True
+
+
 def test_mensaje_sugiere_reintento_transitorio_error_de_datos_es_false():
     assert mensaje_sugiere_reintento_transitorio("Artículo no habilitado para compra") is False
     assert mensaje_sugiere_reintento_transitorio("Proveedor congelado en SAP") is False

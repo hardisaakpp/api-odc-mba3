@@ -392,3 +392,31 @@ migrations:
     description: "pedido_estado id 21: ERROR ENVIO SAP REINTENTO (fallo recuperable al enviar ODC a SAP)"
     category: "alter"
     dependencies: ["005"]
+
+  - version: "615"
+    name: "add_job_id_solicitud_transferencia_detalle"
+    file: "migrations/add_job_id_solicitud_transferencia_detalle.sql"
+    description: "solicitud_transferencia_detalle.job_id: permite consultar GET /api/v1/jobs/{jobId} antes de reintentar una ITR encolada (HTTP 202), evita duplicados"
+    category: "alter"
+    dependencies: ["612"]
+
+  - version: "616"
+    name: "add_codigo_barras_producto_sap_cache"
+    file: "migrations/add_codigo_barras_producto_sap_cache.sql"
+    description: "producto_sap_cache.codigo_barras: cachea CodeBars de SAP (OITM) para mostrarlo como dato de referencia en la carga de Excel de pedido (SAP es la fuente de verdad, no se valida contra el Excel)"
+    category: "alter"
+    dependencies: ["002"]
+
+  - version: "617"
+    name: "add_pvp_sap_producto_sap_cache"
+    file: "migrations/add_pvp_sap_producto_sap_cache.sql"
+    description: "producto_sap_cache.pvp_sap: cachea el Price de ITM1 (PriceList=1, Precio Minorista) para validar obligatoriamente el PVP del Excel contra SAP (RN-02)"
+    category: "alter"
+    dependencies: ["002"]
+
+  - version: "618"
+    name: "add_costo_margen_pedido_detalle"
+    file: "migrations/add_costo_margen_pedido_detalle.sql"
+    description: "pedido_detalle/pedido_detalle_original.costo_margen: columna 'Costo' de la plantilla Excel (req. 1.4), únicamente informativa para el cálculo del Margen de Rentabilidad (req. 1.5); distinta de costo_doc_sin_iva (RN-05)"
+    category: "alter"
+    dependencies: ["004", "605"]

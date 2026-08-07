@@ -72,6 +72,103 @@ def _recalcular_filas_validas(resultado):
     resultado["resumen"]["filasValidas"] = max(0, filas_leidas - filas_invalidas_finales)
 
 
+def _mapear_codigo_a_info_productos(data):
+    """Construye un dict {codigoProducto: [info_producto, ...]} para sincronizar/validar contra SAP."""
+    codigo_a_info_productos = {}
+    for item in data:
+        codigo = item.get("codigoProducto")
+        info_producto = item.get("info_producto")
+        if codigo and info_producto is not None:
+            codigo_a_info_productos.setdefault(codigo, []).append(info_producto)
+    return codigo_a_info_productos
+
+
+def _agregar_error_pack(resultado, codigo_a_filas, codigo, pack_excel, pack_sap):
+    """
+    Agrega un ERROR por fila cuando el Pack del Excel no coincide con el de SAP (RN-02).
+
+    Incluye `pack_excel`/`pack_sap` como campos estructurados (ademas del mensaje) para
+    que el frontend pueda ofrecer la correccion sugerida sin tener que parsear texto.
+    """
+    mensaje = (
+        f"El Pack '{pack_excel}' del Excel no coincide con el Pack registrado en SAP "
+        f"para '{codigo}' ('{pack_sap}'). Use '{pack_sap}'."
+    )
+    for fila in codigo_a_filas.get(codigo, []):
+        resultado["errores"].append({
+            "fila": fila,
+            "campo": "Pack",
+            "tipo": "ERROR",
+            "mensaje": mensaje,
+            "pack_excel": pack_excel,
+            "pack_sap": pack_sap
+        })
+
+
+def _valores_numericos_difieren(valor_excel, valor_sap, tolerancia=0.01):
+    """Compara dos valores monetarios redondeados a 2 decimales, con tolerancia por tipo/redondeo."""
+    try:
+        return abs(round(float(valor_excel), 2) - round(float(valor_sap), 2)) > tolerancia
+    except (TypeError, ValueError):
+        return False
+
+
+def _agregar_error_pvp(resultado, codigo_a_filas, codigo, pvp_excel, pvp_sap):
+    """
+    Agrega un ERROR por fila cuando el PVP del Excel no coincide con el de SAP (RN-02).
+
+    PVP de SAP viene de ITM1 con PriceList=1 ("Precio Minorista"). Incluye
+    `pvp_excel`/`pvp_sap` como campos estructurados (ademas del mensaje) para que
+    el frontend pueda ofrecer la correccion sugerida sin tener que parsear texto.
+    """
+    pvp_excel_fmt = f"{float(pvp_excel):.2f}"
+    pvp_sap_fmt = f"{float(pvp_sap):.2f}"
+    mensaje = (
+        f"El PVP '{pvp_excel_fmt}' del Excel no coincide con el PVP registrado en SAP "
+        f"(Precio Minorista) para '{codigo}' ('{pvp_sap_fmt}'). Use '{pvp_sap_fmt}'."
+    )
+    for fila in codigo_a_filas.get(codigo, []):
+        resultado["errores"].append({
+            "fila": fila,
+            "campo": "PVP",
+            "tipo": "ERROR",
+            "mensaje": mensaje,
+            "pvp_excel": float(pvp_excel),
+            "pvp_sap": float(pvp_sap)
+        })
+
+
+def _sincronizar_maestro_sap_y_validar_pack_pvp(resultado, validacion_sap, codigo_a_filas):
+    """
+    Para cada código válido en SAP: toma código de barras y descripción desde SAP
+    (fuente de verdad; el Excel es solo referencia visual, no se valida contra SAP)
+    y valida Pack y PVP contra SAP (obligatorios por RN-02, bloquean si difieren).
+    """
+    codigo_a_info_productos = _mapear_codigo_a_info_productos(resultado.get("data", []))
+    detalle = validacion_sap.get("detalle", {})
+
+    for codigo, info_productos in codigo_a_info_productos.items():
+        sap_info = detalle.get(codigo, {}).get("info")
+        if not sap_info:
+            continue
+
+        for info_producto in info_productos:
+            if sap_info.get("codigo_barras"):
+                info_producto["codigo_barras"] = sap_info["codigo_barras"]
+            if sap_info.get("item_name"):
+                info_producto["descripcion_sap"] = sap_info["item_name"]
+
+        pack_excel = next((ip.get("pack") for ip in info_productos if ip.get("pack")), None)
+        pack_sap = sap_info.get("pack_sap")
+        if pack_excel and pack_sap and pack_excel.strip().upper() != pack_sap.strip().upper():
+            _agregar_error_pack(resultado, codigo_a_filas, codigo, pack_excel, pack_sap)
+
+        pvp_excel = next((ip.get("pvp") for ip in info_productos if ip.get("pvp")), None)
+        pvp_sap = sap_info.get("pvp_sap")
+        if pvp_excel and pvp_sap and _valores_numericos_difieren(pvp_excel, pvp_sap):
+            _agregar_error_pvp(resultado, codigo_a_filas, codigo, pvp_excel, pvp_sap)
+
+
 def _construir_resumen_validacion_sap(validacion_sap, codigos_productos, codigos_no_encontrados, codigos_errores, codigos_warnings):
     """Construye el resumen de validación SAP para agregar a la respuesta."""
     return {
@@ -138,6 +235,10 @@ def _aplicar_validacion_sap(resultado, sap_obligatorio):
         codigos_warnings, "WARNING",
         lambda c: f"No se pudo validar el codigo '{c}' en SAP"
     )
+
+    # Codigo de barras/descripcion: se toman de SAP (fuente de verdad) para los codigos validos.
+    # Pack y PVP: validacion obligatoria contra SAP (RN-02), bloquea si difieren.
+    _sincronizar_maestro_sap_y_validar_pack_pvp(resultado, validacion_sap, codigo_a_filas)
 
     # Recalcular filasValidas/filasInvalidas
     _recalcular_filas_validas(resultado)

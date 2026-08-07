@@ -18,7 +18,9 @@ sin cambios.
 
 import json
 import logging
+import time
 import urllib.parse
+import redis
 import requests
 from typing import Dict, Any, Optional, List
 
@@ -27,15 +29,53 @@ from src.config import (
     ENABLE_SAP_SERVICE_LAYER,
     SAP_SERVICE_LAYER_TIMEOUT,
     SAP_USE_MIDDLEWARE,
+    REDIS_URL,
 )
 from src.exceptions import SAPDataMasterError
 from .sap_service_layer_client_direct import DirectSAPServiceLayerClient
 
 logger = logging.getLogger(__name__)
 
+# Singleton del cliente Redis usado para rastrear jobs de SAP en curso (ver
+# _resolver_job_en_curso_o_saturado). A diferencia de src/database/services/
+# proceso_estado_service.py, aquí Redis es puramente una optimización: si no está
+# disponible, `_get_redis_client_para_jobs()` retorna None y el caller degrada al
+# comportamiento actual (crear un job nuevo cada vez) en vez de fallar.
+_redis_client_jobs: Optional["redis.Redis"] = None
+
+
+def _get_redis_client_para_jobs() -> Optional["redis.Redis"]:
+    global _redis_client_jobs
+    if _redis_client_jobs is not None:
+        return _redis_client_jobs
+    try:
+        cliente = redis.from_url(
+            REDIS_URL,
+            decode_responses=True,
+            socket_connect_timeout=2,
+            socket_timeout=2,
+        )
+        cliente.ping()
+    except Exception as e:
+        # No se guarda en el singleton: la próxima llamada reintenta conectar,
+        # en vez de quedar pegada a una conexión que nunca se verificó.
+        logger.warning(f"⚠️ Redis no disponible para caché de jobs SAP en curso: {e}")
+        return None
+    _redis_client_jobs = cliente
+    return _redis_client_jobs
+
 
 class _MiddlewareSAPServiceLayerClient:
     """Cliente para el SAP Middleware API."""
+
+    # Reintento acotado ante HTTP 202 (el middleware encoló la petición porque SAP
+    # está saturado) para llamadas de LECTURA/VALIDACIÓN (sin efecto secundario en
+    # SAP): a diferencia de crear una ITR/OC, consultarlas o revalidarlas de nuevo
+    # es idempotente, así que no hay riesgo de duplicar nada en SAP al reintentar
+    # directamente — no necesitan el mecanismo de jobId/polling que sí usa
+    # create_stock_transfer. Ver docs/RESOLUCION_ITR_ENCOLADA_202.md.
+    _LECTURA_202_MAX_INTENTOS = 3
+    _LECTURA_202_ESPERA_BASE_SEGUNDOS = 2.0
 
     def __init__(self):
         self.base_url = SAP_MIDDLEWARE_URL.rstrip("/")
@@ -47,12 +87,27 @@ class _MiddlewareSAPServiceLayerClient:
 
     # ─── HTTP helpers ──────────────────────────────────────────────────────────
 
+    def _esperar_reintento_202(self, path: str, intento: int) -> None:
+        espera = self._LECTURA_202_ESPERA_BASE_SEGUNDOS * intento
+        logger.info(
+            f"⏳ {path}: SAP saturado (HTTP 202), reintentando en {espera:.1f}s "
+            f"({intento}/{self._LECTURA_202_MAX_INTENTOS - 1})..."
+        )
+        time.sleep(espera)
+
     def _get(self, path: str) -> Optional[requests.Response]:
-        try:
-            return requests.get(f"{self.base_url}{path}", timeout=self.timeout)
-        except requests.exceptions.RequestException as e:
-            logger.error(f"❌ GET {path}: error de conexión: {e}")
-            return None
+        """GET con reintento acotado ante HTTP 202 (ver constantes de la clase)."""
+        intentos = 0
+        while True:
+            intentos += 1
+            try:
+                response = requests.get(f"{self.base_url}{path}", timeout=self.timeout)
+            except requests.exceptions.RequestException as e:
+                logger.error(f"❌ GET {path}: error de conexión: {e}")
+                return None
+            if response.status_code != 202 or intentos >= self._LECTURA_202_MAX_INTENTOS:
+                return response
+            self._esperar_reintento_202(path, intentos)
 
     def _post(self, path: str, json_data: Dict) -> Optional[requests.Response]:
         try:
@@ -65,6 +120,22 @@ class _MiddlewareSAPServiceLayerClient:
         except requests.exceptions.RequestException as e:
             logger.error(f"❌ POST {path}: error de conexión: {e}")
             return None
+
+    def _post_lectura(self, path: str, json_data: Dict) -> Optional[requests.Response]:
+        """
+        POST de solo validación/consulta (sin efecto secundario en SAP), con el
+        mismo reintento acotado ante HTTP 202 que `_get`. NO usar para endpoints
+        que crean documentos en SAP (purchase-orders, stock-transfers/requests):
+        ahí reintentar un 202 a ciegas podría duplicar el documento si el job
+        encolado original también llega a completarse.
+        """
+        intentos = 0
+        while True:
+            intentos += 1
+            response = self._post(path, json_data)
+            if response is None or response.status_code != 202 or intentos >= self._LECTURA_202_MAX_INTENTOS:
+                return response
+            self._esperar_reintento_202(path, intentos)
 
     @staticmethod
     def _problem_detail(response: requests.Response) -> str:
@@ -232,6 +303,22 @@ class _MiddlewareSAPServiceLayerClient:
             logger.info(f"✅ Inventory Transfer Request creada: DocEntry={doc_entry}, DocNum={doc_num}")
             return {"success": True, "doc_entry": doc_entry, "doc_num": doc_num, "data": result}
 
+        if response.status_code == 202:
+            result = response.json()
+            job_id = result.get("jobId")
+            logger.info(
+                f"⏳ Inventory Transfer Request encolada por saturación de SAP "
+                f"(jobId={job_id}, {from_wh} → {to_wh}); no es un error definitivo"
+            )
+            return {
+                "success": False,
+                "queued": True,
+                "job_id": job_id,
+                "job_status": result.get("status"),
+                "error": f"SAP saturado: la solicitud fue encolada por el middleware (jobId={job_id})",
+                "status_code": 202,
+            }
+
         error_msg = self._problem_detail(response)
         sap_error = self._extraer_error_sap_embebido(response)
         logger.error(
@@ -280,6 +367,109 @@ class _MiddlewareSAPServiceLayerClient:
         logger.warning(f"⚠️ Error al consultar ITR: {self._problem_detail(response)}")
         return []
 
+    # ─── Jobs (cola de peticiones a SAP) ───────────────────────────────────────
+
+    def get_job_status(self, job_id: str) -> Optional[Dict[str, Any]]:
+        """
+        Consulta el estado de un job encolado (ver docs/job-queue.md del middleware).
+
+        Se usa antes de reintentar una operación que recibió HTTP 202, para no
+        reenviarla a ciegas mientras el job original todavía puede completarse
+        en segundo plano (evita duplicados, ej. una ITR creada dos veces en SAP).
+
+        Returns:
+            {"jobId", "status" ("ENCOLADO"|"PROCESANDO"|"COMPLETADO"|"ERROR"),
+             "result", "error", ...} o None si no se pudo consultar (el caller
+             debe tratarlo igual que "aún no se sabe", sin reenviar a ciegas).
+        """
+        if not self.enabled or not job_id:
+            return None
+        response = self._get(f"/api/v1/jobs/{job_id}")
+        if response is None:
+            return None
+        if response.status_code != 200:
+            logger.warning(f"⚠️ No se pudo consultar job {job_id}: {self._problem_detail(response)}")
+            return None
+        return response.json()
+
+    # ─── Caché de jobs en curso (lecturas/validaciones, no crea documentos) ───
+    #
+    # El middleware NO deduplica peticiones concurrentes para el mismo recurso:
+    # cada llamada que se encola crea un jobId nuevo con su propio ciclo de
+    # reintentos, sin buscar antes si ya hay uno pendiente para el mismo endpoint
+    # (JobExecutionCoordinator.cs:61-64, `Guid.NewGuid()` incondicional). Sin este
+    # caché, cada "Reintentar" manual mientras un artículo/proveedor está "frío"
+    # crea un job independiente que compite por el mismo SapThrottle compartido
+    # con el resto de integraciones — no solo es lento, además le suma carga real
+    # a SAP mientras dura la saturación. Aquí guardamos qué job quedó pendiente
+    # por recurso (item/proveedor) para que el siguiente intento lo consulte en
+    # vez de crear uno nuevo.
+
+    _JOB_EN_CURSO_TTL_SEGUNDOS = 600  # cubre el peor caso de docs/job-queue.md (~8 min)
+
+    @staticmethod
+    def _clave_job_en_curso(tipo: str, codigo: str) -> str:
+        return f"sap:job_en_curso:{tipo}:{codigo}"
+
+    def _job_en_curso_guardar(self, tipo: str, codigo: str, job_id: Optional[str]) -> None:
+        cliente = _get_redis_client_para_jobs()
+        if cliente is None or not job_id:
+            return
+        try:
+            cliente.setex(self._clave_job_en_curso(tipo, codigo), self._JOB_EN_CURSO_TTL_SEGUNDOS, job_id)
+        except Exception as e:
+            logger.warning(f"⚠️ No se pudo guardar el job en curso en Redis ({tipo}:{codigo}): {e}")
+
+    def _job_en_curso_limpiar(self, tipo: str, codigo: str) -> None:
+        cliente = _get_redis_client_para_jobs()
+        if cliente is None:
+            return
+        try:
+            cliente.delete(self._clave_job_en_curso(tipo, codigo))
+        except Exception as e:
+            logger.warning(f"⚠️ No se pudo limpiar el job en curso en Redis ({tipo}:{codigo}): {e}")
+
+    def _resolver_job_en_curso_o_saturado(self, tipo: str, codigo: str, mapear_resultado) -> Optional[Dict[str, Any]]:
+        """
+        Si ya había un job pendiente guardado para este recurso, lo resuelve en vez
+        de dejar que el caller cree uno nuevo.
+
+        Returns:
+            El resultado ya mapeado (mismo shape que get_item/get_business_partner)
+            si el job terminó COMPLETADO; `_error_saturado()` si sigue en curso
+            (ENCOLADO/PROCESANDO); None si no había job guardado, o el que había
+            ya no es válido (ERROR o no consultable) — el caller debe hacer una
+            consulta nueva normal.
+        """
+        cliente = _get_redis_client_para_jobs()
+        if cliente is None:
+            return None
+        try:
+            job_id = cliente.get(self._clave_job_en_curso(tipo, codigo))
+        except Exception as e:
+            logger.warning(f"⚠️ No se pudo consultar el job en curso en Redis ({tipo}:{codigo}): {e}")
+            return None
+        if not job_id:
+            return None
+
+        estado = self.get_job_status(job_id)
+        if estado is None:
+            self._job_en_curso_limpiar(tipo, codigo)
+            return None
+
+        status = estado.get("status")
+        if status == "COMPLETADO":
+            self._job_en_curso_limpiar(tipo, codigo)
+            return mapear_resultado(estado.get("result") or {})
+        if status in ("ENCOLADO", "PROCESANDO"):
+            logger.info(f"⏳ {tipo} {codigo}: reutilizando job {job_id} ya en curso (status={status})")
+            return self._error_saturado()
+
+        # ERROR u otro estado terminal no exitoso: liberar y dejar que el caller
+        # haga una consulta nueva y limpia.
+        self._job_en_curso_limpiar(tipo, codigo)
+        return None
+
     # ─── Items ─────────────────────────────────────────────────────────────────
 
     @classmethod
@@ -298,6 +488,10 @@ class _MiddlewareSAPServiceLayerClient:
             "ItmsGrpCod": data.get("groupCode"),
             "ItmsGrpNam": data.get("groupName"),
             "CardCode": data.get("preferredVendorCode") or None,
+            # "pvp" = precio de la lista "Precio Minorista" (PriceList 1 en SAP), ya resuelto
+            # por el middleware (ItemPrices). "codeBars" viene directo del campo OITM.CodeBars.
+            "Price": data.get("pvp"),
+            "CodeBars": data.get("codeBars"),
         }
 
     @staticmethod
@@ -308,11 +502,30 @@ class _MiddlewareSAPServiceLayerClient:
             "_error_message": f"Item '{item_code}' no existe en SAP",
         }
 
+    @staticmethod
+    def _error_saturado() -> Dict[str, Any]:
+        """
+        Error de consulta cuando SAP sigue saturado (HTTP 202) tras agotar los
+        reintentos de `_get`. Se distingue de `_error_type: "error"` para que el
+        caller (prevalidación de ODC) pueda mostrar un mensaje honesto en vez de
+        un "HTTP 202" críptico, y para que retry_utils.mensaje_sugiere_reintento_transitorio
+        lo reconozca como transitorio (ver needle "saturado").
+        """
+        return {
+            "_error": True,
+            "_error_type": "saturado",
+            "_error_message": "SAP saturado: no se pudo validar en este momento, inténtalo de nuevo en unos segundos",
+        }
+
     def get_item(self, item_code: str) -> Optional[Dict[str, Any]]:
         """Consulta un artículo en SAP via middleware."""
         if not self.enabled:
             logger.debug(f"⏭️ Consulta de Item deshabilitada: {item_code}")
             return None
+
+        en_curso = self._resolver_job_en_curso_o_saturado("item", item_code, self._map_item_data)
+        if en_curso is not None:
+            return en_curso
 
         path = f"/api/v1/items/{urllib.parse.quote(item_code, safe='')}"
         logger.debug(f"🔍 GET {path}")
@@ -332,6 +545,12 @@ class _MiddlewareSAPServiceLayerClient:
             logger.warning(f"⚠️ Item no encontrado: {item_code}")
             return self._item_no_existe(item_code)
 
+        if response.status_code == 202:
+            job_id = response.json().get("jobId")
+            self._job_en_curso_guardar("item", item_code, job_id)
+            logger.warning(f"⏳ Item {item_code}: SAP sigue saturado tras reintentos (jobId={job_id})")
+            return self._error_saturado()
+
         error_msg = self._problem_detail(response)
         logger.error(f"❌ Error al consultar Item {item_code}: {error_msg}")
         return {"_error": True, "_error_type": "error", "_error_message": error_msg}
@@ -339,7 +558,7 @@ class _MiddlewareSAPServiceLayerClient:
     _ITEMS_BATCH_CHUNK_SIZE = 100
 
     def _get_items_batch_chunk(self, codes: List[str]) -> Optional[Dict[str, Any]]:
-        response = self._post("/api/v1/items/batch", {"itemCodes": codes})
+        response = self._post_lectura("/api/v1/items/batch", {"itemCodes": codes})
         if response is None:
             return None
         if response.status_code == 200:
@@ -462,11 +681,26 @@ class _MiddlewareSAPServiceLayerClient:
         logger.error(f"❌ Error al consultar stock de {item_code}: {self._problem_detail(response)}")
         return None
 
+    @classmethod
+    def _map_business_partner_data(cls, data: Dict[str, Any]) -> Dict[str, Any]:
+        """Traduce la respuesta de BP del middleware (GET /business-partners/{code} o job completado) al shape SAP clásico."""
+        return {
+            "CardCode": data.get("cardCode"),
+            "CardName": data.get("cardName"),
+            "CardType": data.get("cardType"),
+            "Valid": cls._bool_to_tyes(data.get("valid")),
+            "Frozen": cls._bool_to_tyes(data.get("frozen")),
+        }
+
     def get_business_partner(self, card_code: str) -> Optional[Dict[str, Any]]:
         """Consulta un Business Partner en SAP via middleware."""
         if not self.enabled:
             logger.debug(f"⏭️ Consulta de Business Partner deshabilitada: {card_code}")
             return None
+
+        en_curso = self._resolver_job_en_curso_o_saturado("bp", card_code, self._map_business_partner_data)
+        if en_curso is not None:
+            return en_curso
 
         path = f"/api/v1/business-partners/{urllib.parse.quote(card_code, safe='')}"
         logger.debug(f"🔍 GET {path}")
@@ -480,13 +714,7 @@ class _MiddlewareSAPServiceLayerClient:
                 f"✅ Business Partner encontrado: {card_code} - "
                 f"{data.get('cardName')} ({data.get('cardType')})"
             )
-            return {
-                "CardCode": data.get("cardCode"),
-                "CardName": data.get("cardName"),
-                "CardType": data.get("cardType"),
-                "Valid": self._bool_to_tyes(data.get("valid")),
-                "Frozen": self._bool_to_tyes(data.get("frozen")),
-            }
+            return self._map_business_partner_data(data)
 
         if response.status_code == 404:
             logger.warning(f"⚠️ Business Partner no encontrado: {card_code}")
@@ -495,6 +723,12 @@ class _MiddlewareSAPServiceLayerClient:
                 "_error_type": "no_existe",
                 "_error_message": f"Business Partner '{card_code}' no existe en SAP",
             }
+
+        if response.status_code == 202:
+            job_id = response.json().get("jobId")
+            self._job_en_curso_guardar("bp", card_code, job_id)
+            logger.warning(f"⏳ Business Partner {card_code}: SAP sigue saturado tras reintentos (jobId={job_id})")
+            return self._error_saturado()
 
         error_msg = self._problem_detail(response)
         logger.error(f"❌ Error al consultar Business Partner {card_code}: {error_msg}")
@@ -582,7 +816,7 @@ class _MiddlewareSAPServiceLayerClient:
         return None
 
     def _validate_warehouses_chunk(self, codes: List[str]) -> Optional[List[Dict[str, Any]]]:
-        response = self._post("/api/v1/warehouses/validate", {"warehouseCodes": codes})
+        response = self._post_lectura("/api/v1/warehouses/validate", {"warehouseCodes": codes})
         if response is None:
             return None
         if response.status_code == 200:
@@ -659,7 +893,7 @@ class _MiddlewareSAPServiceLayerClient:
             f"📤 POST /api/v1/validations/purchase-order "
             f"(cardCode={card_code}, {len(lines)} líneas)"
         )
-        response = self._post("/api/v1/validations/purchase-order", payload)
+        response = self._post_lectura("/api/v1/validations/purchase-order", payload)
         if response is None:
             return None
 

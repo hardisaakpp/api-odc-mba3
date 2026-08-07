@@ -576,7 +576,8 @@ class PedidoService:
         tiendas_permitidas: Optional[List[str]] = None,
         bloquea_con_errores: bool = True,
         validar_sap: bool = True,
-        correcciones_codigos: Optional[Dict[str, str]] = None
+        correcciones_codigos: Optional[Dict[str, str]] = None,
+        correcciones_pack_pvp: Optional[Dict[str, Dict[str, Any]]] = None
     ) -> Dict[str, Any]:
         """
         Valida y procesa un archivo Excel de pedido.
@@ -592,6 +593,10 @@ class PedidoService:
             bloquea_con_errores: Si True, no guarda si hay errores críticos
             validar_sap: Si True, valida que códigos de producto existan en SAP
             sap_obligatorio: Si True, errores de SAP bloquean la persistencia
+            correcciones_pack_pvp: Mapa {codigo: {"pack": valor, "pvp": valor}} con el valor
+                elegido por el usuario (SAP o Excel) para reintentar tras una discrepancia
+                de Pack/PVP (RN-02). Si un campo viene presente, se usa ese valor y no se
+                vuelve a comparar contra SAP.
 
         Returns:
             Dict con resultado incluyendo validación
@@ -621,7 +626,8 @@ class PedidoService:
             resultado["formato_detectado"] = "dos_hojas_nuevo_v1_0"
             cabecera, detalles_con_tiendas = self._procesar_formato_nuevo_v1_0(
                 file_content, hoja_cabecera, hoja_detalle,
-                filename, usuario_id, validar_sap, correcciones_codigos
+                filename, usuario_id, validar_sap, correcciones_codigos,
+                correcciones_pack_pvp
             )
             if not detalles_con_tiendas:
                 raise BusinessException(
@@ -774,62 +780,19 @@ class PedidoService:
             codigos_productos_parsing = codigos_corregidos
         return codigos_productos_parsing
 
-    def _raise_productos_sap_invalidos(
-        self,
-        validacion_sap_productos: Optional[Dict[str, Any]],
-        codigos_productos_parsing: List[str]
-    ) -> None:
-        """Registra el log y lanza BusinessException cuando la validación temprana de productos SAP falla."""
-        no_encontrados = self._norm_list(validacion_sap_productos.get("no_encontrados", []) if validacion_sap_productos else [])
-        errores = self._norm_list(validacion_sap_productos.get("errores", []) if validacion_sap_productos else [])
-        validos = self._norm_list(validacion_sap_productos.get("validos", []) if validacion_sap_productos else [])
-        detalle_validacion = validacion_sap_productos.get("detalle", {}) if validacion_sap_productos else {}
-        no_encontrados_str = ', '.join(no_encontrados[:5])
-        if len(no_encontrados) > 5:
-            no_encontrados_str += f" (+{len(no_encontrados) - 5} más)"
-        logger.error(f"❌ Validación SAP falló: {len(validos)}✓, {len(no_encontrados)}✗ [{no_encontrados_str}]")
-        raise BusinessException(
-            message="Existen códigos de producto no válidos en SAP",
-            error_code="PRODUCTOS_NO_VALIDOS_SAP",
-            data={
-                "validacion": {
-                    "productos": {
-                        "no_encontrados": no_encontrados,
-                        "errores": errores,
-                        "validos": validos,
-                        "total_validos": len(validos),
-                        "total_invalidos": len(no_encontrados) + len(errores)
-                    }
-                },
-                "validacion_sap": {
-                    "total_codigos": len(codigos_productos_parsing),
-                    "validos": len(validos),
-                    "no_encontrados": len(no_encontrados),
-                    "errores": len(errores),
-                    "todos_validos": False,
-                    "detalle_validacion": {
-                        codigo: {
-                            "existe": info.get("existe"),
-                            "severity": info.get("severity"),
-                            "error": info.get("error"),
-                            "mensaje": info.get("mensaje"),
-                            "mba3": info.get("mba3"),
-                            "sugerencias_sap": info.get("sugerencias_sap", [])
-                        }
-                        for codigo, info in detalle_validacion.items()
-                    }
-                }
-            }
-        )
-
     def _validar_productos_sap_temprana(
         self,
         datos_parsing: List[Dict],
         correcciones_codigos: Optional[Dict[str, str]]
-    ) -> None:
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Consulta la validación de productos contra SAP y la retorna siempre (válida o no) sin
+        lanzar excepción — la decisión de bloquear es de _validar_sap_codigo_y_pack_pvp, que la
+        combina con el resultado de Pack/PVP en una sola BusinessException.
+        """
         codigos_productos_parsing = self._recolectar_codigos_producto_parsing(datos_parsing, correcciones_codigos)
         if not codigos_productos_parsing:
-            return
+            return None
         codigos_sample = sorted(codigos_productos_parsing)[:20]
         logger.info(
             f"🔍 Validando {len(codigos_productos_parsing)} productos contra SAP (con sugerencias). "
@@ -843,9 +806,258 @@ class PedidoService:
             incluir_sugerencias=True,
             limite_sugerencias=20
         )
-        if validacion_sap_productos is None or not validacion_sap_productos.get("todos_validos", False):
-            self._raise_productos_sap_invalidos(validacion_sap_productos, codigos_productos_parsing)
-        logger.debug(f"✅ Validación SAP: {len(validacion_sap_productos.get('validos', []))} productos válidos")
+        if validacion_sap_productos is not None and validacion_sap_productos.get("todos_validos", False):
+            logger.debug(f"✅ Validación SAP: {len(validacion_sap_productos.get('validos', []))} productos válidos")
+        return validacion_sap_productos
+
+    def _validar_sap_codigo_y_pack_pvp(
+        self,
+        datos_parsing: List[Dict],
+        correcciones_codigos: Optional[Dict[str, str]],
+        correcciones_pack_pvp: Optional[Dict[str, Dict[str, Any]]]
+    ) -> None:
+        """
+        Ejecuta en una sola pasada las 3 validaciones contra SAP (código, pack, pvp) y, si alguna
+        falla, lanza UNA sola BusinessException combinada — antes código bloqueaba de inmediato y
+        pack/pvp solo se evaluaba en un reintento posterior; ahora el usuario ve y corrige todo en
+        el mismo intento, sin importar cuál(es) de las 3 validaciones fallen.
+        """
+        validacion_sap_productos = self._validar_productos_sap_temprana(datos_parsing, correcciones_codigos)
+        codigos_productos_parsing = self._recolectar_codigos_producto_parsing(datos_parsing, correcciones_codigos)
+        codigo_invalido = bool(codigos_productos_parsing) and (
+            validacion_sap_productos is None or not validacion_sap_productos.get("todos_validos", False)
+        )
+
+        pack_pvp_exc: Optional[BusinessException] = None
+        try:
+            self._validar_pack_pvp_temprana(
+                datos_parsing, correcciones_codigos, validacion_sap_productos, correcciones_pack_pvp
+            )
+        except BusinessException as e:
+            pack_pvp_exc = e
+
+        if not codigo_invalido and pack_pvp_exc is None:
+            return
+        self._raise_validacion_sap_combinada(
+            codigo_invalido, validacion_sap_productos, codigos_productos_parsing, pack_pvp_exc,
+            datos_parsing, correcciones_codigos
+        )
+
+    def _raise_validacion_sap_combinada(
+        self,
+        codigo_invalido: bool,
+        validacion_sap_productos: Optional[Dict[str, Any]],
+        codigos_productos_parsing: List[str],
+        pack_pvp_exc: Optional[BusinessException],
+        datos_parsing: List[Dict],
+        correcciones_codigos: Optional[Dict[str, str]]
+    ) -> None:
+        """Combina el resultado de código inválido y/o de Pack/PVP en una sola BusinessException."""
+        data: Dict[str, Any] = {}
+        partes_mensaje: List[str] = []
+
+        if codigo_invalido:
+            no_encontrados = self._norm_list(validacion_sap_productos.get("no_encontrados", []) if validacion_sap_productos else [])
+            errores = self._norm_list(validacion_sap_productos.get("errores", []) if validacion_sap_productos else [])
+            validos = self._norm_list(validacion_sap_productos.get("validos", []) if validacion_sap_productos else [])
+            detalle_validacion = validacion_sap_productos.get("detalle", {}) if validacion_sap_productos else {}
+            no_encontrados_str = ', '.join(no_encontrados[:5])
+            if len(no_encontrados) > 5:
+                no_encontrados_str += f" (+{len(no_encontrados) - 5} más)"
+            logger.error(f"❌ Validación SAP falló: {len(validos)}✓, {len(no_encontrados)}✗ [{no_encontrados_str}]")
+            data["validacion"] = {
+                "productos": {
+                    "no_encontrados": no_encontrados,
+                    "errores": errores,
+                    "validos": validos,
+                    "total_validos": len(validos),
+                    "total_invalidos": len(no_encontrados) + len(errores)
+                }
+            }
+            # codigo_a_info_productos: mismo agrupamiento (y misma convención de
+            # "primer valor no nulo" ante filas duplicadas por código) que usa la
+            # validación de Pack/PVP para códigos ya válidos — ver
+            # _evaluar_pack_producto / _evaluar_pvp_producto. Se expone aquí el
+            # Pack/PVP tal como vino en el Excel para que el frontend pueda
+            # detectar el mismatch automáticamente apenas el usuario elige una
+            # sugerencia SAP, sin esperar al reintento siguiente.
+            codigo_a_info_productos = self._agrupar_info_productos_por_codigo(datos_parsing, correcciones_codigos)
+            data["validacion_sap"] = {
+                "total_codigos": len(codigos_productos_parsing),
+                "validos": len(validos),
+                "no_encontrados": len(no_encontrados),
+                "errores": len(errores),
+                "todos_validos": False,
+                "detalle_validacion": {
+                    codigo: {
+                        "existe": info.get("existe"),
+                        "severity": info.get("severity"),
+                        "error": info.get("error"),
+                        "mensaje": info.get("mensaje"),
+                        "mba3": info.get("mba3"),
+                        "sugerencias_sap": info.get("sugerencias_sap", []),
+                        "pack_excel": next(
+                            (ip.get("pack") for ip in codigo_a_info_productos.get(codigo, []) if ip.get("pack")),
+                            None
+                        ),
+                        "pvp_excel": next(
+                            (ip.get("pvp") for ip in codigo_a_info_productos.get(codigo, []) if ip.get("pvp")),
+                            None
+                        ),
+                    }
+                    for codigo, info in detalle_validacion.items()
+                }
+            }
+            partes_mensaje.append("códigos de producto no válidos en SAP")
+
+        if pack_pvp_exc is not None:
+            data.update(pack_pvp_exc.data)
+            validacion_pack_pvp = pack_pvp_exc.data["validacion_pack_pvp"]
+            total_pack_pvp = len(validacion_pack_pvp["pack_mismatches"]) + len(validacion_pack_pvp["pvp_mismatches"])
+            partes_mensaje.append(f"{total_pack_pvp} discrepancia(s) de Pack/PVP contra SAP")
+
+        message = "Existen " + " y ".join(partes_mensaje)
+        error_code = "PRODUCTOS_NO_VALIDOS_SAP" if codigo_invalido else "PACK_PVP_INVALIDOS_SAP"
+        raise BusinessException(message=message, error_code=error_code, data=data)
+
+    @staticmethod
+    def _valores_numericos_difieren(valor_excel: Any, valor_sap: Any, tolerancia: float = 0.01) -> bool:
+        """Compara dos valores monetarios redondeados a 2 decimales, con tolerancia por redondeo."""
+        try:
+            return abs(round(float(valor_excel), 2) - round(float(valor_sap), 2)) > tolerancia
+        except (TypeError, ValueError):
+            return False
+
+    @staticmethod
+    def _agrupar_info_productos_por_codigo(
+        datos_parsing: List[Dict],
+        correcciones_codigos: Optional[Dict[str, str]]
+    ) -> Dict[str, List[Dict]]:
+        """Agrupa los info_producto del parsing por código (aplicando correcciones de código si existen)."""
+        codigo_a_info_productos: Dict[str, List[Dict]] = {}
+        for item in datos_parsing:
+            codigo = item.get("codigoProducto")
+            if not codigo:
+                continue
+            if correcciones_codigos and codigo in correcciones_codigos:
+                codigo = correcciones_codigos[codigo]
+            info_producto = item.get("info_producto")
+            if info_producto is not None:
+                codigo_a_info_productos.setdefault(codigo, []).append(info_producto)
+        return codigo_a_info_productos
+
+    @staticmethod
+    def _aplicar_correccion_campo(
+        info_productos: List[Dict],
+        campo: str,
+        valor_corregido: Any
+    ) -> None:
+        for info_producto in info_productos:
+            info_producto[campo] = valor_corregido
+
+    def _evaluar_pack_producto(
+        self,
+        codigo: str,
+        info_productos: List[Dict],
+        sap_info: Dict[str, Any],
+        correccion: Dict[str, Any],
+        mismatches_pack: List[Dict[str, Any]]
+    ) -> None:
+        pack_sap = sap_info.get("pack_sap")
+        if "pack" in correccion:
+            self._aplicar_correccion_campo(info_productos, "pack", correccion["pack"])
+            return
+        pack_excel = next((ip.get("pack") for ip in info_productos if ip.get("pack")), None)
+        if pack_excel and pack_sap and pack_excel.strip().upper() != pack_sap.strip().upper():
+            mismatches_pack.append({"codigo": codigo, "pack_excel": pack_excel, "pack_sap": pack_sap})
+
+    def _evaluar_pvp_producto(
+        self,
+        codigo: str,
+        info_productos: List[Dict],
+        sap_info: Dict[str, Any],
+        correccion: Dict[str, Any],
+        mismatches_pvp: List[Dict[str, Any]]
+    ) -> None:
+        pvp_sap = sap_info.get("pvp_sap")
+        if "pvp" in correccion:
+            self._aplicar_correccion_campo(info_productos, "pvp", correccion["pvp"])
+            return
+        pvp_excel = next((ip.get("pvp") for ip in info_productos if ip.get("pvp")), None)
+        if pvp_excel and pvp_sap and self._valores_numericos_difieren(pvp_excel, pvp_sap):
+            mismatches_pvp.append({
+                "codigo": codigo,
+                "pvp_excel": float(pvp_excel),
+                "pvp_sap": float(pvp_sap)
+            })
+
+    def _validar_pack_pvp_temprana(
+        self,
+        datos_parsing: List[Dict],
+        correcciones_codigos: Optional[Dict[str, str]],
+        validacion_sap_productos: Optional[Dict[str, Any]],
+        correcciones_pack_pvp: Optional[Dict[str, Dict[str, Any]]] = None
+    ) -> None:
+        """
+        Valida Pack y PVP contra SAP (obligatorio por RN-02): bloquea la carga si difieren,
+        a menos que `correcciones_pack_pvp` ya traiga el valor elegido por el usuario
+        (re-intento tras elegir "usar SAP" o "usar Excel" en pantalla) para ese código/campo.
+
+        También sincroniza codigo_barras/descripcion_sap desde SAP (fuente de verdad; el
+        Excel es solo referencia visual para el usuario, esos dos campos no se validan).
+        """
+        if not validacion_sap_productos:
+            return
+        detalle = validacion_sap_productos.get("detalle", {})
+        codigo_a_info_productos = self._agrupar_info_productos_por_codigo(datos_parsing, correcciones_codigos)
+
+        mismatches_pack: List[Dict[str, Any]] = []
+        mismatches_pvp: List[Dict[str, Any]] = []
+
+        for codigo, info_productos in codigo_a_info_productos.items():
+            sap_info = detalle.get(codigo, {}).get("info")
+            if not sap_info:
+                continue
+
+            for info_producto in info_productos:
+                if sap_info.get("codigo_barras"):
+                    info_producto["codigo_barras"] = sap_info["codigo_barras"]
+                if sap_info.get("item_name"):
+                    info_producto["descripcion_sap"] = sap_info["item_name"]
+
+            correccion = (correcciones_pack_pvp or {}).get(codigo, {})
+            self._evaluar_pack_producto(codigo, info_productos, sap_info, correccion, mismatches_pack)
+            self._evaluar_pvp_producto(codigo, info_productos, sap_info, correccion, mismatches_pvp)
+
+        if mismatches_pack or mismatches_pvp:
+            self._raise_pack_pvp_invalidos(mismatches_pack, mismatches_pvp)
+
+    @staticmethod
+    def _raise_pack_pvp_invalidos(mismatches_pack: List[Dict[str, Any]], mismatches_pvp: List[Dict[str, Any]]) -> None:
+        total = len(mismatches_pack) + len(mismatches_pvp)
+        logger.error(
+            f"❌ Validación Pack/PVP contra SAP falló: {len(mismatches_pack)} Pack, {len(mismatches_pvp)} PVP"
+        )
+        mensajes = [
+            f"El Pack '{m['pack_excel']}' del Excel no coincide con el Pack registrado en SAP "
+            f"para '{m['codigo']}' ('{m['pack_sap']}'). Use '{m['pack_sap']}'."
+            for m in mismatches_pack
+        ] + [
+            f"El PVP '{m['pvp_excel']:.2f}' del Excel no coincide con el PVP registrado en SAP "
+            f"(Precio Minorista) para '{m['codigo']}' ('{m['pvp_sap']:.2f}'). Use '{m['pvp_sap']:.2f}'."
+            for m in mismatches_pvp
+        ]
+        raise BusinessException(
+            message=f"Existen {total} discrepancia(s) de Pack/PVP contra SAP",
+            error_code="PACK_PVP_INVALIDOS_SAP",
+            data={
+                "validacion_pack_pvp": {
+                    "pack_mismatches": mismatches_pack,
+                    "pvp_mismatches": mismatches_pvp,
+                    "mensajes": mensajes,
+                }
+            }
+        )
 
     def _agrupar_datos_en_detalles(
         self,
@@ -870,6 +1082,7 @@ class PedidoService:
                         "descripcion_sap": info_producto.get("descripcion_sap"),
                         "pack": info_producto.get("pack"),
                         "costo_doc_sin_iva": info_producto.get("costo_doc_sin_iva"),
+                        "costo_margen": info_producto.get("costo_margen"),
                         "descuento_1": info_producto.get("descuento_1"),
                         "pvp": info_producto.get("pvp"),
                         "subtotal": info_producto.get("subtotal"),
@@ -894,7 +1107,8 @@ class PedidoService:
         filename: str,
         usuario_id: Optional[str],
         validar_sap: bool,
-        correcciones_codigos: Optional[Dict[str, str]]
+        correcciones_codigos: Optional[Dict[str, str]],
+        correcciones_pack_pvp: Optional[Dict[str, Dict[str, Any]]] = None
     ) -> tuple:
         logger.info("📋 Formato DOS HOJAS NUEVO v1.0 detectado: 'cabecera' + 'detalle' (con bodegas centrales)")
         resultado_parsing = self.parser.parsear_excel_pedido(
@@ -906,7 +1120,7 @@ class PedidoService:
         self._validar_numero_pedido_duplicado(cabecera_parseada)
         datos_parsing = resultado_parsing.get("data", [])
         if validar_sap and datos_parsing:
-            self._validar_productos_sap_temprana(datos_parsing, correcciones_codigos)
+            self._validar_sap_codigo_y_pack_pvp(datos_parsing, correcciones_codigos, correcciones_pack_pvp)
         cabecera = self._normalizar_cabecera_para_bd(
             resultado_parsing.get("cabecera", {}), filename, usuario_id
         )

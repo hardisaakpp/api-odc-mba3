@@ -9,10 +9,8 @@ CHANGELOG:
 import logging
 import pyodbc
 from typing import Dict, Any, List, Optional, TYPE_CHECKING
-from datetime import datetime
 
 from src.utils.timezone import ahora_naive
-from decimal import Decimal
 
 if TYPE_CHECKING:
     from src.utils.audit_context import AuditContext
@@ -467,11 +465,22 @@ class DistribucionConfirmadaRepository:
             nueva_version = version_actual + 1
 
             cursor.execute("""
-                SELECT TOP 1 rpd.pedido_detalle_id, rpd.cantidad_solicitada_total, rpd.cantidad_confirmada_total
-                FROM pedido_respuesta_proveedor_detalle rpd
-                INNER JOIN pedido_respuesta_proveedor rp ON rpd.respuesta_id = rp.respuesta_id
-                WHERE rp.pedido_id = ?
-                ORDER BY rp.version DESC, rp.fecha_respuesta DESC
+                WITH respuestas_rankeadas AS (
+                    SELECT
+                        rpd.pedido_detalle_id,
+                        rpd.cantidad_solicitada_total,
+                        rpd.cantidad_confirmada_total,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY rpd.pedido_detalle_id
+                            ORDER BY rp.version DESC, rp.fecha_respuesta DESC
+                        ) AS rn
+                    FROM pedido_respuesta_proveedor_detalle rpd
+                    INNER JOIN pedido_respuesta_proveedor rp ON rpd.respuesta_id = rp.respuesta_id
+                    WHERE rp.pedido_id = ?
+                )
+                SELECT pedido_detalle_id, cantidad_solicitada_total, cantidad_confirmada_total
+                FROM respuestas_rankeadas
+                WHERE rn = 1
             """, (pedido_id,))
 
             respuestas_proveedor: Dict[str, Any] = {}

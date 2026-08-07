@@ -80,7 +80,10 @@ class PedidoParserUtils:
         _CLAVE_CODIGO_BARRAS: ('codigo de barras', 'codigo_barras', 'código de barras', _CLAVE_CODIGO_BARRAS, 'ean'),
         'descripcion sap': ('descripcion sap', 'descripción sap', 'descripcion', 'descripción'),
         'pack': ('pack', 'unidad', 'unidad de empaque'),
-        'costo sin iva': ('costo sin iva', 'costo doc sin iva', 'costo', 'precio sin iva'),
+        'costo sin iva': ('costo sin iva', 'costo doc sin iva', 'precio sin iva'),
+        # Columna "Costo" (req. 1.4/1.5, SIS-PYTD-0002): informativa para el Margen de
+        # Rentabilidad, distinta de "Costo sin IVA" (costo_doc_sin_iva ya alimenta OC/ajustes).
+        'costo margen': ('costo',),
         'descuento': ('descuento', 'dscto', 'dscto 1', 'descuento 1'),
         'pvp': ('pvp', 'precio venta publico', 'precio de venta'),
         'total': ('total',),

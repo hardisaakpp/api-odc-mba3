@@ -11,7 +11,7 @@ import logging
 import base64
 import json
 import asyncio
-from typing import Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from src.utils.timezone import ahora_naive
 from fastapi import FastAPI, UploadFile, File, Depends, HTTPException, Query, Form, Path, Request
@@ -38,6 +38,10 @@ __all__ = ["register_plantillas_endpoints"]
 # Timeout para comprobar si hay workers Celery disponibles (evitar colgar si Redis responde pero no hay worker)
 CELERY_WORKER_PING_TIMEOUT = 2.5
 
+# Tope de códigos por consulta a /sap-info-productos. Coincide con el límite del
+# batch del middleware (POST /api/v1/items/batch admite hasta 100).
+MAX_CODIGOS_SAP_INFO = 100
+
 _PERM_MABEL = 'mabel.view'
 _PERM_ODCSAP = 'odcsap.view'
 _DEFAULT_FILENAME = "sin_nombre.xlsx"
@@ -60,6 +64,70 @@ def _celery_workers_available() -> bool:
     except Exception as e:
         logger.debug("Comprobación de workers Celery fallida: %s", e)
         return False
+
+
+def _consultar_sap_info_productos(codigos: List[str]) -> Dict[str, Dict[str, Any]]:
+    """
+    Resuelve Pack / PVP / código de barras en SAP para una lista de códigos.
+
+    Bloqueante (cache en SQL Server + middleware o su fallback OPENQUERY): debe
+    invocarse via asyncio.to_thread para no congelar el event loop.
+    """
+    from src.database.services.sap_service import SAPService
+
+    resultados = SAPService().get_or_fetch_productos_batch(codigos)
+    salida: Dict[str, Dict[str, Any]] = {}
+    for codigo in codigos:
+        info = resultados.get(codigo)
+        # get_or_fetch_productos_batch devuelve None (no resuelto) o un dict con
+        # _error/_error_type ("no_existe" | "inactivo" | "mismatch") en vez de datos.
+        if not info or info.get("_error"):
+            salida[codigo] = {
+                "encontrado": False,
+                "motivo": (info or {}).get("_error_type"),
+                "pack_sap": None,
+                "pvp_sap": None,
+                "codigo_barras": None,
+                "item_name": None,
+            }
+            continue
+        salida[codigo] = {
+            "encontrado": True,
+            "motivo": None,
+            "pack_sap": info.get("pack_sap"),
+            "pvp_sap": info.get("pvp_sap"),
+            "codigo_barras": info.get("codigo_barras"),
+            "item_name": info.get("item_name"),
+        }
+    return salida
+
+
+def _parsear_codigos_sap_info(codigos: str) -> List[str]:
+    """Divide, limpia y deduplica (preservando orden) la lista de códigos recibida."""
+    vistos = set()
+    lista: List[str] = []
+    for crudo in codigos.split(","):
+        codigo = crudo.strip()
+        if codigo and codigo not in vistos:
+            vistos.add(codigo)
+            lista.append(codigo)
+    if not lista:
+        raise HTTPException(status_code=400, detail="Debe enviar al menos un código en 'codigos'")
+    if len(lista) > MAX_CODIGOS_SAP_INFO:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Máximo {MAX_CODIGOS_SAP_INFO} códigos por consulta "
+                f"(se recibieron {len(lista)}). Divida la consulta en varias llamadas."
+            )
+        )
+    return lista
+
+
+async def _sap_info_productos_handler(codigos: str) -> JSONResponse:
+    lista = _parsear_codigos_sap_info(codigos)
+    productos = await asyncio.to_thread(_consultar_sap_info_productos, lista)
+    return JSONResponse(status_code=200, content={"productos": productos})
 
 
 def _validar_modo_sincronizar_maestro(modo_tiendas: str, confirmar_sincronizacion: bool, user: Dict) -> None:
@@ -122,6 +190,26 @@ def _parsear_correcciones_codigos(correcciones_codigos: Optional[str]) -> Option
         raise HTTPException(
             status_code=400,
             detail=f"Formato JSON inválido en correcciones_codigos: {str(e)}"
+        )
+
+
+def _parsear_correcciones_pack_pvp(correcciones_pack_pvp: Optional[str]) -> Optional[Dict[str, Dict[str, Any]]]:
+    """Parsea el JSON de correcciones de Pack/PVP. Lanza HTTPException 400 si el formato es inválido."""
+    if not correcciones_pack_pvp:
+        return None
+    try:
+        correcciones_dict = json.loads(correcciones_pack_pvp)
+        if not isinstance(correcciones_dict, dict):
+            raise ValueError("correcciones_pack_pvp debe ser un objeto JSON")
+        logger.info(f"Correcciones de Pack/PVP recibidas: {len(correcciones_dict)} código(s) a corregir")
+        for codigo, campos in correcciones_dict.items():
+            logger.info(f"   • {codigo} -> {campos}")
+        return correcciones_dict
+    except json.JSONDecodeError as e:
+        logger.warning(f"Error al parsear correcciones_pack_pvp JSON: {e}")
+        raise HTTPException(
+            status_code=400,
+            detail=f"Formato JSON inválido en correcciones_pack_pvp: {str(e)}"
         )
 
 
@@ -256,6 +344,7 @@ async def _upload_plantilla_handler(
     modo_tiendas: str,
     confirmar_sincronizacion: bool,
     correcciones_codigos: Optional[str],
+    correcciones_pack_pvp: Optional[str],
     user: Dict,
 ) -> JSONResponse:
     try:
@@ -265,6 +354,7 @@ async def _upload_plantilla_handler(
         file_size = len(content)
         user_id = get_user_id(user)
         correcciones_dict = _parsear_correcciones_codigos(correcciones_codigos)
+        correcciones_pack_pvp_dict = _parsear_correcciones_pack_pvp(correcciones_pack_pvp)
 
         logger.info(
             f"Iniciando procesamiento de plantilla '{file.filename}' "
@@ -282,7 +372,8 @@ async def _upload_plantilla_handler(
             validar_antes_de_guardar=validar,
             bloquea_con_errores=bloquea_con_errores,
             tiendas_permitidas=None,
-            correcciones_codigos=correcciones_dict
+            correcciones_codigos=correcciones_dict,
+            correcciones_pack_pvp=correcciones_pack_pvp_dict
         )
 
         response_data, tiene_pedido_guardado = _construir_respuesta_procesamiento(
@@ -323,6 +414,7 @@ def _encolar_plantilla_async(
     bloquea_con_errores: bool,
     modo_tiendas: str,
     correcciones_dict: Optional[Dict[str, str]],
+    correcciones_pack_pvp_dict: Optional[Dict[str, Dict[str, Any]]],
     user_id,
 ) -> Optional[JSONResponse]:
     """Encola el procesamiento en Celery. Retorna la respuesta 202, o None si falla (fallback sync)."""
@@ -345,7 +437,8 @@ def _encolar_plantilla_async(
             validar=validar,
             bloquea_con_errores=bloquea_con_errores,
             modo_tiendas=modo_tiendas,
-            correcciones_codigos=correcciones_dict
+            correcciones_codigos=correcciones_dict,
+            correcciones_pack_pvp=correcciones_pack_pvp_dict
         )
         logger.info(f"📤 Plantilla encolada: {process_id} (usuario: {user_id})")
         return JSONResponse(
@@ -400,6 +493,7 @@ async def _procesar_plantilla_sync_fallback(
     validar: bool,
     bloquea_con_errores: bool,
     correcciones_dict: Optional[Dict[str, str]],
+    correcciones_pack_pvp_dict: Optional[Dict[str, Dict[str, Any]]],
     user_id,
 ) -> JSONResponse:
     """Procesa la plantilla en primer plano (force_sync o fallback cuando no hay worker/storage)."""
@@ -413,7 +507,8 @@ async def _procesar_plantilla_sync_fallback(
         validar_antes_de_guardar=validar,
         bloquea_con_errores=bloquea_con_errores,
         tiendas_permitidas=None,
-        correcciones_codigos=correcciones_dict
+        correcciones_codigos=correcciones_dict,
+        correcciones_pack_pvp=correcciones_pack_pvp_dict
     )
     response_data, tiene_pedido_guardado = _construir_respuesta_procesamiento(
         resultado, file.filename, file_size, user_id
@@ -441,6 +536,7 @@ async def _upload_plantilla_async_handler(
     confirmar_sincronizacion: bool,
     force_sync: bool,
     correcciones_codigos: Optional[str],
+    correcciones_pack_pvp: Optional[str],
     user: Dict,
 ) -> JSONResponse:
     if modo_tiendas == "sincronizar_maestro" and not confirmar_sincronizacion:
@@ -455,9 +551,12 @@ async def _upload_plantilla_async_handler(
     file_size = len(content)
     user_id = get_user_id(user)
     correcciones_dict = _parsear_correcciones_codigos(correcciones_codigos)
+    correcciones_pack_pvp_dict = _parsear_correcciones_pack_pvp(correcciones_pack_pvp)
 
     run_async = not force_sync
-    if run_async and not _celery_workers_available():
+    # to_thread: el ping de inspeccion habla con Redis de forma sincrona y
+    # bloqueante. En el event loop, un Redis lento congela TODA la API.
+    if run_async and not await asyncio.to_thread(_celery_workers_available):
         logger.info(
             "No hay workers Celery disponibles. Procesando plantilla en primer plano (fallback sync)."
         )
@@ -476,15 +575,19 @@ async def _upload_plantilla_async_handler(
         )
 
     if run_async:
-        respuesta_async = _encolar_plantilla_async(
+        # to_thread: encolar toca SQL Server, MinIO y Redis de forma sincrona.
+        # Sin el thread, cualquiera de los tres bloquea el event loop completo.
+        respuesta_async = await asyncio.to_thread(
+            _encolar_plantilla_async,
             content, file, validar, bloquea_con_errores,
-            modo_tiendas, correcciones_dict, user_id
+            modo_tiendas, correcciones_dict, correcciones_pack_pvp_dict, user_id
         )
         if respuesta_async is not None:
             return respuesta_async
 
     return await _procesar_plantilla_sync_fallback(
-        content, file, file_size, validar, bloquea_con_errores, correcciones_dict, user_id
+        content, file, file_size, validar, bloquea_con_errores,
+        correcciones_dict, correcciones_pack_pvp_dict, user_id
     )
 
 
@@ -511,13 +614,15 @@ async def _obtener_resultado_plantilla_handler(process_id: str, user: Dict):
         content = {
             "status": "error",
             "message": estado.get("message", estado.get("error", "Error desconocido")),
-            "error": estado.get("error")
+            "error": estado.get("error"),
+            "error_code": estado.get("error_code")
         }
         error_data = estado.get("error_data")
         if error_data:
             content["validacion"] = error_data.get("validacion")
             content["validacion_sap"] = error_data.get("validacion_sap")
-            logger.debug(f"GET resultado {process_id}: enviando validacion_sap con detalle_validacion")
+            content["validacion_pack_pvp"] = error_data.get("validacion_pack_pvp")
+            logger.debug(f"GET resultado {process_id}: enviando validacion_sap/validacion_pack_pvp con detalle_validacion")
         else:
             logger.warning(f"GET resultado {process_id}: no hay error_data en estado (reiniciar Celery worker si se esperaban sugerencias SAP)")
         return JSONResponse(status_code=400, content=content)
@@ -1181,13 +1286,21 @@ def register_plantillas_endpoints(app: FastAPI):
             None,
             description="JSON con mapa de correcciones de códigos: {\"codigo_original\": \"codigo_sap_corregido\"}"
         ),
+        correcciones_pack_pvp: Optional[str] = Form(
+            None,
+            description=(
+                "JSON con el valor elegido por el usuario (SAP o Excel) para reintentar tras una "
+                "discrepancia de Pack/PVP (RN-02): {\"codigo\": {\"pack\": \"X3\", \"pvp\": 7.99}}"
+            )
+        ),
         user: Dict = Depends(verify_jwt_token),
         _: None = Depends(require_permission(_PERM_MABEL))
     ):
         """Sube y valida una plantilla Excel para procesamiento."""
         return await _upload_plantilla_handler(
             file, validar, bloquea_con_errores, exportar_log,
-            modo_tiendas, confirmar_sincronizacion, correcciones_codigos, user
+            modo_tiendas, confirmar_sincronizacion, correcciones_codigos,
+            correcciones_pack_pvp, user
         )
 
     @app.post("/api/plantillas/upload-async", tags=["Plantillas"])
@@ -1206,6 +1319,10 @@ def register_plantillas_endpoints(app: FastAPI):
             description="Si True, ejecuta en primer plano y devuelve 200 con el resultado (útil si el worker no está disponible)"
         ),
         correcciones_codigos: Optional[str] = Form(None, description="JSON con mapa de correcciones de códigos"),
+        correcciones_pack_pvp: Optional[str] = Form(
+            None,
+            description="JSON con el valor elegido (SAP o Excel) para reintentar tras discrepancia de Pack/PVP"
+        ),
         user: Dict = Depends(verify_jwt_token),
         _: None = Depends(require_permission(_PERM_MABEL))
     ):
@@ -1220,8 +1337,35 @@ def register_plantillas_endpoints(app: FastAPI):
         """
         return await _upload_plantilla_async_handler(
             file, validar, bloquea_con_errores, modo_tiendas,
-            confirmar_sincronizacion, force_sync, correcciones_codigos, user
+            confirmar_sincronizacion, force_sync, correcciones_codigos,
+            correcciones_pack_pvp, user
         )
+
+    @app.get("/api/plantillas/sap-info-productos", tags=["Plantillas"])
+    async def sap_info_productos(
+        codigos: str = Query(
+            ...,
+            description=(
+                "Códigos SAP separados por coma (máx. 100). "
+                "Ej: R311.AMAZ-4-1012,R311.SIE-20.1012"
+            )
+        ),
+        user: Dict = Depends(verify_jwt_token),
+        _: None = Depends(require_permission(_PERM_MABEL))
+    ):
+        """
+        Devuelve Pack, PVP (Precio Minorista) y código de barras de SAP para los
+        códigos indicados.
+
+        Pensado para el modal de corrección de plantillas: cuando el usuario elige
+        una sugerencia para un código inválido, permite saber en el momento si esa
+        elección va a implicar además una discrepancia de Pack/PVP, y resolver todo
+        en una sola ronda en vez de descubrirlo en el reintento siguiente.
+
+        Los códigos no resueltos vuelven con `encontrado: false` y un `motivo`
+        (`no_existe` | `inactivo` | `mismatch` | `null`); nunca tumban la consulta.
+        """
+        return await _sap_info_productos_handler(codigos)
 
     @app.get("/api/plantillas/resultado/{process_id}", tags=["Plantillas"])
     async def obtener_resultado_plantilla(
