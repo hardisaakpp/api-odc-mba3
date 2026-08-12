@@ -389,7 +389,7 @@ def register_exportacion_endpoints(app: FastAPI):
         moneda: str = Query("US", description="Moneda/divisa local (por defecto US dólar)"),
         vendedor: str = Query("", description="Código de vendedor MBA"),
         numero_pedido_mba: int = Query(1, ge=1, description="Número de pedido temporal para agrupar líneas en MBA (col. B)"),
-        consolidado: bool = Query(False, description="Si True, consolida cantidades por producto; si False, una línea por tienda/sucursal"),
+        consolidado: bool = Query(True, description="Si True, consolida cantidades por producto; si False, una línea por tienda/sucursal"),
         incluir_encabezado: bool = Query(True, description="Incluir las 19 líneas de encabezado del formato MBA"),
         user: Dict = Depends(verify_jwt_token),
         _: None = Depends(require_permission(_PERM_ODCSAP_VIEW))
@@ -407,7 +407,8 @@ def register_exportacion_endpoints(app: FastAPI):
         
         - **35 columnas** separadas por TAB
         - **19 líneas de encabezado** (se eliminan automáticamente al importar en MBA)
-        - Una línea por cada combinación producto-tienda (o consolidado por producto)
+        - Una línea por producto, con la cantidad consolidada de todas sus tiendas
+          (o una línea por combinación producto-tienda si se pide `consolidado=false`)
         
         ## Parámetros de configuración (valores por defecto para "Descargar para MBA")
 
@@ -437,11 +438,12 @@ def register_exportacion_endpoints(app: FastAPI):
         tiene ese registro en la bitácora de estados, se exportan vacías (00/00/0000).
         
         ## Modos de exportación
-        
-        - **consolidado=False** (predeterminado): Genera una línea por cada tienda/sucursal.
-          Útil cuando el pedido tiene distribución por tiendas.
-        - **consolidado=True**: Consolida las cantidades y genera una línea por producto.
-          Útil cuando no se necesita distinguir por tienda.
+
+        - **consolidado=True** (predeterminado): Consolida las cantidades y genera una
+          línea por producto. Como la columna Sucursal es fija (`PRI`), una línea por
+          tienda ya no aporta información distinguible entre tiendas.
+        - **consolidado=False**: Genera una línea por cada combinación producto-tienda
+          (sin agrupar), por si se necesita esa granularidad para otro fin.
         
         ## Ejemplo de línea generada
         
