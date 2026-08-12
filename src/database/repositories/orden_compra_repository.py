@@ -365,6 +365,32 @@ class OrdenCompraRepository:
         finally:
             cursor.close()
     
+    def get_doc_num_by_pedido_id(self, pedido_id: str) -> Optional[str]:
+        """
+        Obtiene el DocNum (numero_oc_sap) de la OC más reciente enviada a SAP para un pedido.
+
+        Args:
+            pedido_id: UUID del pedido
+
+        Returns:
+            DocNum como string si existe una OC con numero_oc_sap registrado, None si no.
+        """
+        cursor = self.conn.cursor()
+        try:
+            cursor.execute(
+                """
+                SELECT TOP 1 numero_oc_sap
+                FROM orden_compra_cabecera
+                WHERE pedido_id = ? AND numero_oc_sap IS NOT NULL
+                ORDER BY created_at DESC
+                """,
+                (pedido_id,)
+            )
+            result = cursor.fetchone()
+            return str(result[0]) if result and result[0] is not None else None
+        finally:
+            cursor.close()
+
     def find_by_referencia_despacho(self, referencia_despacho: str) -> Optional[Dict[str, Any]]:
         """
         Busca una orden de compra por referencia_despacho (número de factura).

@@ -420,3 +420,10 @@ migrations:
     description: "pedido_detalle/pedido_detalle_original.costo_margen: columna 'Costo' de la plantilla Excel (req. 1.4), únicamente informativa para el cálculo del Margen de Rentabilidad (req. 1.5); distinta de costo_doc_sin_iva (RN-05)"
     category: "alter"
     dependencies: ["004", "605"]
+
+  - version: "619"
+    name: "add_costo_unitario_pedido_detalle"
+    file: "migrations/add_costo_unitario_pedido_detalle.sql"
+    description: "pedido_detalle/pedido_detalle_original.costo_unitario: costo_doc_sin_iva / unidad_conversion (pack_conversion, por el pack ya resuelto SAP/Excel); reemplaza a costo_margen como insumo del Margen de Rentabilidad (req. 1.5)"
+    category: "alter"
+    dependencies: ["004", "605", "618"]

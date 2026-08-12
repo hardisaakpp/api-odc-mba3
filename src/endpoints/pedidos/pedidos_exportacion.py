@@ -14,7 +14,7 @@ from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
 
 from src.database.connection import get_db_connection_context
 from src.database.repositories.pedido_repository import PedidoRepository
-from src.database.pedido_estados import ESTADO_GESTIONAR_PEDIDO, ESTADO_REDISTRIBUCION
+from src.database.pedido_estados import ESTADO_GESTIONAR_PEDIDO, ESTADO_CONFIRMADO_ENVIADO
 from src.security.jwt_auth import verify_jwt_token, require_permission, require_any_permission
 
 logger = logging.getLogger(__name__)
@@ -210,7 +210,7 @@ def _logic_exportar_pedido_para_proveedor(pedido_id: str):
         logger.error(f"❌ Error al exportar pedido para proveedor: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Error interno al exportar pedido: {str(e)}")
 
-def _logic_exportar_pedido_plano_mba(pedido_id: str, codigo_cliente: str, codigo_subcliente: str, moneda: str, bodega: str, vendedor: str, numero_pedido_mba: int, consolidado: bool, incluir_encabezado: bool):
+def _logic_exportar_pedido_plano_mba(pedido_id: str, codigo_cliente: str, codigo_subcliente: str, moneda: str, vendedor: str, numero_pedido_mba: int, consolidado: bool, incluir_encabezado: bool):
     try:
         from src.database.services.mba_pedido_exporter import MBAPedidoExporter, MBAExportConfig
         with get_db_connection_context() as conn:
@@ -231,18 +231,18 @@ def _logic_exportar_pedido_plano_mba(pedido_id: str, codigo_cliente: str, codigo
 
         cabecera = pedido.get("cabecera", {})
         estado_id = cabecera.get("estado_id")
-        if estado_id != ESTADO_REDISTRIBUCION:
+        if estado_id != ESTADO_CONFIRMADO_ENVIADO:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail={
                     "error": "estado_no_permitido",
-                    "message": f"El pedido debe estar en estado CONFIRMADO POR EL RAYO para generar el TXT MBA3. Estado actual: {cabecera.get('estado_nombre', 'Desconocido')}"
+                    "message": f"El pedido debe estar en estado CONFIRMADO Y ENVIADO para generar el TXT MBA3. Estado actual: {cabecera.get('estado_nombre', 'Desconocido')}"
                 }
             )
 
         config = MBAExportConfig(
             codigo_cliente=codigo_cliente, codigo_subcliente=codigo_subcliente, moneda=moneda,
-            bodega=bodega, vendedor=vendedor, numero_pedido_temporal=numero_pedido_mba,
+            vendedor=vendedor, numero_pedido_temporal=numero_pedido_mba,
         )
         exporter = MBAPedidoExporter()
         if consolidado:
@@ -387,7 +387,6 @@ def register_exportacion_endpoints(app: FastAPI):
         codigo_cliente: str = Query("CLI1795", description="Código de cliente MBA (por defecto CLI1795)"),
         codigo_subcliente: str = Query("", description="Código de subcliente MBA (dejar vacío si no aplica)"),
         moneda: str = Query("US", description="Moneda/divisa local (por defecto US dólar)"),
-        bodega: str = Query("", description="Código de bodega MBA (si vacío, usa origen_traslado del pedido)"),
         vendedor: str = Query("", description="Código de vendedor MBA"),
         numero_pedido_mba: int = Query(1, ge=1, description="Número de pedido temporal para agrupar líneas en MBA (col. B)"),
         consolidado: bool = Query(False, description="Si True, consolida cantidades por producto; si False, una línea por tienda/sucursal"),
@@ -411,18 +410,31 @@ def register_exportacion_endpoints(app: FastAPI):
         - Una línea por cada combinación producto-tienda (o consolidado por producto)
         
         ## Parámetros de configuración (valores por defecto para "Descargar para MBA")
-        
-        Del sistema se toman: Fecha Pedido, Fecha Entrega, Orden Compra Cliente (número de pedido),
-        Código Producto, Precio Final. Columnas fijas: A=secuencial, B=número pedido (agrupa),
+
+        Del sistema se toman: Pedido Manual, Orden Compra Cliente, Código Producto,
+        Precio Final. Columnas fijas: A=secuencial, B=número pedido (agrupa),
         C=CLI1795, G=moneda US, AI=secuencial.
-        
+
         | Parámetro | Default | Descripción |
         |-----------|---------|-------------|
         | codigo_cliente | CLI1795 | Código del cliente en MBA |
         | codigo_subcliente | (vacío) | Subcategoría del cliente (opcional) |
         | moneda | US | Divisa local (dólar) |
-        | bodega | (origen_traslado) | Código de bodega en MBA |
         | vendedor | (vacío) | Código del vendedor |
+
+        Requiere que el pedido esté en estado **CONFIRMADO Y ENVIADO** (la ODC ya fue
+        enviada y aceptada por SAP), ya que la columna 12 depende del DocNum de SAP.
+
+        Columna H (Bodega) es fija: siempre se exporta como `BPT`.
+        Columna 20 (Sucursal) es fija: siempre se exporta como `PRI`.
+        Columna 10 (Pedido Manual): número de pedido interno.
+        Columna 12 (Orden Compra Cliente): DocNum de la Orden de Compra ya enviada a SAP
+        (tabla orden_compra_cabecera.numero_oc_sap). Vacía si el pedido no tiene una OC
+        con DocNum registrado.
+        Columnas 5 y 6 (Fecha Pedido / Fecha Entrega): ambas usan la fecha en que el
+        pedido pasó a estado CONFIRMADO POR EL RAYO (clic en "Confirmar" en el detalle
+        del pedido), no la fecha capturada originalmente en el Excel. Si el pedido no
+        tiene ese registro en la bitácora de estados, se exportan vacías (00/00/0000).
         
         ## Modos de exportación
         
@@ -434,13 +446,13 @@ def register_exportacion_endpoints(app: FastAPI):
         ## Ejemplo de línea generada
         
         ```
-        91	3	CLI0495	GO05	29/10/2025	31/10/2025	US	BPT	JPC			CQ287341						TRUE	FALSE	PRI	R469.911.CCL	6	FALSE	6.16	TRUE								0	FALSE	91
+        91	3	CLI0495	GO05	29/10/2025	31/10/2025	US	BPT	JPC	CQ287341		1524						TRUE	FALSE	PRI	R469.911.CCL	6	FALSE	6.16	TRUE								0	FALSE	91
         ```
         
         Returns:
             Archivo .txt descargable en formato MBA
         """
-        return _logic_exportar_pedido_plano_mba(pedido_id, codigo_cliente, codigo_subcliente, moneda, bodega, vendedor, numero_pedido_mba, consolidado, incluir_encabezado)
+        return _logic_exportar_pedido_plano_mba(pedido_id, codigo_cliente, codigo_subcliente, moneda, vendedor, numero_pedido_mba, consolidado, incluir_encabezado)
 
     @app.get("/api/pedidos/{pedido_id}/descargar-pedido", tags=["Pedidos - Exportación"])
     async def descargar_pedido(

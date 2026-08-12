@@ -14,7 +14,8 @@ NOTA DE RENDIMIENTO:
 import asyncio
 import json
 import logging
-from typing import Dict, List
+import threading
+from typing import Any, Dict, List
 
 from fastapi import FastAPI, Depends, HTTPException, Path, Body, Query, status, Request
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -56,18 +57,38 @@ def _celery_workers_available() -> bool:
     """
     Comprueba si hay al menos un worker Celery disponible.
     Si no hay workers o hay error/timeout, retorna False (priorizar flujo síncrono).
+
+    inspect().ping() no siempre respeta su propio parámetro `timeout` (el canal
+    de control de Celery puede quedarse colgado bastante más tiempo); por eso
+    se ejecuta en un hilo daemon con un límite externo real, para no arrastrar
+    ese cuelgue a la petición HTTP que espera este chequeo.
     """
-    try:
-        from src.celery_app import celery_app
-        inspect = celery_app.control.inspect(timeout=CELERY_WORKER_PING_TIMEOUT)
-        result = inspect.ping()
-        available = bool(result and len(result) > 0)
-        if not available:
-            logger.debug("No hay workers Celery disponibles (ping sin respuesta)")
-        return available
-    except Exception as e:
-        logger.debug("Comprobación de workers Celery fallida: %s", e)
+    resultado: Dict[str, Any] = {}
+
+    def _ping():
+        try:
+            from src.celery_app import celery_app
+            inspect = celery_app.control.inspect(timeout=CELERY_WORKER_PING_TIMEOUT)
+            resultado["ping"] = inspect.ping()
+        except Exception as e:
+            resultado["error"] = e
+
+    hilo = threading.Thread(target=_ping, daemon=True)
+    hilo.start()
+    hilo.join(timeout=CELERY_WORKER_PING_TIMEOUT)
+
+    if hilo.is_alive():
+        logger.debug("Comprobación de workers Celery excedió el timeout (%.1fs)", CELERY_WORKER_PING_TIMEOUT)
         return False
+    if "error" in resultado:
+        logger.debug("Comprobación de workers Celery fallida: %s", resultado["error"])
+        return False
+
+    result = resultado.get("ping")
+    available = bool(result and len(result) > 0)
+    if not available:
+        logger.debug("No hay workers Celery disponibles (ping sin respuesta)")
+    return available
 
 
 def _paso1_confirmar_redistribucion(

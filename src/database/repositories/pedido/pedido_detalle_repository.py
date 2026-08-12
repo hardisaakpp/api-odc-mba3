@@ -110,13 +110,14 @@ class PedidoDetalleRepository:
                     subtotal,
                     total,
                     costo_margen,
+                    costo_unitario,
                     comentario,
                     orden_linea,
                     creado_por,
                     origen,
                     ip_origen,
                     created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """
                 values = (
                     pedido_detalle_id,
@@ -132,6 +133,7 @@ class PedidoDetalleRepository:
                     datos_detalle.get("subtotal"),
                     datos_detalle.get("total"),
                     datos_detalle.get("costo_margen"),
+                    datos_detalle.get("costo_unitario"),
                     datos_detalle.get("comentario"),
                     orden_linea_val,
                     audit.get_creado_por(),
@@ -155,12 +157,13 @@ class PedidoDetalleRepository:
                     subtotal,
                     total,
                     costo_margen,
+                    costo_unitario,
                     comentario,
                     creado_por,
                     origen,
                     ip_origen,
                     created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """
                 values = (
                     pedido_detalle_id,
@@ -176,6 +179,7 @@ class PedidoDetalleRepository:
                     datos_detalle.get("subtotal"),
                     datos_detalle.get("total"),
                     datos_detalle.get("costo_margen"),
+                    datos_detalle.get("costo_unitario"),
                     datos_detalle.get("comentario"),
                     audit.get_creado_por(),
                     audit.origen,
@@ -198,12 +202,13 @@ class PedidoDetalleRepository:
                     subtotal,
                     total,
                     costo_margen,
+                    costo_unitario,
                     orden_linea,
                     creado_por,
                     origen,
                     ip_origen,
                     created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """
                 values = (
                     pedido_detalle_id,
@@ -219,6 +224,7 @@ class PedidoDetalleRepository:
                     datos_detalle.get("subtotal"),
                     datos_detalle.get("total"),
                     datos_detalle.get("costo_margen"),
+                    datos_detalle.get("costo_unitario"),
                     orden_linea_val,
                     audit.get_creado_por(),
                     audit.origen,
@@ -241,11 +247,12 @@ class PedidoDetalleRepository:
                     subtotal,
                     total,
                     costo_margen,
+                    costo_unitario,
                     creado_por,
                     origen,
                     ip_origen,
                     created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """
                 values = (
                     pedido_detalle_id,
@@ -261,6 +268,7 @@ class PedidoDetalleRepository:
                     datos_detalle.get("subtotal"),
                     datos_detalle.get("total"),
                     datos_detalle.get("costo_margen"),
+                    datos_detalle.get("costo_unitario"),
                     audit.get_creado_por(),
                     audit.origen,
                     audit.ip_origen,

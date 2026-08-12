@@ -4,12 +4,16 @@ Tests para la columna "Costo" (req. 1.4/1.5, SIS-PYTD-0002) en el parser de Exce
 Cubre:
 - "Costo sin IVA" sigue mapeando a costo_doc_sin_iva (RN-05: no se toca ese campo).
 - "Costo" (columna nueva) mapea a costo_margen, con valor distinto e independiente.
-- La columna "Costo" no interfiere con la detección de bodegas (RL-CD/OUT-CD/RG-CD)
-  ni de tiendas cuando se agrega al final de la hoja "detalle" (después de tiendas).
+- La columna "Costo"/"Costo Unitario" no interfiere con la detección de bodegas
+  (RL-CD/OUT-CD/RG-CD) ni de tiendas sin importar en qué posición de la hoja "detalle"
+  se inserte (al final, o en medio como en la plantilla real "Costo Unitario" en H).
 
-NOTA: la columna "Costo" debe agregarse siempre al FINAL de la hoja "detalle" (después
-de todas las columnas de tiendas). Bodegas se detectan por posición fija (columnas J-L,
-índices 9-11) e insertar una columna nueva antes de esa posición desalinea esa detección.
+NOTA: la detección de bodegas/tiendas ya NO depende de una posición fija de columna
+(ver identificar_columnas_bodegas/identificar_columnas_tiendas en pedido_parser_detalle.py):
+excluye las columnas ya identificadas por nombre como campos de producto y evalúa el
+resto por nombre/código. Antes dependía de INDICES_BODEGAS/INDICE_INICIO_TIENDAS
+(constantes fijas, eliminadas), lo que se rompía silenciosamente en RG-CD al insertar
+"Costo Unitario" antes de las columnas de bodega (incidente 2026-08-07).
 """
 
 import io
@@ -103,5 +107,35 @@ class TestColumnaCostoMargen:
         assert distribuciones.get("RL-CD") == 4
         assert distribuciones.get("OUT-CD") == 2
         assert distribuciones.get("RG-CD") == 1
+
+    def test_columna_costo_unitario_en_medio_no_pierde_bodega_regions(self):
+        """
+        Plantilla real (incidente 2026-08-07): "Costo Unitario" se inserta en la columna H
+        (después de PVP, antes de Total/Subtotal), corriendo bodegas de J-L a K-M. Antes del
+        fix, RG-CD quedaba fuera del rango fijo INDICES_BODEGAS=[9,10,11] y se perdía en
+        silencio (ni bodega ni tienda). Reproduce exactamente ese layout.
+        """
+        headers = [
+            "Codigo Producto", "Codigo de Barras", "Descripcion SAP", "Pack",
+            "Costo sin IVA", "Descuento", "PVP",
+            "Costo Unitario",
+            "Total", "Subtotal",
+            "RL-CD", "OUT-CD", "RG-CD",
+            "ABC01", "ABC02",
+        ]
+        fila = ["SKU-1", "7501234567890", "Producto Uno", "6", 10.5, 0, 15.0, 3.2, "", "", 4, 2, 1, 10, 5]
+        resultado = _parsear(headers, [fila])
+
+        info = _info_producto_de(resultado, "SKU-1")
+        assert info is not None
+        assert info["costo_margen"] == 3.2
+        assert info["costo_doc_sin_iva"] == 10.5
+
+        distribuciones = {d["idTienda"]: d["cantidad"] for d in resultado["data"] if d["codigoProducto"] == "SKU-1"}
+        assert distribuciones.get("RL-CD") == 4
+        assert distribuciones.get("OUT-CD") == 2
+        assert distribuciones.get("RG-CD") == 1
+        assert distribuciones.get("ABC01") == 10
+        assert distribuciones.get("ABC02") == 5
         assert distribuciones.get("ABC01") == 10
         assert distribuciones.get("ABC02") == 5

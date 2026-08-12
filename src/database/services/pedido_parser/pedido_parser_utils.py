@@ -103,13 +103,6 @@ class PedidoParserUtils:
         'RL-CD': 'RL-CD',
         'OUT-CD': 'OUT-CD'
     }
-    
-    # Constantes: Índices de columnas
-    # NOTA: Ajustados tras eliminar columna "marca" de la plantilla (2026-02-05)
-    INDICE_INICIO_TIENDAS = 12  # Columna M (antes N)
-    INDICES_BODEGAS = [9, 10, 11]  # Columnas J, K, L (antes K, L, M)
-    INDICES_PRODUCTO = list(range(9))  # Columnas A-I (0-8, antes A-J 0-9)
-    
     # Constantes: Prefijos y patrones
     PREFIJO_TIENDA_ANTIGUO = "roland "
     PATRON_CODIGO_TIENDA = r'^[A-Z]{3}\d{2}$'

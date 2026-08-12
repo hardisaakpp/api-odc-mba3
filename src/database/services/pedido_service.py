@@ -19,6 +19,7 @@ from src.config import ENABLE_SQL_SERVER_STORAGE
 from src.exceptions import BusinessException
 from ..connection import get_db_connection_context
 from ..repositories.pedido_repository import PedidoRepository
+from ..repositories.producto_sap_repository import ProductoSAPRepository
 from ..pedido_estados import ESTADO_BORRADOR, ESTADO_NUEVO_PEDIDO
 from .pedido_validator import PedidoValidator
 from .pedido_parser import PedidoParser
@@ -837,10 +838,70 @@ class PedidoService:
             pack_pvp_exc = e
 
         if not codigo_invalido and pack_pvp_exc is None:
+            self._resolver_costo_unitario_temprana(datos_parsing, correcciones_codigos)
             return
         self._raise_validacion_sap_combinada(
             codigo_invalido, validacion_sap_productos, codigos_productos_parsing, pack_pvp_exc,
             datos_parsing, correcciones_codigos
+        )
+
+    def _resolver_costo_unitario_temprana(
+        self,
+        datos_parsing: List[Dict],
+        correcciones_codigos: Optional[Dict[str, str]],
+    ) -> None:
+        """
+        Calcula costo_unitario = costo_doc_sin_iva / unidad_conversion para cada
+        producto, usando el pack ya resuelto (SAP o Excel, según eligió el usuario
+        en _evaluar_pack_producto). Reemplaza a costo_margen (columna "Costo" del
+        Excel, manual) como insumo del Margen de Rentabilidad (req. 1.5).
+
+        Bloquea la carga si el pack final no tiene una unidad de conversión
+        configurada en pack_conversion (código inexistente, inactivo, o pack vacío).
+        """
+        codigo_a_info_productos = self._agrupar_info_productos_por_codigo(datos_parsing, correcciones_codigos)
+        if not codigo_a_info_productos:
+            return
+
+        packs_invalidos: List[Dict[str, Any]] = []
+        with get_db_connection_context() as conn:
+            repo = ProductoSAPRepository(conn)
+            for codigo, info_productos in codigo_a_info_productos.items():
+                pack_final = next((ip.get("pack") for ip in info_productos if ip.get("pack")), None)
+                unidad_conversion = repo.get_unidad_conversion_by_pack(pack_final) if pack_final else None
+                if unidad_conversion is None:
+                    packs_invalidos.append({"codigo": codigo, "pack": pack_final})
+                    continue
+                for info_producto in info_productos:
+                    costo_doc_sin_iva = info_producto.get("costo_doc_sin_iva")
+                    info_producto["costo_unitario"] = (
+                        costo_doc_sin_iva / unidad_conversion if costo_doc_sin_iva is not None else None
+                    )
+
+        if packs_invalidos:
+            self._raise_pack_sin_unidad_conversion(packs_invalidos)
+
+    @staticmethod
+    def _raise_pack_sin_unidad_conversion(packs_invalidos: List[Dict[str, Any]]) -> None:
+        logger.error(f"❌ {len(packs_invalidos)} producto(s) con Pack sin unidad de conversión configurada")
+        mensajes = [
+            (
+                f"El Pack '{m['pack']}' del producto '{m['codigo']}' no tiene una unidad de conversión "
+                f"configurada en pack_conversion. Verifique el código de pack."
+                if m["pack"]
+                else f"El producto '{m['codigo']}' no tiene un Pack válido. Ingrese un código de pack (ej. X1, X2, X3)."
+            )
+            for m in packs_invalidos
+        ]
+        raise BusinessException(
+            message=f"Existen {len(packs_invalidos)} producto(s) con Pack sin unidad de conversión válida",
+            error_code="PACK_SIN_UNIDAD_CONVERSION",
+            data={
+                "validacion_pack_conversion": {
+                    "packs_invalidos": packs_invalidos,
+                    "mensajes": mensajes,
+                }
+            }
         )
 
     def _raise_validacion_sap_combinada(
@@ -1083,6 +1144,7 @@ class PedidoService:
                         "pack": info_producto.get("pack"),
                         "costo_doc_sin_iva": info_producto.get("costo_doc_sin_iva"),
                         "costo_margen": info_producto.get("costo_margen"),
+                        "costo_unitario": info_producto.get("costo_unitario"),
                         "descuento_1": info_producto.get("descuento_1"),
                         "pvp": info_producto.get("pvp"),
                         "subtotal": info_producto.get("subtotal"),

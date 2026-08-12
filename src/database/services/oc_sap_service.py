@@ -119,7 +119,7 @@ class OCSAPService:
             oc_repo: Repositorio de órdenes de compra (para acceder a la conexión)
             
         Returns:
-            Código de bodega (ej: "RL-CD", "OUT-CD", "REG-CD") o None si no se puede determinar
+            Código de bodega (ej: "RL-CD", "OUT-CD", "RG-CD") o None si no se puede determinar
         """
         pedido_id = oc_cabecera.get("pedido_id")
         if not pedido_id:

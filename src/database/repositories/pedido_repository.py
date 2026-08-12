@@ -17,6 +17,7 @@ CHANGELOG:
 import logging
 import pyodbc
 from typing import Dict, Any, List, Optional, Tuple, TYPE_CHECKING
+from datetime import datetime
 
 if TYPE_CHECKING:
     from src.utils.audit_context import AuditContext
@@ -111,10 +112,21 @@ class PedidoRepository:
     def get_pedido_completo_por_numero(self, numero_pedido: str) -> Optional[Dict[str, Any]]:
         """
         Obtiene un pedido completo con cabecera, detalles, tiendas y distribuciones por número de pedido.
-        
+
         DELEGADO a PedidoCabeceraRepository.
         """
         return self.cabecera_repo.get_pedido_completo_por_numero(numero_pedido)
+
+    def get_fecha_confirmacion_estado(
+        self, pedido_id: str, estado_id: int
+    ) -> Optional[datetime]:
+        """
+        Obtiene la fecha/hora (hora Colombia) en que el pedido transicionó a `estado_id`,
+        según la bitácora pedido_estado_historial. None si no hay registro.
+
+        DELEGADO a PedidoCabeceraRepository.
+        """
+        return self.cabecera_repo.get_fecha_confirmacion_estado(pedido_id, estado_id)
 
     def get_by_estado(self, estado: str) -> List[Dict[str, Any]]:
         """

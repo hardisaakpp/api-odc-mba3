@@ -9,11 +9,30 @@ Este es el flujo que usa el frontend (/api/plantillas/upload), a diferencia del 
 /pedidos/importar-excel (registrado pero no consumido por ninguna pantalla).
 """
 
+from contextlib import contextmanager
+from unittest.mock import MagicMock, patch
+
 import pytest
 
 from src.database.services.pedido_service import PedidoService
 from src.database.services.pedido_validator import PedidoValidator
 from src.exceptions import BusinessException
+
+
+@contextmanager
+def _mock_conexion_pack_conversion(conversiones: dict):
+    """
+    Mockea get_db_connection_context/ProductoSAPRepository para que
+    get_unidad_conversion_by_pack(pack) devuelva conversiones.get(pack) (None si no
+    está en el dict), sin tocar una base de datos real.
+    """
+    with patch("src.database.services.pedido_service.get_db_connection_context") as mock_ctx, \
+         patch("src.database.services.pedido_service.ProductoSAPRepository") as mock_repo_class:
+        mock_ctx.return_value.__enter__.return_value = MagicMock()
+        mock_repo_class.return_value.get_unidad_conversion_by_pack.side_effect = (
+            lambda pack: conversiones.get(pack)
+        )
+        yield mock_repo_class
 
 
 def _datos_parsing(codigo="5-0012.9", pack="X3", pvp=7.99, codigo_barras_excel="EXCEL-BARRAS-VIEJO"):
@@ -262,7 +281,8 @@ class TestValidarSapCodigoYPackPvpCombinado:
                 "detalle": {"A1": {"existe": True, "info": {"pack_sap": "X3", "pvp_sap": 7.99, "item_name": "N", "codigo_barras": "1"}, "severity": None}},
             }
         )
-        service._validar_sap_codigo_y_pack_pvp(datos, None, None)
+        with _mock_conexion_pack_conversion({"X3": 4.0}):
+            service._validar_sap_codigo_y_pack_pvp(datos, None, None)
 
     def test_solo_codigo_invalido_no_incluye_pack_pvp_en_la_excepcion(self, monkeypatch):
         service = PedidoService()
@@ -426,8 +446,75 @@ class TestValidarSapCodigoYPackPvpCombinado:
 
         monkeypatch.setattr(PedidoValidator, "validar_productos_existen_en_sap_con_sugerencias", fake_validar)
 
-        service._validar_sap_codigo_y_pack_pvp(
-            datos,
-            correcciones_codigos={"BAD1": "BAD1-CORREGIDO"},
-            correcciones_pack_pvp={"GOOD1": {"pack": "X9"}}
-        )
+        with _mock_conexion_pack_conversion({"X1": 12.0, "X9": 1.333333333}):
+            service._validar_sap_codigo_y_pack_pvp(
+                datos,
+                correcciones_codigos={"BAD1": "BAD1-CORREGIDO"},
+                correcciones_pack_pvp={"GOOD1": {"pack": "X9"}}
+            )
+
+
+def _datos_con_costo(codigo="5-0012.9", pack="X3", costo_doc_sin_iva=13.38):
+    return [{
+        "codigoProducto": codigo,
+        "idTienda": "T001",
+        "cantidad": 10,
+        "filaOrigen": 2,
+        "es_bodega": False,
+        "info_producto": {
+            "codigo_interno": codigo,
+            "pack": pack,
+            "pvp": 7.99,
+            "costo_doc_sin_iva": costo_doc_sin_iva,
+        },
+    }]
+
+
+class TestResolverCostoUnitarioTemprana:
+    """
+    costo_unitario = costo_doc_sin_iva / unidad_conversion (pack_conversion, según el pack
+    ya resuelto SAP/Excel) reemplaza a costo_margen como insumo del Margen de Rentabilidad.
+    Bloquea la carga si el pack final no tiene conversión configurada.
+    """
+
+    def test_calcula_costo_unitario_con_pack_valido(self):
+        service = PedidoService()
+        datos = _datos_con_costo(pack="X3", costo_doc_sin_iva=13.38)
+        with _mock_conexion_pack_conversion({"X3": 4.0}):
+            service._resolver_costo_unitario_temprana(datos, None)
+        assert datos[0]["info_producto"]["costo_unitario"] == 13.38 / 4.0
+
+    def test_pack_sin_conversion_configurada_bloquea_la_carga(self):
+        service = PedidoService()
+        datos = _datos_con_costo(codigo="ABC123", pack="X9Z")
+        with _mock_conexion_pack_conversion({}):
+            with pytest.raises(BusinessException) as exc_info:
+                service._resolver_costo_unitario_temprana(datos, None)
+        exc = exc_info.value
+        assert exc.error_code == "PACK_SIN_UNIDAD_CONVERSION"
+        packs_invalidos = exc.data["validacion_pack_conversion"]["packs_invalidos"]
+        assert packs_invalidos == [{"codigo": "ABC123", "pack": "X9Z"}]
+
+    def test_pack_ausente_en_excel_bloquea_la_carga(self):
+        service = PedidoService()
+        datos = _datos_con_costo(codigo="ABC123", pack=None)
+        with _mock_conexion_pack_conversion({}):
+            with pytest.raises(BusinessException) as exc_info:
+                service._resolver_costo_unitario_temprana(datos, None)
+        assert exc_info.value.error_code == "PACK_SIN_UNIDAD_CONVERSION"
+
+    def test_costo_doc_sin_iva_ausente_da_costo_unitario_none_sin_reventar(self):
+        service = PedidoService()
+        datos = _datos_con_costo(pack="X3", costo_doc_sin_iva=None)
+        with _mock_conexion_pack_conversion({"X3": 4.0}):
+            service._resolver_costo_unitario_temprana(datos, None)
+        assert datos[0]["info_producto"]["costo_unitario"] is None
+
+    def test_pack_ya_resuelto_por_correccion_usa_ese_valor_para_la_conversion(self):
+        """El pack que llega a este método ya fue resuelto SAP/Excel por _evaluar_pack_producto;
+        aquí solo se busca su unidad_conversion, sin importar de qué origen vino."""
+        service = PedidoService()
+        datos = _datos_con_costo(pack="X6", costo_doc_sin_iva=12.0)
+        with _mock_conexion_pack_conversion({"X6": 2.0}):
+            service._resolver_costo_unitario_temprana(datos, None)
+        assert datos[0]["info_producto"]["costo_unitario"] == 6.0

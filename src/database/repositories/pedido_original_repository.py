@@ -110,9 +110,9 @@ class PedidoOriginalRepository:
                         pedido_original_id, pedido_detalle_id, orden_linea,
                         codigo_interno, descripcion_sap, marca, codigo_barras,
                         pack, costo_doc_sin_iva, descuento_1, pvp,
-                        subtotal, total, comentario, costo_margen
+                        subtotal, total, comentario, costo_margen, costo_unitario
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         pedido_original_id,
@@ -130,6 +130,7 @@ class PedidoOriginalRepository:
                         detalle.get("total"),
                         detalle.get("comentario"),
                         detalle.get("costo_margen"),
+                        detalle.get("costo_unitario"),
                     ),
                 )
 
@@ -211,7 +212,7 @@ class PedidoOriginalRepository:
                     pedido_detalle_original_id, pedido_detalle_id,
                     codigo_interno, descripcion_sap, marca, codigo_barras,
                     pack, costo_doc_sin_iva, descuento_1, pvp,
-                    subtotal, total, comentario, costo_margen
+                    subtotal, total, comentario, costo_margen, costo_unitario
                 FROM pedido_detalle_original
                 WHERE pedido_original_id = ?
                 ORDER BY codigo_interno, pedido_detalle_original_id
@@ -236,6 +237,7 @@ class PedidoOriginalRepository:
                     "total": det_row[11],
                     "comentario": det_row[12],
                     "costo_margen": det_row[13],
+                    "costo_unitario": det_row[14],
                 })
 
             return {"cabecera": cabecera, "detalles": detalles}

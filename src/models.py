@@ -966,7 +966,7 @@ class DistribucionTiendaFrontend(BaseModel):
     tienda_codigo: str = Field(..., description="Código de la tienda")
     tienda_nombre: Optional[str] = Field(None, description="Nombre de la tienda")
     cantidad: float = Field(..., ge=0, description="Cantidad asignada a esta tienda (acepta decimales)")
-    es_bodega: Optional[bool] = Field(default=False, description="Indica si es una bodega central (RL-CD, OUT-CD, REG-CD)")
+    es_bodega: Optional[bool] = Field(default=False, description="Indica si es una bodega central (RL-CD, OUT-CD, RG-CD)")
     
     class Config:
         json_schema_extra = {

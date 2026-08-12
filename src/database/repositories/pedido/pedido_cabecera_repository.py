@@ -10,7 +10,7 @@ CHANGELOG:
 import logging
 import pyodbc
 from typing import Dict, Any, List, Optional, TYPE_CHECKING
-from datetime import date
+from datetime import date, datetime
 
 from src.utils.timezone import ahora_naive
 
@@ -641,6 +641,38 @@ class PedidoCabeceraRepository:
             logger.warning(
                 f"⚠️ No se pudo registrar historial de estado para pedido {pedido_id}: {e}"
             )
+
+    def get_fecha_confirmacion_estado(
+        self, pedido_id: str, estado_id: int = ESTADO_REDISTRIBUCION
+    ) -> Optional[datetime]:
+        """
+        Obtiene la fecha/hora en que el pedido transicionó a `estado_id` (por defecto
+        ESTADO_REDISTRIBUCION = "CONFIRMADO POR EL RAYO"), según pedido_estado_historial.
+
+        Si hay varias transiciones al mismo estado, se toma la más reciente.
+        `fecha_cambio` se guarda con SYSUTCDATETIME(); se convierte a hora Colombia
+        (UTC-5, sin horario de verano) para consistencia con el resto del sistema.
+
+        Returns:
+            datetime naive en hora Colombia, o None si no existe la tabla o el registro.
+        """
+        cursor = self.conn.cursor()
+        try:
+            if not self._tiene_tabla_historial(cursor):
+                return None
+            cursor.execute(
+                """
+                SELECT TOP 1 DATEADD(HOUR, -5, fecha_cambio)
+                FROM pedido_estado_historial
+                WHERE pedido_id = ? AND estado_nuevo_id = ?
+                ORDER BY fecha_cambio DESC
+                """,
+                (pedido_id, estado_id),
+            )
+            row = cursor.fetchone()
+            return row[0] if row and row[0] is not None else None
+        finally:
+            cursor.close()
 
     def update_estado(
         self, 

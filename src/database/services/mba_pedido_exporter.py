@@ -17,10 +17,26 @@ from dataclasses import dataclass
 
 from ..connection import get_db_connection_context
 from ..repositories.pedido_repository import PedidoRepository
+from ..repositories.orden_compra_repository import OrdenCompraRepository
+from ..pedido_estados import ESTADO_REDISTRIBUCION
 
 logger = logging.getLogger(__name__)
 
 _FECHA_VACIA = "00/00/0000"
+
+# Bodega MBA fija para el TXT de pedidos de El Rayo (col. H, siempre "BPT")
+_BODEGA_FIJA = "BPT"
+
+# Sucursal MBA fija para el TXT de pedidos de El Rayo (col. 20, siempre "PRI")
+_SUCURSAL_FIJA = "PRI"
+
+# Vendedor MBA derivado de la bodega/marca de origen del traslado (req. 1.7):
+# RL-CD (ROLAND) y RG-CD (REGIONS) -> "mrz"; OUT-CD (DESCUENTON) -> "descu".
+_VENDEDOR_POR_ORIGEN = {
+    "RL-CD": "mrz",
+    "RG-CD": "mrz",
+    "OUT-CD": "descu",
+}
 
 
 @dataclass
@@ -28,21 +44,21 @@ class MBAExportConfig:
     """Configuración para exportación a formato MBA.
     
     Valores por defecto para El Rayo: código cliente CLI1795, moneda US (dólar).
-    Otros campos pueden venir del pedido (fecha_pedido, fecha_entrega, numero_pedido
-    como Orden Compra Cliente, codigo_interno, costo_doc_sin_iva como Precio Final).
-    
+    Otros campos vienen del pedido: numero_pedido como Pedido Manual (col. 10),
+    DocNum de la OC en SAP como Orden Compra Cliente (col. 12), codigo_interno,
+    costo_doc_sin_iva como Precio Final.
+
     Columnas fijas en el TXT: A=secuencial, B=número pedido (agrupa líneas), C=CLI1795,
-    G=moneda (US), AI/35=secuencial.
+    G=moneda (US), H=bodega (BPT), 20=sucursal (PRI), AI/35=secuencial.
     """
     # Datos del cliente/empresa (por defecto El Rayo)
     codigo_cliente: str = "CLI1795"  # Código cliente MBA - fijo para esta implementación
     codigo_subcliente: str = ""  # Dejar vacío si no aplica
-    
-    # Configuración de moneda y bodega (moneda local = dólar US)
+
+    # Configuración de moneda (moneda local = dólar US)
     moneda: str = "US"  # Divisa local
-    bodega: str = ""  # Código de bodega MBA (si vacío, se usa origen_traslado del pedido)
-    
-    # Vendedor
+
+    # Vendedor (si vacío, se deriva de origen_traslado: RL-CD/RG-CD -> "mrz", OUT-CD -> "descu")
     vendedor: str = ""  # Código de vendedor MBA
     
     # Configuraciones booleanas
@@ -132,53 +148,42 @@ Número secuencial de registro\tValor temporal de pedido, marca el bloque que co
             return f"{num:.{decimals}f}"
         except (ValueError, TypeError):
             return "0"
-    
-    @staticmethod
-    def _get_sucursal_from_tienda(tienda_codigo: str) -> str:
-        """Extrae el código de sucursal (3 caracteres) desde el código de tienda.
-        
-        El formato MBA espera hasta 3 caracteres para la sucursal.
-        Ejemplos de mapeo típico:
-        - TRL-QSN → TRL o QSN
-        - TOUT-001 → TOU
-        - PRI → PRI
-        
-        Args:
-            tienda_codigo: Código de tienda del sistema
-            
-        Returns:
-            Código de sucursal de 3 caracteres
-        """
-        if not tienda_codigo:
-            return ""
-        
-        codigo = tienda_codigo.strip().upper()
-        
-        # Si ya es de 3 caracteres o menos, usar directamente
-        if len(codigo) <= 3:
-            return codigo
-        
-        # Si tiene guión, tomar la parte después del guión (puede ser más específica)
-        if "-" in codigo:
-            parts = codigo.split("-")
-            # Tomar la última parte si es de 3 caracteres o menos
-            if len(parts[-1]) <= 3:
-                return parts[-1][:3]
-            # Sino, tomar los primeros 3 del primer segmento
-            return parts[0][:3]
-        
-        # Por defecto, tomar los primeros 3 caracteres
-        return codigo[:3]
 
     @staticmethod
-    def _extraer_datos_exportacion(cabecera: dict, config: "MBAExportConfig") -> dict:
-        """Extrae y normaliza los datos de cabecera y config para la exportación MBA."""
+    def _resolver_vendedor(cabecera: dict, config: "MBAExportConfig") -> str:
+        """Resuelve el código de vendedor: valor manual de config si existe,
+        sino se deriva de la bodega/marca de origen del traslado (RL-CD/RG-CD -> mrz,
+        OUT-CD -> descu)."""
+        if config.vendedor:
+            return config.vendedor
+        origen_traslado = (cabecera.get("origen_traslado") or "").strip().upper()
+        return _VENDEDOR_POR_ORIGEN.get(origen_traslado, "")
+
+    @staticmethod
+    def _extraer_datos_exportacion(
+        cabecera: dict,
+        config: "MBAExportConfig",
+        fecha_confirmacion: Optional[datetime],
+        doc_num: Optional[str],
+    ) -> dict:
+        """Extrae y normaliza los datos de cabecera y config para la exportación MBA.
+
+        fecha_pedido y fecha_entrega (cols. 5 y 6) usan la fecha en que el pedido
+        transicionó a CONFIRMADO POR EL RAYO (clic en "Confirmar"), no las fechas
+        capturadas originalmente en el Excel/creación del pedido.
+
+        pedido_manual (col. 10) es el número de pedido interno; orden_compra_cliente
+        (col. 12) es el DocNum de la Orden de Compra ya enviada a SAP.
+        """
         fd = MBAPedidoExporter._format_date
+        fecha_confirmacion_fmt = fd(fecha_confirmacion)
         return {
-            "fecha_pedido": fd(cabecera.get("fecha_pedido")),
-            "fecha_entrega": fd(cabecera.get("fecha_entrega")),
-            "orden_compra_cliente": (cabecera.get("numero_pedido") or "").strip(),
-            "bodega": config.bodega or cabecera.get("origen_traslado") or "",
+            "fecha_pedido": fecha_confirmacion_fmt,
+            "fecha_entrega": fecha_confirmacion_fmt,
+            "pedido_manual": (cabecera.get("numero_pedido") or "").strip(),
+            "orden_compra_cliente": (doc_num or "").strip(),
+            "bodega": _BODEGA_FIJA,
+            "vendedor": MBAPedidoExporter._resolver_vendedor(cabecera, config),
             "codigo_cliente": (config.codigo_cliente or "CLI1795").strip(),
             "moneda": (config.moneda or "US").strip(),
         }
@@ -193,6 +198,13 @@ Número secuencial de registro\tValor temporal de pedido, marca el bloque que co
             return float(precio)
         except (TypeError, ValueError):
             return 0.0
+
+    @staticmethod
+    def _excluido_por_total_manual_cero(detalle: dict) -> bool:
+        """True si el usuario editó manualmente el Total del producto a 0 en el
+        Detalle del Pedido (total_modificado_manual=1 y total=0/None): ese
+        producto no debe exportarse al TXT MBA3."""
+        return bool(detalle.get("total_modificado_manual")) and not detalle.get("total")
 
     def exportar_pedido_formato_mba(
         self,
@@ -231,17 +243,21 @@ Número secuencial de registro\tValor temporal de pedido, marca el bloque que co
             
             cabecera = pedido["cabecera"]
             detalles = pedido["detalles"]
-            
+
             logger.info(f"📄 Exportando pedido {pedido_id} a formato MBA ({len(detalles)} productos)")
-            
-            datos = self._extraer_datos_exportacion(cabecera, config)
+
+            fecha_confirmacion = repo.get_fecha_confirmacion_estado(pedido_id, ESTADO_REDISTRIBUCION)
+            doc_num = OrdenCompraRepository(conn).get_doc_num_by_pedido_id(pedido_id)
+            datos = self._extraer_datos_exportacion(cabecera, config, fecha_confirmacion, doc_num)
             fecha_pedido = datos["fecha_pedido"]
             fecha_entrega = datos["fecha_entrega"]
+            pedido_manual = datos["pedido_manual"]
             orden_compra_cliente = datos["orden_compra_cliente"]
             bodega = datos["bodega"]
+            vendedor = datos["vendedor"]
             codigo_cliente = datos["codigo_cliente"]
             moneda = datos["moneda"]
-            
+
             # Construir líneas del archivo
             lines = []
             
@@ -254,6 +270,10 @@ Número secuencial de registro\tValor temporal de pedido, marca el bloque que co
             
             # Generar una línea por cada combinación producto-tienda
             for detalle in detalles:
+                # Producto excluido: Total editado manualmente a 0 en el Detalle del Pedido
+                if self._excluido_por_total_manual_cero(detalle):
+                    continue
+
                 codigo_producto = (detalle.get("codigo_interno") or "").strip()  # Col 21 Código Producto
                 precio_unitario = self._resolver_precio_unitario(detalle)
 
@@ -263,10 +283,7 @@ Número secuencial de registro\tValor temporal de pedido, marca el bloque que co
                     # Omitir solo si la cantidad es negativa (0 y decimales como 0.5 se exportan)
                     if cantidad < 0:
                         continue
-                    
-                    tienda_codigo = tienda.get("codigo") or ""
-                    sucursal = self._get_sucursal_from_tienda(tienda_codigo)
-                    
+
                     # Construir las 35 columnas (TXTN SUBIR PEDIDOS CON PRECIO)
                     columnas = [
                         self._format_number(numero_secuencial, 0),  # 1. Numero (col A - secuencial)
@@ -277,10 +294,10 @@ Número secuencial de registro\tValor temporal de pedido, marca el bloque que co
                         fecha_entrega,  # 6. Fecha Entrega
                         moneda,  # 7. Moneda (col G - divisa local US)
                         bodega,  # 8. Bodega
-                        config.vendedor,  # 9. Vendedor
-                        "",  # 10. Pedido Manual
+                        vendedor,  # 9. Vendedor
+                        pedido_manual,  # 10. Pedido Manual (numero_pedido interno)
                         "",  # 11. Contrato
-                        orden_compra_cliente,  # 12. Orden Compra Cliente (numero_pedido, ej. "PEDIDO ROLAND NO.")
+                        orden_compra_cliente,  # 12. Orden Compra Cliente (DocNum de la OC enviada a SAP)
                         "",  # 13. Cotización Original
                         "",  # 14. Medio Captura
                         "",  # 15. Transporte
@@ -288,7 +305,7 @@ Número secuencial de registro\tValor temporal de pedido, marca el bloque que co
                         "",  # 17. Memo
                         self._format_boolean(config.registro_editable),  # 18. Registro Editable
                         self._format_boolean(config.confirmado),  # 19. Confirmado
-                        sucursal,  # 20. Sucursal (3 caracteres)
+                        _SUCURSAL_FIJA,  # 20. Sucursal
                         codigo_producto,  # 21. Código Producto
                         self._format_number(cantidad, 4),  # 22. Cantidad Pedido (acepta decimales)
                         "FALSE",  # 23. BackOrder (siempre FALSE)
@@ -354,31 +371,33 @@ Número secuencial de registro\tValor temporal de pedido, marca el bloque que co
             
             cabecera = pedido["cabecera"]
             detalles = pedido["detalles"]
-            
+
             logger.info(f"📄 Exportando pedido {pedido_id} a formato MBA consolidado ({len(detalles)} productos)")
-            
-            datos = self._extraer_datos_exportacion(cabecera, config)
+
+            fecha_confirmacion = repo.get_fecha_confirmacion_estado(pedido_id, ESTADO_REDISTRIBUCION)
+            doc_num = OrdenCompraRepository(conn).get_doc_num_by_pedido_id(pedido_id)
+            datos = self._extraer_datos_exportacion(cabecera, config, fecha_confirmacion, doc_num)
             fecha_pedido = datos["fecha_pedido"]
             fecha_entrega = datos["fecha_entrega"]
+            pedido_manual = datos["pedido_manual"]
             orden_compra_cliente = datos["orden_compra_cliente"]
             bodega = datos["bodega"]
+            vendedor = datos["vendedor"]
             codigo_cliente = datos["codigo_cliente"]
             moneda = datos["moneda"]
-            
-            # Usar la primera tienda para la sucursal (o el campo bodega del config)
-            sucursal_default = ""
-            if detalles and detalles[0].get("tiendas"):
-                primera_tienda = detalles[0]["tiendas"][0].get("codigo", "")
-                sucursal_default = self._get_sucursal_from_tienda(primera_tienda)
-            
+
             lines = []
             
             if incluir_encabezado:
                 lines.append(self.MBA_HEADER)
             
             numero_secuencial = 1
-            
+
             for detalle in detalles:
+                # Producto excluido: Total editado manualmente a 0 en el Detalle del Pedido
+                if self._excluido_por_total_manual_cero(detalle):
+                    continue
+
                 codigo_producto = (detalle.get("codigo_interno") or "").strip()
                 precio_unitario = self._resolver_precio_unitario(detalle)
 
@@ -397,10 +416,10 @@ Número secuencial de registro\tValor temporal de pedido, marca el bloque que co
                     fecha_entrega,
                     moneda,
                     bodega,
-                    config.vendedor,
-                    "",  # Pedido Manual
+                    vendedor,
+                    pedido_manual,  # Pedido Manual (numero_pedido interno)
                     "",  # Contrato
-                    orden_compra_cliente,
+                    orden_compra_cliente,  # DocNum de la OC enviada a SAP
                     "",  # Cotización Original
                     "",  # Medio Captura
                     "",  # Transporte
@@ -408,7 +427,7 @@ Número secuencial de registro\tValor temporal de pedido, marca el bloque que co
                     "",  # Memo
                     self._format_boolean(config.registro_editable),
                     self._format_boolean(config.confirmado),
-                    sucursal_default,
+                    _SUCURSAL_FIJA,
                     codigo_producto,
                     self._format_number(cantidad_total, 4),  # Cantidad total (acepta decimales)
                     "FALSE",

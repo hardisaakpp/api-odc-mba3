@@ -17,6 +17,22 @@ logger = logging.getLogger(__name__)
 _MENSAJE_TABLAS: Tuple[str, ...] = ("pedido", "pedido_original")
 
 
+def calcular_margen_rentabilidad(costo_unitario: Optional[float], pvp: Optional[float]) -> Optional[float]:
+    """
+    Calcula el Margen de Rentabilidad (req. 1.5, SIS-PYTD-0002): 1 - (Costo unitario / (PVP / 1.15)).
+    `costo_unitario` = costo_doc_sin_iva / unidad_conversion (pack_conversion, según el pack
+    ya resuelto SAP/Excel) -- reemplaza a la columna "Costo" del Excel (costo_margen), que era
+    manual y no se validaba. Devuelve None si falta el costo o si el PVP es nulo/cero (división
+    inválida). Fracción decimal (ej. 0.35 = 35%), igual que su equivalente en el frontend
+    (mba3-consultas/utils/formatters.ts).
+    """
+    if costo_unitario is None:
+        return None
+    if not pvp:
+        return None
+    return 1 - (costo_unitario / (pvp / 1.15))
+
+
 def clamp_pedido_mensaje(value: Any, *, max_length: Optional[int] = None) -> Any:
     """Trunca mensaje al máximo efectivo (columna SQL o techo de app). Evita error 2628."""
     cap = max_length if max_length is not None else MAX_PEDIDO_MENSAJE_LENGTH
@@ -292,7 +308,8 @@ class PedidoUtils:
         tiene_comentario: bool,
         tiene_campos_modificados: bool,
         tiendas_distribucion: List[Dict[str, Any]],
-        tiene_costo_margen: bool = False
+        tiene_costo_margen: bool = False,
+        tiene_costo_unitario: bool = False
     ) -> Dict[str, Any]:
         """
         Construye un diccionario de detalle desde una fila de resultado SQL.
@@ -302,8 +319,10 @@ class PedidoUtils:
             tiene_comentario: Si True, incluye el campo comentario
             tiene_campos_modificados: Si True, incluye campos de modificación manual
             tiendas_distribucion: Lista de distribuciones por tienda
-            tiene_costo_margen: Si True, incluye costo_margen (columna "Costo" informativa
-                para el Margen de Rentabilidad, req. 1.4/1.5, distinta de costo_doc_sin_iva)
+            tiene_costo_margen: Si True, incluye costo_margen (columna "Costo" del Excel,
+                informativa; ya no se usa para el Margen de Rentabilidad, ver costo_unitario)
+            tiene_costo_unitario: Si True, incluye costo_unitario (costo_doc_sin_iva /
+                unidad_conversion), insumo del Margen de Rentabilidad (req. 1.4/1.5)
 
         Returns:
             Diccionario con los datos del detalle
@@ -342,11 +361,21 @@ class PedidoUtils:
             detalle_dict["total_modificado_manual"] = False
             detalle_dict["comentario_modificado_manual"] = False
 
-        # Agregar costo_margen si existe en la consulta (columna nueva, req. 1.4/1.5)
+        # Agregar costo_margen si existe en la consulta (columna "Costo" del Excel, informativa,
+        # ya no alimenta el Margen de Rentabilidad; ver costo_unitario)
         if tiene_costo_margen and len(row) > 15:
             detalle_dict["costo_margen"] = float(row[15]) if row[15] else None
         else:
             detalle_dict["costo_margen"] = None
+
+        # Agregar costo_unitario si existe en la consulta (costo_doc_sin_iva / unidad_conversion)
+        if tiene_costo_unitario and len(row) > 16:
+            detalle_dict["costo_unitario"] = float(row[16]) if row[16] else None
+        else:
+            detalle_dict["costo_unitario"] = None
+
+        # Margen de Rentabilidad (req. 1.5): calculado en backend, no en el frontend.
+        detalle_dict["margen"] = calcular_margen_rentabilidad(detalle_dict["costo_unitario"], detalle_dict["pvp"])
 
         return detalle_dict
     
@@ -376,7 +405,7 @@ class PedidoUtils:
                     ISNULL(pd.costo_modificado_manual, 0) AS costo_modificado_manual,
                     ISNULL(pd.total_modificado_manual, 0) AS total_modificado_manual,
                     ISNULL(pd.comentario_modificado_manual, 0) AS comentario_modificado_manual,
-                    pd.costo_margen
+                    pd.costo_margen, pd.costo_unitario
                 FROM pedido_detalle pd
                 WHERE pd.pedido_id = ?
                 ORDER BY pd.codigo_interno, pd.pedido_detalle_id
@@ -384,8 +413,9 @@ class PedidoUtils:
             tiene_comentario = True
             tiene_campos_modificados = True
             tiene_costo_margen = True
+            tiene_costo_unitario = True
         except Exception:
-            # Si falla la query anterior (ej. columna inexistente), intentar sin campos opcionales
+            # Si falla la query anterior (ej. columna costo_unitario inexistente), intentar sin ella
             try:
                 cursor.execute("""
                     SELECT
@@ -395,55 +425,79 @@ class PedidoUtils:
                         pd.subtotal, pd.total, pd.comentario,
                         ISNULL(pd.costo_modificado_manual, 0) AS costo_modificado_manual,
                         ISNULL(pd.total_modificado_manual, 0) AS total_modificado_manual,
-                        ISNULL(pd.comentario_modificado_manual, 0) AS comentario_modificado_manual
+                        ISNULL(pd.comentario_modificado_manual, 0) AS comentario_modificado_manual,
+                        pd.costo_margen
                     FROM pedido_detalle pd
                     WHERE pd.pedido_id = ?
                     ORDER BY pd.codigo_interno, pd.pedido_detalle_id
                 """, (pedido_id,))
                 tiene_comentario = True
                 tiene_campos_modificados = True
-                tiene_costo_margen = False
+                tiene_costo_margen = True
+                tiene_costo_unitario = False
             except Exception:
+                # Si falla la query anterior (ej. columna costo_margen inexistente), intentar sin campos opcionales
                 try:
-                    cursor.execute("""
-                        SELECT 
-                            pd.pedido_detalle_id,
-                            pd.codigo_interno, pd.descripcion_sap, pd.marca, pd.codigo_barras,
-                            pd.pack, pd.costo_doc_sin_iva, pd.descuento_1, pd.pvp,
-                            pd.subtotal, pd.total, pd.comentario
-                        FROM pedido_detalle pd
-                        WHERE pd.pedido_id = ?
-                        ORDER BY pd.codigo_interno, pd.pedido_detalle_id
-                    """, (pedido_id,))
-                    tiene_comentario = True
-                    tiene_campos_modificados = False
-                    tiene_costo_margen = False
-                except Exception:
                     cursor.execute("""
                         SELECT
                             pd.pedido_detalle_id,
                             pd.codigo_interno, pd.descripcion_sap, pd.marca, pd.codigo_barras,
                             pd.pack, pd.costo_doc_sin_iva, pd.descuento_1, pd.pvp,
-                            pd.subtotal, pd.total
+                            pd.subtotal, pd.total, pd.comentario,
+                            ISNULL(pd.costo_modificado_manual, 0) AS costo_modificado_manual,
+                            ISNULL(pd.total_modificado_manual, 0) AS total_modificado_manual,
+                            ISNULL(pd.comentario_modificado_manual, 0) AS comentario_modificado_manual
                         FROM pedido_detalle pd
                         WHERE pd.pedido_id = ?
                         ORDER BY pd.codigo_interno, pd.pedido_detalle_id
                     """, (pedido_id,))
-                    tiene_comentario = False
-                    tiene_campos_modificados = False
+                    tiene_comentario = True
+                    tiene_campos_modificados = True
                     tiene_costo_margen = False
-        
+                    tiene_costo_unitario = False
+                except Exception:
+                    try:
+                        cursor.execute("""
+                            SELECT
+                                pd.pedido_detalle_id,
+                                pd.codigo_interno, pd.descripcion_sap, pd.marca, pd.codigo_barras,
+                                pd.pack, pd.costo_doc_sin_iva, pd.descuento_1, pd.pvp,
+                                pd.subtotal, pd.total, pd.comentario
+                            FROM pedido_detalle pd
+                            WHERE pd.pedido_id = ?
+                            ORDER BY pd.codigo_interno, pd.pedido_detalle_id
+                        """, (pedido_id,))
+                        tiene_comentario = True
+                        tiene_campos_modificados = False
+                        tiene_costo_margen = False
+                        tiene_costo_unitario = False
+                    except Exception:
+                        cursor.execute("""
+                            SELECT
+                                pd.pedido_detalle_id,
+                                pd.codigo_interno, pd.descripcion_sap, pd.marca, pd.codigo_barras,
+                                pd.pack, pd.costo_doc_sin_iva, pd.descuento_1, pd.pvp,
+                                pd.subtotal, pd.total
+                            FROM pedido_detalle pd
+                            WHERE pd.pedido_id = ?
+                            ORDER BY pd.codigo_interno, pd.pedido_detalle_id
+                        """, (pedido_id,))
+                        tiene_comentario = False
+                        tiene_campos_modificados = False
+                        tiene_costo_margen = False
+                        tiene_costo_unitario = False
+
         detalles = []
         for row in cursor.fetchall():
             pedido_detalle_id = str(row[0])
-            
+
             # Obtener distribuciones por tienda para este detalle
             tiendas_distribucion = self.obtener_distribuciones_tienda(cursor, pedido_detalle_id)
-            
+
             # Construir detalle
             detalle_dict = self.construir_detalle_desde_row(
                 row, tiene_comentario, tiene_campos_modificados, tiendas_distribucion,
-                tiene_costo_margen
+                tiene_costo_margen, tiene_costo_unitario
             )
             
             detalles.append(detalle_dict)
