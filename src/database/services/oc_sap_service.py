@@ -24,6 +24,7 @@ from .retry_utils import retry_operation, sap_service_layer_result_should_retry
 from ..repositories.orden_compra_repository import OrdenCompraRepository
 from ..clients.sap_service_layer_client import SAPServiceLayerClient
 from ..mappers.sap_oc_mapper import SAPOCMapper
+from src.exceptions import SolicitudTransferenciaNoAplicaError
 
 logger = logging.getLogger(__name__)
 
@@ -664,6 +665,21 @@ class OCSAPService:
             else:
                 OCSAPService._log_fallo_itr(pedido_id, resultado_transferencias)
             result["solicitudes_transferencia"] = resultado_transferencias
+        except SolicitudTransferenciaNoAplicaError as e:
+            # No es una falla de SAP/Service Layer: la distribución del pedido no tiene
+            # destino a tienda (ej. todo va a bodega), así que no corresponde generar ITR.
+            # Se guarda con la misma forma que un resultado "sin ST" normal (ver
+            # docs/FRONTEND_MODAL_INTEGRACION_SAP.md, Caso 1) para que ni el modal ni el
+            # correo a técnicos lo traten como un error.
+            logger.info(f"ℹ️ Solicitudes de Transferencia no aplican para pedido {pedido_id}: {e}")
+            result["solicitudes_transferencia"] = {
+                "success": False,
+                "transferencias_creadas": 0,
+                "transferencias_errores": 0,
+                "total_tiendas": 0,
+                "error": str(e),
+                "no_aplica": True,
+            }
         except Exception as e:
             logger.warning(f"⚠️ Error al crear Solicitudes de Transferencia (no crítico): {e}")
             result["solicitudes_transferencia_error"] = str(e)
@@ -688,6 +704,9 @@ class OCSAPService:
             return True
         resultado_st = result.get("solicitudes_transferencia")
         if isinstance(resultado_st, dict):
+            if resultado_st.get("no_aplica"):
+                # Distribución sin destino a tienda: resultado esperado, no un error de SAP.
+                return False
             transferencias_errores = int(resultado_st.get("transferencias_errores", 0) or 0)
             return transferencias_errores > 0 or not bool(resultado_st.get("success"))
         return False

@@ -18,7 +18,7 @@ from src.config import (
     EMAIL_FROM,
     ENABLE_EMAIL_NOTIFICATIONS,
 )
-from src.utils.notificacion_destinatarios import get_destinatarios_por_tipo
+from src.utils.notificacion_destinatarios import get_destinatarios_por_correo
 from src.utils.smtp_sender import send_smtp_message
 
 logger = logging.getLogger(__name__)
@@ -30,6 +30,22 @@ _PROBLEMA_NO_EXISTE = "No existe en SAP"
 _SECCION_INFO_PEDIDO = "Informaci&oacute;n del Pedido"
 _LABEL_NUMERO_PEDIDO = "N&uacute;mero de Pedido"
 _LABEL_PEDIDO_ID = "Pedido ID"
+
+# Asuntos exactos del catálogo (notificacion_tipo_correo.tipo_correo): deben
+# coincidir con el seed en scripts/migrations/create_notificacion_tipo_correo.sql
+# para que get_destinatarios_por_correo() resuelva destinatarios reales.
+_CORREO_MIGRACION = "Nuevos Registros Migrados"
+_CORREO_ERROR_MIGRACION = "Error en Migración Automática"
+_CORREO_HOMOLOGACION = "Productos NO Homologados Detectados"
+_CORREO_CAPACITY_WARNING = "Advertencia de Capacidad"
+_CORREO_OC_PROVEEDOR = "Orden de Compra Generada"
+_CORREO_DESPACHO = "OC y Solicitudes de Transferencia - Listo para Despacho"
+_CORREO_OC_ST_ERROR = "Error en OC y Solicitudes de Transferencia"
+_CORREO_PLANTILLA = "Plantilla Excel Procesada (Pedido Enviado)"
+_CORREO_PEDIDO_CANCELADO = "Pedido Cancelado"
+_CORREO_PEDIDO_DESCARTADO = "Pedido Descartado"
+_CORREO_REDISTRIBUCION_CONFIRMADA = "Redistribución Confirmada por MABEL TRADING"
+_CORREO_PEDIDO_ELIMINADO = "Pedido Eliminado"
 
 
 # ─── Helpers privados ────────────────────────────────────────────────────────
@@ -240,11 +256,11 @@ def _generate_odc_pdf_attachment(oc_cabecera, oc_detalles, doc_num, numero_oc_sa
         return None
 
 
-def _build_unique_recipients(tipos):
+def _build_unique_recipients(tipos, tipo_correo):
     seen = set()
     recipients = []
     for tipo in tipos:
-        for email in get_destinatarios_por_tipo(tipo):
+        for email in get_destinatarios_por_correo(tipo, tipo_correo):
             e = (email or "").strip().lower()
             if e and e not in seen:
                 seen.add(e)
@@ -510,6 +526,406 @@ def _extract_errores_st(solicitudes_transferencia):
     return total, exitosas, fallidas, errores
 
 
+# ─── Constructores de HTML puros (sin I/O) ───────────────────────────────────
+# Extraídos de cada send_*() para que la vista previa administrativa
+# (notificacion_tipo_correo, endpoint /preview) pueda reconstruir el mismo
+# HTML que se envía realmente, sin duplicar la lógica de composición. Cada
+# send_*() sigue siendo quien resuelve destinatarios y hace el envío por SMTP.
+
+def _build_migracion_email(facturas_guardadas, facturas_actualizadas, total_detalles, fecha_ejecucion):
+    """Construye (subject, body_html) para 'Nuevos Registros Migrados' (OPERACIONES)."""
+    from src.utils.email_template import build_email, info_section, paragraph
+
+    body_html = build_email(
+        title="Migraci&oacute;n Autom&aacute;tica Completada",
+        subtitle="Nuevos registros migrados desde MBA3",
+        sections=[
+            paragraph("Se han migrado nuevos registros desde MBA3 a la base de datos."),
+            info_section("Resumen de la Migraci&oacute;n", [
+                ("Facturas Nuevas", facturas_guardadas),
+                ("Facturas Actualizadas", facturas_actualizadas),
+                ("Total Detalles", total_detalles),
+            ], accent="green", highlight_first=True),
+        ],
+        accent="green",
+        timestamp=fecha_ejecucion,
+    )
+    subject = f"Nuevos Registros Migrados - {facturas_guardadas} factura(s) nueva(s)"
+    return subject, body_html
+
+
+def _build_error_migracion_email(error_message, fecha_ejecucion):
+    """Construye (subject, body_html) para 'Error en Migración Automática' (TECNICOS)."""
+    from src.utils.email_template import build_email, info_section, warning_section, paragraph
+
+    body_html = build_email(
+        title="Error en Migraci&oacute;n Autom&aacute;tica",
+        subtitle="Se requiere atenci&oacute;n t&eacute;cnica",
+        sections=[
+            paragraph("Se ha producido un error durante la migraci&oacute;n autom&aacute;tica desde MBA3."),
+            info_section("Detalles del Error", [
+                ("Error", f'<span style="font-family:Consolas,monospace;font-size:13px;color:#c62828;">{error_message}</span>'),
+            ], accent="red"),
+            warning_section("Acci&oacute;n Recomendada",
+                '<p style="margin:0;color:#5d4037;font-size:14px;">Por favor, revisa los logs del sistema para m&aacute;s informaci&oacute;n.</p>'),
+        ],
+        accent="red",
+        timestamp=fecha_ejecucion,
+    )
+    subject = "Error en Migracion Automatica MBA3"
+    return subject, body_html
+
+
+def _build_homologacion_email(productos_a_notificar, estadisticas, fecha_ejecucion):
+    """Construye (subject, body_html) para 'Productos NO Homologados Detectados' (HOMOLOGACIONES)."""
+    from src.utils.email_template import (
+        build_email, info_section, table_section, warning_section,
+        paragraph, badge_html,
+    )
+
+    total_mba3, homologados, no_homologados, porcentaje = _get_estadisticas_homologacion(
+        estadisticas, len(productos_a_notificar)
+    )
+
+    productos_no_existen = [p for p in productos_a_notificar if p.get("tipo_problema") == "no_existe"]
+    productos_mismatch = [p for p in productos_a_notificar if p.get("tipo_problema") == "mismatch"]
+    productos_error = [p for p in productos_a_notificar if p.get("tipo_problema") == "error"]
+    productos_sin_tipo = [p for p in productos_a_notificar if not p.get("tipo_problema")]
+
+    productos_mostrar = productos_a_notificar[:20]
+    table_rows = _build_homologacion_table_rows(productos_mostrar, badge_html)
+    footer_note = f"... y {len(productos_a_notificar) - 20} producto(s) m&aacute;s" if len(productos_a_notificar) > 20 else None
+    resumen_items = _build_homologacion_resumen_items(
+        productos_mismatch, productos_no_existen, productos_error, productos_sin_tipo, badge_html
+    )
+
+    sections = [
+        paragraph(f"Se han detectado <strong>{len(productos_a_notificar)}</strong> producto(s) de MBA3 que NO est&aacute;n homologados en SAP o tienen problemas de coincidencia."),
+        info_section("Resumen por Tipo de Problema", resumen_items, accent="orange"),
+        warning_section("Acci&oacute;n Requerida",
+            '<ul style="margin:8px 0;padding-left:20px;color:#5d4037;font-size:14px;line-height:1.6;">'
+            '<li><strong>No existen:</strong> Crear en SAP con el mismo ItemCode (SKU).</li>'
+            '<li><strong>Mismatch:</strong> Corregir la homologaci&oacute;n para que SKU y ItemCode coincidan.</li></ul>'),
+        info_section("Estad&iacute;sticas de Homologaci&oacute;n", [
+            ("Total Productos MBA3", total_mba3),
+            ("Homologados", homologados),
+            ("NO Homologados", no_homologados),
+            ("Porcentaje", f"{porcentaje}%"),
+        ], accent="orange"),
+        table_section("Productos que Requieren Homologaci&oacute;n",
+            ["#", "SKU", "Producto", "Problema", "Usos", "Docenas", "Valor", "&Uacute;lt. Aparici&oacute;n"],
+            table_rows, accent="orange", footer_note=footer_note),
+    ]
+
+    body_html = build_email(
+        title="Productos NO Homologados Detectados",
+        subtitle=f"{len(productos_a_notificar)} producto(s) nuevos requieren atenci&oacute;n",
+        sections=sections,
+        accent="orange",
+        timestamp=fecha_ejecucion,
+    )
+    subject = f"Productos NO Homologados Detectados - {len(productos_a_notificar)} producto(s) NUEVOS"
+    return subject, body_html
+
+
+def _build_capacity_warning_email(warning_type, details, fecha_ejecucion):
+    """Construye (subject, body_html) para 'Advertencia de Capacidad' (TECNICOS)."""
+    if warning_type == 'time_limit':
+        titulo = "⚠️ Advertencia: Tiempo de Ejecución Alto"
+        mensaje_principal = f"La migración está usando {details.get('porcentaje_usado', 0)}% del tiempo límite."
+    elif warning_type == 'high_volume':
+        titulo = "📊 Advertencia: Volumen Alto de Registros"
+        mensaje_principal = f"Se detectaron {details.get('num_facturas', 0)} facturas (umbral: {details.get('umbral', 0)})."
+    elif warning_type == 'high_failures':
+        titulo = "🔴 Advertencia: Múltiples Fallos Detectados"
+        mensaje_principal = f"Se detectaron {details.get('num_fallos', 0)} fallos en las últimas 24 horas."
+    else:
+        titulo = "⚠️ Advertencia del Sistema"
+        mensaje_principal = "Se detectó una condición de advertencia."
+
+    from src.utils.email_template import build_email, info_section, warning_section, paragraph
+
+    accent_map = {'time_limit': 'orange', 'high_volume': 'blue', 'high_failures': 'red'}
+    accent = accent_map.get(warning_type, 'orange')
+
+    detail_items = [(key.replace('_', ' ').title(), str(value)) for key, value in details.items()]
+
+    body_html = build_email(
+        title=titulo,
+        subtitle=mensaje_principal,
+        sections=[
+            paragraph(mensaje_principal),
+            info_section("Detalles", detail_items, accent=accent),
+            warning_section("Acci&oacute;n Recomendada",
+                '<p style="margin:0;color:#5d4037;font-size:14px;">Revisar los logs del sistema y considerar ajustar la configuraci&oacute;n si es necesario.</p>'),
+        ],
+        accent=accent,
+        timestamp=fecha_ejecucion,
+    )
+    return titulo, body_html
+
+
+def _build_oc_proveedor_email(oc_cabecera, oc_detalles, doc_num, doc_entry, fecha_ejecucion):
+    """Construye (subject, body_html) para 'Orden de Compra Generada' (proveedor / OPERACIONES)."""
+    proveedor = oc_cabecera.get("proveedor", "N/A")
+    numero_oc_sap = doc_num or oc_cabecera.get("numero_oc_sap", "N/A")
+    referencia = oc_cabecera.get("referencia_despacho", "N/A")
+    doc_entry_str = doc_entry or "N/A"
+
+    from src.utils.email_template import build_email, info_section, table_section, paragraph
+
+    total_lineas = len(oc_detalles)
+    total_cantidad = sum(d.get("cantidad_sap", 0) for d in oc_detalles)
+    total_valor = sum(d.get("total_linea", 0) or 0 for d in oc_detalles)
+
+    detalles_mostrar = oc_detalles[:50]
+    table_rows = []
+    for idx, detalle in enumerate(detalles_mostrar, 1):
+        sku = detalle.get("sku_sap", "N/A")
+        nombre = detalle.get("nombre_producto", _DEFAULT_NOMBRE_PRODUCTO)
+        cantidad = detalle.get("cantidad_sap", 0)
+        unidad = detalle.get("unidad_sap", "N/A")
+        precio_unit = detalle.get("precio_unitario", 0)
+        total_linea = detalle.get("total_linea", 0)
+        table_rows.append((
+            str(idx), f"<strong>{sku}</strong>", nombre,
+            f"{cantidad:.2f}", unidad, f"${precio_unit:.4f}", f"${total_linea:.4f}",
+        ))
+
+    footer_note = f"... y {len(oc_detalles) - 50} l&iacute;nea(s) m&aacute;s" if len(oc_detalles) > 50 else None
+
+    body_html = build_email(
+        title="Orden de Compra Generada",
+        subtitle=f"ODC #{numero_oc_sap}",
+        sections=[
+            paragraph("Se ha generado una nueva Orden de Compra en SAP."),
+            paragraph(
+                "Adjunto encontrar&aacute; el documento PDF de la Orden de Compra.",
+                italic=True,
+                color="#7f8c8d",
+            ),
+            info_section("Informaci&oacute;n de la ODC", [
+                ("N&uacute;mero ODC SAP", numero_oc_sap),
+                ("DocEntry", doc_entry_str),
+                ("Proveedor", proveedor),
+                ("Referencia", referencia),
+                ("Total L&iacute;neas", total_lineas),
+                ("Total Cantidad", f"{total_cantidad:.2f}"),
+                ("Total Valor", f"${total_valor:.4f}"),
+            ], accent="green", highlight_first=True),
+            table_section("Detalle de la Orden de Compra",
+                ["#", "SKU", "Producto", "Cantidad", "Unidad", "P. Unit.", "Total"],
+                table_rows, accent="green", footer_note=footer_note),
+        ],
+        accent="green",
+        timestamp=fecha_ejecucion,
+    )
+    subject = f"Orden de Compra Generada - ODC #{numero_oc_sap}"
+    return subject, body_html
+
+
+def _build_despacho_email(oc_cabecera, doc_num, doc_entry, solicitudes_transferencia, pedido_numero, fecha_ejecucion):
+    """Construye (subject, body_html) para 'OC y Solicitudes de Transferencia - Listo para Despacho'."""
+    proveedor = oc_cabecera.get("proveedor", "N/A")
+    numero_oc_sap = doc_num or oc_cabecera.get("numero_oc_sap", "N/A")
+    referencia = oc_cabecera.get("referencia_despacho", "N/A")
+
+    total, exitosas, fallidas, _detalle_texto = _extract_transferencias_data(solicitudes_transferencia)
+    filas_tabla_html = _build_filas_tabla_despacho(solicitudes_transferencia)
+    seccion_transferencias_html = _build_seccion_transferencias_despacho(
+        solicitudes_transferencia, exitosas, total, fallidas, filas_tabla_html
+    )
+    pedido_html = _build_pedido_html_row(pedido_numero)
+
+    body_html = _build_despacho_html_body(
+        numero_oc_sap, doc_entry, proveedor, referencia,
+        pedido_html, seccion_transferencias_html, fecha_ejecucion
+    )
+    subject = f"OC y Solicitudes de Transferencia - Listo para Despacho #{numero_oc_sap}"
+    return subject, body_html
+
+
+def _build_oc_st_error_email(oc_cabecera, doc_num, doc_entry, solicitudes_transferencia, pedido_numero, fecha_ejecucion):
+    """Construye (subject, body_html) para 'Error en OC y Solicitudes de Transferencia' (TECNICOS)."""
+    proveedor = oc_cabecera.get("proveedor", "N/A")
+    numero_oc_sap = doc_num or oc_cabecera.get("numero_oc_sap", "N/A")
+    referencia = oc_cabecera.get("referencia_despacho", "N/A")
+
+    total_transferencias, transferencias_exitosas, transferencias_fallidas, errores = _extract_errores_st(solicitudes_transferencia)
+
+    from src.utils.email_template import build_email, info_section, warning_section, paragraph
+
+    error_html = "<br>".join(errores[:15]) if errores else "Sin detalle adicional"
+    body_html = build_email(
+        title="Error en OC y Solicitudes de Transferencia",
+        subtitle=f"Revisión técnica requerida - ODC #{numero_oc_sap}",
+        sections=[
+            paragraph("Se detectó un error durante la generación/procesamiento de la Orden de Compra y/o Solicitudes de Transferencia en SAP."),
+            info_section("Información de la ODC", [
+                ("Número OC SAP", numero_oc_sap),
+                ("DocEntry", doc_entry or "N/A"),
+                ("Proveedor", proveedor),
+                ("Referencia", referencia),
+                ("Pedido", pedido_numero or "N/A"),
+                ("Solicitudes de Transferencia", f"{transferencias_exitosas}/{total_transferencias} creadas"),
+                ("Transferencias con Error", transferencias_fallidas),
+            ], accent="red", highlight_first=True),
+            warning_section("Detalle del Error", f"<p style='margin:0;color:#5d4037;font-size:14px;line-height:1.6;'>{error_html}</p>"),
+        ],
+        accent="red",
+        timestamp=fecha_ejecucion,
+    )
+    subject = f"Error en OC y Solicitudes de Transferencia - ODC #{numero_oc_sap}"
+    return subject, body_html
+
+
+def _build_plantilla_email(pedido_id, numero_pedido, filename, usuario_id, articulos_cargados, distribuciones_cargadas, formato_detectado, fecha_ejecucion):
+    """Construye (subject, body_html) para 'Plantilla Excel Procesada' (PRODUCCION_ELRAYO)."""
+    num_pedido_val = numero_pedido or "N/A"
+    pedido_id_val = pedido_id or "N/A"
+    filename_val = filename or "N/A"
+    usuario_val = usuario_id or "N/A"
+    formato_val = formato_detectado or "N/A"
+
+    from src.utils.email_template import build_email, info_section, paragraph
+
+    body_html = build_email(
+        title="Plantilla Excel Procesada Exitosamente",
+        subtitle=f"Pedido: {num_pedido_val}",
+        sections=[
+            paragraph("Se ha procesado y guardado exitosamente una plantilla Excel de pedido."),
+            info_section(_SECCION_INFO_PEDIDO, [
+                (_LABEL_NUMERO_PEDIDO, num_pedido_val),
+                (_LABEL_PEDIDO_ID, pedido_id_val),
+                ("Archivo", filename_val),
+                ("Usuario", usuario_val),
+                ("Formato", formato_val),
+                ("Art&iacute;culos Cargados", articulos_cargados),
+                ("Distribuciones Cargadas", distribuciones_cargadas),
+            ], accent="green"),
+        ],
+        accent="green",
+        timestamp=fecha_ejecucion,
+    )
+    subject = f"Plantilla Excel Procesada - {num_pedido_val}"
+    return subject, body_html
+
+
+def _build_pedido_cancelado_email(pedido_id, numero_pedido, usuario_id, fecha_ejecucion):
+    """Construye (subject, body_html) para 'Pedido Cancelado' (OPERACIONES)."""
+    from src.utils.email_template import build_email, info_section, paragraph, badge_html
+
+    body_html = build_email(
+        title="Pedido Cancelado",
+        subtitle=f"Pedido: {numero_pedido or pedido_id}",
+        sections=[
+            paragraph(f"Se ha cancelado un pedido. El estado ha cambiado a {badge_html('CANCELADO', '#ffebee', '#c62828')}."),
+            info_section(_SECCION_INFO_PEDIDO, [
+                (_LABEL_NUMERO_PEDIDO, numero_pedido or "N/A"),
+                (_LABEL_PEDIDO_ID, pedido_id),
+                ("Usuario que cancel&oacute;", usuario_id or "N/A"),
+                ("Nuevo Estado", badge_html("CANCELADO", "#ffebee", "#c62828")),
+            ], accent="red"),
+            paragraph("El pedido permanece en el sistema con estado CANCELADO y no ser&aacute; procesado.", italic=True),
+        ],
+        accent="red",
+        timestamp=fecha_ejecucion,
+    )
+    subject = f"Pedido Cancelado - {numero_pedido or pedido_id}"
+    return subject, body_html
+
+
+def _build_pedido_descartado_email(pedido_id, numero_pedido, usuario_id, fecha_ejecucion):
+    """Construye (subject, body_html) para 'Pedido Descartado' (OPERACIONES)."""
+    from src.utils.email_template import build_email, info_section, paragraph
+
+    body_html = build_email(
+        title="Pedido Descartado",
+        subtitle=f"Pedido: {numero_pedido or pedido_id}",
+        sections=[
+            paragraph("Se ha descartado y eliminado un pedido completamente de la base de datos."),
+            info_section(_SECCION_INFO_PEDIDO, [
+                (_LABEL_NUMERO_PEDIDO, numero_pedido or "N/A"),
+                (_LABEL_PEDIDO_ID, pedido_id),
+                ("Usuario que descart&oacute;", usuario_id or "N/A"),
+            ], accent="red"),
+            paragraph("El pedido ya no est&aacute; disponible en el sistema. Podr&aacute;n volver a cargarlo desde cero si lo necesitan.", italic=True),
+        ],
+        accent="red",
+        timestamp=fecha_ejecucion,
+    )
+    subject = f"Pedido Descartado - {numero_pedido or pedido_id}"
+    return subject, body_html
+
+
+def _build_redistribucion_confirmada_email(pedido_id, numero_pedido, usuario_mabel, version_confirmada, total_productos, total_cantidad_ajustada, fecha_ejecucion):
+    """Construye (subject, body_html) para 'Redistribución Confirmada por MABEL TRADING' (OPERACIONES)."""
+    import os
+    base_url = os.getenv("FRONTEND_URL", "http://localhost:3000")
+    numero_pedido_encoded = numero_pedido.replace(" ", "%20")
+    url_pedido = f"{base_url}/mba3-consultas/pedidos/{numero_pedido_encoded}"
+
+    from src.utils.email_template import (
+        build_email, info_section, success_badge_section,
+        button_section, paragraph, badge_html,
+    )
+
+    info_items = [
+        (_LABEL_NUMERO_PEDIDO, numero_pedido),
+        (_LABEL_PEDIDO_ID, pedido_id),
+    ]
+    if usuario_mabel:
+        info_items.append(("Usuario MABEL TRADING", usuario_mabel))
+    if version_confirmada:
+        info_items.append(("Versi&oacute;n Confirmada", str(version_confirmada)))
+    info_items.extend([
+        ("Total Productos Redistribuidos", str(total_productos)),
+        ("Total Cantidad Ajustada", str(total_cantidad_ajustada)),
+        ("Estado", badge_html("CONFIRMADO REDISTRIBUCION", "#e8f5e9", "#2e7d32")),
+    ])
+
+    body_html = build_email(
+        title="Redistribuci&oacute;n Confirmada por MABEL TRADING",
+        subtitle=f"Pedido: {numero_pedido}",
+        sections=[
+            success_badge_section("MABEL TRADING ha confirmado la redistribuci&oacute;n exitosamente"),
+            paragraph("Se ha procesado la confirmaci&oacute;n de la redistribuci&oacute;n del pedido y est&aacute; listo para continuar."),
+            info_section(_SECCION_INFO_PEDIDO, info_items, accent="blue"),
+            button_section("Ver Pedido", url_pedido, accent="blue"),
+            paragraph("El pedido est&aacute; ahora listo para la generaci&oacute;n de orden de compra (ODC).", italic=True),
+        ],
+        accent="blue",
+        timestamp=fecha_ejecucion,
+    )
+    subject = f"Redistribucion Confirmada por MABEL TRADING - {numero_pedido}"
+    return subject, body_html
+
+
+def _build_pedido_eliminado_email(pedido_id, numero_pedido, usuario_id, fecha_ejecucion):
+    """Construye (subject, body_html) para 'Pedido Eliminado' (MABEL_TRADING)."""
+    from src.utils.email_template import build_email, info_section, warning_section, paragraph
+
+    body_html = build_email(
+        title="Pedido Eliminado Exitosamente",
+        subtitle=f"Pedido: {numero_pedido or pedido_id}",
+        sections=[
+            paragraph("Se ha eliminado un pedido desde la interfaz de Detalle del Pedido."),
+            info_section("Informaci&oacute;n del Pedido Eliminado", [
+                (_LABEL_NUMERO_PEDIDO, numero_pedido or "N/A"),
+                (_LABEL_PEDIDO_ID, pedido_id),
+                ("Usuario que elimin&oacute;", usuario_id or "N/A"),
+                ("Estado al eliminar", "Gestionar Pedido"),
+            ], accent="green"),
+            warning_section("Nota Importante",
+                '<p style="margin:0;color:#5d4037;font-size:14px;">Esta es una operaci&oacute;n irreversible. Si necesita crear el pedido nuevamente, deber&aacute; cargarlo desde cero.</p>'),
+        ],
+        accent="green",
+        timestamp=fecha_ejecucion,
+    )
+    subject = f"Pedido Eliminado - {numero_pedido or pedido_id}"
+    return subject, body_html
+
+
 # ─── Funciones públicas ───────────────────────────────────────────────────────
 
 def send_migration_notification(
@@ -545,28 +961,16 @@ def send_migration_notification(
         fecha_ejecucion = ahora_naive()
 
     try:
-        # Destinatarios: BD (notificacion_destinatarios) o fallback .env
-        recipients: list[str] = get_destinatarios_por_tipo("OPERACIONES")
+        recipients: list[str] = get_destinatarios_por_correo("OPERACIONES", _CORREO_MIGRACION)
 
         if not recipients:
             logger.warning("⚠️ No hay destinatarios de OPERACIONES configurados")
             return False
 
-        from src.utils.email_template import build_email, info_section, paragraph, create_email_message
+        from src.utils.email_template import create_email_message
 
-        body_html = build_email(
-            title="Migraci&oacute;n Autom&aacute;tica Completada",
-            subtitle="Nuevos registros migrados desde MBA3",
-            sections=[
-                paragraph("Se han migrado nuevos registros desde MBA3 a la base de datos."),
-                info_section("Resumen de la Migraci&oacute;n", [
-                    ("Facturas Nuevas", facturas_guardadas),
-                    ("Facturas Actualizadas", facturas_actualizadas),
-                    ("Total Detalles", total_detalles),
-                ], accent="green", highlight_first=True),
-            ],
-            accent="green",
-            timestamp=fecha_ejecucion,
+        subject, body_html = _build_migracion_email(
+            facturas_guardadas, facturas_actualizadas, total_detalles, fecha_ejecucion
         )
 
         body_text = f"""Migracion Automatica Completada
@@ -584,7 +988,7 @@ Mensaje automatico del sistema - Mabel Trading
 """
 
         msg = create_email_message(
-            subject=f"Nuevos Registros Migrados - {facturas_guardadas} factura(s) nueva(s)",
+            subject=subject,
             recipients=recipients,
             body_html=body_html,
             body_text=body_text,
@@ -623,29 +1027,15 @@ def send_error_notification(
         fecha_ejecucion = ahora_naive()
 
     try:
-        # Destinatarios: BD o fallback .env
-        recipients: list[str] = get_destinatarios_por_tipo("TECNICOS")
+        recipients: list[str] = get_destinatarios_por_correo("TECNICOS", _CORREO_ERROR_MIGRACION)
 
         if not recipients:
             logger.warning("⚠️ No hay destinatarios TÉCNICOS configurados")
             return False
 
-        from src.utils.email_template import build_email, info_section, warning_section, paragraph, create_email_message
+        from src.utils.email_template import create_email_message
 
-        body_html = build_email(
-            title="Error en Migraci&oacute;n Autom&aacute;tica",
-            subtitle="Se requiere atenci&oacute;n t&eacute;cnica",
-            sections=[
-                paragraph("Se ha producido un error durante la migraci&oacute;n autom&aacute;tica desde MBA3."),
-                info_section("Detalles del Error", [
-                    ("Error", f'<span style="font-family:Consolas,monospace;font-size:13px;color:#c62828;">{error_message}</span>'),
-                ], accent="red"),
-                warning_section("Acci&oacute;n Recomendada",
-                    '<p style="margin:0;color:#5d4037;font-size:14px;">Por favor, revisa los logs del sistema para m&aacute;s informaci&oacute;n.</p>'),
-            ],
-            accent="red",
-            timestamp=fecha_ejecucion,
-        )
+        subject, body_html = _build_error_migracion_email(error_message, fecha_ejecucion)
 
         body_text = f"""Error en Migracion Automatica
 {'=' * 40}
@@ -660,7 +1050,7 @@ Por favor, revisa los logs del sistema para mas informacion.
 """
 
         msg = create_email_message(
-            subject="Error en Migracion Automatica MBA3",
+            subject=subject,
             recipients=recipients,
             body_html=body_html,
             body_text=body_text,
@@ -734,58 +1124,20 @@ def send_homologacion_notification(
         return False
 
     try:
-        recipients: list[str] = get_destinatarios_por_tipo("HOMOLOGACIONES")
+        recipients: list[str] = get_destinatarios_por_correo("HOMOLOGACIONES", _CORREO_HOMOLOGACION)
 
         if not recipients:
             logger.warning("⚠️ No hay destinatarios de HOMOLOGACIONES configurados")
             return False
 
-        from src.utils.email_template import (
-            build_email, info_section, table_section, warning_section,
-            paragraph, badge_html, create_email_message,
-        )
+        from src.utils.email_template import create_email_message
+
+        subject, body_html = _build_homologacion_email(productos_a_notificar, estadisticas, fecha_ejecucion)
 
         total_mba3, homologados, no_homologados, porcentaje = _get_estadisticas_homologacion(
             estadisticas, len(productos_a_notificar)
         )
-
-        productos_no_existen = [p for p in productos_a_notificar if p.get("tipo_problema") == "no_existe"]
-        productos_mismatch = [p for p in productos_a_notificar if p.get("tipo_problema") == "mismatch"]
-        productos_error = [p for p in productos_a_notificar if p.get("tipo_problema") == "error"]
-        productos_sin_tipo = [p for p in productos_a_notificar if not p.get("tipo_problema")]
-
         productos_mostrar = productos_a_notificar[:20]
-        table_rows = _build_homologacion_table_rows(productos_mostrar, badge_html)
-        footer_note = f"... y {len(productos_a_notificar) - 20} producto(s) m&aacute;s" if len(productos_a_notificar) > 20 else None
-        resumen_items = _build_homologacion_resumen_items(
-            productos_mismatch, productos_no_existen, productos_error, productos_sin_tipo, badge_html
-        )
-
-        sections = [
-            paragraph(f"Se han detectado <strong>{len(productos_a_notificar)}</strong> producto(s) de MBA3 que NO est&aacute;n homologados en SAP o tienen problemas de coincidencia."),
-            info_section("Resumen por Tipo de Problema", resumen_items, accent="orange"),
-            warning_section("Acci&oacute;n Requerida",
-                '<ul style="margin:8px 0;padding-left:20px;color:#5d4037;font-size:14px;line-height:1.6;">'
-                '<li><strong>No existen:</strong> Crear en SAP con el mismo ItemCode (SKU).</li>'
-                '<li><strong>Mismatch:</strong> Corregir la homologaci&oacute;n para que SKU y ItemCode coincidan.</li></ul>'),
-            info_section("Estad&iacute;sticas de Homologaci&oacute;n", [
-                ("Total Productos MBA3", total_mba3),
-                ("Homologados", homologados),
-                ("NO Homologados", no_homologados),
-                ("Porcentaje", f"{porcentaje}%"),
-            ], accent="orange"),
-            table_section("Productos que Requieren Homologaci&oacute;n",
-                ["#", "SKU", "Producto", "Problema", "Usos", "Docenas", "Valor", "&Uacute;lt. Aparici&oacute;n"],
-                table_rows, accent="orange", footer_note=footer_note),
-        ]
-
-        body_html = build_email(
-            title="Productos NO Homologados Detectados",
-            subtitle=f"{len(productos_a_notificar)} producto(s) nuevos requieren atenci&oacute;n",
-            sections=sections,
-            accent="orange",
-            timestamp=fecha_ejecucion,
-        )
 
         body_text = _build_homologacion_body_text(
             productos_mostrar, productos_a_notificar,
@@ -795,7 +1147,7 @@ def send_homologacion_notification(
         csv_attachments = _build_homologacion_csv(productos_a_notificar, fecha_ejecucion)
 
         msg = create_email_message(
-            subject=f"Productos NO Homologados Detectados - {len(productos_a_notificar)} producto(s) NUEVOS",
+            subject=subject,
             recipients=recipients,
             body_html=body_html,
             body_text=body_text,
@@ -841,7 +1193,7 @@ def send_capacity_warning_notification(
         fecha_ejecucion = ahora_naive()
 
     try:
-        recipients: list[str] = get_destinatarios_por_tipo("TECNICOS")
+        recipients: list[str] = get_destinatarios_por_correo("TECNICOS", _CORREO_CAPACITY_WARNING)
 
         if not recipients:
             logger.warning("⚠️ No hay destinatarios TÉCNICOS configurados")
@@ -861,25 +1213,9 @@ def send_capacity_warning_notification(
             titulo = "⚠️ Advertencia del Sistema"
             mensaje_principal = "Se detectó una condición de advertencia."
 
-        from src.utils.email_template import build_email, info_section, warning_section, paragraph, create_email_message
+        from src.utils.email_template import create_email_message
 
-        accent_map = {'time_limit': 'orange', 'high_volume': 'blue', 'high_failures': 'red'}
-        accent = accent_map.get(warning_type, 'orange')
-
-        detail_items = [(key.replace('_', ' ').title(), str(value)) for key, value in details.items()]
-
-        body_html = build_email(
-            title=titulo,
-            subtitle=mensaje_principal,
-            sections=[
-                paragraph(mensaje_principal),
-                info_section("Detalles", detail_items, accent=accent),
-                warning_section("Acci&oacute;n Recomendada",
-                    '<p style="margin:0;color:#5d4037;font-size:14px;">Revisar los logs del sistema y considerar ajustar la configuraci&oacute;n si es necesario.</p>'),
-            ],
-            accent=accent,
-            timestamp=fecha_ejecucion,
-        )
+        subject, body_html = _build_capacity_warning_email(warning_type, details, fecha_ejecucion)
 
         body_text = f"""{titulo}
 {'=' * 40}
@@ -896,7 +1232,7 @@ Accion Recomendada: Revisar los logs del sistema.
 """
 
         msg = create_email_message(
-            subject=titulo,
+            subject=subject,
             recipients=recipients,
             body_html=body_html,
             body_text=body_text,
@@ -955,7 +1291,7 @@ def send_oc_to_supplier(
         if proveedor_email:
             recipients: list[str] = [proveedor_email.strip()]
         else:
-            recipients = get_destinatarios_por_tipo("OPERACIONES")
+            recipients = get_destinatarios_por_correo("OPERACIONES", _CORREO_OC_PROVEEDOR)
             logger.warning(f"⚠️ No se proporcionó email del proveedor, enviando a operaciones: {recipients}")
 
         if not recipients:
@@ -967,57 +1303,15 @@ def send_oc_to_supplier(
         referencia = oc_cabecera.get("referencia_despacho", "N/A")
         doc_entry_str = doc_entry or "N/A"
 
-        from src.utils.email_template import (
-            build_email, info_section, table_section,
-            paragraph, create_email_message,
-        )
+        from src.utils.email_template import create_email_message
 
         total_lineas = len(oc_detalles)
         total_cantidad = sum(d.get("cantidad_sap", 0) for d in oc_detalles)
         total_valor = sum(d.get("total_linea", 0) or 0 for d in oc_detalles)
 
         detalles_mostrar = oc_detalles[:50]
-        table_rows = []
-        for idx, detalle in enumerate(detalles_mostrar, 1):
-            sku = detalle.get("sku_sap", "N/A")
-            nombre = detalle.get("nombre_producto", _DEFAULT_NOMBRE_PRODUCTO)
-            cantidad = detalle.get("cantidad_sap", 0)
-            unidad = detalle.get("unidad_sap", "N/A")
-            precio_unit = detalle.get("precio_unitario", 0)
-            total_linea = detalle.get("total_linea", 0)
-            table_rows.append((
-                str(idx), f"<strong>{sku}</strong>", nombre,
-                f"{cantidad:.2f}", unidad, f"${precio_unit:.4f}", f"${total_linea:.4f}",
-            ))
 
-        footer_note = f"... y {len(oc_detalles) - 50} l&iacute;nea(s) m&aacute;s" if len(oc_detalles) > 50 else None
-
-        body_html = build_email(
-            title="Orden de Compra Generada",
-            subtitle=f"ODC #{numero_oc_sap}",
-            sections=[
-                paragraph("Se ha generado una nueva Orden de Compra en SAP."),
-                paragraph(
-                    "Adjunto encontrar&aacute; el documento PDF de la Orden de Compra.",
-                    italic=True,
-                    color="#7f8c8d",
-                ),
-                info_section("Informaci&oacute;n de la ODC", [
-                    ("N&uacute;mero ODC SAP", numero_oc_sap),
-                    ("DocEntry", doc_entry_str),
-                    ("Proveedor", proveedor),
-                    ("Referencia", referencia),
-                    ("Total L&iacute;neas", total_lineas),
-                    ("Total Cantidad", f"{total_cantidad:.2f}"),
-                    ("Total Valor", f"${total_valor:.4f}"),
-                ], accent="green", highlight_first=True),
-                table_section("Detalle de la Orden de Compra",
-                    ["#", "SKU", "Producto", "Cantidad", "Unidad", "P. Unit.", "Total"],
-                    table_rows, accent="green", footer_note=footer_note),
-            ],
-            accent="green",
-            timestamp=fecha_ejecucion,
-        )
+        subject, body_html = _build_oc_proveedor_email(oc_cabecera, oc_detalles, doc_num, doc_entry, fecha_ejecucion)
 
         body_text = f"""Orden de Compra Generada - ODC #{numero_oc_sap}
 {'=' * 40}
@@ -1053,7 +1347,7 @@ Detalle:
         )
 
         msg = create_email_message(
-            subject=f"Orden de Compra Generada - ODC #{numero_oc_sap}",
+            subject=subject,
             recipients=recipients,
             body_html=body_html,
             body_text=body_text,
@@ -1106,7 +1400,7 @@ def send_oc_ready_for_dispatch_notification(
         fecha_ejecucion = ahora_naive()
 
     try:
-        recipients = _build_unique_recipients(["OPERACIONES", "MABEL_TRADING"])
+        recipients = _build_unique_recipients(["OPERACIONES", "MABEL_TRADING"], _CORREO_DESPACHO)
 
         if not recipients:
             logger.warning("⚠️ No hay destinatarios configurados para notificación de despacho (OPERACIONES ni MABEL_TRADING)")
@@ -1117,15 +1411,9 @@ def send_oc_ready_for_dispatch_notification(
         referencia = oc_cabecera.get("referencia_despacho", "N/A")
 
         total, exitosas, fallidas, detalle_texto = _extract_transferencias_data(solicitudes_transferencia)
-        filas_tabla_html = _build_filas_tabla_despacho(solicitudes_transferencia)
-        seccion_transferencias_html = _build_seccion_transferencias_despacho(
-            solicitudes_transferencia, exitosas, total, fallidas, filas_tabla_html
-        )
-        pedido_html = _build_pedido_html_row(pedido_numero)
 
-        body_html = _build_despacho_html_body(
-            numero_oc_sap, doc_entry, proveedor, referencia,
-            pedido_html, seccion_transferencias_html, fecha_ejecucion
+        subject, body_html = _build_despacho_email(
+            oc_cabecera, doc_num, doc_entry, solicitudes_transferencia, pedido_numero, fecha_ejecucion
         )
         body_text = _build_despacho_body_text(
             numero_oc_sap, doc_entry, proveedor, referencia, pedido_numero,
@@ -1136,7 +1424,7 @@ def send_oc_ready_for_dispatch_notification(
         msg = MIMEMultipart('alternative')
         msg['From'] = EMAIL_SMTP_USER or EMAIL_FROM
         msg['To'] = ", ".join(recipients)
-        msg['Subject'] = f"OC y Solicitudes de Transferencia - Listo para Despacho #{numero_oc_sap}"
+        msg['Subject'] = subject
         msg.attach(MIMEText(body_text, 'plain', 'utf-8'))
         msg.attach(MIMEText(body_html, 'html', 'utf-8'))
 
@@ -1171,7 +1459,7 @@ def send_oc_st_error_notification_tecnicos(
         fecha_ejecucion = ahora_naive()
 
     try:
-        recipients: list[str] = get_destinatarios_por_tipo("TECNICOS")
+        recipients: list[str] = get_destinatarios_por_correo("TECNICOS", _CORREO_OC_ST_ERROR)
         if not recipients:
             logger.warning("⚠️ No hay destinatarios TÉCNICOS configurados para error de ODC/ST")
             return False
@@ -1182,27 +1470,10 @@ def send_oc_st_error_notification_tecnicos(
 
         total_transferencias, transferencias_exitosas, transferencias_fallidas, errores = _extract_errores_st(solicitudes_transferencia)
 
-        from src.utils.email_template import build_email, info_section, warning_section, paragraph, create_email_message
+        from src.utils.email_template import create_email_message
 
-        error_html = "<br>".join(errores[:15]) if errores else "Sin detalle adicional"
-        body_html = build_email(
-            title="Error en OC y Solicitudes de Transferencia",
-            subtitle=f"Revisión técnica requerida - ODC #{numero_oc_sap}",
-            sections=[
-                paragraph("Se detectó un error durante la generación/procesamiento de la Orden de Compra y/o Solicitudes de Transferencia en SAP."),
-                info_section("Información de la ODC", [
-                    ("Número OC SAP", numero_oc_sap),
-                    ("DocEntry", doc_entry or "N/A"),
-                    ("Proveedor", proveedor),
-                    ("Referencia", referencia),
-                    ("Pedido", pedido_numero or "N/A"),
-                    ("Solicitudes de Transferencia", f"{transferencias_exitosas}/{total_transferencias} creadas"),
-                    ("Transferencias con Error", transferencias_fallidas),
-                ], accent="red", highlight_first=True),
-                warning_section("Detalle del Error", f"<p style='margin:0;color:#5d4037;font-size:14px;line-height:1.6;'>{error_html}</p>"),
-            ],
-            accent="red",
-            timestamp=fecha_ejecucion,
+        subject, body_html = _build_oc_st_error_email(
+            oc_cabecera, doc_num, doc_entry, solicitudes_transferencia, pedido_numero, fecha_ejecucion
         )
 
         errores_detalle = "\n- ".join(errores[:15]) if errores else "Sin detalle adicional"
@@ -1222,7 +1493,7 @@ def send_oc_st_error_notification_tecnicos(
         )
 
         msg = create_email_message(
-            subject=f"Error en OC y Solicitudes de Transferencia - ODC #{numero_oc_sap}",
+            subject=subject,
             recipients=recipients,
             body_html=body_html,
             body_text=body_text,
@@ -1249,9 +1520,11 @@ def send_plantilla_upload_notification(
     fecha_ejecucion: Optional[datetime] = None
 ) -> bool:
     """
-    Envía notificación a El Rayo cuando se sube exitosamente una plantilla Excel.
+    Envía notificación a Producción El Rayo cuando MABEL TRADING envía un pedido
+    (clic en "Enviar" desde cargar-plantilla, o subida de plantilla exitosa).
 
-    DESTINATARIO: EMAIL_TO_OPERACIONES (Operaciones/Despachos - El Rayo)
+    DESTINATARIO: EMAIL_TO_PRODUCCION_ELRAYO (req. 1.8; antes iba a EMAIL_TO_OPERACIONES/
+    Administración El Rayo, que ya no recibe este correo).
 
     Args:
         pedido_id: UUID del pedido creado
@@ -1274,10 +1547,10 @@ def send_plantilla_upload_notification(
         fecha_ejecucion = ahora_naive()
 
     try:
-        recipients: list[str] = get_destinatarios_por_tipo("OPERACIONES")
+        recipients: list[str] = get_destinatarios_por_correo("PRODUCCION_ELRAYO", _CORREO_PLANTILLA)
 
         if not recipients:
-            logger.warning("⚠️ No hay destinatarios configurados para notificación de plantilla")
+            logger.warning("⚠️ No hay destinatarios configurados para notificación de plantilla (PRODUCCION_ELRAYO)")
             return False
 
         num_pedido_val = numero_pedido or "N/A"
@@ -1286,25 +1559,11 @@ def send_plantilla_upload_notification(
         usuario_val = usuario_id or "N/A"
         formato_val = formato_detectado or "N/A"
 
-        from src.utils.email_template import build_email, info_section, paragraph, create_email_message
+        from src.utils.email_template import create_email_message
 
-        body_html = build_email(
-            title="Plantilla Excel Procesada Exitosamente",
-            subtitle=f"Pedido: {num_pedido_val}",
-            sections=[
-                paragraph("Se ha procesado y guardado exitosamente una plantilla Excel de pedido."),
-                info_section(_SECCION_INFO_PEDIDO, [
-                    (_LABEL_NUMERO_PEDIDO, num_pedido_val),
-                    (_LABEL_PEDIDO_ID, pedido_id_val),
-                    ("Archivo", filename_val),
-                    ("Usuario", usuario_val),
-                    ("Formato", formato_val),
-                    ("Art&iacute;culos Cargados", articulos_cargados),
-                    ("Distribuciones Cargadas", distribuciones_cargadas),
-                ], accent="green"),
-            ],
-            accent="green",
-            timestamp=fecha_ejecucion,
+        subject, body_html = _build_plantilla_email(
+            pedido_id, numero_pedido, filename, usuario_id,
+            articulos_cargados, distribuciones_cargadas, formato_detectado, fecha_ejecucion
         )
 
         body_text = f"""Plantilla Excel Procesada Exitosamente
@@ -1323,7 +1582,7 @@ Fecha y Hora: {fecha_ejecucion.strftime('%Y-%m-%d %H:%M:%S')}
 """
 
         msg = create_email_message(
-            subject=f"Plantilla Excel Procesada - {num_pedido_val}",
+            subject=subject,
             recipients=recipients,
             body_html=body_html,
             body_text=body_text,
@@ -1368,30 +1627,15 @@ def send_pedido_cancelado_notification(
         fecha_ejecucion = ahora_naive()
 
     try:
-        recipients: list[str] = get_destinatarios_por_tipo("OPERACIONES")
+        recipients: list[str] = get_destinatarios_por_correo("OPERACIONES", _CORREO_PEDIDO_CANCELADO)
 
         if not recipients:
             logger.warning("⚠️ No hay destinatarios configurados para notificación de pedido descartado")
             return False
 
-        from src.utils.email_template import build_email, info_section, paragraph, badge_html, create_email_message
+        from src.utils.email_template import create_email_message
 
-        body_html = build_email(
-            title="Pedido Cancelado",
-            subtitle=f"Pedido: {numero_pedido or pedido_id}",
-            sections=[
-                paragraph(f"Se ha cancelado un pedido. El estado ha cambiado a {badge_html('CANCELADO', '#ffebee', '#c62828')}."),
-                info_section(_SECCION_INFO_PEDIDO, [
-                    (_LABEL_NUMERO_PEDIDO, numero_pedido or "N/A"),
-                    (_LABEL_PEDIDO_ID, pedido_id),
-                    ("Usuario que cancel&oacute;", usuario_id or "N/A"),
-                    ("Nuevo Estado", badge_html("CANCELADO", "#ffebee", "#c62828")),
-                ], accent="red"),
-                paragraph("El pedido permanece en el sistema con estado CANCELADO y no ser&aacute; procesado.", italic=True),
-            ],
-            accent="red",
-            timestamp=fecha_ejecucion,
-        )
+        subject, body_html = _build_pedido_cancelado_email(pedido_id, numero_pedido, usuario_id, fecha_ejecucion)
 
         body_text = f"""Pedido Cancelado - {numero_pedido or pedido_id}
 {'=' * 40}
@@ -1406,7 +1650,7 @@ El pedido permanece en el sistema con estado CANCELADO y no sera procesado.
 """
 
         msg = create_email_message(
-            subject=f"Pedido Cancelado - {numero_pedido or pedido_id}",
+            subject=subject,
             recipients=recipients,
             body_html=body_html,
             body_text=body_text,
@@ -1451,29 +1695,15 @@ def send_pedido_descartado_notification(
         fecha_ejecucion = ahora_naive()
 
     try:
-        recipients: list[str] = get_destinatarios_por_tipo("OPERACIONES")
+        recipients: list[str] = get_destinatarios_por_correo("OPERACIONES", _CORREO_PEDIDO_DESCARTADO)
 
         if not recipients:
             logger.warning("⚠️ No hay destinatarios configurados para notificación de pedido descartado")
             return False
 
-        from src.utils.email_template import build_email, info_section, paragraph, create_email_message
+        from src.utils.email_template import create_email_message
 
-        body_html = build_email(
-            title="Pedido Descartado",
-            subtitle=f"Pedido: {numero_pedido or pedido_id}",
-            sections=[
-                paragraph("Se ha descartado y eliminado un pedido completamente de la base de datos."),
-                info_section(_SECCION_INFO_PEDIDO, [
-                    (_LABEL_NUMERO_PEDIDO, numero_pedido or "N/A"),
-                    (_LABEL_PEDIDO_ID, pedido_id),
-                    ("Usuario que descart&oacute;", usuario_id or "N/A"),
-                ], accent="red"),
-                paragraph("El pedido ya no est&aacute; disponible en el sistema. Podr&aacute;n volver a cargarlo desde cero si lo necesitan.", italic=True),
-            ],
-            accent="red",
-            timestamp=fecha_ejecucion,
-        )
+        subject, body_html = _build_pedido_descartado_email(pedido_id, numero_pedido, usuario_id, fecha_ejecucion)
 
         body_text = f"""Pedido Descartado - {numero_pedido or pedido_id}
 {'=' * 40}
@@ -1487,7 +1717,7 @@ El pedido ya no esta disponible en el sistema.
 """
 
         msg = create_email_message(
-            subject=f"Pedido Descartado - {numero_pedido or pedido_id}",
+            subject=subject,
             recipients=recipients,
             body_html=body_html,
             body_text=body_text,
@@ -1537,7 +1767,7 @@ def send_mabel_redistribucion_confirmacion_notification(
         fecha_ejecucion = ahora_naive()
 
     try:
-        recipients: list[str] = get_destinatarios_por_tipo("OPERACIONES")
+        recipients: list[str] = get_destinatarios_por_correo("OPERACIONES", _CORREO_REDISTRIBUCION_CONFIRMADA)
 
         if not recipients:
             logger.warning("⚠️ No hay destinatarios configurados para notificación de redistribución")
@@ -1548,37 +1778,11 @@ def send_mabel_redistribucion_confirmacion_notification(
         numero_pedido_encoded = numero_pedido.replace(" ", "%20")
         url_pedido = f"{base_url}/mba3-consultas/pedidos/{numero_pedido_encoded}"
 
-        from src.utils.email_template import (
-            build_email, info_section, success_badge_section,
-            button_section, paragraph, badge_html, create_email_message,
-        )
+        from src.utils.email_template import create_email_message
 
-        info_items = [
-            (_LABEL_NUMERO_PEDIDO, numero_pedido),
-            (_LABEL_PEDIDO_ID, pedido_id),
-        ]
-        if usuario_mabel:
-            info_items.append(("Usuario MABEL TRADING", usuario_mabel))
-        if version_confirmada:
-            info_items.append(("Versi&oacute;n Confirmada", str(version_confirmada)))
-        info_items.extend([
-            ("Total Productos Redistribuidos", str(total_productos)),
-            ("Total Cantidad Ajustada", str(total_cantidad_ajustada)),
-            ("Estado", badge_html("CONFIRMADO REDISTRIBUCION", "#e8f5e9", "#2e7d32")),
-        ])
-
-        body_html = build_email(
-            title="Redistribuci&oacute;n Confirmada por MABEL TRADING",
-            subtitle=f"Pedido: {numero_pedido}",
-            sections=[
-                success_badge_section("MABEL TRADING ha confirmado la redistribuci&oacute;n exitosamente"),
-                paragraph("Se ha procesado la confirmaci&oacute;n de la redistribuci&oacute;n del pedido y est&aacute; listo para continuar."),
-                info_section(_SECCION_INFO_PEDIDO, info_items, accent="blue"),
-                button_section("Ver Pedido", url_pedido, accent="blue"),
-                paragraph("El pedido est&aacute; ahora listo para la generaci&oacute;n de orden de compra (ODC).", italic=True),
-            ],
-            accent="blue",
-            timestamp=fecha_ejecucion,
+        subject, body_html = _build_redistribucion_confirmada_email(
+            pedido_id, numero_pedido, usuario_mabel, version_confirmada,
+            total_productos, total_cantidad_ajustada, fecha_ejecucion
         )
 
         usuario_line = f"- Usuario MABEL TRADING: {usuario_mabel}" if usuario_mabel else ""
@@ -1601,7 +1805,7 @@ Fecha y Hora: {fecha_ejecucion.strftime('%Y-%m-%d %H:%M:%S')}
 """
 
         msg = create_email_message(
-            subject=f"Redistribucion Confirmada por MABEL TRADING - {numero_pedido}",
+            subject=subject,
             recipients=recipients,
             body_html=body_html,
             body_text=body_text,
@@ -1646,31 +1850,15 @@ def send_pedido_eliminado_mabel_notification(
         fecha_ejecucion = ahora_naive()
 
     try:
-        recipients: list[str] = get_destinatarios_por_tipo("MABEL_TRADING")
+        recipients: list[str] = get_destinatarios_por_correo("MABEL_TRADING", _CORREO_PEDIDO_ELIMINADO)
 
         if not recipients:
             logger.warning("⚠️ No hay destinatarios de MABEL TRADING configurados")
             return False
 
-        from src.utils.email_template import build_email, info_section, warning_section, paragraph, create_email_message
+        from src.utils.email_template import create_email_message
 
-        body_html = build_email(
-            title="Pedido Eliminado Exitosamente",
-            subtitle=f"Pedido: {numero_pedido or pedido_id}",
-            sections=[
-                paragraph("Se ha eliminado un pedido desde la interfaz de Detalle del Pedido."),
-                info_section("Informaci&oacute;n del Pedido Eliminado", [
-                    (_LABEL_NUMERO_PEDIDO, numero_pedido or "N/A"),
-                    (_LABEL_PEDIDO_ID, pedido_id),
-                    ("Usuario que elimin&oacute;", usuario_id or "N/A"),
-                    ("Estado al eliminar", "Gestionar Pedido"),
-                ], accent="green"),
-                warning_section("Nota Importante",
-                    '<p style="margin:0;color:#5d4037;font-size:14px;">Esta es una operaci&oacute;n irreversible. Si necesita crear el pedido nuevamente, deber&aacute; cargarlo desde cero.</p>'),
-            ],
-            accent="green",
-            timestamp=fecha_ejecucion,
-        )
+        subject, body_html = _build_pedido_eliminado_email(pedido_id, numero_pedido, usuario_id, fecha_ejecucion)
 
         body_text = f"""Pedido Eliminado Exitosamente - {numero_pedido or pedido_id}
 {'=' * 40}
@@ -1685,7 +1873,7 @@ Nota: Operacion irreversible. Para crear el pedido nuevamente, cargarlo desde ce
 """
 
         msg = create_email_message(
-            subject=f"Pedido Eliminado - {numero_pedido or pedido_id}",
+            subject=subject,
             recipients=recipients,
             body_html=body_html,
             body_text=body_text,

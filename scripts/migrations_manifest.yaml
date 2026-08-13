@@ -100,6 +100,12 @@ migrations:
     description: "Crear tabla para modificaciones de columnas en detalle"
     category: "base"
 
+  - version: "016"
+    name: "create_notificacion_destinatarios"
+    file: "migrations/create_notificacion_destinatarios.sql"
+    description: "Crear tabla notificacion_destinatarios (configuración de destinatarios de email por tipo de notificación, sustituye listas fijas en .env); faltaba registrada en el manifest aunque ya se usa en código"
+    category: "base"
+
   # Alteraciones: Agregar columnas y campos
   - version: "101"
     name: "add_precio_unitario_sap"
@@ -427,3 +433,51 @@ migrations:
     description: "pedido_detalle/pedido_detalle_original.costo_unitario: costo_doc_sin_iva / unidad_conversion (pack_conversion, por el pack ya resuelto SAP/Excel); reemplaza a costo_margen como insumo del Margen de Rentabilidad (req. 1.5)"
     category: "alter"
     dependencies: ["004", "605", "618"]
+
+  - version: "620"
+    name: "add_estado_produccion_pospuesta"
+    file: "migrations/add_estado_produccion_pospuesta.sql"
+    description: "pedido_estado id 22: PRODUCCION POSPUESTA (el proveedor pospone la producción de las diferencias para decidir con Mabel)"
+    category: "alter"
+    dependencies: ["005"]
+
+  - version: "621"
+    name: "add_estado_confirmado_por_produccion"
+    file: "migrations/add_estado_confirmado_por_produccion.sql"
+    description: "pedido_estado id 23: CONFIRMADO POR PRODUCCION (req. 1.8 - nuevo perfil Producción El Rayo); entre GESTIONAR PEDIDO (3) y CONFIRMADO POR EL RAYO (4)"
+    category: "alter"
+    dependencies: ["005"]
+
+  - version: "622"
+    name: "add_codigo_evento_notificacion_destinatarios"
+    file: "migrations/add_codigo_evento_notificacion_destinatarios.sql"
+    description: "notificacion_destinatarios.codigo_evento: permite excluir un email de un evento puntual (ej. solo 'Redistribución Confirmada') sin sacarlo del resto de notificaciones de su mismo tipo_notificacion"
+    category: "alter"
+    dependencies: ["016"]
+
+  - version: "623"
+    name: "add_exclusion_nvelasquez_redistribucion_confirmada"
+    file: "migrations/add_exclusion_nvelasquez_redistribucion_confirmada.sql"
+    description: "Excluye a nvelasquez@elrayo.com.ec del correo REDISTRIBUCION_CONFIRMADA (solicitud de Nicole Velasquez, El Rayo); se mantiene en el resto de notificaciones OPERACIONES"
+    category: "data"
+    dependencies: ["622"]
+
+  - version: "624"
+    name: "create_notificacion_tipo_correo"
+    file: "migrations/create_notificacion_tipo_correo.sql"
+    description: "Tabla notificacion_tipo_correo: catálogo administrable de correos (asuntos) y su tipo_notificacion; reemplaza el array hardcodeado del frontend. tipo_notificacion ya no depende del tuple TIPOS_NOTIFICACION para la interfaz de administración: se deriva de esta tabla"
+    category: "base"
+
+  - version: "625"
+    name: "create_notificacion_persona_correo"
+    file: "migrations/create_notificacion_persona_correo.sql"
+    description: "Tabla notificacion_persona_correo: organización persona-céntrica (nombre+email -> correos de notificacion_tipo_correo). Es la fuente real de destinatarios del envío de correos (ver migración 626 para el traslado de datos desde notificacion_destinatarios)"
+    category: "base"
+    dependencies: ["624"]
+
+  - version: "626"
+    name: "seed_notificacion_persona_correo_desde_destinatarios"
+    file: "migrations/seed_notificacion_persona_correo_desde_destinatarios.sql"
+    description: "Traslada los destinatarios base activos de notificacion_destinatarios (por tipo_notificacion) a notificacion_persona_correo (por correo específico del catálogo), respetando la exclusión de nvelasquez@elrayo.com.ec en Redistribución Confirmada. A partir de esta migración, notificacion_destinatarios queda como tabla histórica: ya no determina el envío real"
+    category: "data"
+    dependencies: ["625"]

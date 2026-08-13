@@ -480,6 +480,12 @@ EMAIL_PROVEEDOR_PRUEBAS = os.getenv("EMAIL_PROVEEDOR_PRUEBAS", _DEFAULT_CORTIZ_E
 _email_mabel_trading = os.getenv("EMAIL_MABEL_TRADING", "cortiz@mabeltrading.com.ec,pchafuel@mabeltrading.com.ec")
 EMAIL_MABEL_TRADING = [email.strip() for email in _email_mabel_trading.split(",") if email.strip()]
 
+# Email de Producción El Rayo (req. 1.8): notificación de pedido "Enviado" por MABEL TRADING.
+# Antes iba a EMAIL_TO_OPERACIONES (Administración El Rayo); ahora es exclusivo de Producción.
+# Sin default: si no se configura, no se envía (mejor que enviarlo a la lista equivocada).
+_email_produccion_elrayo = os.getenv("EMAIL_TO_PRODUCCION_ELRAYO", "")
+EMAIL_TO_PRODUCCION_ELRAYO = [email.strip() for email in _email_produccion_elrayo.split(",") if email.strip()]
+
 # Override en desarrollo: todos los correos van a este destinatario (ignora BD).
 # Solo aplica cuando ENVIRONMENT=development. En producción no se usa.
 _email_dev_override_str = os.getenv("EMAIL_DEV_OVERRIDE", "")

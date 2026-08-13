@@ -30,7 +30,7 @@ from ..repositories.solicitud_transferencia_repository import SolicitudTransfere
 from ..clients.sap_service_layer_client import SAPServiceLayerClient
 from ..mappers.sap_stock_transfer_mapper import SAPStockTransferMapper
 from ..services.bodega_sap_service import BodegaSAPService
-from src.exceptions import SAPDataMasterError
+from src.exceptions import SAPDataMasterError, SolicitudTransferenciaNoAplicaError
 
 logger = logging.getLogger(__name__)
 
@@ -1303,7 +1303,7 @@ class StockTransferService:
                     )
 
                 if not distribucion_por_tienda:
-                    raise ValueError(
+                    raise SolicitudTransferenciaNoAplicaError(
                         "No hay distribución válida por tienda para crear transferencias. "
                         "Las Solicitudes de Transferencia se crean desde bodega origen hacia tiendas, no hacia bodegas."
                     )
