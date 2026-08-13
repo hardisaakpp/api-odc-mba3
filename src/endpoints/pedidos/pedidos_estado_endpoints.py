@@ -33,6 +33,7 @@ logger = logging.getLogger(__name__)
 DESC_UUID_PEDIDO = "UUID del pedido"
 PERM_MABEL_VIEW = "mabel.view"
 PERM_ODCSAP_VIEW = "odcsap.view"
+PERM_PRODUCCION_ELRAYO_VIEW = "produccion-elrayo.view"
 MSG_ERROR_NO_ENCONTRADO = "No se encontró el pedido."
 
 
@@ -280,12 +281,15 @@ def register_pedidos_estado_endpoints(app: FastAPI):
         request: Request,
         pedido_id: str = Path(..., description=DESC_UUID_PEDIDO),
         user: Dict = Depends(verify_jwt_token),
-        _: None = Depends(require_any_permission([PERM_ODCSAP_VIEW, PERM_MABEL_VIEW]))
+        _: None = Depends(require_any_permission([PERM_ODCSAP_VIEW, PERM_MABEL_VIEW, PERM_PRODUCCION_ELRAYO_VIEW]))
     ):
         """
         Marca el pedido como GESTIONAR PEDIDO (al hacer clic en "Ver Detalle" desde la tabla Pedidos).
         Si el pedido está en estado NUEVO PEDIDO, actualiza a GESTIONAR PEDIDO y devuelve el pedido completo.
         Si ya está en otro estado, solo devuelve el pedido sin cambiar estado.
+
+        Incluye produccion-elrayo.view (req. 1.8 segunda fase): NUEVO_PEDIDO/GESTIONAR_PEDIDO
+        son los únicos 2 estados que este perfil gestiona.
         """
         return await _logic_marcar_pedido_gestionar(pedido_id, request, user)
     

@@ -16,6 +16,8 @@ logger = logging.getLogger(__name__)
 
 _PERM_MABEL = "mabel.view"
 _PERM_ODCSAP = "odcsap.view"
+_PERM_PRODUCCION_ELRAYO = "produccion-elrayo.view"
+_PERM_FUNCIONALIDADES_ADMIN = "funcionalidades-admin.view"
 
 # Exportar función principal para el linter
 __all__ = ["register_auth_endpoints"]
@@ -63,11 +65,16 @@ def _map_permissions_to_capabilities(permissions: list, roles: list) -> Dict[str
         "can_manage_order": has_perm(_PERM_ODCSAP),
         "can_view_order_list": has_perm(_PERM_ODCSAP),
         "mabel_view": has_perm(_PERM_MABEL),
+        # Producción El Rayo (req. 1.8): listado de pedidos restringido a NUEVO_PEDIDO/GESTIONAR_PEDIDO.
+        "can_view_produccion_elrayo": has_perm(_PERM_PRODUCCION_ELRAYO),
         "can_view_odc": is_admin,
         "can_review_pedido": is_admin or has_perm(_PERM_MABEL) or has_perm(_PERM_ODCSAP),
         "can_confirm_pedido": is_admin or has_perm(_PERM_MABEL) or has_perm(_PERM_ODCSAP),
         # Ver/gestionar archivos Excel originales (Listado Pedidos Originales)
         "can_view_plantillas_originales": is_admin or has_perm(_PERM_MABEL) or has_perm(_PERM_ODCSAP),
+        # Panel "Información Pedidos y ODC (EN DESARROLLO)": único requisito de acceso,
+        # reemplaza los permisos internos que tenía cada botón (mabel.view, odcsap.view, etc.).
+        "can_view_funcionalidades_admin": has_perm(_PERM_FUNCIONALIDADES_ADMIN),
     }
     
     # Logging de debug solo en desarrollo

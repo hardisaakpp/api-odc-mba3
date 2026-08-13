@@ -11,6 +11,9 @@ ESTADO_BORRADOR = 1
 ESTADO_NUEVO_PEDIDO = 2  # Enviado a EL RAYO (notificación enviada)
 ESTADO_GESTIONAR_PEDIDO = 3  # Al hacer clic en "Ver Detalle" desde la tabla Pedidos
 ESTADO_REDISTRIBUCION = 4  # "CONFIRMADO POR EL RAYO" - Tras confirmar (EL RAYO)
+# Producción registra "Cantidad a producir" y confirma (req. 1.8); entre
+# GESTIONAR_PEDIDO (3) y REDISTRIBUCION/"CONFIRMADO POR EL RAYO" (4)
+ESTADO_CONFIRMADO_POR_PRODUCCION = 23
 ESTADO_RESPUESTA_PROVEEDOR_CARGADA = 5
 ESTADO_CONFIRMADO_PROVEEDOR = 6
 ESTADO_REDISTRIBUIDO = 9
@@ -24,6 +27,8 @@ ESTADO_CANCELADO = 19  # Pedido cancelado por MABEL TRADING desde Redistribució
 ESTADO_CANCELADO_POR_EL_RAYO = 20  # Pedido cancelado por EL RAYO desde Gestionar Pedido
 # Fallo al enviar ODC a SAP (p. ej. prevalidación / conexión); se puede reintentar
 ESTADO_ERROR_ENVIO_SAP_REINTENTO = 21
+ESTADO_PRODUCCION_POSPUESTA = 22
+
 
 # Filtro rápido "solo pendientes" en listados de pedidos (El Rayo / Mabel)
 ESTADOS_REQUIERE_ACCION_IDS = frozenset({
@@ -34,6 +39,18 @@ ESTADOS_REQUIERE_ACCION_NOMBRES = (
     "PENDIENTE_CONFIRMACION_PROVEEDOR",
     "RESPUESTA_PROVEEDOR_CARGADA",
     "CONFIRMADO_PROVEEDOR",
+)
+
+# Estados visibles para el perfil Producción El Rayo (req. 1.8, permiso
+# produccion-elrayo.view): solo mientras el pedido está en NUEVO_PEDIDO o
+# GESTIONAR_PEDIDO; a partir de ahí lo gestiona Administración El Rayo (odcsap.view).
+ESTADOS_PRODUCCION_EL_RAYO_IDS = frozenset({
+    ESTADO_NUEVO_PEDIDO,
+    ESTADO_GESTIONAR_PEDIDO,
+})
+ESTADOS_PRODUCCION_EL_RAYO_NOMBRES = (
+    "NUEVO_PEDIDO",
+    "GESTIONAR_PEDIDO",
 )
 
 # Estado inicial al subir Excel o crear pedido (siempre id = 1)
@@ -86,6 +103,7 @@ ESTADOS_BLOQUEADOS_PROVEEDOR = frozenset({
     ESTADO_PEDIDO_CONFIRMADO,
     ESTADO_ERROR_ENVIO_SAP_REINTENTO,
     ESTADO_CONFIRMADO_ENVIADO,
+    ESTADO_PRODUCCION_POSPUESTA,
 })
 
 # Ids conocidos del sistema (para validar que un id existe)
@@ -106,6 +124,8 @@ ESTADO_IDS_VALIDOS = frozenset({
     ESTADO_CANCELADO,
     ESTADO_CANCELADO_POR_EL_RAYO,
     ESTADO_ERROR_ENVIO_SAP_REINTENTO,
+    ESTADO_PRODUCCION_POSPUESTA,
+    ESTADO_CONFIRMADO_POR_PRODUCCION,
 })
 
 # --- Mapping legacy string → id (solo para migración / compat temporal) -------
@@ -136,6 +156,10 @@ LEGACY_STRING_TO_ID = {
     "CANCELADO_POR_EL_RAYO": ESTADO_CANCELADO_POR_EL_RAYO,
     "ERROR ENVIO SAP REINTENTO": ESTADO_ERROR_ENVIO_SAP_REINTENTO,
     "ERROR_ENVIO_SAP_REINTENTO": ESTADO_ERROR_ENVIO_SAP_REINTENTO,
+    "PRODUCCION_POSPUESTA": ESTADO_PRODUCCION_POSPUESTA,
+    "PRODUCCION POSPUESTA": ESTADO_PRODUCCION_POSPUESTA,
+    "CONFIRMADO POR PRODUCCION": ESTADO_CONFIRMADO_POR_PRODUCCION,
+    "CONFIRMADO_POR_PRODUCCION": ESTADO_CONFIRMADO_POR_PRODUCCION,
 }
 
 

@@ -29,7 +29,34 @@ logger = logging.getLogger(__name__)
 
 _PERM_MABEL = 'mabel.view'
 _PERM_ODCSAP = 'odcsap.view'
-_PERMS_LISTADO = [_PERM_MABEL, _PERM_ODCSAP]
+_PERM_PRODUCCION_ELRAYO = 'produccion-elrayo.view'
+_PERMS_LISTADO = [_PERM_MABEL, _PERM_ODCSAP, _PERM_PRODUCCION_ELRAYO]
+
+
+def _es_solo_produccion_elrayo(user: Dict) -> bool:
+    """True si el usuario solo tiene produccion-elrayo.view (sin mabel.view ni odcsap.view).
+
+    Req. 1.8: el perfil Producción El Rayo solo puede ver pedidos en
+    NUEVO_PEDIDO/GESTIONAR_PEDIDO; Administración El Rayo (odcsap.view) y
+    Mabel (mabel.view) siguen viendo el listado completo.
+    """
+    permissions = user.get("permissions") or []
+    return (
+        _PERM_PRODUCCION_ELRAYO in permissions
+        and _PERM_MABEL not in permissions
+        and _PERM_ODCSAP not in permissions
+    )
+
+
+def _debe_excluir_estados_el_rayo(user: Dict) -> bool:
+    """True si el usuario tiene odcsap.view pero NO produccion-elrayo.view:
+    NUEVO_PEDIDO/GESTIONAR_PEDIDO pasan a ser exclusivos de Producción El Rayo
+    (req. 1.8, segunda fase); Administración El Rayo deja de verlos y de poder
+    acceder a su detalle. Si además tiene produccion-elrayo.view (cuenta con
+    ambos permisos), no se restringe: ese permiso nunca pierde acceso a estos
+    2 estados."""
+    permissions = user.get("permissions") or []
+    return _PERM_ODCSAP in permissions and _PERM_PRODUCCION_ELRAYO not in permissions
 
 
 class _Paginacion:
@@ -63,6 +90,8 @@ async def _listar_pedidos_handler(
     page_size_camel: Optional[int],
     solo_redistribucion: Optional[str],
     solo_pendientes_accion: Optional[str],
+    solo_produccion_elrayo: Optional[str],
+    user: Dict,
 ):
     try:
         filtrar_redistribucion = (
@@ -73,6 +102,16 @@ async def _listar_pedidos_handler(
             solo_pendientes_accion is not None
             and str(solo_pendientes_accion).lower() in ("true", "1")
         )
+        # Restringe a NUEVO_PEDIDO/GESTIONAR_PEDIDO (req. 1.8): ya sea porque la
+        # pantalla de Producción El Rayo lo pide explícitamente (solo_produccion_elrayo),
+        # o como defensa adicional cuando el llamador solo tiene ese permiso.
+        filtrar_produccion_elrayo = (
+            solo_produccion_elrayo is not None
+            and str(solo_produccion_elrayo).lower() in ("true", "1")
+        ) or _es_solo_produccion_elrayo(user)
+        # Req. 1.8 (segunda fase): odcsap.view ya no ve NUEVO_PEDIDO/GESTIONAR_PEDIDO,
+        # ahora exclusivos de Producción El Rayo.
+        excluir_estados_el_rayo = _debe_excluir_estados_el_rayo(user)
         size = page_size_camel if page_size_camel is not None else page_size
         if limit is not None:
             use_limit, use_offset = limit, offset or 0
@@ -94,6 +133,8 @@ async def _listar_pedidos_handler(
                 excluir_borrador=True,
                 solo_redistribucion=filtrar_redistribucion,
                 solo_pendientes_accion=filtrar_pendientes,
+                restringir_produccion_el_rayo=filtrar_produccion_elrayo,
+                excluir_estados_produccion_el_rayo=excluir_estados_el_rayo,
             )
 
             return JSONResponse(
@@ -222,12 +263,15 @@ async def _get_ultimo_pedido_redistribucion_handler(
         )
 
 
-async def _listar_estados_pedido_handler(contexto: Optional[str]):
+async def _listar_estados_pedido_handler(contexto: Optional[str], user: Dict):
     try:
         excluir_ids: Optional[List[int]] = None
         solo_ids: Optional[List[int]] = None
 
-        if contexto == "pedidos":
+        if contexto == "produccion" or _es_solo_produccion_elrayo(user):
+            from src.database.pedido_estados import ESTADOS_PRODUCCION_EL_RAYO_IDS
+            solo_ids = list(sorted(ESTADOS_PRODUCCION_EL_RAYO_IDS))
+        elif contexto == "pedidos":
             excluir_ids = [ESTADO_BORRADOR]
         elif contexto == "redistribucion":
             solo_ids = [
@@ -240,6 +284,14 @@ async def _listar_estados_pedido_handler(contexto: Optional[str]):
                 ESTADO_PENDIENTE_LOGISTICA,
                 ESTADO_ERROR_DATOS_MAESTROS,
             ]
+
+        # Req. 1.8 (segunda fase): odcsap.view ya no ve NUEVO_PEDIDO/GESTIONAR_PEDIDO
+        # (exclusivos de Producción El Rayo). No aplica si solo_ids ya restringe a otra
+        # lista (ej. contexto "produccion" o "redistribucion", que no los incluyen o
+        # son mutuamente excluyentes con tener odcsap.view).
+        if solo_ids is None and _debe_excluir_estados_el_rayo(user):
+            from src.database.pedido_estados import ESTADOS_PRODUCCION_EL_RAYO_IDS
+            excluir_ids = list(excluir_ids or []) + list(sorted(ESTADOS_PRODUCCION_EL_RAYO_IDS))
 
         with get_db_connection_context() as conn:
             repo = PedidoRepository(conn)
@@ -308,6 +360,10 @@ def register_pedidos_listado_endpoints(app: FastAPI):
             None,
             description="Si 'true', solo pedidos que requieren acción (pendiente confirmación / respuesta proveedor / confirmado proveedor)"
         ),
+        solo_produccion_elrayo: Optional[str] = Query(
+            None,
+            description="Si 'true', restringe a NUEVO_PEDIDO/GESTIONAR_PEDIDO (pantalla Producción El Rayo, req. 1.8)"
+        ),
         user: Dict = Depends(verify_jwt_token),
         _: None = Depends(require_any_permission(_PERMS_LISTADO))
     ):
@@ -331,6 +387,8 @@ def register_pedidos_listado_endpoints(app: FastAPI):
         - `offset` (int, default: 0) - Offset para paginación
         - `solo_redistribucion` (string, opcional) - Si "true", solo pedidos aptos para redistribución
           (estado >= "CONFIRMADO POR EL RAYO" y != "CANCELADO"). Para la vista /redistribucion.
+        - `solo_produccion_elrayo` (string, opcional) - Si "true", restringe a NUEVO_PEDIDO/GESTIONAR_PEDIDO.
+          Para la pantalla /mba3-consultas/produccion/pedidos (req. 1.8).
 
         **Ejemplo:**
         ```
@@ -379,6 +437,8 @@ def register_pedidos_listado_endpoints(app: FastAPI):
             page_size_camel=paginacion.page_size_camel,
             solo_redistribucion=solo_redistribucion,
             solo_pendientes_accion=solo_pendientes_accion,
+            solo_produccion_elrayo=solo_produccion_elrayo,
+            user=user,
         )
 
     @app.get("/api/pedidos/confirmados", tags=["Pedidos"])
@@ -476,7 +536,8 @@ def register_pedidos_listado_endpoints(app: FastAPI):
                 "Contexto de la vista para filtrar estados relevantes. "
                 "Valores posibles: 'pedidos' (excluye BORRADOR), "
                 "'cargar-plantilla' (incluye BORRADOR, solo del flujo de carga), "
-                "'redistribucion' (solo estados aptos para redistribucion). "
+                "'redistribucion' (solo estados aptos para redistribucion), "
+                "'produccion' (solo NUEVO_PEDIDO/GESTIONAR_PEDIDO, pantalla Producción El Rayo, req. 1.8). "
                 "Si no se indica, devuelve todos los estados activos."
             ),
         ),
@@ -522,7 +583,7 @@ def register_pedidos_listado_endpoints(app: FastAPI):
         Returns:
             JSON con lista de estados disponibles para el filtro
         """
-        return await _listar_estados_pedido_handler(contexto=contexto)
+        return await _listar_estados_pedido_handler(contexto=contexto, user=user)
 
     @app.get("/api/pedidos/existe", tags=["Pedidos"])
     async def verificar_pedidos_existen(

@@ -149,20 +149,26 @@ class PedidoRepository:
         excluir_borrador: bool = False,
         solo_redistribucion: bool = False,
         solo_pendientes_accion: bool = False,
+        restringir_produccion_el_rayo: bool = False,
+        excluir_estados_produccion_el_rayo: bool = False,
     ) -> Dict[str, Any]:
         """
         Obtiene pedidos con filtros y paginación.
-        
+
         DELEGADO a PedidoCabeceraRepository.
-        
+
         Args:
             solo_redistribucion: si True, solo incluye pedidos aptos para redistribución
                 (estado_id >= 4 "CONFIRMADO POR EL RAYO" y excluye CANCELADO (19) y CANCELADO POR EL RAYO (20))
+            restringir_produccion_el_rayo: si True, solo incluye NUEVO_PEDIDO y GESTIONAR_PEDIDO
+                (req. 1.8, perfil Producción El Rayo)
+            excluir_estados_produccion_el_rayo: si True, excluye NUEVO_PEDIDO y GESTIONAR_PEDIDO
+                (req. 1.8 segunda fase, perfil odcsap.view: esos 2 estados dejan de verse)
         """
         return self.cabecera_repo.get_pedidos_con_filtros(
             estado, fecha_desde, fecha_hasta, proveedor_nombre,
             numero_pedido, creado_por, limit, offset, excluir_borrador, solo_redistribucion,
-            solo_pendientes_accion,
+            solo_pendientes_accion, restringir_produccion_el_rayo, excluir_estados_produccion_el_rayo,
         )
 
     def get_pedidos_confirmados(

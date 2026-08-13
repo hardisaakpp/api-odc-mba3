@@ -1230,9 +1230,50 @@ class PedidoCabeceraRepository:
             list(ESTADOS_REQUIERE_ACCION_NOMBRES),
         )
 
+    def _filtro_estados_produccion_el_rayo(self, tiene_estado_id: bool) -> tuple:
+        """Condición y parámetros para restringir el listado al perfil Producción
+        El Rayo (req. 1.8, permiso produccion-elrayo.view): solo NUEVO_PEDIDO y
+        GESTIONAR_PEDIDO."""
+        from src.database.pedido_estados import (
+            ESTADOS_PRODUCCION_EL_RAYO_IDS,
+            ESTADOS_PRODUCCION_EL_RAYO_NOMBRES,
+        )
+        if tiene_estado_id:
+            placeholders = ",".join("?" * len(ESTADOS_PRODUCCION_EL_RAYO_IDS))
+            return (
+                [f"p.estado_id IN ({placeholders})"],
+                list(sorted(ESTADOS_PRODUCCION_EL_RAYO_IDS)),
+            )
+        legacy_placeholders = ",".join("?" * len(ESTADOS_PRODUCCION_EL_RAYO_NOMBRES))
+        return (
+            [f"p.estado IN ({legacy_placeholders})"],
+            list(ESTADOS_PRODUCCION_EL_RAYO_NOMBRES),
+        )
+
+    def _filtro_exclusion_estados_produccion_el_rayo(self, tiene_estado_id: bool) -> tuple:
+        """Condición y parámetros para EXCLUIR NUEVO_PEDIDO/GESTIONAR_PEDIDO del
+        listado (req. 1.8 segunda fase, permiso odcsap.view): esos 2 estados pasan
+        a ser exclusivos de Producción El Rayo."""
+        from src.database.pedido_estados import (
+            ESTADOS_PRODUCCION_EL_RAYO_IDS,
+            ESTADOS_PRODUCCION_EL_RAYO_NOMBRES,
+        )
+        if tiene_estado_id:
+            placeholders = ",".join("?" * len(ESTADOS_PRODUCCION_EL_RAYO_IDS))
+            return (
+                [f"(p.estado_id IS NULL OR p.estado_id NOT IN ({placeholders}))"],
+                list(sorted(ESTADOS_PRODUCCION_EL_RAYO_IDS)),
+            )
+        legacy_placeholders = ",".join("?" * len(ESTADOS_PRODUCCION_EL_RAYO_NOMBRES))
+        return (
+            [f"(p.estado IS NULL OR p.estado NOT IN ({legacy_placeholders}))"],
+            list(ESTADOS_PRODUCCION_EL_RAYO_NOMBRES),
+        )
+
     def _construir_filtros_pedidos(
         self, cursor, *,
         estado, excluir_borrador, solo_redistribucion, solo_pendientes_accion,
+        restringir_produccion_el_rayo, excluir_estados_produccion_el_rayo,
         fecha_desde, fecha_hasta, proveedor_nombre, numero_pedido, creado_por,
         tiene_estado_id, tiene_estado,
     ):
@@ -1276,6 +1317,16 @@ class PedidoCabeceraRepository:
 
         if solo_pendientes_accion and (tiene_estado_id or tiene_estado):
             c, p = self._filtro_pendientes_accion(tiene_estado_id)
+            where_conditions.extend(c)
+            params.extend(p)
+
+        if restringir_produccion_el_rayo and (tiene_estado_id or tiene_estado):
+            c, p = self._filtro_estados_produccion_el_rayo(tiene_estado_id)
+            where_conditions.extend(c)
+            params.extend(p)
+
+        if excluir_estados_produccion_el_rayo and (tiene_estado_id or tiene_estado):
+            c, p = self._filtro_exclusion_estados_produccion_el_rayo(tiene_estado_id)
             where_conditions.extend(c)
             params.extend(p)
 
@@ -1328,6 +1379,8 @@ class PedidoCabeceraRepository:
         excluir_borrador: bool = False,
         solo_redistribucion: bool = False,
         solo_pendientes_accion: bool = False,
+        restringir_produccion_el_rayo: bool = False,
+        excluir_estados_produccion_el_rayo: bool = False,
     ) -> Dict[str, Any]:
         """
         Obtiene pedidos con filtros y paginación.
@@ -1339,6 +1392,11 @@ class PedidoCabeceraRepository:
             solo_redistribucion: si True, solo incluye pedidos aptos para redistribución
                 (estado_id >= 4 "CONFIRMADO POR EL RAYO" y excluye CANCELADO (19) y CANCELADO POR EL RAYO (20))
             solo_pendientes_accion: si True, solo estados que requieren acción del proveedor
+            restringir_produccion_el_rayo: si True, solo incluye NUEVO_PEDIDO y GESTIONAR_PEDIDO
+                (req. 1.8, perfil Producción El Rayo); se combina (AND) con `estado` si también se indica
+            excluir_estados_produccion_el_rayo: si True, excluye NUEVO_PEDIDO y GESTIONAR_PEDIDO
+                (req. 1.8 segunda fase, perfil odcsap.view); mutuamente excluyente en la práctica
+                con restringir_produccion_el_rayo (ver _debe_excluir_estados_el_rayo)
         """
         cursor = self.conn.cursor()
         try:
@@ -1351,6 +1409,8 @@ class PedidoCabeceraRepository:
                 excluir_borrador=excluir_borrador,
                 solo_redistribucion=solo_redistribucion,
                 solo_pendientes_accion=solo_pendientes_accion,
+                restringir_produccion_el_rayo=restringir_produccion_el_rayo,
+                excluir_estados_produccion_el_rayo=excluir_estados_produccion_el_rayo,
                 fecha_desde=fecha_desde,
                 fecha_hasta=fecha_hasta,
                 proveedor_nombre=proveedor_nombre,
