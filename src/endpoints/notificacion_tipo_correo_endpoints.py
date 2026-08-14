@@ -2,7 +2,7 @@
 Endpoints de administración del catálogo de correos (notificacion_tipo_correo).
 
 Documenta qué correo (asunto) envía el sistema y a qué tipo_notificacion
-pertenece. Solo Admin, igual que notificacion_destinatarios_endpoints.py.
+pertenece. Solo Admin.
 """
 
 import logging

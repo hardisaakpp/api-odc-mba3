@@ -481,3 +481,30 @@ migrations:
     description: "Traslada los destinatarios base activos de notificacion_destinatarios (por tipo_notificacion) a notificacion_persona_correo (por correo específico del catálogo), respetando la exclusión de nvelasquez@elrayo.com.ec en Redistribución Confirmada. A partir de esta migración, notificacion_destinatarios queda como tabla histórica: ya no determina el envío real"
     category: "data"
     dependencies: ["625"]
+
+  - version: "627"
+    name: "add_fecha_facturacion_pedido"
+    file: "migrations/add_fecha_facturacion_pedido.sql"
+    description: "Columna fecha_facturacion (DATE NULL) en pedido: nuevo campo en Información del Pedido (req. 1.8), en blanco por defecto, editable solo por produccion-elrayo.view en estado GESTIONAR PEDIDO"
+    category: "alter"
+
+  - version: "628"
+    name: "add_correo_pedido_confirmado_produccion"
+    file: "migrations/add_correo_pedido_confirmado_produccion.sql"
+    description: "Correo 'Pedido Confirmado por Producción' (OPERACIONES) en el catálogo, req. 1.8: se envía a Administración El Rayo cuando Producción confirma un pedido (botón 'Confirmar Producción'); renumera orden_flujo >= 5 en +1"
+    category: "data"
+    dependencies: ["624"]
+
+  - version: "629"
+    name: "add_correos_legacy_pedido_a_catalogo"
+    file: "migrations/add_correos_legacy_pedido_a_catalogo.sql"
+    description: "Agrega al catálogo los 3 correos de email_notifier_pedido.py (Pedido Confirmado por El Rayo, Pedido Despachar y Facturar, Pedido Finalizado) que quedaron con import roto (get_destinatarios_por_tipo) desde que el envío real pasó a notificacion_persona_correo; corrige el código para usar get_destinatarios_por_correo"
+    category: "data"
+    dependencies: ["624"]
+
+  - version: "630"
+    name: "drop_notificacion_destinatarios"
+    file: "migrations/drop_notificacion_destinatarios.sql"
+    description: "Elimina la tabla notificacion_destinatarios (histórica desde la migración 626); se retira junto con la interfaz de administración 'Destinatarios por Tipo (histórico)' y sus endpoints/repositorio, ya superados por notificacion_persona_correo ('Personas y Correos')"
+    category: "rollback"
+    dependencies: ["629"]

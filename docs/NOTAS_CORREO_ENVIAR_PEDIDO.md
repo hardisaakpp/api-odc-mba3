@@ -38,7 +38,7 @@ Qué revisar:
    El backend usa `mabeltrading-com-ec.mail.protection.outlook.com:25`. El log "Notificación de plantilla procesada enviada a…" indica que el envío SMTP fue aceptado. Si no llega a EL RAYO, puede ser filtrado, retraso o reglas en el dominio @elrayo.com.ec.
 
 3. **Destinatarios en BD**  
-   Si existe tabla `notificacion_destinatarios` con tipo `OPERACIONES`, se usan esos correos en lugar del `.env`. Los logs muestran que en tu caso se usan los dos correos @elrayo.com.ec anteriores.
+   Los destinatarios de cada correo salen de `notificacion_persona_correo` (interfaz "Personas y Correos" en `/mba3-consultas/admin/destinatarios`), filtrando por el correo específico del catálogo (`notificacion_tipo_correo`). Si nadie está vinculado a ese correo, no se envía a nadie.
 
 ---
 
@@ -48,8 +48,8 @@ Para que en **desarrollo** solo el desarrollador reciba todos los correos (y en 
 
 - **Variable:** `EMAIL_DEV_OVERRIDE` en `.env`.
 - **Comportamiento:**  
-  Si `ENVIRONMENT=development` **y** `EMAIL_DEV_OVERRIDE` tiene al menos un correo, **todos** los tipos de notificación (OPERACIONES, MABEL_TRADING, HOMOLOGACIONES, TECNICOS) envían a ese(s) correo(s). La tabla `notificacion_destinatarios` **no** se consulta en ese caso.
-- **Producción:** con `ENVIRONMENT=production` no se usa `EMAIL_DEV_OVERRIDE`; se usa la BD (o el fallback .env por tipo) como siempre.
+  Si `ENVIRONMENT=development` **y** `EMAIL_DEV_OVERRIDE` tiene al menos un correo, **todos** los tipos de notificación (OPERACIONES, MABEL_TRADING, HOMOLOGACIONES, TECNICOS, PRODUCCION_ELRAYO) envían a ese(s) correo(s). `notificacion_persona_correo` **no** se consulta en ese caso.
+- **Producción:** con `ENVIRONMENT=production` no se usa `EMAIL_DEV_OVERRIDE`; se usa siempre `notificacion_persona_correo` (sin fallback a `.env`).
 
 **Ejemplo .env desarrollo (local):**
 ```env
@@ -57,7 +57,7 @@ ENVIRONMENT=development
 EMAIL_DEV_OVERRIDE=cortiz@mabeltrading.com.ec
 ```
 
-**Producción:** no definir `EMAIL_DEV_OVERRIDE` (o dejarlo vacío) y mantener `ENVIRONMENT=production`; los destinatarios salen de la tabla `notificacion_destinatarios`.
+**Producción:** no definir `EMAIL_DEV_OVERRIDE` (o dejarlo vacío) y mantener `ENVIRONMENT=production`; los destinatarios salen de `notificacion_persona_correo` ("Personas y Correos" en el admin).
 
 ---
 

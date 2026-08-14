@@ -12,9 +12,10 @@ Estrategia actual:
   - Excepción: EMAIL_DEV_OVERRIDE en desarrollo sigue redirigiendo todos los
     correos a esa(s) dirección(es), ignorando BD; es un override explícito para
     pruebas locales, no un fallback.
-  - notificacion_destinatarios (por tipo_notificacion, sin distinguir el correo
-    específico) queda como tabla histórica: ya no determina el envío real. Sus
-    destinatarios activos se migraron a notificacion_persona_correo (ver
+  - La antigua tabla notificacion_destinatarios (por tipo_notificacion, sin
+    distinguir el correo específico) fue eliminada (ver
+    scripts/migrations/drop_notificacion_destinatarios.sql); sus destinatarios
+    activos se migraron antes a notificacion_persona_correo (ver
     scripts/migrations/seed_notificacion_persona_correo_desde_destinatarios.sql).
 """
 

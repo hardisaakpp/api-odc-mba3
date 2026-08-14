@@ -449,42 +449,16 @@ EMAIL_FROM = os.getenv("EMAIL_FROM", "integrationsap@mabeltrading.com.ec")
 # Nombre del remitente para los correos
 EMAIL_FROM_NAME = os.getenv("EMAIL_FROM_NAME", "INTEGRACIÃ“N SAP")
 
-# EMAIL_TO - SEGMENTADO POR TIPO (fallback desde .env)
-# La app lee primero de la tabla notificacion_destinatarios; si no hay datos, usa estas listas.
-# Tipos: OPERACIONES, MABEL_TRADING, HOMOLOGACIONES, TECNICOS (ver get_destinatarios_por_tipo).
+# Los destinatarios de cada correo se resuelven en BD vía
+# get_destinatarios_por_correo (notificacion_persona_correo /
+# notificacion_tipo_correo, administrable en "Personas y Correos"); no hay
+# fallback a variables de entorno.
 _DEFAULT_CORTIZ_EMAIL = "cortiz@mabeltrading.com.ec"
-# Usuario Principal: Operaciones/Despachos (recibe notificaciones de NUEVOS DESPACHOS)
-_email_operaciones = os.getenv("EMAIL_TO_OPERACIONES", "cortiz@mabeltrading.com.ec,pchafuel@mabeltrading.com.ec")
-EMAIL_TO_OPERACIONES = [email.strip() for email in _email_operaciones.split(",") if email.strip()]
-
-# Usuario Homologaciones: Productos no homologados (recibe notificaciones de SKUs faltantes)
-_email_homologaciones = os.getenv("EMAIL_TO_HOMOLOGACIONES", _DEFAULT_CORTIZ_EMAIL)
-EMAIL_TO_HOMOLOGACIONES = [email.strip() for email in _email_homologaciones.split(",") if email.strip()]
-
-# Usuario TÃ©cnico: Errores y advertencias del sistema (recibe notificaciones tÃ©cnicas)
-_email_tecnicos = os.getenv("EMAIL_TO_TECNICOS", _DEFAULT_CORTIZ_EMAIL)
-EMAIL_TO_TECNICOS = [email.strip() for email in _email_tecnicos.split(",") if email.strip()]
-
-# EMAIL_TO (legacy - para compatibilidad con cÃ³digo existente)
-# Por defecto usa EMAIL_TO_OPERACIONES
-_email_to_str = os.getenv("EMAIL_TO", _email_operaciones)
-EMAIL_TO = [email.strip() for email in _email_to_str.split(",") if email.strip()]
 
 # Email del proveedor para pruebas (FASE 6)
 # Durante fase de pruebas, se usa este email para notificaciones de ODC
 # NOTE: En producciÃ³n, obtener desde tabla cliente usando CardCode
 EMAIL_PROVEEDOR_PRUEBAS = os.getenv("EMAIL_PROVEEDOR_PRUEBAS", _DEFAULT_CORTIZ_EMAIL)
-
-# Email de MABEL TRADING para notificaciones de confirmacion de pedidos
-# Usado cuando EL RAYO confirma un pedido y se debe notificar a MABEL TRADING
-_email_mabel_trading = os.getenv("EMAIL_MABEL_TRADING", "cortiz@mabeltrading.com.ec,pchafuel@mabeltrading.com.ec")
-EMAIL_MABEL_TRADING = [email.strip() for email in _email_mabel_trading.split(",") if email.strip()]
-
-# Email de Producción El Rayo (req. 1.8): notificación de pedido "Enviado" por MABEL TRADING.
-# Antes iba a EMAIL_TO_OPERACIONES (Administración El Rayo); ahora es exclusivo de Producción.
-# Sin default: si no se configura, no se envía (mejor que enviarlo a la lista equivocada).
-_email_produccion_elrayo = os.getenv("EMAIL_TO_PRODUCCION_ELRAYO", "")
-EMAIL_TO_PRODUCCION_ELRAYO = [email.strip() for email in _email_produccion_elrayo.split(",") if email.strip()]
 
 # Override en desarrollo: todos los correos van a este destinatario (ignora BD).
 # Solo aplica cuando ENVIRONMENT=development. En producción no se usa.

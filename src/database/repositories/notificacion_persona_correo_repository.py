@@ -4,9 +4,7 @@ de qué correos (notificacion_tipo_correo) debería recibir cada persona.
 
 Fuente real de los destinatarios del envío de correos (vía
 src.utils.notificacion_destinatarios.get_destinatarios_por_correo, usado por
-email_notifier.py). notificacion_destinatarios (por tipo_notificacion, sin
-distinguir el correo específico) queda como tabla histórica: ya no determina
-el envío real.
+email_notifier.py y email_notifier_pedido.py).
 """
 
 from typing import List
