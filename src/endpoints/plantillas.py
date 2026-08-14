@@ -45,6 +45,7 @@ MAX_CODIGOS_SAP_INFO = 100
 
 _PERM_MABEL = 'mabel.view'
 _PERM_ODCSAP = 'odcsap.view'
+_PERM_PRODUCCION_ELRAYO = 'produccion-elrayo.view'
 _DEFAULT_FILENAME = "sin_nombre.xlsx"
 _KEY_TAMANO_BYTES = "tamaño_bytes"
 
@@ -1438,7 +1439,7 @@ def register_plantillas_endpoints(app: FastAPI):
     async def descargar_plantilla_original(
         pedido_id: str = Path(..., description="ID del pedido (GUID)"),
         user: Dict = Depends(verify_jwt_token),
-        _: None = Depends(require_any_permission([_PERM_MABEL, _PERM_ODCSAP]))
+        _: None = Depends(require_any_permission([_PERM_MABEL, _PERM_ODCSAP, _PERM_PRODUCCION_ELRAYO]))
     ):
         """Descarga el archivo Excel original subido para un pedido."""
         return await _descargar_plantilla(
@@ -1450,7 +1451,7 @@ def register_plantillas_endpoints(app: FastAPI):
     async def descargar_plantilla_original_por_archivo(
         archivo_id: int = Path(..., description="ID del archivo original"),
         user: Dict = Depends(verify_jwt_token),
-        _: None = Depends(require_any_permission([_PERM_MABEL, _PERM_ODCSAP]))
+        _: None = Depends(require_any_permission([_PERM_MABEL, _PERM_ODCSAP, _PERM_PRODUCCION_ELRAYO]))
     ):
         """Descarga un archivo Excel original por su ID de archivo."""
         return await _descargar_plantilla(
@@ -1462,7 +1463,7 @@ def register_plantillas_endpoints(app: FastAPI):
     async def info_archivo_plantilla(
         pedido_id: str = Path(..., description="ID del pedido (GUID)"),
         user: Dict = Depends(verify_jwt_token),
-        _: None = Depends(require_any_permission([_PERM_MABEL, _PERM_ODCSAP]))
+        _: None = Depends(require_any_permission([_PERM_MABEL, _PERM_ODCSAP, _PERM_PRODUCCION_ELRAYO]))
     ):
         """Obtiene información sobre el archivo Excel original de un pedido."""
         return await _info_archivo_plantilla_handler(pedido_id)

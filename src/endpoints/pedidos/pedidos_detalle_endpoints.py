@@ -44,6 +44,22 @@ def _validar_acceso_produccion_el_rayo(pedido: Dict, user: Dict) -> None:
         )
 
 
+def _validar_acceso_estados_permitidos_produccion_el_rayo(pedido: Dict, user: Dict) -> None:
+    """Rechaza (403) el acceso al detalle si el pedido NO está en NUEVO_PEDIDO ni
+    GESTIONAR_PEDIDO y el usuario tiene produccion-elrayo.view pero NO odcsap.view
+    (req. 1.8: Producción El Rayo solo puede acceder a esos 2 estados; si el
+    usuario tiene ambos permisos, odcsap.view nunca pierde acceso)."""
+    permissions = user.get("permissions") or []
+    if _PERM_PRODUCCION_ELRAYO not in permissions or _PERM_ODCSAP in permissions:
+        return
+    estado_id = get_estado_id_from_pedido(pedido)
+    if estado_id not in ESTADOS_PRODUCCION_EL_RAYO_IDS:
+        raise HTTPException(
+            status_code=403,
+            detail="Producción El Rayo solo puede acceder a pedidos en Nuevo Pedido o Gestionar Pedido.",
+        )
+
+
 def _obtener_y_enriquecer_pedido(identificador: str, incluir_respuesta: bool, conn) -> Dict:
     """Extrae la lógica de obtención y enriquecimiento del pedido para reducir complejidad."""
     # Detectar si es UUID (formato: 8-4-4-4-12 caracteres hexadecimales)
@@ -133,6 +149,7 @@ def register_pedidos_detalle_endpoints(app: FastAPI):
             with get_db_connection_context() as conn:
                 pedido = _obtener_y_enriquecer_pedido(identificador, incluir_respuesta, conn)
                 _validar_acceso_produccion_el_rayo(pedido, user)
+                _validar_acceso_estados_permitidos_produccion_el_rayo(pedido, user)
 
                 # Asegurar que Decimal (p. ej. cantidad_solicitada_total, cantidad_confirmada_total, total, cantidad) sea JSON serializable
                 content = make_json_serializable(pedido)

@@ -31,6 +31,7 @@ logger = logging.getLogger(__name__)
 # Permisos (evita duplicación de literales)
 _PERM_MABEL = 'mabel.view'
 _PERM_ODCSAP = 'odcsap.view'
+_PERM_PRODUCCION_ELRAYO = 'produccion-elrayo.view'
 
 
 def _resolver_estado_id(cabecera):
@@ -419,7 +420,7 @@ def register_pedidos_cancelar_endpoints(app: FastAPI):
         request: Request,
         pedido_id: str = Path(..., description="UUID del pedido a cancelar"),
         user: Dict = Depends(verify_jwt_token),
-        _: None = Depends(require_any_permission([_PERM_ODCSAP, _PERM_MABEL]))
+        _: None = Depends(require_any_permission([_PERM_ODCSAP, _PERM_MABEL, _PERM_PRODUCCION_ELRAYO]))
     ):
         """
         Cancelar un pedido desde la interfaz de Detalle del Pedido (boton "Cancelar Pedido").

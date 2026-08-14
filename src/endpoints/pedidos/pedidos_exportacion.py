@@ -21,6 +21,7 @@ logger = logging.getLogger(__name__)
 
 _PERM_ODCSAP_VIEW = 'odcsap.view'
 _PERM_MABEL_VIEW = 'mabel.view'
+_PERM_PRODUCCION_ELRAYO = 'produccion-elrayo.view'
 DESC_UUID_PEDIDO = "UUID del pedido"
 MEDIA_TYPE_EXCEL = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
@@ -493,7 +494,7 @@ def register_exportacion_endpoints(app: FastAPI):
     async def descargar_pedido_original(
         pedido_id: str = Path(..., description=DESC_UUID_PEDIDO),
         user: Dict = Depends(verify_jwt_token),
-        _: None = Depends(require_any_permission([_PERM_MABEL_VIEW, _PERM_ODCSAP_VIEW]))
+        _: None = Depends(require_any_permission([_PERM_MABEL_VIEW, _PERM_ODCSAP_VIEW, _PERM_PRODUCCION_ELRAYO]))
     ):
         """
         Descarga el pedido **con los valores originales** (antes de ediciones).
