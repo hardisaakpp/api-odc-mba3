@@ -14,7 +14,7 @@ from datetime import date, datetime
 
 from src.utils.timezone import ahora_naive
 
-from .pedido_utils import PedidoUtils, clamp_pedido_mensaje
+from .pedido_utils import PedidoUtils, clamp_pedido_mensaje, MARCA_POR_CODIGO_BODEGA
 
 from src.database.pedido_estados import (
     ESTADO_BORRADOR,
@@ -412,6 +412,18 @@ class PedidoCabeceraRepository:
         finally:
             cursor.close()
 
+    @staticmethod
+    def _aplicar_fallback_marca_cabecera(detalles: List[Dict[str, Any]], cabecera: Dict[str, Any]) -> None:
+        """Completa (in-place) la marca de las líneas sin bodega propia con la marca
+        derivada de cabecera.origen_traslado (columna "Marca" en Productos del Pedido)."""
+        origen = str(cabecera.get("origen_traslado") or "").strip().upper()
+        marca_cabecera = MARCA_POR_CODIGO_BODEGA.get(origen)
+        if not marca_cabecera:
+            return
+        for detalle in detalles:
+            if not detalle.get("marca"):
+                detalle["marca"] = marca_cabecera
+
     def get_pedido_completo(self, pedido_id: str) -> Optional[Dict[str, Any]]:
         """
         Obtiene un pedido completo con cabecera, detalles, tiendas y distribuciones.
@@ -431,35 +443,35 @@ class PedidoCabeceraRepository:
 
             if tiene_estado_id:
                 cursor.execute("""
-                    SELECT 
+                    SELECT
                         p.pedido_id, p.numero_pedido, p.fecha_pedido, p.fecha_entrega,
                         p.forma_pago, p.mensaje, p.proveedor_nombre, p.comprador_nombre,
                         p.comprador_codigo, p.origen_traslado, p.serie, p.archivo_nombre,
                         p.creado_por, p.estado_id, pe.nombre AS estado_nombre, p.creado_en,
-                        p.modificado_por
+                        p.modificado_por, p.fecha_facturacion
                     FROM pedido p
                     LEFT JOIN pedido_estado pe ON pe.id = p.estado_id
                     WHERE p.pedido_id = ?
                 """, (pedido_id,))
             elif tiene_estado:
                 cursor.execute("""
-                    SELECT 
+                    SELECT
                         pedido_id, numero_pedido, fecha_pedido, fecha_entrega,
                         forma_pago, mensaje, proveedor_nombre, comprador_nombre,
                         comprador_codigo, origen_traslado, serie, archivo_nombre,
                         creado_por, estado, creado_en,
-                        modificado_por
+                        modificado_por, fecha_facturacion
                     FROM pedido
                     WHERE pedido_id = ?
                 """, (pedido_id,))
             else:
                 cursor.execute("""
-                    SELECT 
+                    SELECT
                         pedido_id, numero_pedido, fecha_pedido, fecha_entrega,
                         forma_pago, mensaje, proveedor_nombre, comprador_nombre,
                         comprador_codigo, origen_traslado, serie, archivo_nombre,
                         creado_por, creado_en,
-                        modificado_por
+                        modificado_por, fecha_facturacion
                     FROM pedido
                     WHERE pedido_id = ?
                 """, (pedido_id,))
@@ -472,17 +484,18 @@ class PedidoCabeceraRepository:
                 row, tiene_estado or tiene_estado_id, tiene_estado_id
             )
             detalles = self.utils.obtener_detalles_pedido(cursor, pedido_id)
-            
+            self._aplicar_fallback_marca_cabecera(detalles, cabecera)
+
             # Si el pedido está en estado CONFIRMADO_ENVIADO, obtener datos de SAP
             estado_id = cabecera.get("estado_id")
             if estado_id == ESTADO_CONFIRMADO_ENVIADO:
                 cabecera = self._agregar_datos_sap_a_cabecera(cursor, pedido_id, cabecera)
-            
+
             return {
                 "cabecera": cabecera,
                 "detalles": detalles
             }
-            
+
         except Exception as e:
             logger.error(f"❌ Error al obtener pedido completo: {e}", exc_info=True)
             raise
@@ -508,35 +521,35 @@ class PedidoCabeceraRepository:
 
             if tiene_estado_id:
                 cursor.execute("""
-                    SELECT 
+                    SELECT
                         p.pedido_id, p.numero_pedido, p.fecha_pedido, p.fecha_entrega,
                         p.forma_pago, p.mensaje, p.proveedor_nombre, p.comprador_nombre,
                         p.comprador_codigo, p.origen_traslado, p.serie, p.archivo_nombre,
                         p.creado_por, p.estado_id, pe.nombre AS estado_nombre, p.creado_en,
-                        p.modificado_por
+                        p.modificado_por, p.fecha_facturacion
                     FROM pedido p
                     LEFT JOIN pedido_estado pe ON pe.id = p.estado_id
                     WHERE p.numero_pedido = ?
                 """, (numero_pedido,))
             elif tiene_estado:
                 cursor.execute("""
-                    SELECT 
+                    SELECT
                         pedido_id, numero_pedido, fecha_pedido, fecha_entrega,
                         forma_pago, mensaje, proveedor_nombre, comprador_nombre,
                         comprador_codigo, origen_traslado, serie, archivo_nombre,
                         creado_por, estado, creado_en,
-                        modificado_por
+                        modificado_por, fecha_facturacion
                     FROM pedido
                     WHERE numero_pedido = ?
                 """, (numero_pedido,))
             else:
                 cursor.execute("""
-                    SELECT 
+                    SELECT
                         pedido_id, numero_pedido, fecha_pedido, fecha_entrega,
                         forma_pago, mensaje, proveedor_nombre, comprador_nombre,
                         comprador_codigo, origen_traslado, serie, archivo_nombre,
                         creado_por, creado_en,
-                        modificado_por
+                        modificado_por, fecha_facturacion
                     FROM pedido
                     WHERE numero_pedido = ?
                 """, (numero_pedido,))
@@ -550,7 +563,8 @@ class PedidoCabeceraRepository:
                 row, tiene_estado or tiene_estado_id, tiene_estado_id
             )
             detalles = self.utils.obtener_detalles_pedido(cursor, pedido_id)
-            
+            self._aplicar_fallback_marca_cabecera(detalles, cabecera)
+
             # Si el pedido está en estado CONFIRMADO_ENVIADO, obtener datos de SAP
             estado_id = cabecera.get("estado_id")
             if estado_id == ESTADO_CONFIRMADO_ENVIADO:
@@ -888,7 +902,7 @@ class PedidoCabeceraRepository:
                     pedido_id, numero_pedido, fecha_pedido, fecha_entrega,
                     forma_pago, mensaje, proveedor_nombre, comprador_nombre,
                     comprador_codigo, origen_traslado, serie, archivo_nombre,
-                    creado_por, estado
+                    creado_por, estado, fecha_facturacion
                 FROM pedido
                 WHERE pedido_id = ?
             """, (pedido_id,))
@@ -898,7 +912,7 @@ class PedidoCabeceraRepository:
                     pedido_id, numero_pedido, fecha_pedido, fecha_entrega,
                     forma_pago, mensaje, proveedor_nombre, comprador_nombre,
                     comprador_codigo, origen_traslado, serie, archivo_nombre,
-                    creado_por
+                    creado_por, fecha_facturacion
                 FROM pedido
                 WHERE pedido_id = ?
             """, (pedido_id,))
@@ -918,6 +932,7 @@ class PedidoCabeceraRepository:
             "origen_traslado": row[9],
             "serie": row[10],
             "archivo_nombre": row[11],
+            "fecha_facturacion": row[-1].isoformat() if row[-1] else None,
         }
         if tiene_estado:
             existing["estado"] = row[13]
@@ -963,6 +978,7 @@ class PedidoCabeceraRepository:
                 origen_traslado = ?,
                 serie = ?,
                 estado = ?,
+                fecha_facturacion = ?,
                 modificado_por = ?,
                 modificado_fecha = ?,
                 origen = COALESCE(?, origen),
@@ -980,6 +996,7 @@ class PedidoCabeceraRepository:
                 merged.get("origen_traslado"),
                 merged.get("serie"),
                 merged.get("estado"),
+                merged.get("fecha_facturacion"),
                 modificado_por,
                 modificado_fecha,
                 audit.origen,
@@ -998,6 +1015,7 @@ class PedidoCabeceraRepository:
                 comprador_codigo = ?,
                 origen_traslado = ?,
                 serie = ?,
+                fecha_facturacion = ?,
                 modificado_por = ?,
                 modificado_fecha = ?
             WHERE pedido_id = ?
@@ -1012,6 +1030,7 @@ class PedidoCabeceraRepository:
                 merged.get("comprador_codigo"),
                 merged.get("origen_traslado"),
                 merged.get("serie"),
+                merged.get("fecha_facturacion"),
                 modificado_por,
                 modificado_fecha,
                 pedido_id,

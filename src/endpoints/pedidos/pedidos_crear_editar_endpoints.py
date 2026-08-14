@@ -10,6 +10,7 @@ from fastapi.responses import JSONResponse
 
 from src.database.connection import get_db_connection_context
 from src.database.repositories.pedido_repository import PedidoRepository
+from src.database.pedido_estados import ESTADO_GESTIONAR_PEDIDO
 from src.security.jwt_auth import verify_jwt_token, require_permission, require_any_permission
 from src.exceptions import BusinessException
 from src.logging_config import log_business_operation
@@ -27,6 +28,32 @@ logger = logging.getLogger(__name__)
 # Permisos (evita duplicación de literales)
 _PERM_MABEL = 'mabel.view'
 _PERM_ODCSAP = 'odcsap.view'
+_PERM_PRODUCCION_ELRAYO = 'produccion-elrayo.view'
+
+
+def _validar_puede_editar_fecha_facturacion(datos_cabecera: Dict, pedido_existente: Dict, user: Dict) -> None:
+    """Fecha Facturación (req. 1.8) es exclusiva de produccion-elrayo.view y solo
+    editable mientras el pedido está en GESTIONAR PEDIDO (estado_id = 3)."""
+    if "fecha_facturacion" not in datos_cabecera:
+        return
+    permissions = user.get("permissions") or []
+    if _PERM_PRODUCCION_ELRAYO not in permissions:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "error": "permiso_denegado",
+                "message": "Fecha Facturación solo puede editarla el perfil Producción El Rayo."
+            }
+        )
+    estado_id = (pedido_existente.get("cabecera") or {}).get("estado_id")
+    if estado_id != ESTADO_GESTIONAR_PEDIDO:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "error": "estado_no_permitido",
+                "message": "Fecha Facturación solo puede editarse mientras el pedido está en Gestionar Pedido."
+            }
+        )
 
 
 def _mapear_codigo_a_filas(data):
@@ -406,6 +433,8 @@ async def _modificar_pedido_cabecera_handler(request, pedido_id, request_body, u
                     }
                 )
 
+            _validar_puede_editar_fecha_facturacion(datos_cabecera, pedido_existente, user)
+
             resultado = repo.update_cabecera(pedido_id, datos_cabecera, audit_context=audit)
 
             if not resultado:
@@ -576,7 +605,7 @@ def register_pedidos_crear_editar_endpoints(app: FastAPI):
         pedido_id: str = Path(..., description="UUID del pedido"),
         request_body: ModificarPedidoCabeceraRequest = Body(..., description="Datos de la cabecera a modificar"),
         user: Dict = Depends(verify_jwt_token),
-        _: None = Depends(require_any_permission([_PERM_ODCSAP, _PERM_MABEL]))
+        _: None = Depends(require_any_permission([_PERM_ODCSAP, _PERM_MABEL, _PERM_PRODUCCION_ELRAYO]))
     ):
         """
         Modifica la cabecera de un pedido (HU-03 - Modificacion de pedidos).

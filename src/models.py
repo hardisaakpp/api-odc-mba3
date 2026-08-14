@@ -1377,7 +1377,8 @@ class ModificarPedidoCabeceraRequest(BaseModel):
     origen_traslado: Optional[str] = Field(None, description="Origen de traslado (bodega)")
     serie: Optional[str] = Field(None, description="Serie del documento")
     estado: Optional[str] = Field(None, description="Estado del pedido")
-    
+    fecha_facturacion: Optional[str] = Field(None, description="Fecha de facturación (YYYY-MM-DD), req. 1.8")
+
     class Config:
         json_schema_extra = {
             "example": {
@@ -1388,7 +1389,8 @@ class ModificarPedidoCabeceraRequest(BaseModel):
                 "comprador_nombre": "VACA ANDREA",
                 "comprador_codigo": "801",
                 "origen_traslado": "RL-CD",
-                "serie": "A"
+                "serie": "A",
+                "fecha_facturacion": "2025-01-25"
             }
         }
 
