@@ -175,6 +175,12 @@ def _preview_pedido_eliminado() -> Tuple[str, str]:
     )
 
 
+def _preview_pedido_confirmado_produccion() -> Tuple[str, str]:
+    return _en._build_pedido_confirmado_produccion_email(
+        _PEDIDO_ID_EJEMPLO, _NUMERO_PEDIDO_EJEMPLO, _USUARIO_EJEMPLO, _FECHA_EJEMPLO
+    )
+
+
 # Clave: (tipo_notificacion, tipo_correo) tal como se guardan en
 # notificacion_tipo_correo (ver seed en scripts/migrations/create_notificacion_tipo_correo.sql).
 _DISPATCH: Dict[Tuple[str, str], Callable[[], Tuple[str, str]]] = {
@@ -182,6 +188,7 @@ _DISPATCH: Dict[Tuple[str, str], Callable[[], Tuple[str, str]]] = {
     ("OPERACIONES", "Pedido Descartado"): _preview_pedido_descartado,
     ("MABEL_TRADING", "Pedido Eliminado"): _preview_pedido_eliminado,
     ("OPERACIONES", "Pedido Cancelado"): _preview_pedido_cancelado,
+    ("OPERACIONES", "Pedido Confirmado por Producción"): _preview_pedido_confirmado_produccion,
     ("OPERACIONES", "Redistribución Confirmada por MABEL TRADING"): _preview_redistribucion_confirmada,
     ("OPERACIONES", "Orden de Compra Generada"): _preview_oc_proveedor,
     ("OPERACIONES", "OC y Solicitudes de Transferencia - Listo para Despacho"): _preview_despacho,

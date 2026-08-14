@@ -18,8 +18,9 @@ from src.database.pedido_estados import (
     ESTADO_CONFIRMADO_ENVIADO,
     ESTADO_DESPACHAR_Y_FACTURAR,
     ESTADO_FINALIZADO,
+    ESTADO_CONFIRMADO_POR_PRODUCCION,
 )
-from src.security.jwt_auth import verify_jwt_token, require_any_permission
+from src.security.jwt_auth import verify_jwt_token, require_any_permission, require_permission
 from src.utils.audit_context import get_audit_context, ORIGEN_WEB
 from .pedidos_crud_helpers import (
     enrich_pedido_with_ui_flags,
@@ -85,6 +86,75 @@ async def _logic_marcar_pedido_gestionar(pedido_id: str, request: Request, user:
     except Exception as e:
         logger.error(f"Error al marcar pedido como gestionar: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Error interno: {str(e)}")
+
+
+async def _logic_confirmar_produccion(pedido_id: str, request: Request, user: Dict):
+    """Lógica de 'Confirmar Producción' (req. 1.8, botón exclusivo de produccion-elrayo.view):
+    GESTIONAR_PEDIDO (3) -> CONFIRMADO_POR_PRODUCCION (23), notifica por correo a
+    Administración El Rayo (odcsap.view). Requiere que el pedido ya tenga Fecha
+    Facturación seleccionada."""
+    audit = get_audit_context(request, user, origen=ORIGEN_WEB)
+    try:
+        with get_db_connection_context() as conn:
+            repo = PedidoRepository(conn)
+            pedido = _obtener_pedido_completo_o_404(repo, pedido_id)
+            estado_id = get_estado_id_from_pedido(pedido)
+
+            if estado_id != ESTADO_GESTIONAR_PEDIDO:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail={
+                        "error": "estado_no_permitido",
+                        "message": "Solo se puede confirmar producción mientras el pedido está en Gestionar Pedido."
+                    }
+                )
+
+            if not (pedido.get("cabecera") or {}).get("fecha_facturacion"):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail={
+                        "error": "fecha_facturacion_requerida",
+                        "message": "Debe seleccionar la Fecha Facturación antes de confirmar producción."
+                    }
+                )
+
+            numero_pedido = (pedido.get("cabecera") or {}).get("numero_pedido")
+            repo.update_estado(pedido_id, ESTADO_CONFIRMADO_POR_PRODUCCION, audit_context=audit)
+
+        try:
+            from src.utils.email_notifier import send_pedido_confirmado_produccion_notification
+            _username = user.get("username") or user.get("sub") or "unknown"
+            send_pedido_confirmado_produccion_notification(
+                pedido_id=pedido_id,
+                numero_pedido=numero_pedido,
+                usuario_id=_username,
+            )
+        except Exception as email_err:
+            logger.warning(f"⚠️ Error al enviar email de confirmación por producción (no crítico): {email_err}")
+
+        logger.info(
+            f"✅ Pedido {pedido_id} confirmado por Producción por usuario {user.get('username', 'UNKNOWN')} "
+            f"(numero_pedido={numero_pedido})"
+        )
+
+        from fastapi.responses import JSONResponse
+        return JSONResponse(
+            status_code=200,
+            content={
+                "success": True,
+                "message": f"Pedido {numero_pedido or pedido_id} confirmado por Producción",
+                "pedido_id": pedido_id,
+                "numero_pedido": numero_pedido,
+                "estado": "CONFIRMADO POR PRODUCCION",
+                "estado_id": ESTADO_CONFIRMADO_POR_PRODUCCION,
+            }
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error al confirmar producción del pedido {pedido_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Error interno: {str(e)}")
+
 
 async def _logic_confirmar_para_redistribucion(pedido_id: str, request: Request, user: Dict):
     audit = get_audit_context(request, user, origen=ORIGEN_WEB)
@@ -292,7 +362,24 @@ def register_pedidos_estado_endpoints(app: FastAPI):
         son los únicos 2 estados que este perfil gestiona.
         """
         return await _logic_marcar_pedido_gestionar(pedido_id, request, user)
-    
+
+    @app.post("/api/pedidos/{pedido_id}/confirmar-produccion", tags=["Pedidos"])
+    async def confirmar_produccion(
+        request: Request,
+        pedido_id: str = Path(..., description=DESC_UUID_PEDIDO),
+        user: Dict = Depends(verify_jwt_token),
+        _: None = Depends(require_permission(PERM_PRODUCCION_ELRAYO_VIEW))
+    ):
+        """
+        Confirma el pedido desde Producción El Rayo (req. 1.8, botón "Confirmar Producción",
+        exclusivo de produccion-elrayo.view).
+
+        Solo válido en estado GESTIONAR PEDIDO (3); transiciona a CONFIRMADO POR PRODUCCION
+        (23) y notifica por correo a Administración El Rayo (odcsap.view). Administración
+        El Rayo continúa el flujo normal desde ahí con el botón "Confirmar" existente.
+        """
+        return await _logic_confirmar_produccion(pedido_id, request, user)
+
     @app.post("/api/pedidos/{pedido_id}/confirmar-para-redistribucion", tags=["Pedidos"])
     async def confirmar_para_redistribucion(
         request: Request,

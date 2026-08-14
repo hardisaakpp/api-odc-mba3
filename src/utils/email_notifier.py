@@ -46,6 +46,7 @@ _CORREO_PEDIDO_CANCELADO = "Pedido Cancelado"
 _CORREO_PEDIDO_DESCARTADO = "Pedido Descartado"
 _CORREO_REDISTRIBUCION_CONFIRMADA = "Redistribución Confirmada por MABEL TRADING"
 _CORREO_PEDIDO_ELIMINADO = "Pedido Eliminado"
+_CORREO_PEDIDO_CONFIRMADO_PRODUCCION = "Pedido Confirmado por Producción"
 
 
 # ─── Helpers privados ────────────────────────────────────────────────────────
@@ -832,6 +833,30 @@ def _build_pedido_cancelado_email(pedido_id, numero_pedido, usuario_id, fecha_ej
         timestamp=fecha_ejecucion,
     )
     subject = f"Pedido Cancelado - {numero_pedido or pedido_id}"
+    return subject, body_html
+
+
+def _build_pedido_confirmado_produccion_email(pedido_id, numero_pedido, usuario_id, fecha_ejecucion):
+    """Construye (subject, body_html) para 'Pedido Confirmado por Producción' (OPERACIONES, req. 1.8)."""
+    from src.utils.email_template import build_email, info_section, paragraph, badge_html
+
+    body_html = build_email(
+        title="Pedido Confirmado por Producción",
+        subtitle=f"Pedido: {numero_pedido or pedido_id}",
+        sections=[
+            paragraph(f"Producción confirmó este pedido. El estado ha cambiado a {badge_html('CONFIRMADO POR PRODUCCION', '#fff8e1', '#8a6d00')}."),
+            info_section(_SECCION_INFO_PEDIDO, [
+                (_LABEL_NUMERO_PEDIDO, numero_pedido or "N/A"),
+                (_LABEL_PEDIDO_ID, pedido_id),
+                ("Usuario de Producci&oacute;n", usuario_id or "N/A"),
+                ("Nuevo Estado", badge_html("CONFIRMADO POR PRODUCCION", "#fff8e1", "#8a6d00")),
+            ], accent="orange"),
+            paragraph("Queda pendiente de revisi&oacute;n y confirmaci&oacute;n por Administraci&oacute;n El Rayo.", italic=True),
+        ],
+        accent="orange",
+        timestamp=fecha_ejecucion,
+    )
+    subject = f"Pedido Confirmado por Producción - {numero_pedido or pedido_id}"
     return subject, body_html
 
 
@@ -1663,6 +1688,76 @@ El pedido permanece en el sistema con estado CANCELADO y no sera procesado.
 
     except Exception as e:
         logger.error(f"❌ Error al enviar notificación de pedido cancelado: {e}", exc_info=True)
+        return False
+
+
+def send_pedido_confirmado_produccion_notification(
+    pedido_id: str,
+    numero_pedido: Optional[str] = None,
+    usuario_id: Optional[str] = None,
+    fecha_ejecucion: Optional[datetime] = None
+) -> bool:
+    """
+    Envía notificación a Administración El Rayo cuando Producción confirma un pedido
+    (cambia estado a CONFIRMADO POR PRODUCCION).
+
+    Se usa al procesar POST /api/pedidos/{pedido_id}/confirmar-produccion (req. 1.8,
+    perfil Producción El Rayo, botón "Confirmar Producción").
+    DESTINATARIO: EMAIL_TO_OPERACIONES (Administración El Rayo)
+
+    Args:
+        pedido_id: UUID del pedido confirmado
+        numero_pedido: Número del pedido (opcional, para identificación)
+        usuario_id: Usuario de Producción que confirmó el pedido
+        fecha_ejecucion: Fecha y hora de la confirmación (por defecto ahora)
+
+    Returns:
+        True si el email se envió correctamente, False en caso contrario
+    """
+    if not ENABLE_EMAIL_NOTIFICATIONS:
+        logger.debug(_MSG_EMAIL_DESHABILITADO)
+        return False
+
+    if not fecha_ejecucion:
+        fecha_ejecucion = ahora_naive()
+
+    try:
+        recipients: list[str] = get_destinatarios_por_correo("OPERACIONES", _CORREO_PEDIDO_CONFIRMADO_PRODUCCION)
+
+        if not recipients:
+            logger.warning("⚠️ No hay destinatarios configurados para notificación de pedido confirmado por producción")
+            return False
+
+        from src.utils.email_template import create_email_message
+
+        subject, body_html = _build_pedido_confirmado_produccion_email(pedido_id, numero_pedido, usuario_id, fecha_ejecucion)
+
+        body_text = f"""Pedido Confirmado por Producción - {numero_pedido or pedido_id}
+{'=' * 40}
+
+- Numero de Pedido: {numero_pedido or 'N/A'}
+- Pedido ID: {pedido_id}
+- Usuario de Produccion: {usuario_id or 'N/A'}
+- Fecha y hora: {fecha_ejecucion.strftime('%Y-%m-%d %H:%M:%S')}
+- Nuevo Estado: CONFIRMADO POR PRODUCCION
+
+Queda pendiente de revision y confirmacion por Administracion El Rayo.
+"""
+
+        msg = create_email_message(
+            subject=subject,
+            recipients=recipients,
+            body_html=body_html,
+            body_text=body_text,
+        )
+
+        send_smtp_message(msg, recipients)
+
+        logger.info(f"✅ Notificación de pedido confirmado por producción enviada a {', '.join(recipients)} (Pedido: {numero_pedido or pedido_id})")
+        return True
+
+    except Exception as e:
+        logger.error(f"❌ Error al enviar notificación de pedido confirmado por producción: {e}", exc_info=True)
         return False
 
 

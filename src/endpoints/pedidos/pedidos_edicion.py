@@ -10,7 +10,7 @@ from fastapi.responses import JSONResponse
 
 from src.database.connection import get_db_connection_context
 from src.database.repositories.pedido_repository import PedidoRepository
-from src.database.pedido_estados import ESTADO_GESTIONAR_PEDIDO
+from src.database.pedido_estados import ESTADO_GESTIONAR_PEDIDO, ESTADO_CONFIRMADO_POR_PRODUCCION
 from src.security.jwt_auth import verify_jwt_token
 from src.models import (
     ActualizarCostoRequest,
@@ -29,7 +29,10 @@ logger = logging.getLogger(__name__)
 
 DESC_NUMERO_PEDIDO = "Número del pedido o pedido_id (UUID); el backend acepta ambos."
 DESC_PEDIDO_DETALLE_ID = "UUID del detalle del pedido"
-MSG_ERROR_ESTADO_NO_EDITABLE = "Solo se pueden editar COSTO UNIT., TOTAL y COMENTARIO cuando el pedido está en estado GESTIONAR PEDIDO."
+MSG_ERROR_ESTADO_NO_EDITABLE = "Solo se pueden editar COSTO UNIT., TOTAL y COMENTARIO cuando el pedido está en estado GESTIONAR PEDIDO o CONFIRMADO POR PRODUCCIÓN."
+# Req. 1.8: odcsap.view hereda en CONFIRMADO POR PRODUCCIÓN (23) las mismas
+# funcionalidades de edición que tenía en GESTIONAR PEDIDO (3).
+_ESTADOS_EDITABLES_COSTO_TOTAL_COMENTARIO = frozenset({ESTADO_GESTIONAR_PEDIDO, ESTADO_CONFIRMADO_POR_PRODUCCION})
 
 
 def _get_pedido_por_identificador(repo: PedidoRepository, identificador: str) -> Optional[Dict]:
@@ -61,7 +64,7 @@ def _validar_pedido_editable(repo: PedidoRepository, numero_pedido: str) -> Dict
         estado_id = int(estado_id) if estado_id is not None else None
     except (TypeError, ValueError):
         estado_id = None
-    if estado_id != ESTADO_GESTIONAR_PEDIDO:
+    if estado_id not in _ESTADOS_EDITABLES_COSTO_TOTAL_COMENTARIO:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
                           detail={"error": "estado_no_editable",
                                  "message": MSG_ERROR_ESTADO_NO_EDITABLE})
@@ -289,7 +292,7 @@ def register_edicion_endpoints(app: FastAPI):
         request_body: ActualizarCostoRequest = Body(..., description="Datos del costo a actualizar"),
         user: Dict = Depends(verify_jwt_token),
     ):
-        """Actualiza el costo unitario de una línea de detalle del pedido. Cualquier usuario autenticado puede editar (estado GESTIONAR PEDIDO). Devuelve totales recalculados."""
+        """Actualiza el costo unitario de una línea de detalle del pedido. Cualquier usuario autenticado puede editar (estado GESTIONAR PEDIDO o CONFIRMADO POR PRODUCCIÓN). Devuelve totales recalculados."""
         return _logic_actualizar_costo_detalle(numero_pedido, pedido_detalle_id, request_body, user)
     
     @app.patch("/api/pedidos/{numero_pedido}/detalle/{pedido_detalle_id}/total", tags=["Pedidos - Edición"])
@@ -299,7 +302,7 @@ def register_edicion_endpoints(app: FastAPI):
         request_body: ActualizarTotalRequest = Body(..., description="Datos del total a actualizar"),
         user: Dict = Depends(verify_jwt_token),
     ):
-        """Actualiza el total de una línea de detalle del pedido. Cualquier usuario autenticado puede editar (estado GESTIONAR PEDIDO). Devuelve totales recalculados."""
+        """Actualiza el total de una línea de detalle del pedido. Cualquier usuario autenticado puede editar (estado GESTIONAR PEDIDO o CONFIRMADO POR PRODUCCIÓN). Devuelve totales recalculados."""
         return _logic_actualizar_total_detalle(numero_pedido, pedido_detalle_id, request_body, user)
     
     @app.patch("/api/pedidos/{numero_pedido}/detalle/{pedido_detalle_id}/comentario", tags=["Pedidos - Edición"])
