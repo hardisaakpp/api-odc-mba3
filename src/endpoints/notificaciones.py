@@ -37,14 +37,14 @@ def _resolver_permisos_notificaciones(user: Dict, username: str) -> list:
     # Filtrar solo permisos relevantes para notificaciones
     relevant_permissions = [
         p for p in permissions
-        if p in ("odcsap.view", "mabel.view")
+        if p in ("odcsap.view", "mabel.view", "produccion-elrayo.view")
     ]
 
     if not relevant_permissions:
-        # Si el usuario es Admin, suscribir a ambos canales
+        # Si el usuario es Admin, suscribir a todos los canales
         roles = user.get("roles", [])
         if "Admin" in roles:
-            return ["odcsap.view", "mabel.view"]
+            return ["odcsap.view", "mabel.view", "produccion-elrayo.view"]
         logger.warning(
             f"📢 Usuario {username} sin permisos relevantes para notificaciones"
         )

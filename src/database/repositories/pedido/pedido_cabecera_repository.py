@@ -25,6 +25,8 @@ from src.database.pedido_estados import (
     ESTADO_FINALIZADO,
     ESTADO_CANCELADO,
     ESTADO_CANCELADO_POR_EL_RAYO,
+    ESTADO_CONFIRMADO_POR_PRODUCCION,
+    ESTADO_PRODUCCION_POSPUESTA,
     estado_id_desde_legacy,
 )
 
@@ -1218,16 +1220,28 @@ class PedidoCabeceraRepository:
         """Condición y parámetros para la vista de redistribución.
 
         Incluye solo pedidos con estado >= 4 (CONFIRMADO POR EL RAYO) y excluye
-        DESPACHAR_Y_FACTURAR (17), FINALIZADO (18), CANCELADO (19) y CANCELADO POR EL RAYO (20).
+        DESPACHAR_Y_FACTURAR (17), FINALIZADO (18), CANCELADO (19), CANCELADO POR
+        EL RAYO (20), CONFIRMADO POR PRODUCCION (23) y PRODUCCION POSPUESTA (22).
+        Estos 2 últimos tienen id numérico > 4 pero ocurren ANTES en el flujo real
+        (entre GESTIONAR_PEDIDO y REDISTRIBUCION); sin la exclusión explícita, el
+        ">=" los deja pasar aunque el pedido todavía no llegó a redistribución.
         """
         if tiene_estado_id:
             return (
-                ["p.estado_id >= ?", "p.estado_id NOT IN (?, ?, ?, ?)"],
-                [ESTADO_REDISTRIBUCION, ESTADO_DESPACHAR_Y_FACTURAR, ESTADO_FINALIZADO, ESTADO_CANCELADO, ESTADO_CANCELADO_POR_EL_RAYO],
+                ["p.estado_id >= ?", "p.estado_id NOT IN (?, ?, ?, ?, ?, ?)"],
+                [
+                    ESTADO_REDISTRIBUCION,
+                    ESTADO_DESPACHAR_Y_FACTURAR,
+                    ESTADO_FINALIZADO,
+                    ESTADO_CANCELADO,
+                    ESTADO_CANCELADO_POR_EL_RAYO,
+                    ESTADO_CONFIRMADO_POR_PRODUCCION,
+                    ESTADO_PRODUCCION_POSPUESTA,
+                ],
             )
         # Fallback para bases de datos sin columna estado_id
         return (
-            ["p.estado NOT IN (N'BORRADOR', N'NUEVO_PEDIDO', N'GESTIONAR_PEDIDO', N'PENDIENTE_CONFIRMACION_PROVEEDOR', N'DESPACHAR_Y_FACTURAR', N'DESPACHAR Y FACTURAR', N'FINALIZADO', N'CANCELADO', N'CANCELADO POR EL RAYO')"],
+            ["p.estado NOT IN (N'BORRADOR', N'NUEVO_PEDIDO', N'GESTIONAR_PEDIDO', N'PENDIENTE_CONFIRMACION_PROVEEDOR', N'DESPACHAR_Y_FACTURAR', N'DESPACHAR Y FACTURAR', N'FINALIZADO', N'CANCELADO', N'CANCELADO POR EL RAYO', N'CONFIRMADO POR PRODUCCION', N'CONFIRMADO_POR_PRODUCCION', N'PRODUCCION POSPUESTA', N'PRODUCCION_POSPUESTA')"],
             [],
         )
 
@@ -1409,7 +1423,9 @@ class PedidoCabeceraRepository:
             fecha_desde, fecha_hasta, proveedor_nombre, numero_pedido, creado_por, limit, offset
             excluir_borrador: si True, excluye pedidos en estado BORRADOR (estado_id=1)
             solo_redistribucion: si True, solo incluye pedidos aptos para redistribución
-                (estado_id >= 4 "CONFIRMADO POR EL RAYO" y excluye CANCELADO (19) y CANCELADO POR EL RAYO (20))
+                (estado_id >= 4 "CONFIRMADO POR EL RAYO", excluyendo CANCELADO (19),
+                CANCELADO POR EL RAYO (20), CONFIRMADO POR PRODUCCION (23) y
+                PRODUCCION POSPUESTA (22) — ver `_filtro_redistribucion`)
             solo_pendientes_accion: si True, solo estados que requieren acción del proveedor
             restringir_produccion_el_rayo: si True, solo incluye NUEVO_PEDIDO y GESTIONAR_PEDIDO
                 (req. 1.8, perfil Producción El Rayo); se combina (AND) con `estado` si también se indica

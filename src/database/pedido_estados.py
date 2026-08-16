@@ -61,9 +61,11 @@ ESTADO_INICIAL = ESTADO_BORRADOR
 # - Nuevo Pedido (2): notifica a EL RAYO
 ESTADOS_PUEDE_DESCARTAR = (ESTADO_BORRADOR, ESTADO_NUEVO_PEDIDO)
 
-# Estados en los que se permite "Cancelar Pedido" por EL RAYO (Detalle del Pedido): solo Gestionar Pedido.
+# Estados en los que se permite "Cancelar Pedido" por EL RAYO (Detalle del Pedido): solo Confirmado
+# por Producción, una vez que Producción ya confirmó el pedido (req. 1.8 segunda fase). Exclusivo
+# de odcsap.view (Administración El Rayo); Producción y MABEL ya no pueden usar este botón.
 # Cambia estado a CANCELADO POR EL RAYO (20) en lugar de eliminar de la BD.
-ESTADOS_PUEDE_CANCELAR_POR_EL_RAYO = (ESTADO_GESTIONAR_PEDIDO,)
+ESTADOS_PUEDE_CANCELAR_POR_EL_RAYO = (ESTADO_CONFIRMADO_POR_PRODUCCION,)
 
 # "Cancelar Pedido" (Redistribución): deshabilitar desde Confirmado redistribución (10) en adelante.
 # El botón debe estar habilitado solo cuando estado_id < ESTADO_PEDIDO_CONFIRMADO (10).

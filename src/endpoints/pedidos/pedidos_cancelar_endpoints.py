@@ -62,6 +62,26 @@ async def _notificar_realtime(actor_permission, actor_username, title, message, 
         logger.warning(f"⚠️ Error al enviar notificacion en tiempo real: {notif_err}")
 
 
+async def _notificar_realtime_permiso(target_permission, title, message, metadata):
+    """Envía una notificación en tiempo real a un permiso específico (best-effort).
+
+    A diferencia de _notificar_realtime (notify_by_actor), no depende del mapeo
+    de "permiso opuesto" (odcsap.view <-> mabel.view): produccion-elrayo.view no
+    está en ese mapeo, así que para notificarlo hay que apuntarle directamente.
+    """
+    try:
+        from src.utils.notification_manager import notification_manager, NotificationType
+        await notification_manager.notify(
+            target_permission=target_permission,
+            title=title,
+            message=message,
+            notification_type=NotificationType.WARNING,
+            metadata=metadata,
+        )
+    except Exception as notif_err:
+        logger.warning(f"⚠️ Error al enviar notificacion en tiempo real a {target_permission}: {notif_err}")
+
+
 def _notificar_cancelado_email(pedido_id, numero_pedido, user):
     """Envía el correo de cancelación a EL RAYO (best-effort)."""
     try:
@@ -73,6 +93,19 @@ def _notificar_cancelado_email(pedido_id, numero_pedido, user):
         )
     except Exception as notif_err:
         logger.warning(f"⚠️ No se pudo enviar notificacion de pedido cancelado a EL RAYO: {notif_err}")
+
+
+def _notificar_cancelado_por_el_rayo_email(pedido_id, numero_pedido, user):
+    """Envía el correo de cancelación a MABEL TRADING cuando El Rayo cancela (best-effort)."""
+    try:
+        from src.utils.email_notifier import send_pedido_cancelado_por_el_rayo_notification
+        send_pedido_cancelado_por_el_rayo_notification(
+            pedido_id=pedido_id,
+            numero_pedido=numero_pedido,
+            usuario_id=user.get("username") or user.get("sub"),
+        )
+    except Exception as notif_err:
+        logger.warning(f"⚠️ No se pudo enviar notificacion de pedido cancelado por El Rayo a MABEL TRADING: {notif_err}")
 
 
 async def _notificar_descartado(pedido_id, numero_pedido, estado_id, user):
@@ -289,7 +322,7 @@ async def _cancelar_pedido_por_el_rayo_handler(request, pedido_id, user):
         with get_db_connection_context() as conn:
             repo = PedidoRepository(conn)
 
-            # Validar que se puede cancelar (solo estado GESTIONAR PEDIDO)
+            # Validar que se puede cancelar (solo estado CONFIRMADO POR PRODUCCION)
             ok, error_code, message = repo.validar_puede_eliminar(pedido_id)
             _raise_si_no_puede_cancelar_por_rayo(ok, error_code, message)
 
@@ -305,6 +338,9 @@ async def _cancelar_pedido_por_el_rayo_handler(request, pedido_id, user):
                 audit_context=audit,
             )
 
+            # Notificar a MABEL TRADING por correo (best-effort)
+            _notificar_cancelado_por_el_rayo_email(pedido_id, numero_pedido, user)
+
             # 📢 Notificacion: otros EL RAYO + MABEL (excl. autor)
             _username = user.get("username") or user.get("sub") or "unknown"
             await _notificar_realtime(
@@ -312,6 +348,14 @@ async def _cancelar_pedido_por_el_rayo_handler(request, pedido_id, user):
                 actor_username=_username,
                 title="Pedido cancelado por EL RAYO",
                 message=f"El pedido {numero_pedido or pedido_id} ha sido cancelado por EL RAYO.",
+                metadata={"pedido_id": pedido_id, "numero_pedido": numero_pedido, "accion": "pedido_cancelado_por_el_rayo"},
+            )
+
+            # 📢 Notificacion a Produccion El Rayo: ella habia confirmado este pedido
+            await _notificar_realtime_permiso(
+                target_permission=_PERM_PRODUCCION_ELRAYO,
+                title="El Rayo canceló un pedido que confirmaste",
+                message=f"El pedido {numero_pedido or pedido_id}, que Producción había confirmado, fue cancelado por Administración El Rayo.",
                 metadata={"pedido_id": pedido_id, "numero_pedido": numero_pedido, "accion": "pedido_cancelado_por_el_rayo"},
             )
 
@@ -401,8 +445,9 @@ def register_pedidos_cancelar_endpoints(app: FastAPI):
            - Borra el pedido **y** envia correo a EL RAYO.
            - Permitido solo en estados **anteriores** a Confirmado redistribucion (estado_id < 10).
 
-        **Nota:** Para eliminar desde **Detalle del Pedido** (estado GESTIONAR PEDIDO),
-        usar el endpoint `/api/pedidos/{pedido_id}/eliminar` en su lugar.
+        **Nota:** Para cancelar desde **Detalle del Pedido** (estado CONFIRMADO POR PRODUCCION),
+        usar el endpoint `/api/pedidos/{pedido_id}/cancelar-por-el-rayo` en su lugar
+        (ya no borra el pedido: cambia su estado a CANCELADO POR EL RAYO).
 
         **Restricciones:**
         - No se permite si el pedido tiene respuesta de proveedor, redistribucion confirmada u orden de compra
@@ -420,26 +465,32 @@ def register_pedidos_cancelar_endpoints(app: FastAPI):
         request: Request,
         pedido_id: str = Path(..., description="UUID del pedido a cancelar"),
         user: Dict = Depends(verify_jwt_token),
-        _: None = Depends(require_any_permission([_PERM_ODCSAP, _PERM_MABEL, _PERM_PRODUCCION_ELRAYO]))
+        _: None = Depends(require_permission(_PERM_ODCSAP))
     ):
         """
         Cancelar un pedido desde la interfaz de Detalle del Pedido (boton "Cancelar Pedido").
 
         **Uso exclusivo:**
         - Interfaz: **Detalle del Pedido** (`/pedidos/{pedido_id}`)
-        - Estado permitido: **GESTIONAR PEDIDO (3)** unicamente
-        - Comportamiento: Cambia estado a CANCELADO POR EL RAYO (20) y notifica a MABEL TRADING
+        - Permiso: **odcsap.view** (Administracion El Rayo) unicamente
+        - Estado permitido: **CONFIRMADO POR PRODUCCION (23)** unicamente, una vez que
+          Produccion ya confirmo el pedido (req. 1.8 segunda fase)
+        - Comportamiento: Cambia estado a CANCELADO POR EL RAYO (20) y notifica a MABEL
+          TRADING y a Produccion El Rayo (ella habia confirmado el pedido)
 
         **Notificaciones:**
-        - ✅ Se envia notificacion en tiempo real a MABEL TRADING
+        - ✅ Se envia correo a MABEL TRADING y a Produccion El Rayo ("Pedido Cancelado
+          por El Rayo", catalogo MABEL_TRADING + PRODUCCION_ELRAYO)
+        - ✅ Se envia notificacion en tiempo real a MABEL TRADING y a Produccion El Rayo
 
         **Diferencia con "Cancelar Pedido" de MABEL:**
         - "Cancelar Pedido" (MABEL): Desde Redistribucion, estados < 10, cambia a CANCELADO (19)
-        - "Cancelar Pedido" (EL RAYO): Desde Detalle, estado 3 solamente, cambia a CANCELADO POR EL RAYO (20)
+        - "Cancelar Pedido" (EL RAYO): Desde Detalle, estado 23 (Confirmado por Produccion)
+          solamente, cambia a CANCELADO POR EL RAYO (20)
 
         **Respuestas:**
         - **200**: Pedido cancelado correctamente
-        - **400**: Pedido no esta en estado GESTIONAR PEDIDO (3)
+        - **400**: Pedido no esta en estado CONFIRMADO POR PRODUCCION (23)
         - **404**: Pedido no encontrado
         """
         return await _cancelar_pedido_por_el_rayo_handler(request, pedido_id, user)

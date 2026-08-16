@@ -159,7 +159,9 @@ class PedidoRepository:
 
         Args:
             solo_redistribucion: si True, solo incluye pedidos aptos para redistribución
-                (estado_id >= 4 "CONFIRMADO POR EL RAYO" y excluye CANCELADO (19) y CANCELADO POR EL RAYO (20))
+                (estado_id >= 4 "CONFIRMADO POR EL RAYO", excluyendo CANCELADO (19),
+                CANCELADO POR EL RAYO (20), CONFIRMADO POR PRODUCCION (23) y
+                PRODUCCION POSPUESTA (22))
             restringir_produccion_el_rayo: si True, solo incluye NUEVO_PEDIDO y GESTIONAR_PEDIDO
                 (req. 1.8, perfil Producción El Rayo)
             excluir_estados_produccion_el_rayo: si True, excluye NUEVO_PEDIDO y GESTIONAR_PEDIDO
@@ -376,29 +378,29 @@ class PedidoRepository:
 
     def validar_puede_eliminar(self, pedido_id: str) -> tuple[bool, str, str]:
         """
-        Valida si un pedido puede eliminarse con el botón "Eliminar Pedido" (Detalle del Pedido).
-        
-        Solo permite eliminar si:
-        - El pedido está en estado GESTIONAR PEDIDO (3)
+        Valida si un pedido puede cancelarse con el botón "Cancelar Pedido" de EL RAYO (Detalle del Pedido).
+
+        Solo permite cancelar si:
+        - El pedido está en estado CONFIRMADO POR PRODUCCION (23)
         - No tiene respuesta de proveedor, redistribución confirmada u orden de compra
-        
+
         Returns:
-            Tupla: (puede_eliminar, codigo_error, mensaje_error)
+            Tupla: (puede_cancelar, codigo_error, mensaje_error)
         """
         pedido_completo = self.cabecera_repo.get_pedido_completo(pedido_id)
         if not pedido_completo:
             return (False, "not_found", "Pedido no encontrado.")
-        
+
         # Obtener estado_id de la cabecera
         cabecera = pedido_completo.get("cabecera", {})
         estado_id = cabecera.get("estado_id")
-        
-        # Validar estado: solo GESTIONAR PEDIDO (3)
+
+        # Validar estado: solo CONFIRMADO POR PRODUCCION (23)
         if estado_id not in ESTADOS_PUEDE_CANCELAR_POR_EL_RAYO:
             return (
                 False,
                 "estado_no_permitido",
-                "El pedido no puede eliminarse porque no está en estado Gestionar Pedido.",
+                "El pedido no puede cancelarse porque no está en estado Confirmado por Producción.",
             )
         
         # Validar que no tenga datos asociados

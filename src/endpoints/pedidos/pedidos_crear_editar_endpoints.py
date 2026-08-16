@@ -495,6 +495,21 @@ async def _enviar_pedido_handler(pedido_id, user):
         except Exception as notif_err:
             logger.warning(f"⚠️ Error al enviar notificacion en tiempo real: {notif_err}")
 
+        # 📢 Notificacion a Producción El Rayo (req. 1.8): notify_by_actor no lo cubre,
+        # ya que su mapeo de "permiso opuesto" solo conoce mabel.view<->odcsap.view.
+        try:
+            from src.utils.notification_manager import notification_manager, NotificationType
+            numero_pedido = resultado.get("numero_pedido", "")
+            await notification_manager.notify(
+                target_permission=_PERM_PRODUCCION_ELRAYO,
+                title="Nuevo pedido de MABEL TRADING",
+                message=f"El pedido {numero_pedido} fue enviado por MABEL TRADING y está disponible para gestión.",
+                notification_type=NotificationType.INFO,
+                metadata={"pedido_id": pedido_id, "numero_pedido": numero_pedido, "accion": "pedido_enviado"},
+            )
+        except Exception as notif_err:
+            logger.warning(f"⚠️ Error al enviar notificacion en tiempo real a Producción El Rayo: {notif_err}")
+
         return JSONResponse(
             status_code=status.HTTP_200_OK,
             content=resultado
