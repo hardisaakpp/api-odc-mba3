@@ -42,11 +42,11 @@ _CORREO_OC_PROVEEDOR = "Orden de Compra Generada"
 _CORREO_DESPACHO = "OC y Solicitudes de Transferencia - Listo para Despacho"
 _CORREO_OC_ST_ERROR = "Error en OC y Solicitudes de Transferencia"
 _CORREO_PLANTILLA = "Plantilla Excel Procesada (Pedido Enviado)"
-_CORREO_PEDIDO_CANCELADO = "Pedido Cancelado"
+_CORREO_PEDIDO_CANCELADO = "Pedido Cancelado por Mabel"
 _CORREO_PEDIDO_DESCARTADO = "Pedido Descartado"
 _CORREO_REDISTRIBUCION_CONFIRMADA = "Redistribución Confirmada por MABEL TRADING"
-_CORREO_PEDIDO_ELIMINADO = "Pedido Eliminado"
 _CORREO_PEDIDO_CONFIRMADO_PRODUCCION = "Pedido Confirmado por Producción"
+_CORREO_PEDIDO_CANCELADO_POR_EL_RAYO = "Pedido Cancelado por El Rayo"
 
 
 # ─── Helpers privados ────────────────────────────────────────────────────────
@@ -926,28 +926,35 @@ def _build_redistribucion_confirmada_email(pedido_id, numero_pedido, usuario_mab
     return subject, body_html
 
 
-def _build_pedido_eliminado_email(pedido_id, numero_pedido, usuario_id, fecha_ejecucion):
-    """Construye (subject, body_html) para 'Pedido Eliminado' (MABEL_TRADING)."""
-    from src.utils.email_template import build_email, info_section, warning_section, paragraph
+def _build_pedido_cancelado_por_el_rayo_email(pedido_id, numero_pedido, usuario_id, fecha_ejecucion):
+    """Construye (subject, body_html) para 'Pedido Cancelado por El Rayo' (MABEL_TRADING)."""
+    from src.utils.email_template import build_email, info_section, paragraph, badge_html
 
     body_html = build_email(
-        title="Pedido Eliminado Exitosamente",
+        title="Pedido Cancelado por El Rayo",
         subtitle=f"Pedido: {numero_pedido or pedido_id}",
         sections=[
-            paragraph("Se ha eliminado un pedido desde la interfaz de Detalle del Pedido."),
-            info_section("Informaci&oacute;n del Pedido Eliminado", [
+            paragraph(
+                "Administraci&oacute;n El Rayo cancel&oacute; este pedido desde Detalle del "
+                "Pedido, luego de que Producci&oacute;n ya lo hab&iacute;a confirmado. El "
+                f"estado ha cambiado a {badge_html('CANCELADO POR EL RAYO', '#ffebee', '#c62828')}."
+            ),
+            info_section(_SECCION_INFO_PEDIDO, [
                 (_LABEL_NUMERO_PEDIDO, numero_pedido or "N/A"),
                 (_LABEL_PEDIDO_ID, pedido_id),
-                ("Usuario que elimin&oacute;", usuario_id or "N/A"),
-                ("Estado al eliminar", "Gestionar Pedido"),
-            ], accent="green"),
-            warning_section("Nota Importante",
-                '<p style="margin:0;color:#5d4037;font-size:14px;">Esta es una operaci&oacute;n irreversible. Si necesita crear el pedido nuevamente, deber&aacute; cargarlo desde cero.</p>'),
+                ("Usuario de El Rayo que cancel&oacute;", usuario_id or "N/A"),
+                ("Nuevo Estado", badge_html("CANCELADO POR EL RAYO", "#ffebee", "#c62828")),
+            ], accent="red"),
+            paragraph(
+                "El pedido permanece en el sistema con estado CANCELADO POR EL RAYO y no "
+                "ser&aacute; procesado.",
+                italic=True,
+            ),
         ],
-        accent="green",
+        accent="red",
         timestamp=fecha_ejecucion,
     )
-    subject = f"Pedido Eliminado - {numero_pedido or pedido_id}"
+    subject = f"Pedido Cancelado por El Rayo - {numero_pedido or pedido_id}"
     return subject, body_html
 
 
@@ -1916,23 +1923,29 @@ Fecha y Hora: {fecha_ejecucion.strftime('%Y-%m-%d %H:%M:%S')}
         return False
 
 
-def send_pedido_eliminado_mabel_notification(
+def send_pedido_cancelado_por_el_rayo_notification(
     pedido_id: str,
     numero_pedido: Optional[str] = None,
     usuario_id: Optional[str] = None,
     fecha_ejecucion: Optional[datetime] = None
 ) -> bool:
     """
-    Envía notificación a MABEL TRADING cuando se elimina un pedido desde Detalle del Pedido.
+    Envía notificación a MABEL TRADING y a Producción El Rayo cuando Administración
+    El Rayo cancela un pedido desde Detalle del Pedido (cambia estado a CANCELADO POR
+    EL RAYO). Producción se notifica porque ella misma había confirmado el pedido.
 
-    Se usa al procesar DELETE /api/pedidos/{pedido_id}/eliminar (botón "Eliminar Pedido").
-    DESTINATARIO: EMAIL_MABEL_TRADING (Usuario MABEL TRADING)
+    Se usa al procesar POST /api/pedidos/{pedido_id}/cancelar-por-el-rayo (botón
+    "Cancelar Pedido", solo disponible en estado CONFIRMADO POR PRODUCCION, exclusivo
+    de odcsap.view).
+    DESTINATARIOS: quienes estén vinculados al correo "Pedido Cancelado por El Rayo"
+    en Personas y Correos (catálogo consolidado en una sola fila MABEL_TRADING;
+    incluye tanto a MABEL TRADING como a Producción El Rayo).
 
     Args:
-        pedido_id: UUID del pedido eliminado
+        pedido_id: UUID del pedido cancelado
         numero_pedido: Número del pedido (opcional, para identificación)
-        usuario_id: Usuario que eliminó el pedido (MABEL TRADING)
-        fecha_ejecucion: Fecha y hora de la eliminación (por defecto ahora)
+        usuario_id: Usuario de El Rayo que canceló el pedido
+        fecha_ejecucion: Fecha y hora de la cancelación (por defecto ahora)
 
     Returns:
         True si el email se envió correctamente, False en caso contrario
@@ -1945,26 +1958,28 @@ def send_pedido_eliminado_mabel_notification(
         fecha_ejecucion = ahora_naive()
 
     try:
-        recipients: list[str] = get_destinatarios_por_correo("MABEL_TRADING", _CORREO_PEDIDO_ELIMINADO)
+        recipients: list[str] = get_destinatarios_por_correo(
+            "MABEL_TRADING", _CORREO_PEDIDO_CANCELADO_POR_EL_RAYO
+        )
 
         if not recipients:
-            logger.warning("⚠️ No hay destinatarios de MABEL TRADING configurados")
+            logger.warning("⚠️ No hay destinatarios configurados para pedido cancelado por El Rayo")
             return False
 
         from src.utils.email_template import create_email_message
 
-        subject, body_html = _build_pedido_eliminado_email(pedido_id, numero_pedido, usuario_id, fecha_ejecucion)
+        subject, body_html = _build_pedido_cancelado_por_el_rayo_email(pedido_id, numero_pedido, usuario_id, fecha_ejecucion)
 
-        body_text = f"""Pedido Eliminado Exitosamente - {numero_pedido or pedido_id}
+        body_text = f"""Pedido Cancelado por El Rayo - {numero_pedido or pedido_id}
 {'=' * 40}
 
 - Numero de Pedido: {numero_pedido or 'N/A'}
 - Pedido ID: {pedido_id}
-- Usuario que elimino: {usuario_id or 'N/A'}
+- Usuario de El Rayo que cancelo: {usuario_id or 'N/A'}
 - Fecha y hora: {fecha_ejecucion.strftime('%Y-%m-%d %H:%M:%S')}
-- Estado al eliminar: Gestionar Pedido
+- Nuevo Estado: CANCELADO POR EL RAYO
 
-Nota: Operacion irreversible. Para crear el pedido nuevamente, cargarlo desde cero.
+El pedido permanece en el sistema con estado CANCELADO POR EL RAYO y no sera procesado.
 """
 
         msg = create_email_message(
@@ -1976,9 +1991,9 @@ Nota: Operacion irreversible. Para crear el pedido nuevamente, cargarlo desde ce
 
         send_smtp_message(msg, recipients)
 
-        logger.info(f"✅ Notificación de pedido eliminado enviada a MABEL TRADING {', '.join(recipients)} (Pedido: {numero_pedido or pedido_id})")
+        logger.info(f"✅ Notificación de pedido cancelado por El Rayo enviada a {', '.join(recipients)} (Pedido: {numero_pedido or pedido_id})")
         return True
 
     except Exception as e:
-        logger.error(f"❌ Error al enviar notificación de pedido eliminado a MABEL TRADING: {e}", exc_info=True)
+        logger.error(f"❌ Error al enviar notificación de pedido cancelado por El Rayo: {e}", exc_info=True)
         return False

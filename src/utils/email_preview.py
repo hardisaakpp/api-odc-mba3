@@ -18,6 +18,7 @@ from typing import Callable, Dict, Optional, Tuple
 
 from src.utils.timezone import ahora_naive
 from src.utils import email_notifier as _en
+from src.utils import email_notifier_pedido as _enp
 
 _FECHA_EJEMPLO = ahora_naive()
 
@@ -169,15 +170,21 @@ def _preview_redistribucion_confirmada() -> Tuple[str, str]:
     )
 
 
-def _preview_pedido_eliminado() -> Tuple[str, str]:
-    return _en._build_pedido_eliminado_email(
+def _preview_pedido_confirmado_produccion() -> Tuple[str, str]:
+    return _en._build_pedido_confirmado_produccion_email(
         _PEDIDO_ID_EJEMPLO, _NUMERO_PEDIDO_EJEMPLO, _USUARIO_EJEMPLO, _FECHA_EJEMPLO
     )
 
 
-def _preview_pedido_confirmado_produccion() -> Tuple[str, str]:
-    return _en._build_pedido_confirmado_produccion_email(
+def _preview_pedido_cancelado_por_el_rayo() -> Tuple[str, str]:
+    return _en._build_pedido_cancelado_por_el_rayo_email(
         _PEDIDO_ID_EJEMPLO, _NUMERO_PEDIDO_EJEMPLO, _USUARIO_EJEMPLO, _FECHA_EJEMPLO
+    )
+
+
+def _preview_pedido_confirmado_por_el_rayo() -> Tuple[str, str]:
+    return _enp._build_pedido_confirmado_por_el_rayo_email(
+        _PEDIDO_ID_EJEMPLO, _NUMERO_PEDIDO_EJEMPLO, _USUARIO_EJEMPLO, 3, _FECHA_EJEMPLO
     )
 
 
@@ -186,8 +193,9 @@ def _preview_pedido_confirmado_produccion() -> Tuple[str, str]:
 _DISPATCH: Dict[Tuple[str, str], Callable[[], Tuple[str, str]]] = {
     ("PRODUCCION_ELRAYO", "Plantilla Excel Procesada (Pedido Enviado)"): _preview_plantilla,
     ("OPERACIONES", "Pedido Descartado"): _preview_pedido_descartado,
-    ("MABEL_TRADING", "Pedido Eliminado"): _preview_pedido_eliminado,
-    ("OPERACIONES", "Pedido Cancelado"): _preview_pedido_cancelado,
+    ("OPERACIONES", "Pedido Cancelado por Mabel"): _preview_pedido_cancelado,
+    ("MABEL_TRADING", "Pedido Cancelado por El Rayo"): _preview_pedido_cancelado_por_el_rayo,
+    ("MABEL_TRADING", "Pedido Confirmado por El Rayo"): _preview_pedido_confirmado_por_el_rayo,
     ("OPERACIONES", "Pedido Confirmado por Producción"): _preview_pedido_confirmado_produccion,
     ("OPERACIONES", "Redistribución Confirmada por MABEL TRADING"): _preview_redistribucion_confirmada,
     ("OPERACIONES", "Orden de Compra Generada"): _preview_oc_proveedor,

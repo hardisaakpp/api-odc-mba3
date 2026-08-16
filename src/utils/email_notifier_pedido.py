@@ -29,6 +29,45 @@ _CORREO_PEDIDO_DESPACHAR_Y_FACTURAR = "Pedido Despachar y Facturar"
 _CORREO_PEDIDO_FINALIZADO = "Pedido Finalizado"
 
 
+def _build_pedido_confirmado_por_el_rayo_email(pedido_id, numero_pedido, usuario_rayo, detalles_modificados, fecha_ejecucion):
+    """Construye (subject, body_html) para 'Pedido Confirmado por El Rayo' (MABEL_TRADING)."""
+    base_url = os.getenv("FRONTEND_URL", _DEFAULT_FRONTEND_URL)
+    numero_pedido_encoded = numero_pedido.replace(" ", "%20")
+    url_pedido = f"{base_url}/mba3-consultas/pedidos/{numero_pedido_encoded}"
+
+    from src.utils.email_template import (
+        build_email, info_section, success_badge_section,
+        button_section, paragraph, badge_html,
+    )
+
+    info_items = [
+        (_LABEL_NUMERO_PEDIDO, numero_pedido),
+        (_LABEL_PEDIDO_ID, pedido_id),
+    ]
+    if usuario_rayo:
+        info_items.append(("Usuario El Rayo", usuario_rayo))
+    info_items.extend([
+        ("Detalles Modificados", str(detalles_modificados)),
+        ("Estado", badge_html("CONFIRMADO", "#e8f5e9", "#2e7d32")),
+    ])
+
+    body_html = build_email(
+        title="Pedido Confirmado por El Rayo",
+        subtitle=f"Pedido: {numero_pedido}",
+        sections=[
+            success_badge_section("EL RAYO ha confirmado el pedido exitosamente"),
+            paragraph("Se ha procesado la confirmaci&oacute;n del pedido y se ha creado la respuesta del proveedor correspondiente."),
+            info_section(_INFO_PEDIDO_TITLE, info_items, accent="green"),
+            button_section(_LABEL_VER_PEDIDO, url_pedido, accent="green"),
+            paragraph("El pedido est&aacute; ahora listo para que MABEL TRADING proceda con la redistribuci&oacute;n y ajustes necesarios.", italic=True),
+        ],
+        accent="green",
+        timestamp=fecha_ejecucion,
+    )
+    subject = f"Pedido Confirmado por El Rayo - {numero_pedido}"
+    return subject, body_html
+
+
 def send_rayo_confirmacion_notification(
     pedido_id: str,
     numero_pedido: str,
@@ -75,40 +114,15 @@ def send_rayo_confirmacion_notification(
             logger.warning(_MSG_SIN_DESTINATARIOS)
             return False
 
-        # Construir URL del pedido
+        from src.utils.email_template import create_email_message
+
+        subject, body_html = _build_pedido_confirmado_por_el_rayo_email(
+            pedido_id, numero_pedido, usuario_rayo, detalles_modificados, fecha_ejecucion
+        )
+
         base_url = os.getenv("FRONTEND_URL", _DEFAULT_FRONTEND_URL)
         numero_pedido_encoded = numero_pedido.replace(" ", "%20")
         url_pedido = f"{base_url}/mba3-consultas/pedidos/{numero_pedido_encoded}"
-
-        from src.utils.email_template import (
-            build_email, info_section, success_badge_section,
-            button_section, paragraph, badge_html, create_email_message,
-        )
-
-        info_items = [
-            (_LABEL_NUMERO_PEDIDO, numero_pedido),
-            (_LABEL_PEDIDO_ID, pedido_id),
-        ]
-        if usuario_rayo:
-            info_items.append(("Usuario El Rayo", usuario_rayo))
-        info_items.extend([
-            ("Detalles Modificados", str(detalles_modificados)),
-            ("Estado", badge_html("CONFIRMADO", "#e8f5e9", "#2e7d32")),
-        ])
-
-        body_html = build_email(
-            title="Pedido Confirmado por El Rayo",
-            subtitle=f"Pedido: {numero_pedido}",
-            sections=[
-                success_badge_section("EL RAYO ha confirmado el pedido exitosamente"),
-                paragraph("Se ha procesado la confirmaci&oacute;n del pedido y se ha creado la respuesta del proveedor correspondiente."),
-                info_section(_INFO_PEDIDO_TITLE, info_items, accent="green"),
-                button_section(_LABEL_VER_PEDIDO, url_pedido, accent="green"),
-                paragraph("El pedido est&aacute; ahora listo para que MABEL TRADING proceda con la redistribuci&oacute;n y ajustes necesarios.", italic=True),
-            ],
-            accent="green",
-            timestamp=fecha_ejecucion,
-        )
 
         body_text = f"""Pedido Confirmado por El Rayo - {numero_pedido}
 {'=' * 40}
@@ -126,7 +140,7 @@ Fecha y Hora: {fecha_ejecucion.strftime('%Y-%m-%d %H:%M:%S')}
 """
 
         msg = create_email_message(
-            subject=f"Pedido Confirmado por El Rayo - {numero_pedido}",
+            subject=subject,
             recipients=recipients,
             body_html=body_html,
             body_text=body_text,

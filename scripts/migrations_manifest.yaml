@@ -508,3 +508,58 @@ migrations:
     description: "Elimina la tabla notificacion_destinatarios (histórica desde la migración 626); se retira junto con la interfaz de administración 'Destinatarios por Tipo (histórico)' y sus endpoints/repositorio, ya superados por notificacion_persona_correo ('Personas y Correos')"
     category: "rollback"
     dependencies: ["629"]
+
+  - version: "631"
+    name: "fix_descripcion_correo_pedido_descartado"
+    file: "migrations/fix_descripcion_correo_pedido_descartado.sql"
+    description: "Corrige la descripción del correo 'Pedido Descartado' en el catálogo: se acota al único flujo real (descartar en Nuevo Pedido, desde Cargar Plantilla); se retira la mención a 'cancelar desde Redistribución' porque ese flujo usa el correo distinto 'Pedido Cancelado' y no invoca este endpoint desde el frontend. Solo texto, sin cambio de lógica"
+    category: "data"
+    dependencies: ["624"]
+
+  - version: "632"
+    name: "drop_correo_pedido_eliminado"
+    file: "migrations/drop_correo_pedido_eliminado.sql"
+    description: "Retira del catálogo el correo 'Pedido Eliminado' (MABEL_TRADING): correspondía al endpoint DELETE /api/pedidos/{pedido_id}/eliminar, reemplazado desde el commit 'cancelar pedido' (2026-02-12) por POST /api/pedidos/{pedido_id}/cancelar-por-el-rayo (ya no borra, cambia estado y notifica solo en tiempo real, sin correo). Se retira también send_pedido_eliminado_mabel_notification y su vista previa en el código, ya sin ningún endpoint que los invocara"
+    category: "data"
+    dependencies: ["624"]
+
+  - version: "633"
+    name: "reconciliar_schema_migrations_catalogo_correos"
+    file: "migrations/reconciliar_schema_migrations_catalogo_correos.sql"
+    description: "Registra en schema_migrations las versiones 624/625/627/628/632 (familia del catálogo de correos) que se aplicaron manualmente sin pasar por migration_runner.py, verificando en cada caso la evidencia real (tabla/columna/fila) antes de marcarlas; no toca datos de negocio. No reconcilia 626/629/630/631: verificado 2026-08-14 que siguen genuinamente pendientes (629 en particular: sin sus filas de catálogo, los 3 correos legacy de pedido no tienen destinatarios y no se están enviando). Sin dependencies a propósito: su función es justamente registrar 624 cuando el bookkeeping todavía no lo tiene, así que no puede depender de que 624 ya esté registrada"
+    category: "config"
+
+  - version: "634"
+    name: "add_correo_pedido_cancelado_por_el_rayo"
+    file: "migrations/add_correo_pedido_cancelado_por_el_rayo.sql"
+    description: "Correo 'Pedido Cancelado por El Rayo' (MABEL_TRADING) al catálogo, req. 1.8 segunda fase: se envía a MABEL TRADING cuando Administración El Rayo (odcsap.view) cancela un pedido desde Detalle del Pedido (botón 'Cancelar Pedido'), disponible solo en estado Confirmado por Producción (23). Reutiliza el orden_flujo=3 que dejó libre la migración 632 al retirar 'Pedido Eliminado', sin renumerar el resto del catálogo"
+    category: "data"
+    dependencies: ["624"]
+
+  - version: "635"
+    name: "reordenar_flujo_confirmado_produccion"
+    file: "migrations/reordenar_flujo_confirmado_produccion.sql"
+    description: "Reordena orden_flujo para reflejar la secuencia real al llegar a CONFIRMADO POR PRODUCCION (23): Pedido Confirmado por Producción pasa de 5 a 3 (se notifica primero a Administración El Rayo), Pedido Cancelado por El Rayo de 3 a 4 (solo si El Rayo decide cancelar después), Pedido Cancelado (Redistribución) de 4 a 5. orden_flujo >= 6 sin cambios. Solo reordena, sin cambiar descripciones ni lógica de envío"
+    category: "data"
+    dependencies: ["624", "628", "634"]
+
+  - version: "636"
+    name: "insertar_flujo_pedido_confirmado_por_el_rayo"
+    file: "migrations/insertar_flujo_pedido_confirmado_por_el_rayo.sql"
+    description: "Inserta 'Pedido Confirmado por El Rayo' (MABEL_TRADING, agregado sin orden_flujo en la migración 629) en orden_flujo=5: es la contraparte de éxito de 'Pedido Cancelado por El Rayo' (4) al llegar a Confirmado por Producción (23) — El Rayo cancela o confirma. Recorre +1 los correos desde Pedido Cancelado (Redistribución) en adelante. Guardado con IF NOT EXISTS para ser seguro de repetir"
+    category: "data"
+    dependencies: ["624", "629", "635"]
+
+  - version: "637"
+    name: "add_produccion_elrayo_a_correo_cancelado_por_el_rayo"
+    file: "migrations/add_produccion_elrayo_a_correo_cancelado_por_el_rayo.sql"
+    description: "'Pedido Cancelado por El Rayo' también notifica a Producción El Rayo (fue quien confirmó el pedido originalmente), no solo a MABEL_TRADING: agrega fila PRODUCCION_ELRAYO en orden_flujo=5 (mismo patrón de doble audiencia que 'OC y ST Despacho'), actualiza la descripción de la fila MABEL_TRADING con la referencia cruzada, y recorre +1 el resto de la secuencia desde 5 en adelante. El código ahora usa _build_unique_recipients(['MABEL_TRADING','PRODUCCION_ELRAYO'], ...) para el envío real"
+    category: "data"
+    dependencies: ["624", "634", "636"]
+
+  - version: "638"
+    name: "consolidar_correo_cancelado_por_el_rayo"
+    file: "migrations/consolidar_correo_cancelado_por_el_rayo.sql"
+    description: "Retira la fila PRODUCCION_ELRAYO agregada en la migración 637 para 'Pedido Cancelado por El Rayo': con 'Personas y Correos' (notificacion_persona_correo) ya no hace falta una fila de catálogo por audiencia, cualquier persona se vincula directamente sin importar su equipo. Re-vincula sus destinatarios a la fila MABEL_TRADING (evitando duplicar vínculos) y actualiza su descripción. orden_flujo=5 queda vacante (no se renumera, mismo criterio que 632/634). El código ahora usa un solo get_destinatarios_por_correo('MABEL_TRADING', ...) en vez de _build_unique_recipients de 2 tipos. No aplica a 'OC y ST Despacho' (mismo patrón de 2 filas): queda pendiente de revisión aparte porque su contenido podría diferir por audiencia"
+    category: "data"
+    dependencies: ["637"]
