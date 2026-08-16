@@ -16,6 +16,7 @@ from src.database.pedido_estados import (
     ESTADO_CANCELADO_POR_EL_RAYO,
     ESTADO_LIMITE_CANCELAR_PEDIDO,
     ESTADO_NUEVO_PEDIDO,
+    ESTADOS_PRODUCCION_EL_RAYO_IDS,
 )
 from src.security.jwt_auth import verify_jwt_token, require_permission, require_any_permission
 from src.logging_config import log_business_operation
@@ -129,6 +130,18 @@ async def _notificar_descartado(pedido_id, numero_pedido, estado_id, user):
         message=f"El pedido {numero_pedido or pedido_id} ha sido descartado.",
         metadata={"pedido_id": pedido_id, "numero_pedido": numero_pedido, "accion": "pedido_descartado"},
     )
+
+    # 📢 Notificacion a Produccion El Rayo (req. 1.8): notify_by_actor no lo cubre,
+    # ya que su mapeo de "permiso opuesto" solo conoce mabel.view<->odcsap.view.
+    # Cubre tanto "Descartar" (Nuevo Pedido) como "Cancelar Pedido" desde Redistribucion
+    # (puede ocurrir en Gestionar Pedido) - ambos estados visibles para Produccion.
+    if estado_id in ESTADOS_PRODUCCION_EL_RAYO_IDS:
+        await _notificar_realtime_permiso(
+            target_permission=_PERM_PRODUCCION_ELRAYO,
+            title="Pedido descartado por MABEL TRADING",
+            message=f"El pedido {numero_pedido or pedido_id} fue descartado y ya no está disponible para gestión.",
+            metadata={"pedido_id": pedido_id, "numero_pedido": numero_pedido, "accion": "pedido_descartado"},
+        )
 
 
 def _raise_si_no_puede_descartar(ok, error_code, message):
