@@ -16,14 +16,12 @@ Cubre los casos críticos de confirmación del proveedor:
 """
 
 import pytest  # type: ignore[reportMissingImports]
-from unittest.mock import Mock, patch, MagicMock
-from decimal import Decimal
+from unittest.mock import patch, MagicMock
 from typing import Dict, Any
 
 from src.database.services.pedido_ajuste_service import PedidoAjusteService
-from src.database.repositories.pedido_repository import PedidoRepository
-from src.database.repositories.pedido_respuesta_repository import PedidoRespuestaRepository
 from src.database.pedido_estados import ESTADO_CONFIRMADO_PROVEEDOR
+from src.utils.audit_context import ORIGEN_WEB
 
 
 class TestPedidoAjusteService:
@@ -158,10 +156,15 @@ class TestPedidoAjusteService:
             assert resultado["resumen"]["porcentaje_confirmacion"] == 100.0
             
             # Verificar que se actualizó estado del pedido (usa constante entera, no string)
-            mock_pedido_repo.update_estado.assert_called_once_with(
-                "pedido-123",
-                ESTADO_CONFIRMADO_PROVEEDOR
-            )
+            # y que se adjuntó el audit_context correspondiente (usuario/origen).
+            # No se compara audit_context.fecha porque se genera con ahora_naive()
+            # (reloj no determinista) en el momento de la llamada.
+            mock_pedido_repo.update_estado.assert_called_once()
+            call = mock_pedido_repo.update_estado.call_args
+            assert call.args == ("pedido-123", ESTADO_CONFIRMADO_PROVEEDOR)
+            audit_context = call.kwargs["audit_context"]
+            assert audit_context.usuario == "user-1"
+            assert audit_context.origen == ORIGEN_WEB
             
             # Verificar commit único
             assert mock_conn.commit.call_count == 1
@@ -491,9 +494,12 @@ class TestPedidoAjusteService:
     ):
         """
         Test específico: redistribución proporcional suma exacta.
-        
+
         Caso: 100 solicitado, 73 confirmado, 2 tiendas (50/50 original).
-        Resultado esperado: 37 + 36 = 73 (exacto)
+        Desde la migración a cantidad DECIMAL(18,4) (commit "numeros decimales",
+        2026-03-03) la redistribución ya NO redondea a enteros: preserva hasta
+        4 decimales (quantize a '0.0001'). Con reparto 50/50 el resultado exacto
+        es 36.5 + 36.5 = 73, no 37 + 36.
         """
         pedido = {
             "cabecera": {"pedido_id": "pedido-123"},
@@ -503,14 +509,6 @@ class TestPedidoAjusteService:
                     {"tienda_id": "t1", "codigo": "T001", "cantidad": 50},
                     {"tienda_id": "t2", "codigo": "T002", "cantidad": 50}
                 ]
-            }]
-        }
-        
-        respuesta = {
-            "cabecera": {"respuesta_id": "resp-1"},
-            "detalles": [{
-                "pedido_detalle_id": "detalle-1",
-                "cantidad_confirmada_total": 73
             }]
         }
         
@@ -539,8 +537,8 @@ class TestPedidoAjusteService:
         # Verificar que última tienda absorbe residuo
         assert ajuste["metodo"] == "redistribucion_proporcional"
         
-        # Verificar distribución proporcional (redondeo correcto)
-        # 73 * 0.5 = 36.5 → 37 (primera), 36 (segunda) = 73 exacto
-        assert cantidades[0] == 37 or cantidades[1] == 37, "Una tienda debe tener 37"
-        assert cantidades[0] == 36 or cantidades[1] == 36, "Una tienda debe tener 36"
+        # Verificar distribución proporcional (preserva decimales, DECIMAL(18,4))
+        # 73 * 0.5 = 36.5 exacto para ambas tiendas (ya no se redondea a entero)
+        assert cantidades[0] == 36.5, f"Primera tienda debe ser 36.5, obtuvo {cantidades[0]}"
+        assert cantidades[1] == 36.5, f"Segunda tienda debe ser 36.5, obtuvo {cantidades[1]}"
 

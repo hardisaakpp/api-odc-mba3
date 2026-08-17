@@ -6,10 +6,10 @@ antes y después de la refactorización para asegurar que no se rompe nada.
 """
 
 import pytest  # type: ignore[reportMissingImports]
-from unittest.mock import MagicMock, patch, Mock
+from unittest.mock import MagicMock, patch
 from fastapi.testclient import TestClient
+import copy
 import uuid
-from datetime import datetime
 
 
 @pytest.fixture
@@ -59,9 +59,31 @@ def mock_pedido_completo():
 
 @pytest.fixture
 def client():
-    """Cliente de prueba para FastAPI."""
+    """Cliente de prueba para FastAPI con verify_jwt_token override (bypass real JWT)."""
+    from fastapi import Request
     from src.api_server import app
-    return TestClient(app)
+    from src.security.jwt_auth import verify_jwt_token
+
+    def _override_verify_jwt_token(request: Request):
+        user = {
+            "id": "test-user-id",
+            "username": "test_user",
+            "email": "test@example.com",
+            "roles": ["Admin"],       # bypass de require_permission/require_any_permission
+            "permissions": ["Admin"],
+            "raw_claims": {},
+        }
+        # replicar el side-effect de verify_jwt_token real: dejar el usuario
+        # en request.state, ya que require_permission/require_any_permission
+        # validan con hasattr(request.state, "current_user")
+        request.state.current_user = user
+        return user
+
+    app.dependency_overrides[verify_jwt_token] = _override_verify_jwt_token
+    try:
+        yield TestClient(app)
+    finally:
+        app.dependency_overrides.pop(verify_jwt_token, None)
 
 
 class TestListarPedidosEndpoint:
@@ -83,29 +105,19 @@ class TestListarPedidosEndpoint:
         # Mock de la conexión y el repository
         mock_conn = MagicMock()
         mock_cursor = MagicMock()
-        mock_cursor.fetchall.return_value = [
-            (
-                mock_pedido_completo["pedido_id"],
-                mock_pedido_completo["numero_pedido"],
-                "PROV001",
-                "Proveedor Test",
-                1,  # estado_id
-                "NUEVO PEDIDO",
-                "2024-01-15T10:00:00",
-                "test_user"
-            )
-        ]
+        mock_cursor.fetchall.return_value = []
+        mock_cursor.fetchone.return_value = (1,)
         mock_conn.cursor.return_value = mock_cursor
         mock_db_context.return_value.__enter__.return_value = mock_conn
-        
+
         response = client.get("/api/pedidos?limit=50&offset=0")
-        
+
         assert response.status_code == 200
         data = response.json()
-        assert "items" in data
-        assert "total_items" in data
-        assert "limit" in data
-        assert "offset" in data
+        assert "data" in data
+        assert isinstance(data["data"], list)
+        assert "limit" in data["metadata"]
+        assert "offset" in data["metadata"]
     
     @patch('src.endpoints.pedidos.pedidos_listado_endpoints.verify_jwt_token')
     @patch('src.endpoints.pedidos.pedidos_listado_endpoints.get_db_connection_context')
@@ -122,14 +134,15 @@ class TestListarPedidosEndpoint:
         mock_conn = MagicMock()
         mock_cursor = MagicMock()
         mock_cursor.fetchall.return_value = []
+        mock_cursor.fetchone.return_value = (1,)
         mock_conn.cursor.return_value = mock_cursor
         mock_db_context.return_value.__enter__.return_value = mock_conn
-        
+
         response = client.get("/api/pedidos?estado=NUEVO_PEDIDO&limit=10")
-        
+
         assert response.status_code == 200
         data = response.json()
-        assert isinstance(data["items"], list)
+        assert isinstance(data["data"], list)
 
 
 class TestGetPedidoPorIdentificador:
@@ -154,9 +167,9 @@ class TestGetPedidoPorIdentificador:
         mock_db_context.return_value.__enter__.return_value = mock_conn
         
         mock_repo = MagicMock()
-        mock_repo.get_pedido_completo.return_value = mock_pedido_completo
+        mock_repo.get_pedido_completo_por_numero.return_value = mock_pedido_completo
         mock_pedido_repo_class.return_value = mock_repo
-        
+
         response = client.get("/api/plantillas/2024-001")
         
         assert response.status_code == 200
@@ -213,9 +226,9 @@ class TestGetPedidoPorIdentificador:
         mock_db_context.return_value.__enter__.return_value = mock_conn
         
         mock_repo = MagicMock()
-        mock_repo.get_pedido_completo.return_value = None
+        mock_repo.get_pedido_completo_por_numero.return_value = None
         mock_pedido_repo_class.return_value = mock_repo
-        
+
         response = client.get("/api/plantillas/NO-EXISTE")
         
         assert response.status_code == 404
@@ -281,13 +294,13 @@ class TestTransicionesEstado:
         mock_conn = MagicMock()
         mock_db_context.return_value.__enter__.return_value = mock_conn
         
-        # Pedido en estado CONFIRMADO_ENVIADO
-        pedido_confirmado = mock_pedido_completo.copy()
-        pedido_confirmado["cabecera"]["estado_id"] = 3  # CONFIRMADO_ENVIADO
-        
+        # Pedido en estado GESTIONAR_PEDIDO (precondición para confirmar redistribución)
+        pedido_confirmado = copy.deepcopy(mock_pedido_completo)
+        pedido_confirmado["cabecera"]["estado_id"] = 3  # GESTIONAR_PEDIDO
+
         # Pedido actualizado a REDISTRIBUCION
-        pedido_redistribucion = mock_pedido_completo.copy()
-        pedido_redistribucion["cabecera"]["estado_id"] = 2  # REDISTRIBUCION
+        pedido_redistribucion = copy.deepcopy(mock_pedido_completo)
+        pedido_redistribucion["cabecera"]["estado_id"] = 4  # REDISTRIBUCION
         
         mock_repo = MagicMock()
         mock_repo.get_pedido_completo.side_effect = [
@@ -307,12 +320,12 @@ class TestCrearModificarPedido:
     """Tests para crear y modificar pedidos."""
     
     @patch('src.endpoints.pedidos.pedidos_crear_editar_endpoints.verify_jwt_token')
-    @patch('src.endpoints.pedidos.pedidos_crear_editar_endpoints.PedidoService')
+    @patch('src.endpoints.pedidos.pedidos_crear_editar_endpoints.PedidoRepository')
     @patch('src.endpoints.pedidos.pedidos_crear_editar_endpoints.get_db_connection_context')
     def test_modificar_pedido_cabecera(
         self,
         mock_db_context,
-        mock_pedido_service_class,
+        mock_pedido_repo_class,
         mock_verify_jwt,
         client,
         mock_jwt_token,
@@ -320,31 +333,31 @@ class TestCrearModificarPedido:
     ):
         """Test modificar cabecera de pedido."""
         mock_verify_jwt.return_value = mock_jwt_token
-        
+
         mock_conn = MagicMock()
         mock_db_context.return_value.__enter__.return_value = mock_conn
-        
-        mock_service = MagicMock()
-        mock_service.modificar_pedido_cabecera.return_value = {
-            "pedido_id": mock_pedido_completo["pedido_id"],
-            "success": True,
-            "message": "Pedido actualizado exitosamente"
-        }
-        mock_pedido_service_class.return_value = mock_service
-        
+
+        # El handler usa PedidoRepository directamente (get_pedido_completo +
+        # update_cabecera), no PedidoService.
+        mock_repo = MagicMock()
+        mock_repo.get_pedido_completo.return_value = mock_pedido_completo
+        mock_repo.update_cabecera.return_value = True
+        mock_pedido_repo_class.return_value = mock_repo
+
         pedido_id = mock_pedido_completo["pedido_id"]
         body = {
             "observaciones": "Observaciones actualizadas"
         }
-        
+
         response = client.put(
             f"/api/pedidos/{pedido_id}",
             json=body
         )
-        
+
         assert response.status_code == 200
         data = response.json()
-        assert data["success"] is True
+        assert data["status"] == "success"
+        assert data["pedido_id"] == pedido_id
 
 
 class TestCancelarPedido:
@@ -399,6 +412,7 @@ class TestCancelarPedido:
         assert data["pedido_id"] == pedido_id
     
     @patch('src.endpoints.pedidos.pedidos_cancelar_endpoints.verify_jwt_token')
+    @patch('src.endpoints.pedidos.pedidos_cancelar_endpoints.PedidoCabeceraRepository')
     @patch('src.endpoints.pedidos.pedidos_cancelar_endpoints.PedidoRepository')
     @patch('src.endpoints.pedidos.pedidos_cancelar_endpoints.get_db_connection_context')
     @patch('src.utils.notification_manager.notification_manager')
@@ -407,6 +421,7 @@ class TestCancelarPedido:
         mock_notification_mgr,
         mock_db_context,
         mock_pedido_repo_class,
+        mock_cabecera_repo_class,
         mock_verify_jwt,
         client,
         mock_jwt_token,
@@ -414,25 +429,32 @@ class TestCancelarPedido:
     ):
         """Test cancelar pedido por El Rayo."""
         mock_verify_jwt.return_value = mock_jwt_token
-        
+
         mock_conn = MagicMock()
         mock_db_context.return_value.__enter__.return_value = mock_conn
-        
+
         # Pedido en estado CONFIRMADO_ENVIADO (puede cancelarse por El Rayo)
         pedido_confirmado = mock_pedido_completo.copy()
         pedido_confirmado["cabecera"]["estado_id"] = 3  # CONFIRMADO_ENVIADO
-        
+
         # Pedido cancelado por El Rayo
         pedido_cancelado_rayo = mock_pedido_completo.copy()
         pedido_cancelado_rayo["cabecera"]["estado_id"] = 7  # CANCELADO_POR_EL_RAYO
-        
+
         mock_repo = MagicMock()
         mock_repo.get_pedido_completo.side_effect = [
             pedido_confirmado,
             pedido_cancelado_rayo
         ]
         mock_repo.update_estado.return_value = None
+        mock_repo.validar_puede_eliminar.return_value = (True, None, None)
         mock_pedido_repo_class.return_value = mock_repo
+
+        # El handler actualiza el estado a través de un PedidoCabeceraRepository
+        # separado (cab_repo), no del PedidoRepository facade mockeado arriba.
+        mock_cabecera_repo = MagicMock()
+        mock_cabecera_repo.update_estado.return_value = None
+        mock_cabecera_repo_class.return_value = mock_cabecera_repo
         
         pedido_id = mock_pedido_completo["pedido_id"]
         body = {
@@ -475,6 +497,7 @@ class TestDescartarEliminarPedido:
         mock_repo = MagicMock()
         mock_repo.get_pedido_completo.return_value = pedido_nuevo
         mock_repo.delete_pedido.return_value = None
+        mock_repo.validar_puede_descartar.return_value = (True, None, None)
         mock_pedido_repo_class.return_value = mock_repo
         
         pedido_id = mock_pedido_completo["pedido_id"]
@@ -509,11 +532,11 @@ class TestListarEstados:
         mock_db_context.return_value.__enter__.return_value = mock_conn
         
         response = client.get("/api/pedidos/estados")
-        
+
         assert response.status_code == 200
         data = response.json()
-        assert isinstance(data, list)
-        assert len(data) >= 3
+        assert isinstance(data["data"], list)
+        assert len(data["data"]) >= 3
 
 
 class TestDescargarExcelCSV:
@@ -577,7 +600,7 @@ class TestDescargarExcelCSV:
         
         # Pedido en estado REDISTRIBUCION (permitido)
         pedido_redistribucion = mock_pedido_completo.copy()
-        pedido_redistribucion["cabecera"]["estado_id"] = 2  # REDISTRIBUCION
+        pedido_redistribucion["cabecera"]["estado_id"] = 4  # REDISTRIBUCION
         
         mock_repo = MagicMock()
         mock_repo.get_pedido_completo.return_value = pedido_redistribucion
@@ -615,16 +638,13 @@ class TestVerificarPedidosExisten:
         
         mock_conn = MagicMock()
         mock_cursor = MagicMock()
-        mock_cursor.fetchall.return_value = [
-            ("2024-001",),
-            ("2024-002",)
-        ]
+        mock_cursor.fetchone.return_value = (2,)
         mock_conn.cursor.return_value = mock_cursor
         mock_db_context.return_value.__enter__.return_value = mock_conn
-        
-        response = client.get("/api/pedidos/existe?numeros=2024-001,2024-002,2024-003")
-        
+
+        response = client.get("/api/pedidos/existe")
+
         assert response.status_code == 200
         data = response.json()
-        assert "existen" in data
-        assert "no_existen" in data
+        assert "tiene_pedidos" in data
+        assert data["tiene_pedidos"] is True

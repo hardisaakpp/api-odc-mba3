@@ -491,7 +491,7 @@ class PedidoParserDetalle:
             return None
         try:
             cantidad = float(raw_str)
-            return cantidad if cantidad >= 0 else None
+            return cantidad if cantidad > 0 else None
         except (ValueError, TypeError):
             logger.warning(f"⚠️ Fila {row_num}: Cantidad inválida en {etiqueta}: {cantidad_raw}")
             return None

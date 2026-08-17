@@ -23,6 +23,18 @@ else:
 # Configuracion de li­mites
 MAX_QUERY_LENGTH = 5000  # Longitud maxima de consulta en caracteres
 
+# ============================================================================
+# Configuración del ThreadPoolExecutor por defecto de asyncio
+# ============================================================================
+# La app corre como un único proceso uvicorn (sin --workers) y usa
+# asyncio.to_thread(...) extensivamente para llamadas bloqueantes (pyodbc a
+# SQL Server, HTTP a SAP/middleware, storage de archivos). Sin configurar
+# esto, asyncio usa su ThreadPoolExecutor por defecto
+# (min(32, os.cpu_count()+4)), compartido por TODAS esas llamadas en toda la
+# app. El tamaño configurado aquí se aplica como executor por defecto del
+# event loop en el startup de la app (ver api_server.py, startup_event()).
+API_THREAD_POOL_MAX_WORKERS = int(os.getenv("API_THREAD_POOL_MAX_WORKERS", "64"))
+
 # Ruta para guardar la Ãºltima consulta (en la raÃ­z del proyecto)
 # Si api_server.py estÃ¡ en src/, subir un nivel para llegar a la raÃ­z
 _current_file = Path(__file__).resolve()

@@ -2,8 +2,9 @@
 Endpoint para migrar despachos desde MBA3 a SQL Server.
 """
 
+import asyncio
 import logging
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 from src.utils.timezone import ahora_naive
 from typing import List, Dict, Any, Union
@@ -300,7 +301,9 @@ async def _migrar_completo_handler(request: Request, user: dict):
 
         # NUEVO: Verificar productos no homologados y notificar EN TIEMPO REAL
         # Solo si hay facturas nuevas guardadas
-        _notificar_homologaciones_migracion(save_status)
+        # (incluye envío SMTP sync/bloqueante -> se delega a un thread para no
+        # bloquear el event loop mientras se envía el correo)
+        await asyncio.to_thread(_notificar_homologaciones_migracion, save_status)
 
         # Retornar respuesta con metadata
         return JSONResponse(

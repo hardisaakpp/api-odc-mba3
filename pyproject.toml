@@ -22,6 +22,12 @@ exclude = [
 # Descomentar para ir endureciendo poco a poco:
 # extend-select = ["I", "UP", "B"]
 
+[tool.ruff.lint.per-file-ignores]
+# setup_logging() debe ejecutarse antes de importar el resto de módulos de src
+# para que todos los loggers queden configurados correctamente (ver comentario
+# en el propio archivo) - los imports posteriores son intencionales, no un descuido.
+"src/api_server.py" = ["E402"]
+
 [tool.ruff.format]
 quote-style = "double"
 indent-style = "space"

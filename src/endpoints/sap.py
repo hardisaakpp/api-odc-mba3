@@ -2,6 +2,7 @@
 Endpoints relacionados con integración SAP.
 """
 
+import asyncio
 import logging
 import uuid
 from src.utils.timezone import ahora_naive
@@ -911,7 +912,10 @@ def register_sap_endpoints(app: FastAPI):
         Returns:
             JSON con metadata del proceso de envío a SAP
         """
-        return _ejecutar_integrar_sap(request, oc_id, referencia_despacho, user)
+        # _ejecutar_integrar_sap hace DB (pyodbc), HTTP a SAP Service Layer (requests)
+        # y envío de email SMTP, todo síncrono/bloqueante -> se delega a un thread
+        # aparte para no bloquear el event loop durante toda la operación.
+        return await asyncio.to_thread(_ejecutar_integrar_sap, request, oc_id, referencia_despacho, user)
 
     @app.get("/sap/test", tags=["Integración SAP"])
     async def test_sap_query(

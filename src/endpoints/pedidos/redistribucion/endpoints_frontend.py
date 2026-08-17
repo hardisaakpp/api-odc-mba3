@@ -1,5 +1,6 @@
 """Endpoints compatibles con frontend (por numero_pedido)."""
 
+import asyncio
 import logging
 import re
 from typing import Dict, Optional
@@ -27,7 +28,7 @@ from ..utils import get_user_id
 from ._helpers import obtener_pedido_o_404, obtener_respuestas_proveedor, enriquecer_productos_con_pedido
 from ._converters import convertir_ajustes_a_redistribucion
 from ._resumen import calcular_resumen_confirmacion
-from ._sap_processing import procesar_pedido_sap_con_homologacion
+from ._sap_processing import procesar_pedido_sap_con_homologacion_sync
 from ._notifications import notificar_redistribucion_confirmada, enviar_email_confirmacion_redistribucion
 from ._excel_generators import generar_excel_distribucion
 from ._excel_traslados import generar_excel_traslados
@@ -110,7 +111,11 @@ async def _confirmar_redistribucion_handler(
             logger.info("=" * 70)
 
             try:
-                await procesar_pedido_sap_con_homologacion(
+                # Procesamiento SAP + homologaciones + email SMTP: todo síncrono/bloqueante
+                # (HTTP a SAP Service Layer, DB, smtplib) -> se delega a un thread aparte
+                # para no bloquear el event loop (usa la variante *_sync* pensada para esto).
+                await asyncio.to_thread(
+                    procesar_pedido_sap_con_homologacion_sync,
                     pedido_id=pedido_id,
                     user_id=user_id,
                     conn=conn,
@@ -123,7 +128,8 @@ async def _confirmar_redistribucion_handler(
             logger.info("=" * 70)
 
             try:
-                email_enviado = enviar_email_confirmacion_redistribucion(
+                email_enviado = await asyncio.to_thread(
+                    enviar_email_confirmacion_redistribucion,
                     pedido_id=pedido_id,
                     numero_pedido=numero_pedido,
                     user_id=user_id,

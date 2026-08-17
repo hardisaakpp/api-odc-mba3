@@ -19,9 +19,11 @@ Endpoints principales:
 - GET /health: Health check del servicio
 """
 
+import asyncio
 import logging
 import uvicorn
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 # Agregar el directorio src al PYTHONPATH si no está
@@ -49,7 +51,8 @@ from src.config import (
     ENVIRONMENT,
     ENV_FILE_USED,
     HIDE_SWAGGER_IN_PROD,
-    ENABLE_SQL_SERVER_STORAGE
+    ENABLE_SQL_SERVER_STORAGE,
+    API_THREAD_POOL_MAX_WORKERS,
 )
 from src.security.rate_limit import setup_rate_limiting
 
@@ -162,7 +165,27 @@ async def startup_event():
     logger.info("=" * 70)
     logger.info("🚀 Inicializando recursos críticos...")
     logger.info("=" * 70)
-    
+
+    # 0. Configurar un ThreadPoolExecutor dedicado como executor por defecto
+    #    del event loop. Sin esto, asyncio usa su pool por defecto
+    #    (min(32, os.cpu_count()+4)), compartido por TODAS las llamadas
+    #    asyncio.to_thread(...) de la app (SQL Server vía pyodbc, HTTP a
+    #    SAP/middleware, storage de archivos). Bajo carga ese pool por
+    #    defecto se agota y peticiones quedan encoladas esperando un hilo
+    #    libre. Tamaño configurable con API_THREAD_POOL_MAX_WORKERS (ver
+    #    src/config.py).
+    loop = asyncio.get_running_loop()
+    loop.set_default_executor(
+        ThreadPoolExecutor(
+            max_workers=API_THREAD_POOL_MAX_WORKERS,
+            thread_name_prefix="api-io-worker",
+        )
+    )
+    logger.info(
+        f"🧵 Executor por defecto del event loop: ThreadPoolExecutor("
+        f"max_workers={API_THREAD_POOL_MAX_WORKERS})"
+    )
+
     # 1. Inicializar cliente MBA3 (warm-up)
     try:
         logger.info("📡 Inicializando cliente MBA3...")

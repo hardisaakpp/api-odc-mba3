@@ -1,5 +1,6 @@
 """Endpoints core de redistribución (por UUID)."""
 
+import asyncio
 import logging
 from typing import Dict, Optional
 
@@ -30,7 +31,7 @@ from ._helpers import (
     enriquecer_productos_con_pedido,
     calcular_estado_puede_descartar,
 )
-from ._sap_processing import procesar_pedido_sap_con_homologacion
+from ._sap_processing import procesar_pedido_sap_con_homologacion_sync
 from ._notifications import notificar_redistribucion_confirmada
 from ._excel_generators import generar_excel_reporte_diferencias
 
@@ -219,7 +220,11 @@ async def _handle_confirmar_redistribucion(
             logger.info("=" * 70)
 
             try:
-                resultado_sap = await procesar_pedido_sap_con_homologacion(
+                # Procesamiento SAP + homologaciones + email SMTP: todo síncrono/bloqueante
+                # (HTTP a SAP Service Layer, DB, smtplib) -> se delega a un thread aparte
+                # para no bloquear el event loop (usa la variante *_sync* pensada para esto).
+                resultado_sap = await asyncio.to_thread(
+                    procesar_pedido_sap_con_homologacion_sync,
                     pedido_id=pedido_id,
                     user_id=user_id,
                     conn=conn,

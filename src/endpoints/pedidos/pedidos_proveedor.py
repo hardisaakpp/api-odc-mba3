@@ -2,6 +2,7 @@
 Endpoints de gestión de respuestas de proveedores.
 """
 
+import asyncio
 import logging
 from typing import Dict
 from fastapi import FastAPI, UploadFile, File, Depends, HTTPException, Path, Body
@@ -233,7 +234,9 @@ async def _handle_crear_respuesta_desde_pedido(pedido_id: str, user: Dict):
         transicion_a_confirmado = estado_id_antes is not None and estado_id_antes != ESTADO_REDISTRIBUCION
 
         await _notificar_confirmacion_rayo(resultado, transicion_a_confirmado, pedido_id, user)
-        _enviar_email_confirmacion_rayo(resultado, transicion_a_confirmado, pedido_id, usuario_id)
+        await asyncio.to_thread(
+            _enviar_email_confirmacion_rayo, resultado, transicion_a_confirmado, pedido_id, usuario_id
+        )
 
         return JSONResponse(status_code=200, content=resultado)
     except ValueError as e:

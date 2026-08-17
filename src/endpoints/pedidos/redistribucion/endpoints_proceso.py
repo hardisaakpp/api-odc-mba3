@@ -14,6 +14,7 @@ NOTA DE RENDIMIENTO:
 import asyncio
 import json
 import logging
+import os
 import threading
 from typing import Any, Dict, List
 
@@ -44,11 +45,15 @@ from ._converters import convertir_ajustes_a_redistribucion
 from ._resumen import calcular_resumen_confirmacion
 from ._sap_processing import procesar_pedido_sap_con_homologacion_sync
 from ._notifications import notificar_odc_enviada_a_sap
+import src.celery_app as celery_app_module
 
 logger = logging.getLogger(__name__)
 
 # Timeout para comprobar si hay workers Celery (evitar 202 sin worker y polling colgado)
-CELERY_WORKER_PING_TIMEOUT = 2.5
+# Configurable via .env (mismo patrón que EMAIL_SMTP_TIMEOUT en src/config.py); default
+# subido de 2.5s a 5.0s tras incidente 2026-08 de falso negativo con worker vivo (más
+# margen sobre la latencia típica de ping() sin penalizar demasiado el camino caído).
+CELERY_WORKER_PING_TIMEOUT = float(os.getenv("CELERY_WORKER_PING_TIMEOUT", "5.0"))
 
 _PERM_MABEL_VIEW = 'mabel.view'
 
@@ -67,8 +72,7 @@ def _celery_workers_available() -> bool:
 
     def _ping():
         try:
-            from src.celery_app import celery_app
-            inspect = celery_app.control.inspect(timeout=CELERY_WORKER_PING_TIMEOUT)
+            inspect = celery_app_module.celery_app.control.inspect(timeout=CELERY_WORKER_PING_TIMEOUT)
             resultado["ping"] = inspect.ping()
         except Exception as e:
             resultado["error"] = e

@@ -2,6 +2,7 @@
 Endpoints de cancelacion y descarte de pedidos.
 """
 
+import asyncio
 import logging
 from typing import Dict
 
@@ -113,7 +114,8 @@ async def _notificar_descartado(pedido_id, numero_pedido, estado_id, user):
     """Envía las notificaciones (email + tiempo real) de pedido descartado (best-effort)."""
     try:
         from src.utils.email_notifier import send_pedido_descartado_notification
-        send_pedido_descartado_notification(
+        await asyncio.to_thread(
+            send_pedido_descartado_notification,
             pedido_id=pedido_id,
             numero_pedido=numero_pedido,
             usuario_id=user.get("username") or user.get("sub"),
@@ -226,7 +228,7 @@ async def _cancelar_pedido_handler(request, pedido_id, user):
             numero_pedido = (pedido_actualizado.get("cabecera") or {}).get("numero_pedido")
 
             # Notificar a EL RAYO (email)
-            _notificar_cancelado_email(pedido_id, numero_pedido, user)
+            await asyncio.to_thread(_notificar_cancelado_email, pedido_id, numero_pedido, user)
 
             # 📢 Notificacion: otros MABEL + EL RAYO (excl. autor)
             _username = user.get("username") or user.get("sub") or "unknown"
@@ -352,7 +354,7 @@ async def _cancelar_pedido_por_el_rayo_handler(request, pedido_id, user):
             )
 
             # Notificar a MABEL TRADING por correo (best-effort)
-            _notificar_cancelado_por_el_rayo_email(pedido_id, numero_pedido, user)
+            await asyncio.to_thread(_notificar_cancelado_por_el_rayo_email, pedido_id, numero_pedido, user)
 
             # 📢 Notificacion: otros EL RAYO + MABEL (excl. autor)
             _username = user.get("username") or user.get("sub") or "unknown"

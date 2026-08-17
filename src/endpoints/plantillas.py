@@ -11,6 +11,7 @@ import logging
 import base64
 import json
 import asyncio
+import os
 import threading
 from typing import Any, Dict, List, Optional
 
@@ -30,6 +31,7 @@ from src.exceptions import BusinessException
 from src.endpoints.pedidos.utils import validate_excel_file, get_user_id, MAX_FILE_SIZE
 from src.config import ENABLE_FILE_STORAGE
 from src.database.services.proceso_estado_service import ProcesoEstadoService
+import src.celery_app as celery_app_module
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +39,7 @@ logger = logging.getLogger(__name__)
 __all__ = ["register_plantillas_endpoints"]
 
 # Timeout para comprobar si hay workers Celery disponibles (evitar colgar si Redis responde pero no hay worker)
-CELERY_WORKER_PING_TIMEOUT = 2.5
+CELERY_WORKER_PING_TIMEOUT = float(os.getenv("CELERY_WORKER_PING_TIMEOUT", "5.0"))
 
 # Tope de códigos por consulta a /sap-info-productos. Coincide con el límite del
 # batch del middleware (POST /api/v1/items/batch admite hasta 100).
@@ -64,8 +66,7 @@ def _celery_workers_available() -> bool:
 
     def _ping():
         try:
-            from src.celery_app import celery_app
-            inspect = celery_app.control.inspect(timeout=CELERY_WORKER_PING_TIMEOUT)
+            inspect = celery_app_module.celery_app.control.inspect(timeout=CELERY_WORKER_PING_TIMEOUT)
             resultado["ping"] = inspect.ping()
         except Exception as e:
             resultado["error"] = e
@@ -409,7 +410,10 @@ async def _upload_plantilla_handler(
         if respuesta_error is not None:
             return respuesta_error
 
-        _adjuntar_archivo_original(
+        # Guardado en storage (MinIO/S3, put_object) es I/O síncrono/bloqueante ->
+        # se delega a un thread aparte para no bloquear el event loop.
+        await asyncio.to_thread(
+            _adjuntar_archivo_original,
             response_data, content, resultado,
             file.filename or _DEFAULT_FILENAME, file_size, user_id
         )
@@ -543,7 +547,10 @@ async def _procesar_plantilla_sync_fallback(
     respuesta_error = _respuesta_error_procesamiento(resultado, tiene_pedido_guardado, response_data)
     if respuesta_error is not None:
         return respuesta_error
-    _adjuntar_archivo_original_fallback(
+    # Guardado en storage (MinIO/S3, put_object) es I/O síncrono/bloqueante ->
+    # se delega a un thread aparte para no bloquear el event loop.
+    await asyncio.to_thread(
+        _adjuntar_archivo_original_fallback,
         response_data, content, resultado,
         file.filename or _DEFAULT_FILENAME, file_size, user_id
     )
@@ -941,7 +948,9 @@ async def _descargar_plantilla(
                     }
                 )
 
-        contenido = _descargar_contenido_storage(archivo_info["storage_path"])
+        # Descarga de storage (MinIO/S3, get_object + read) es I/O síncrono/bloqueante ->
+        # se delega a un thread aparte para no bloquear el event loop.
+        contenido = await asyncio.to_thread(_descargar_contenido_storage, archivo_info["storage_path"])
 
         with get_db_connection_context() as conn:
             archivo_repo = ArchivoPlantillaRepository(conn)
@@ -1220,7 +1229,11 @@ async def _eliminar_archivo_original_handler(archivo_id: int, eliminar_fisicamen
                     from src.services.file_storage_service import get_file_storage, FileStorageError
 
                     storage = get_file_storage()
-                    storage.eliminar_archivo(archivo_info["storage_path"])
+                    # delete_object es I/O síncrono/bloqueante -> se delega a un thread
+                    # aparte para no bloquear el event loop (esto ocurre dentro de un
+                    # "with get_db_connection_context()" abierto, así que es especialmente
+                    # importante no bloquear aquí).
+                    await asyncio.to_thread(storage.eliminar_archivo, archivo_info["storage_path"])
                     eliminacion_storage = True
 
                     logger.info(
@@ -1271,7 +1284,9 @@ async def _storage_health_check_handler():
         from src.services.file_storage_service import get_file_storage
 
         storage = get_file_storage()
-        health = storage.health_check()
+        # head_bucket es I/O síncrono/bloqueante -> se delega a un thread aparte
+        # para no bloquear el event loop.
+        health = await asyncio.to_thread(storage.health_check)
 
         return JSONResponse(status_code=200, content=health)
 

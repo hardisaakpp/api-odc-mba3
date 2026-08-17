@@ -5,6 +5,7 @@ Este módulo agrupa todos los endpoints relacionados con cambios de estado
 de pedidos: gestionar, confirmar para redistribución, despachar y facturar, finalizar.
 """
 
+import asyncio
 import logging
 from typing import Dict
 from fastapi import FastAPI, Path, Depends, HTTPException, Request, status
@@ -124,7 +125,8 @@ async def _logic_confirmar_produccion(pedido_id: str, request: Request, user: Di
         try:
             from src.utils.email_notifier import send_pedido_confirmado_produccion_notification
             _username = user.get("username") or user.get("sub") or "unknown"
-            send_pedido_confirmado_produccion_notification(
+            await asyncio.to_thread(
+                send_pedido_confirmado_produccion_notification,
                 pedido_id=pedido_id,
                 numero_pedido=numero_pedido,
                 usuario_id=_username,
@@ -269,7 +271,8 @@ async def _logic_marcar_despachar_y_facturar(pedido_id: str, request: Request, u
                 from src.utils.email_notifier_pedido import send_despachar_y_facturar_notification
 
                 usuario_rayo = user.get("username") or user.get("sub") or "unknown"
-                email_enviado = send_despachar_y_facturar_notification(
+                email_enviado = await asyncio.to_thread(
+                    send_despachar_y_facturar_notification,
                     pedido_id=pedido_id,
                     numero_pedido=numero_pedido,
                     usuario_rayo=usuario_rayo,
@@ -339,7 +342,8 @@ async def _logic_marcar_finalizado(pedido_id: str, request: Request, user: Dict)
                 from src.utils.email_notifier_pedido import send_finalizar_pedido_notification
 
                 usuario_mabel = user.get("username") or user.get("sub") or "unknown"
-                email_enviado = send_finalizar_pedido_notification(
+                email_enviado = await asyncio.to_thread(
+                    send_finalizar_pedido_notification,
                     pedido_id=pedido_id,
                     numero_pedido=numero_pedido,
                     usuario_mabel=usuario_mabel,

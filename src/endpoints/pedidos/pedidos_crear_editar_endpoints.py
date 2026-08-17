@@ -2,6 +2,7 @@
 Endpoints de creacion, edicion e importacion de pedidos.
 """
 
+import asyncio
 import logging
 from typing import Dict
 
@@ -477,7 +478,9 @@ async def _enviar_pedido_handler(pedido_id, user):
         from src.database.services.pedido_service import PedidoService
         service = PedidoService()
         usuario_id = get_user_id(user)
-        resultado = service.enviar_pedido(pedido_id=pedido_id, usuario_id=usuario_id)
+        # enviar_pedido() hace I/O síncrono/bloqueante (DB + envío de correo SMTP) ->
+        # se delega a un thread aparte para no bloquear el event loop.
+        resultado = await asyncio.to_thread(service.enviar_pedido, pedido_id=pedido_id, usuario_id=usuario_id)
 
         # 📢 Notificacion: otros MABEL + EL RAYO (excl. autor)
         try:
