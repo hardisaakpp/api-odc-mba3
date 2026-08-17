@@ -16,6 +16,7 @@ import json
 import logging
 import os
 import threading
+import time
 from typing import Any, Dict, List
 
 from fastapi import FastAPI, Depends, HTTPException, Path, Body, Query, status, Request
@@ -55,7 +56,21 @@ logger = logging.getLogger(__name__)
 # margen sobre la latencia típica de ping() sin penalizar demasiado el camino caído).
 CELERY_WORKER_PING_TIMEOUT = float(os.getenv("CELERY_WORKER_PING_TIMEOUT", "5.0"))
 
+# Margen extra sobre CELERY_WORKER_PING_TIMEOUT para el join() externo (ver más abajo
+# por qué es necesario: inspect().ping() no corta exactamente en su propio timeout).
+CELERY_WORKER_PING_JOIN_BUFFER = float(os.getenv("CELERY_WORKER_PING_JOIN_BUFFER", "2.0"))
+
+# TTL del cache de disponibilidad de workers Celery (ver docstring de
+# _celery_workers_available para el porqué: evita que llamadas repetidas en
+# ráfaga disparen un nuevo hilo de ping cada vez).
+CELERY_WORKER_AVAILABILITY_CACHE_TTL = float(os.getenv("CELERY_WORKER_AVAILABILITY_CACHE_TTL", "4.0"))
+
 _PERM_MABEL_VIEW = 'mabel.view'
+
+# Estado del cache single-flight de disponibilidad de workers Celery (ver
+# _celery_workers_available). Módulo-privado.
+_disponibilidad_lock = threading.Lock()
+_disponibilidad_cache = {"resultado": False, "timestamp": 0.0, "verificando": False}
 
 
 def _celery_workers_available() -> bool:
@@ -67,7 +82,38 @@ def _celery_workers_available() -> bool:
     de control de Celery puede quedarse colgado bastante más tiempo); por eso
     se ejecuta en un hilo daemon con un límite externo real, para no arrastrar
     ese cuelgue a la petición HTTP que espera este chequeo.
+
+    Cache single-flight con TTL corto (CELERY_WORKER_AVAILABILITY_CACHE_TTL):
+    se verificó en vivo que cuando el join() externo se rinde, el hilo daemon
+    abandonado sigue corriendo en segundo plano intentando obtener su pong, y
+    ese hilo huérfano CONTIENDE con el hilo de ping de la siguiente llamada
+    (aparentemente por un pool de conexiones Kombu/Celery compartido y
+    limitado): pings aislados resolvían en ~5.4s, pero pings que competían
+    con un hilo abandonado tardaban 9.6-14s. El resultado era que llamadas
+    repetidas/rápidas a esta función seguían devolviendo falsos negativos,
+    porque chocaban con sus propios rezagados, incluso después del fix del
+    margen de join() (CELERY_WORKER_PING_JOIN_BUFFER) de la ronda anterior.
+
+    Este cache soluciona eso de tres formas:
+      (a) llamadas repetidas dentro del TTL reutilizan la última respuesta en
+          vez de lanzar un hilo de ping nuevo cada vez;
+      (b) si ya hay un ping en curso, los llamadores nuevos reutilizan el
+          último valor conocido en vez de lanzar un hilo de ping COMPETIDOR
+          (esto es lo que elimina la acumulación/contención de hilos);
+      (c) si un hilo de ping abandonado/lento finalmente recibe su pong
+          (incluso después de que su propio llamador se haya rendido),
+          igual actualiza el cache compartido para que el SIGUIENTE llamador
+          se beneficie de inmediato en vez de disparar otro ping lento.
     """
+    ahora = time.time()
+    with _disponibilidad_lock:
+        edad = ahora - _disponibilidad_cache["timestamp"]
+        if edad < CELERY_WORKER_AVAILABILITY_CACHE_TTL:
+            return _disponibilidad_cache["resultado"]
+        if _disponibilidad_cache["verificando"]:
+            return _disponibilidad_cache["resultado"]
+        _disponibilidad_cache["verificando"] = True
+
     resultado: Dict[str, Any] = {}
 
     def _ping():
@@ -76,20 +122,32 @@ def _celery_workers_available() -> bool:
             resultado["ping"] = inspect.ping()
         except Exception as e:
             resultado["error"] = e
+        finally:
+            disponible = bool(resultado.get("ping"))
+            with _disponibilidad_lock:
+                _disponibilidad_cache["resultado"] = disponible
+                _disponibilidad_cache["timestamp"] = time.time()
+                _disponibilidad_cache["verificando"] = False
 
     hilo = threading.Thread(target=_ping, daemon=True)
     hilo.start()
-    hilo.join(timeout=CELERY_WORKER_PING_TIMEOUT)
+    # inspect(timeout=X).ping() no respeta X con precisión: se confirmó en vivo que
+    # excede el timeout pedido por ~0.3-0.4s incluso con un worker sano; sin este
+    # margen el join externo pierde esa carrera casi siempre y devuelve falso negativo.
+    hilo.join(timeout=CELERY_WORKER_PING_TIMEOUT + CELERY_WORKER_PING_JOIN_BUFFER)
 
     if hilo.is_alive():
-        logger.debug("Comprobación de workers Celery excedió el timeout (%.1fs)", CELERY_WORKER_PING_TIMEOUT)
+        logger.debug(
+            "Comprobación de workers Celery excedió el timeout (%.1fs); "
+            "el hilo sigue en curso y actualizará el cache al terminar",
+            CELERY_WORKER_PING_TIMEOUT + CELERY_WORKER_PING_JOIN_BUFFER,
+        )
         return False
     if "error" in resultado:
         logger.debug("Comprobación de workers Celery fallida: %s", resultado["error"])
         return False
 
-    result = resultado.get("ping")
-    available = bool(result and len(result) > 0)
+    available = bool(resultado.get("ping"))
     if not available:
         logger.debug("No hay workers Celery disponibles (ping sin respuesta)")
     return available
