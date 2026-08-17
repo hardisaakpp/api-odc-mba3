@@ -132,6 +132,30 @@ async def _logic_confirmar_produccion(pedido_id: str, request: Request, user: Di
         except Exception as email_err:
             logger.warning(f"⚠️ Error al enviar email de confirmación por producción (no crítico): {email_err}")
 
+        # 📢 Notificación en tiempo real: otros Producción (excl. autor) + Administración El Rayo.
+        # notify_by_actor no cubre produccion-elrayo.view -> odcsap.view (no está en
+        # OPPOSITE_PERMISSION), así que se notifica explícitamente al permiso destino real.
+        try:
+            from src.utils.notification_manager import notification_manager, NotificationType
+            _username = user.get("username") or user.get("sub") or "unknown"
+            await notification_manager.notify_by_actor(
+                actor_permission=PERM_PRODUCCION_ELRAYO_VIEW,
+                actor_username=_username,
+                title="Pedido confirmado por Producción",
+                message=f"El pedido {numero_pedido} fue confirmado por Producción.",
+                notification_type=NotificationType.SUCCESS,
+                metadata={"pedido_id": pedido_id, "numero_pedido": numero_pedido, "accion": "confirmar_produccion"},
+            )
+            await notification_manager.notify(
+                target_permission=PERM_ODCSAP_VIEW,
+                title="Pedido confirmado por Producción",
+                message=f"El pedido {numero_pedido} fue confirmado por Producción y está listo para gestión de Administración El Rayo.",
+                notification_type=NotificationType.SUCCESS,
+                metadata={"pedido_id": pedido_id, "numero_pedido": numero_pedido, "accion": "confirmar_produccion"},
+            )
+        except Exception as notif_err:
+            logger.warning(f"⚠️ Error al enviar notificación en tiempo real: {notif_err}")
+
         logger.info(
             f"✅ Pedido {pedido_id} confirmado por Producción por usuario {user.get('username', 'UNKNOWN')} "
             f"(numero_pedido={numero_pedido})"
