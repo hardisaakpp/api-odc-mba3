@@ -243,7 +243,67 @@ async def startup_event():
             logger.error("   Esto puede causar un error 500 en la primera llamada")
     else:
         logger.info("⏭️ SQL Server storage deshabilitado (ENABLE_SQL_SERVER_STORAGE=false)")
-    
+
+    # 2.5 Auto-aplicar migraciones de ESQUEMA (ALTER TABLE / catálogo, ver
+    #     scripts/migration_runner.py) pendientes -- SOLO en development. Evita el
+    #     patrón que causó el bug de req. 1.2 (2026-08-17): una migración quedaba
+    #     escrita en scripts/migrations/ y en el manifest, pero nadie la ejecutaba
+    #     contra la BD local, y el código degradaba en silencio (columna ausente ->
+    #     valor NULL) en vez de fallar. NO se activa en staging/production: ahí las
+    #     migraciones se aplican a mano antes del deploy (memoria del equipo: solo
+    #     si son aditivas), un paso deliberado -- staging/producción no deben
+    #     mutar su propio esquema en cada arranque, y con >1 instancia arrancando
+    #     a la vez, correr el mismo ALTER TABLE en paralelo puede bloquearse.
+    #     No confundir con ENABLE_AUTO_MIGRATE de arriba: aquella es la migración
+    #     de datos de despachos vía Celery Beat (legacy), un concepto distinto.
+    #     Se excluyen migraciones category="rollback" (ej. DROP TABLE) del
+    #     auto-apply: igual que las marcadas manual=true en el manifest, son
+    #     cambios destructivos que requieren revisión humana antes de ejecutarse.
+    if ENVIRONMENT == "development":
+        try:
+            scripts_dir = Path(__file__).parent.parent / "scripts"
+            if str(scripts_dir) not in sys.path:
+                sys.path.insert(0, str(scripts_dir))
+            from migration_runner import MigrationRunner
+
+            logger.info("🔧 Auto-aplicando migraciones de esquema pendientes (solo development)...")
+            runner = MigrationRunner(
+                manifest_path=scripts_dir / "migrations_manifest.yaml",
+                scripts_dir=scripts_dir,
+            )
+            runner.load_manifest()
+            runner.connect_db()
+            runner.ensure_migration_table()
+            runner.load_applied_migrations()
+
+            pending = runner.get_pending_migrations(skip_manual=True)
+            excluidas_rollback = [m for m in pending if m.get("category") == "rollback"]
+            a_aplicar = [m for m in pending if m.get("category") != "rollback"]
+
+            if excluidas_rollback:
+                logger.warning(
+                    "   ⚠️ Migraciones 'rollback' pendientes, NO auto-aplicadas (requieren revisión manual): "
+                    + ", ".join(f"{m['version']} ({m['name']})" for m in excluidas_rollback)
+                )
+
+            if not a_aplicar:
+                logger.info("   ✅ No hay migraciones de esquema pendientes por aplicar")
+            else:
+                logger.info(f"   📋 Migraciones a aplicar: {', '.join(m['version'] for m in a_aplicar)}")
+                for migration in a_aplicar:
+                    if not runner.execute_migration(migration, dry_run=False):
+                        logger.error(
+                            f"   ❌ Migración {migration['version']} ({migration['name']}) falló; "
+                            "se detiene el auto-apply. Aplícala manualmente con scripts/migration_runner.py."
+                        )
+                        break
+            runner.conn.close()
+        except Exception as e:
+            logger.error(f"❌ Error al auto-aplicar migraciones de esquema: {e}")
+            logger.error("   El servidor sigue arrancando; aplica manualmente con scripts/migration_runner.py")
+    else:
+        logger.info(f"⏭️ Auto-apply de migraciones de esquema deshabilitado (ENVIRONMENT={ENVIRONMENT}); en este ambiente se aplican a mano con scripts/migration_runner.py antes del deploy")
+
     # 3. IMPORTANTE: NO iniciar asyncio auto_migrate
     # La migración automática ahora se ejecuta con Celery Beat en un proceso separado
     # Esto previene el cuello de botella entre el proceso manual y automático
