@@ -4,9 +4,10 @@ Endpoints de gestión de respuestas de proveedores.
 
 import asyncio
 import logging
-from typing import Dict
-from fastapi import FastAPI, UploadFile, File, Depends, HTTPException, Path, Body
+from typing import Dict, Optional
+from fastapi import FastAPI, UploadFile, File, Depends, HTTPException, Path, Body, Request
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel, Field
 
 from src.security.jwt_auth import verify_jwt_token, require_permission, require_any_permission
 from src.models import (
@@ -15,11 +16,27 @@ from src.models import (
     RespuestaProveedorResponse
 )
 from .utils import validate_excel_file, get_user_id, MAX_FILE_SIZE
+from .pedidos_crud_helpers import calcular_diferencia_produccion
 
 logger = logging.getLogger(__name__)
 
 _DESC_PEDIDO_ID = "UUID del pedido"
 _PERM_MABEL_VIEW = 'mabel.view'
+_PERM_ODCSAP_VIEW = 'odcsap.view'
+
+
+class ConfirmarConDiferenciaRequest(BaseModel):
+    """Req. 1.2: body de POST confirmar-con-diferencia."""
+    nueva_fecha_entrega: str = Field(..., description="Nueva fecha de entrega para el pedido hijo generado con la diferencia")
+
+
+class ConfirmarRespuestaRequest(BaseModel):
+    """Req. 1.2 (endurecimiento 2026-08-17): body opcional de POST crear-respuesta-desde-pedido.
+    diferencia_reconocida=true indica que el cliente ya mostró el modal de diferencia de
+    producción y el usuario decidió confirmar sin generar pedido hijo ('Diferencia no será
+    entregada'). Sin este campo (o en false), el endpoint rechaza la confirmación si detecta
+    una diferencia -- ver _handle_crear_respuesta_desde_pedido."""
+    diferencia_reconocida: bool = Field(False, description="True si el usuario ya reconoció la diferencia de producción mostrada en el modal")
 
 
 async def _handle_cargar_respuesta_proveedor(pedido_id: str, file: UploadFile, user: Dict):
@@ -34,7 +51,8 @@ async def _handle_cargar_respuesta_proveedor(pedido_id: str, file: UploadFile, u
         from src.database.services.pedido_proveedor_service import PedidoProveedorService
         service = PedidoProveedorService()
         usuario_id = get_user_id(user)
-        resultado = service.importar_respuesta_proveedor(
+        resultado = await asyncio.to_thread(
+            service.importar_respuesta_proveedor,
             pedido_id=pedido_id,
             file_content=content,
             usuario_id=usuario_id
@@ -59,7 +77,7 @@ async def _handle_obtener_formulario_proveedor(pedido_id: str):
     try:
         from src.database.services.pedido_proveedor_web_service import PedidoProveedorWebService
         service = PedidoProveedorWebService()
-        formulario = service.obtener_formulario_proveedor(pedido_id)
+        formulario = await asyncio.to_thread(service.obtener_formulario_proveedor, pedido_id)
         return JSONResponse(status_code=200, content=formulario)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
@@ -79,7 +97,8 @@ async def _handle_enviar_respuesta_proveedor(
         service = PedidoProveedorWebService()
         usuario_id = get_user_id(user)
         productos_dict = [producto.model_dump() for producto in respuesta.productos]
-        resultado = service.procesar_respuesta_proveedor_web(
+        resultado = await asyncio.to_thread(
+            service.procesar_respuesta_proveedor_web,
             pedido_id=pedido_id,
             productos=productos_dict,
             observaciones_generales=respuesta.observaciones_generales,
@@ -116,18 +135,23 @@ def _leer_estado_antes(pedido_id: str):
     return estado_id_antes
 
 
+def _db_numero_pedido_para_notificacion(pedido_id: str) -> str:
+    """Consulta bloqueante (pyodbc); se ejecuta vía asyncio.to_thread."""
+    from src.database.connection import get_db_connection_context as _get_conn
+    from src.database.repositories.pedido_repository import PedidoRepository as _PedidoRepo
+    with _get_conn() as _conn:
+        _repo = _PedidoRepo(_conn)
+        _pedido = _repo.get_pedido_completo(pedido_id)
+        return (_pedido.get("cabecera") or {}).get("numero_pedido", "") if _pedido else ""
+
+
 async def _notificar_confirmacion_rayo(
     resultado: Dict, transicion_a_confirmado: bool, pedido_id: str, user: Dict
 ):
     if resultado.get("status") == "success" and transicion_a_confirmado:
         try:
             from src.utils.notification_manager import notification_manager, NotificationType
-            from src.database.connection import get_db_connection_context as _get_conn
-            from src.database.repositories.pedido_repository import PedidoRepository as _PedidoRepo
-            with _get_conn() as _conn:
-                _repo = _PedidoRepo(_conn)
-                _pedido = _repo.get_pedido_completo(pedido_id)
-                _num = (_pedido.get("cabecera") or {}).get("numero_pedido", "") if _pedido else ""
+            _num = await asyncio.to_thread(_db_numero_pedido_para_notificacion, pedido_id)
             _username = user.get("username") or user.get("sub") or "unknown"
             await notification_manager.notify_by_actor(
                 actor_permission="odcsap.view",
@@ -212,18 +236,36 @@ def _enviar_email_confirmacion_rayo(
         logger.warning(f"⚠️ Error al enviar email de confirmación de El Rayo (no crítico): {e}")
 
 
-async def _handle_crear_respuesta_desde_pedido(pedido_id: str, user: Dict):
+async def _handle_crear_respuesta_desde_pedido(pedido_id: str, user: Dict, diferencia_reconocida: bool = False):
     try:
         from src.database.services.pedido_proveedor_web_service import PedidoProveedorWebService
         from src.database.pedido_estados import ESTADO_REDISTRIBUCION
 
         usuario_id = get_user_id(user)
-        estado_id_antes = _leer_estado_antes(pedido_id)
+        estado_id_antes = await asyncio.to_thread(_leer_estado_antes, pedido_id)
+
+        # Req. 1.2 (endurecimiento): antes esta regla solo vivía como gate de UI (el
+        # frontend consultaba GET /diferencia-produccion y decidía si mostrar el modal
+        # antes de llamar aquí). Cualquier llamada directa a este endpoint -- otro
+        # cliente, un bug futuro del frontend, o simplemente una migración de BD
+        # pendiente que dejaba cantidad_solicitada_original en NULL -- se saltaba el
+        # control por completo. Se repite la misma verificación aquí, del lado del
+        # servidor, para que no dependa de que el llamador haya preguntado antes.
+        pedido_actual = await asyncio.to_thread(_db_obtener_pedido_completo, pedido_id)
+        if pedido_actual:
+            diferencia = calcular_diferencia_produccion(pedido_actual.get("detalles", []))
+            if diferencia["tiene_diferencia"] and not diferencia_reconocida:
+                raise HTTPException(status_code=400, detail={
+                    "error": "diferencia_produccion_no_reconocida",
+                    "message": "El pedido tiene productos con Total por debajo de la cantidad solicitada originalmente. Usa el flujo de diferencia de producción (modal) para confirmar.",
+                    "detalles": diferencia["detalles"],
+                })
 
         logger.info(f"Guardando cambios y creando respuesta para pedido {pedido_id} (usuario: {usuario_id})")
 
         web_service = PedidoProveedorWebService()
-        resultado = web_service.crear_respuesta_desde_pedido(
+        resultado = await asyncio.to_thread(
+            web_service.crear_respuesta_desde_pedido,
             pedido_id=pedido_id,
             usuario_id=usuario_id,
             observaciones_generales=None
@@ -239,6 +281,8 @@ async def _handle_crear_respuesta_desde_pedido(pedido_id: str, user: Dict):
         )
 
         return JSONResponse(status_code=200, content=resultado)
+    except HTTPException:
+        raise
     except ValueError as e:
         error_msg = str(e)
         logger.error(f"❌ Error de validación al guardar cambios: {e}")
@@ -249,6 +293,102 @@ async def _handle_crear_respuesta_desde_pedido(pedido_id: str, user: Dict):
             status_code=500,
             detail=f"Error interno al guardar cambios del pedido: {str(e)}"
         )
+
+
+def _db_obtener_pedido_completo(pedido_id: str):
+    """Consulta bloqueante (pyodbc); se ejecuta vía asyncio.to_thread."""
+    from src.database.connection import get_db_connection_context
+    from src.database.repositories.pedido_repository import PedidoRepository
+    with get_db_connection_context() as conn:
+        repo = PedidoRepository(conn)
+        return repo.get_pedido_completo(pedido_id)
+
+
+async def _handle_obtener_diferencia_produccion(pedido_id: str):
+    """Req. 1.2: GET de solo lectura que el frontend consulta justo al hacer clic en
+    'Confirmar', antes de decidir si mostrar el modal de diferencia de producción."""
+    pedido = await asyncio.to_thread(_db_obtener_pedido_completo, pedido_id)
+    if not pedido:
+        raise HTTPException(status_code=404, detail={"error": "pedido_not_found", "message": f"No se encontró el pedido: {pedido_id}"})
+    resultado = calcular_diferencia_produccion(pedido.get("detalles", []))
+    return JSONResponse(status_code=200, content=resultado)
+
+
+def _db_crear_pedido_hijo_diferencia(pedido_padre, detalles_con_diferencia, nueva_fecha_entrega, usuario_id, audit):
+    """Consulta bloqueante (pyodbc); se ejecuta vía asyncio.to_thread."""
+    from src.database.services.pedido_service import PedidoService
+    service = PedidoService()
+    return service.crear_pedido_hijo_diferencia(
+        pedido_padre=pedido_padre,
+        detalles_con_diferencia=detalles_con_diferencia,
+        nueva_fecha_entrega=nueva_fecha_entrega,
+        usuario_id=usuario_id,
+        audit_context=audit,
+    )
+
+
+async def _handle_confirmar_con_diferencia(pedido_id: str, body: ConfirmarConDiferenciaRequest, request, user: Dict):
+    """Req. 1.2: opción 'Confirmar pedido, generar nuevo pedido con la diferencia' del
+    modal de diferencia de producción. El pedido padre sigue el flujo normal de
+    confirmación (igual que 'Diferencia no será entregada'/crear-respuesta-desde-pedido)
+    y además se crea un pedido hijo con la diferencia, en estado PRODUCCION POSPUESTA."""
+    from src.database.services.pedido_proveedor_web_service import PedidoProveedorWebService
+    from src.utils.audit_context import get_audit_context, ORIGEN_WEB
+
+    usuario_id = get_user_id(user)
+    audit = get_audit_context(request, user, origen=ORIGEN_WEB)
+
+    pedido_padre = await asyncio.to_thread(_db_obtener_pedido_completo, pedido_id)
+    if not pedido_padre:
+        raise HTTPException(status_code=404, detail={"error": "pedido_not_found", "message": f"No se encontró el pedido: {pedido_id}"})
+
+    diferencia = calcular_diferencia_produccion(pedido_padre.get("detalles", []))
+    if not diferencia["tiene_diferencia"]:
+        raise HTTPException(status_code=400, detail={
+            "error": "sin_diferencia",
+            "message": "El pedido no tiene productos con total por debajo de la cantidad solicitada original."
+        })
+
+    try:
+        web_service = PedidoProveedorWebService()
+        resultado_confirmacion = await asyncio.to_thread(
+            web_service.crear_respuesta_desde_pedido,
+            pedido_id=pedido_id,
+            usuario_id=usuario_id,
+            observaciones_generales=None,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    resultado_hijo = await asyncio.to_thread(
+        _db_crear_pedido_hijo_diferencia,
+        pedido_padre, diferencia["detalles"], body.nueva_fecha_entrega, usuario_id, audit,
+    )
+
+    try:
+        from src.utils.email_notifier import send_diferencia_pedido_notification
+        cab_padre = pedido_padre["cabecera"]
+        await asyncio.to_thread(
+            send_diferencia_pedido_notification,
+            pedido_id=pedido_id,
+            numero_pedido=cab_padre.get("numero_pedido"),
+            numero_pedido_hijo=resultado_hijo["numero_pedido"],
+            usuario_id=usuario_id,
+            detalles_diferencia=diferencia["detalles"],
+        )
+    except Exception as email_err:
+        logger.warning(f"⚠️ Error al enviar email de diferencia en pedido (no crítico): {email_err}")
+
+    logger.info(
+        f"✅ Pedido {pedido_id} confirmado con diferencia por usuario {user.get('username', 'UNKNOWN')}; "
+        f"pedido hijo {resultado_hijo['numero_pedido']} creado"
+    )
+
+    return JSONResponse(status_code=200, content={
+        "status": "success",
+        "confirmacion": resultado_confirmacion,
+        "pedido_hijo": resultado_hijo,
+    })
 
 
 def register_proveedor_endpoints(app: FastAPI):
@@ -292,8 +432,49 @@ def register_proveedor_endpoints(app: FastAPI):
               tags=["Pedidos - Proveedor"])
     async def crear_respuesta_desde_pedido(
         pedido_id: str = Path(..., description=_DESC_PEDIDO_ID),
+        body: Optional[ConfirmarRespuestaRequest] = Body(default=None),
         user: Dict = Depends(verify_jwt_token),
         _: None = Depends(require_any_permission(['odcsap.view', _PERM_MABEL_VIEW]))
     ):
-        """Guarda los cambios de EL RAYO, crea la respuesta del proveedor y deja el pedido en estado CONFIRMADO (confirmar = ir a redistribución)."""
-        return await _handle_crear_respuesta_desde_pedido(pedido_id, user)
+        """Guarda los cambios de EL RAYO, crea la respuesta del proveedor y deja el pedido en
+        estado CONFIRMADO (confirmar = ir a redistribución).
+
+        Req. 1.2 (endurecimiento 2026-08-17): rechaza (400, error
+        'diferencia_produccion_no_reconocida') si el pedido tiene productos con Total por
+        debajo de cantidad_solicitada_original y el body no envía diferencia_reconocida=true.
+        Antes esta regla vivía solo como gate de UI -- ver
+        docs/requeriments/PYTD002_ODC-MABEL-RAYO_SEGUIMIENTO.md.
+        """
+        diferencia_reconocida = body.diferencia_reconocida if body else False
+        return await _handle_crear_respuesta_desde_pedido(pedido_id, user, diferencia_reconocida)
+
+    @app.get("/api/pedidos/{pedido_id}/diferencia-produccion", tags=["Pedidos - Proveedor"])
+    async def obtener_diferencia_produccion(
+        pedido_id: str = Path(..., description=_DESC_PEDIDO_ID),
+        user: Dict = Depends(verify_jwt_token),
+        _: None = Depends(require_any_permission([_PERM_ODCSAP_VIEW, _PERM_MABEL_VIEW]))
+    ):
+        """
+        Req. 1.2 (pedidos parciales): indica si algún producto del pedido tiene un
+        Total actual por debajo de la cantidad_solicitada_original (plantilla Excel).
+        El frontend lo consulta al hacer clic en "Confirmar" para decidir si mostrar
+        el modal de diferencia de producción.
+        """
+        return await _handle_obtener_diferencia_produccion(pedido_id)
+
+    @app.post("/api/pedidos/{pedido_id}/confirmar-con-diferencia", tags=["Pedidos - Proveedor"])
+    async def confirmar_con_diferencia(
+        request: Request,
+        pedido_id: str = Path(..., description=_DESC_PEDIDO_ID),
+        body: ConfirmarConDiferenciaRequest = Body(...),
+        user: Dict = Depends(verify_jwt_token),
+        _: None = Depends(require_any_permission([_PERM_ODCSAP_VIEW, _PERM_MABEL_VIEW]))
+    ):
+        """
+        Req. 1.2 (pedidos parciales): opción "Confirmar pedido, generar nuevo pedido con
+        la diferencia" del modal de diferencia de producción. Confirma el pedido padre
+        (mismo flujo que crear-respuesta-desde-pedido) y crea un pedido hijo
+        (numero_pedido = "<padre>.NN") con la diferencia, en estado PRODUCCION POSPUESTA,
+        notificando por correo a MABEL_TRADING.
+        """
+        return await _handle_confirmar_con_diferencia(pedido_id, body, request, user)

@@ -9,10 +9,12 @@ from typing import Optional, Dict, Any, List
 
 from src.database.pedido_estados import (
     ESTADO_REDISTRIBUCION,
+    ESTADO_CONFIRMADO_ENVIADO,
     ESTADO_DESPACHAR_Y_FACTURAR,
     ESTADOS_PUEDE_DESCARTAR,
     ESTADOS_PUEDE_CANCELAR_POR_EL_RAYO,
     ESTADO_LIMITE_CANCELAR_PEDIDO,
+    ESTADO_PRODUCCION_POSPUESTA,
     ESTADOS_PUEDE_CONFIRMAR_REDISTRIBUCION,
     ESTADO_PEDIDO_CONFIRMADO,
     ESTADO_ERROR_ENVIO_SAP_REINTENTO,
@@ -51,6 +53,43 @@ def calcular_totales_detalles(detalles: List[Dict[str, Any]]) -> Dict[str, float
     }
 
 
+def calcular_diferencia_produccion(detalles: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """
+    Req. 1.2 (pedidos parciales): detecta líneas cuyo "total" vigente quedó por debajo
+    de la cantidad que Mabel Trading solicitó originalmente en la plantilla Excel
+    (cantidad_solicitada_original, inmutable desde el INSERT -- ver
+    PedidoDetalleRepository.insert y PedidoUtils._agregar_cantidad_solicitada_original).
+
+    Ignora líneas sin cantidad_solicitada_original (pedidos anteriores a la migración 641,
+    o valor NULL) -- no hay base para comparar.
+
+    Returns:
+        {"tiene_diferencia": bool, "detalles": [{pedido_detalle_id, codigo_interno,
+         descripcion_sap, cantidad_solicitada_original, total_actual, diferencia}, ...]}
+    """
+    detalles_con_diferencia = []
+    for d in detalles or []:
+        original = d.get("cantidad_solicitada_original")
+        total_actual = d.get("total")
+        if original is None or total_actual is None:
+            continue
+        original = float(original)
+        total_actual = float(total_actual)
+        if total_actual < original:
+            detalles_con_diferencia.append({
+                "pedido_detalle_id": d.get("pedido_detalle_id"),
+                "codigo_interno": d.get("codigo_interno"),
+                "descripcion_sap": d.get("descripcion_sap"),
+                "cantidad_solicitada_original": original,
+                "total_actual": total_actual,
+                "diferencia": round(original - total_actual, 4),
+            })
+    return {
+        "tiene_diferencia": len(detalles_con_diferencia) > 0,
+        "detalles": detalles_con_diferencia,
+    }
+
+
 def get_estado_id_from_pedido(pedido: Dict[str, Any]) -> Optional[int]:
     """
     Extrae y normaliza el estado_id desde un diccionario de pedido.
@@ -84,7 +123,7 @@ def enrich_pedido_with_ui_flags(pedido: Dict[str, Any]) -> None:
     - puede_cancelar_por_el_rayo: bool - Si El Rayo puede cancelar el pedido
     - puede_cancelar_pedido: bool - Si MABEL puede cancelar el pedido
     - puede_descargar_csv: bool - Si se puede descargar CSV (solo estado REDISTRIBUCION)
-    - puede_generar_txt_mba3: bool - Si se puede generar el TXT MBA3 (solo estado REDISTRIBUCION / "CONFIRMADO POR EL RAYO")
+    - puede_generar_txt_mba3: bool - Si se puede generar el TXT MBA3 (solo estado CONFIRMADO_ENVIADO / "CONFIRMADO Y ENVIADO", ver PYTD002_ODC-MABEL-RAYO_SEGUIMIENTO.md 1.7)
     - puede_confirmar_redistribucion: bool - Si se puede confirmar para redistribución
     - puede_finalizar: bool - Si se puede marcar como finalizado (solo DESPACHAR_Y_FACTURAR)
     
@@ -102,11 +141,70 @@ def enrich_pedido_with_ui_flags(pedido: Dict[str, Any]) -> None:
     # Flags basados en el estado del pedido
     pedido["puede_descartar"] = estado_id in ESTADOS_PUEDE_DESCARTAR
     pedido["puede_cancelar_por_el_rayo"] = estado_id in ESTADOS_PUEDE_CANCELAR_POR_EL_RAYO
-    pedido["puede_cancelar_pedido"] = estado_id is not None and estado_id < ESTADO_LIMITE_CANCELAR_PEDIDO
+    # Req. 1.2: PRODUCCION_POSPUESTA (22) es numéricamente mayor al límite pero anterior
+    # en el flujo real (pedido "hijo" a la espera de una futura producción) -- mismo
+    # motivo por el que ya se excluye de _filtro_redistribucion; Mabel Trading puede
+    # cancelarlo si prefiere gestionar la diferencia por su cuenta.
+    pedido["puede_cancelar_pedido"] = estado_id is not None and (
+        estado_id < ESTADO_LIMITE_CANCELAR_PEDIDO or estado_id == ESTADO_PRODUCCION_POSPUESTA
+    )
     pedido["puede_descargar_csv"] = estado_id == ESTADO_REDISTRIBUCION
-    pedido["puede_generar_txt_mba3"] = estado_id == ESTADO_REDISTRIBUCION
+    # req. 1.7 / RN-01: el requerimiento pide gatillar con "Confirmado por El Rayo"
+    # (ESTADO_REDISTRIBUCION = 4), pero el DocNum de SAP que exige la columna 12 del
+    # TXT recién existe en CONFIRMADO_ENVIADO (12) -- ver docs/requeriments/
+    # PYTD002_ODC-MABEL-RAYO_SEGUIMIENTO.md, punto 1.7, para el detalle de la decisión.
+    pedido["puede_generar_txt_mba3"] = estado_id == ESTADO_CONFIRMADO_ENVIADO
     pedido["puede_confirmar_redistribucion"] = estado_id in ESTADOS_PUEDE_CONFIRMAR_REDISTRIBUCION
     pedido["puede_finalizar"] = estado_id == ESTADO_DESPACHAR_Y_FACTURAR
+
+
+_PERM_ODCSAP_VIEW = 'odcsap.view'
+_PERM_MABEL_VIEW = 'mabel.view'
+_PERM_PRODUCCION_ELRAYO_VIEW = 'produccion-elrayo.view'
+
+# RN-03: campos de costo/precio/margen que Producción El Rayo no debe recibir. "total"
+# (Cantidad Total solicitada) y "total_total" quedan fuera a propósito: son cantidad, no
+# costo, y 1.8 los declara explícitamente visibles para este perfil. "pvp" también queda
+# fuera a propósito (corregido 2026-08-17): es precio de venta al público, no costo/margen
+# de Mabel, y el usuario confirmó que Producción sí debe verlo.
+_CAMPOS_COSTO_DETALLE = ("costo_doc_sin_iva", "descuento_1", "subtotal", "costo_margen", "costo_unitario", "margen")
+_CAMPOS_COSTO_TOTALES = ("total_costo_unitario", "total_subtotal")
+
+
+def es_solo_produccion_el_rayo(user: Dict[str, Any]) -> bool:
+    """True si el usuario NO tiene odcsap.view ni mabel.view (los perfiles que sí deben
+    ver costos/precios/márgenes), pero sí tiene produccion-elrayo.view."""
+    permissions = user.get("permissions") or []
+    if _PERM_ODCSAP_VIEW in permissions or _PERM_MABEL_VIEW in permissions:
+        return False
+    return _PERM_PRODUCCION_ELRAYO_VIEW in permissions
+
+
+def ocultar_costos_para_produccion_el_rayo(
+    user: Dict[str, Any],
+    detalles: Optional[List[Dict[str, Any]]] = None,
+    totales: Optional[Dict[str, Any]] = None,
+) -> None:
+    """RN-03: si quien pide la respuesta tiene únicamente produccion-elrayo.view, anula
+    (in-place) los campos de costo/precio/margen en `detalles` y `totales` antes de
+    serializar la respuesta HTTP.
+
+    Debe llamarse SOLO justo antes de devolver la respuesta al cliente -- nunca antes,
+    porque otros pasos de la misma petición (cálculo de OC hacia SAP, notificaciones,
+    auditoría) siguen necesitando el valor real. No se elimina la clave (para no romper
+    el tipado del frontend, que ya trata estos campos como opcionales/nulos); se deja en
+    None, igual que cuando el dato simplemente no existe.
+    """
+    if not es_solo_produccion_el_rayo(user):
+        return
+    for detalle in detalles or []:
+        for campo in _CAMPOS_COSTO_DETALLE:
+            if campo in detalle:
+                detalle[campo] = None
+    if isinstance(totales, dict):
+        for campo in _CAMPOS_COSTO_TOTALES:
+            if campo in totales:
+                totales[campo] = None
 
 
 def _oc_permite_reintento_envio_por_detalle_error(oc: Dict[str, Any]) -> bool:

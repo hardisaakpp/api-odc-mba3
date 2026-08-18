@@ -20,7 +20,7 @@ from src.exceptions import BusinessException
 from ..connection import get_db_connection_context
 from ..repositories.pedido_repository import PedidoRepository
 from ..repositories.producto_sap_repository import ProductoSAPRepository
-from ..pedido_estados import ESTADO_BORRADOR, ESTADO_NUEVO_PEDIDO
+from ..pedido_estados import ESTADO_BORRADOR, ESTADO_NUEVO_PEDIDO, ESTADO_PRODUCCION_POSPUESTA
 from .pedido_validator import PedidoValidator
 from .pedido_parser import PedidoParser
 from .pedido_consolidator import PedidoConsolidator
@@ -1476,6 +1476,106 @@ class PedidoService:
             "creado_por": usuario_id,
             "estado_id": 1
         }
+
+    def crear_pedido_hijo_diferencia(
+        self,
+        pedido_padre: Dict[str, Any],
+        detalles_con_diferencia: List[Dict[str, Any]],
+        nueva_fecha_entrega: str,
+        usuario_id: Optional[str] = None,
+        audit_context: Optional["AuditContext"] = None,
+    ) -> Dict[str, Any]:
+        """
+        Req. 1.2 (Gestión de pedidos parciales): crea el pedido "hijo" con la diferencia
+        no producida, cuando Administración El Rayo elige "Confirmar pedido, generar
+        nuevo pedido con la diferencia" en el modal de diferencia de producción.
+
+        - numero_pedido = "<numero_pedido_padre>.NN", NN = pedidos hijo ya generados a
+          partir del mismo padre + 1 (soporta divisiones repetidas sin caso especial).
+        - pedido_padre_id enlaza al padre (trazabilidad, migración 643).
+        - fecha_entrega = nueva_fecha_entrega (la indica el usuario administrativo en el
+          momento); fecha_facturacion queda NULL (se define en su propio ciclo, igual
+          que cualquier pedido nuevo, ver _db_confirmar_produccion).
+        - estado_id = ESTADO_PRODUCCION_POSPUESTA (22): estado sembrado para esto en la
+          migración 620 pero nunca usado hasta ahora.
+        - Cada línea del hijo copia los atributos de producto/precio de la línea
+          correspondiente del padre; total = diferencia; subtotal se escala
+          proporcionalmente al subtotal original del padre (subtotal no lo toca ningún
+          PATCH de "Total", así que sigue reflejando cantidad_solicitada_original).
+
+        Returns:
+            {"pedido_id", "numero_pedido", "pedido_padre_id", "detalles_insertados"}
+        """
+        cab_padre = pedido_padre["cabecera"]
+        pedido_padre_id = cab_padre["pedido_id"]
+        numero_pedido_padre = cab_padre["numero_pedido"]
+
+        with get_db_connection_context() as conn:
+            repo = PedidoRepository(conn)
+            siguiente_sufijo = repo.contar_hijos(pedido_padre_id) + 1
+            numero_pedido_hijo = f"{numero_pedido_padre}.{siguiente_sufijo:02d}"
+
+            cabecera_hijo = {
+                "numero_pedido": numero_pedido_hijo,
+                "fecha_pedido": datetime.now().date(),
+                "fecha_entrega": nueva_fecha_entrega,
+                "forma_pago": cab_padre.get("forma_pago"),
+                "proveedor_nombre": cab_padre.get("proveedor_nombre"),
+                "comprador_nombre": cab_padre.get("comprador_nombre"),
+                "comprador_codigo": cab_padre.get("comprador_codigo"),
+                "origen_traslado": cab_padre.get("origen_traslado"),
+                "serie": cab_padre.get("serie"),
+                "archivo_nombre": f"GENERADO_PARCIAL_{numero_pedido_padre}",
+                "creado_por": usuario_id,
+                "estado_id": ESTADO_PRODUCCION_POSPUESTA,
+                "pedido_padre_id": pedido_padre_id,
+            }
+            pedido_hijo_id = repo.insert_cabecera(cabecera_hijo, audit_context=audit_context)
+
+            detalles_padre_por_id = {
+                d["pedido_detalle_id"]: d for d in pedido_padre.get("detalles", [])
+            }
+            detalles_insertados = 0
+            for orden_linea, dif in enumerate(detalles_con_diferencia):
+                detalle_padre = detalles_padre_por_id.get(dif["pedido_detalle_id"])
+                if not detalle_padre:
+                    continue
+                diferencia = dif["diferencia"]
+                subtotal_padre = detalle_padre.get("subtotal")
+                original_padre = dif["cantidad_solicitada_original"]
+                subtotal_hijo = (
+                    round(float(subtotal_padre) * (diferencia / original_padre), 4)
+                    if subtotal_padre is not None and original_padre else None
+                )
+                detalle_hijo = {
+                    "codigo_interno": detalle_padre.get("codigo_interno"),
+                    "descripcion_sap": detalle_padre.get("descripcion_sap"),
+                    "marca": detalle_padre.get("marca"),
+                    "codigo_barras": detalle_padre.get("codigo_barras"),
+                    "pack": detalle_padre.get("pack"),
+                    "costo_doc_sin_iva": detalle_padre.get("costo_doc_sin_iva"),
+                    "descuento_1": detalle_padre.get("descuento_1"),
+                    "pvp": detalle_padre.get("pvp"),
+                    "subtotal": subtotal_hijo,
+                    "total": diferencia,
+                    "costo_margen": detalle_padre.get("costo_margen"),
+                    "costo_unitario": detalle_padre.get("costo_unitario"),
+                    "orden_linea": orden_linea,
+                }
+                repo.insert_detalle(pedido_hijo_id, detalle_hijo, audit_context=audit_context)
+                detalles_insertados += 1
+
+            logger.info(
+                f"✅ Pedido hijo {numero_pedido_hijo} ({pedido_hijo_id}) creado desde "
+                f"{numero_pedido_padre} con {detalles_insertados} línea(s) en diferencia"
+            )
+
+            return {
+                "pedido_id": pedido_hijo_id,
+                "numero_pedido": numero_pedido_hijo,
+                "pedido_padre_id": pedido_padre_id,
+                "detalles_insertados": detalles_insertados,
+            }
 
     def _construir_detalles_desde_articulos(self, articulos: List[Dict]) -> List[Dict]:
         detalles_con_tiendas = []

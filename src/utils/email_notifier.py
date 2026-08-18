@@ -47,6 +47,7 @@ _CORREO_PEDIDO_DESCARTADO = "Pedido Descartado"
 _CORREO_REDISTRIBUCION_CONFIRMADA = "Redistribución Confirmada por MABEL TRADING"
 _CORREO_PEDIDO_CONFIRMADO_PRODUCCION = "Pedido Confirmado por Producción"
 _CORREO_PEDIDO_CANCELADO_POR_EL_RAYO = "Pedido Cancelado por El Rayo"
+_CORREO_DIFERENCIA_PEDIDO = "Diferencia en Pedido"
 
 
 # ─── Helpers privados ────────────────────────────────────────────────────────
@@ -255,18 +256,6 @@ def _generate_odc_pdf_attachment(oc_cabecera, oc_detalles, doc_num, numero_oc_sa
     except Exception as e:
         logger.warning(f"⚠️ No se pudo generar PDF adjunto (se enviará email sin PDF): {e}")
         return None
-
-
-def _build_unique_recipients(tipos, tipo_correo):
-    seen = set()
-    recipients = []
-    for tipo in tipos:
-        for email in get_destinatarios_por_correo(tipo, tipo_correo):
-            e = (email or "").strip().lower()
-            if e and e not in seen:
-                seen.add(e)
-                recipients.append(email.strip())
-    return recipients
 
 
 def _extract_transferencias_data(solicitudes_transferencia):
@@ -833,6 +822,55 @@ def _build_pedido_cancelado_email(pedido_id, numero_pedido, usuario_id, fecha_ej
         timestamp=fecha_ejecucion,
     )
     subject = f"Pedido Cancelado - {numero_pedido or pedido_id}"
+    return subject, body_html
+
+
+def _build_diferencia_pedido_email(
+    pedido_id, numero_pedido, numero_pedido_hijo, usuario_id, detalles_diferencia, fecha_ejecucion
+):
+    """Construye (subject, body_html) para 'Diferencia en Pedido' (MABEL_TRADING, req. 1.2).
+
+    Se envía cuando Administración El Rayo confirma un pedido con cantidades por debajo
+    de lo solicitado originalmente y elige generar un pedido nuevo con la diferencia."""
+    from src.utils.email_template import build_email, info_section, paragraph, badge_html
+
+    filas_productos = "".join(
+        f"<tr><td style='padding:4px 8px;'>{d.get('codigo_interno') or 'N/A'}</td>"
+        f"<td style='padding:4px 8px;'>{d.get('cantidad_solicitada_original')}</td>"
+        f"<td style='padding:4px 8px;'>{d.get('total_actual')}</td>"
+        f"<td style='padding:4px 8px;'>{d.get('diferencia')}</td></tr>"
+        for d in detalles_diferencia
+    )
+    tabla_productos = (
+        "<table style='width:100%; border-collapse:collapse; font-size:13px;'>"
+        "<tr style='font-weight:bold;'><td style='padding:4px 8px;'>C&oacute;digo</td>"
+        "<td style='padding:4px 8px;'>Solicitado</td><td style='padding:4px 8px;'>Confirmado</td>"
+        "<td style='padding:4px 8px;'>Diferencia</td></tr>"
+        f"{filas_productos}</table>"
+    )
+
+    body_html = build_email(
+        title="Diferencia en Pedido",
+        subtitle=f"Pedido: {numero_pedido or pedido_id}",
+        sections=[
+            paragraph(
+                f"Administraci&oacute;n El Rayo confirm&oacute; el pedido {numero_pedido or pedido_id} "
+                f"con cantidades por debajo de lo solicitado y gener&oacute; el pedido "
+                f"{badge_html(numero_pedido_hijo, '#fff8e1', '#8a6d00')} con la diferencia, "
+                f"en estado {badge_html('PRODUCCION POSPUESTA', '#fff8e1', '#8a6d00')}."
+            ),
+            info_section(_SECCION_INFO_PEDIDO, [
+                (_LABEL_NUMERO_PEDIDO, numero_pedido or "N/A"),
+                ("Pedido con la Diferencia", numero_pedido_hijo),
+                (_LABEL_PEDIDO_ID, pedido_id),
+                ("Usuario Administrativo El Rayo", usuario_id or "N/A"),
+            ], accent="orange"),
+            paragraph(tabla_productos),
+        ],
+        accent="orange",
+        timestamp=fecha_ejecucion,
+    )
+    subject = f"Diferencia en Pedido - {numero_pedido or pedido_id}"
     return subject, body_html
 
 
@@ -1411,7 +1449,9 @@ def send_oc_ready_for_dispatch_notification(
 
     HU-04: Alertar al personal de El Rayo para proceder con el despacho y facturación
 
-    DESTINATARIOS: OPERACIONES (El Rayo) + MABEL_TRADING
+    DESTINATARIOS: quienes estén vinculados al correo "OC y Solicitudes de Transferencia
+    - Listo para Despacho" en Personas y Correos (catálogo consolidado en una sola fila
+    OPERACIONES; incluye tanto a El Rayo como a MABEL TRADING)
 
     Args:
         oc_cabecera: Datos de cabecera de la orden de compra
@@ -1432,7 +1472,7 @@ def send_oc_ready_for_dispatch_notification(
         fecha_ejecucion = ahora_naive()
 
     try:
-        recipients = _build_unique_recipients(["OPERACIONES", "MABEL_TRADING"], _CORREO_DESPACHO)
+        recipients = get_destinatarios_por_correo("OPERACIONES", _CORREO_DESPACHO)
 
         if not recipients:
             logger.warning("⚠️ No hay destinatarios configurados para notificación de despacho (OPERACIONES ni MABEL_TRADING)")
@@ -1695,6 +1735,90 @@ El pedido permanece en el sistema con estado CANCELADO y no sera procesado.
 
     except Exception as e:
         logger.error(f"❌ Error al enviar notificación de pedido cancelado: {e}", exc_info=True)
+        return False
+
+
+def send_diferencia_pedido_notification(
+    pedido_id: str,
+    numero_pedido: str,
+    numero_pedido_hijo: str,
+    usuario_id: Optional[str] = None,
+    detalles_diferencia: Optional[List[Dict[str, Any]]] = None,
+    fecha_ejecucion: Optional[datetime] = None,
+) -> bool:
+    """
+    Envía notificación a MABEL TRADING (req. 1.2, Gestión de pedidos parciales) cuando
+    Administración El Rayo confirma un pedido con cantidades por debajo de lo solicitado
+    originalmente y genera un pedido nuevo con la diferencia.
+
+    Se usa al procesar POST /api/pedidos/{pedido_id}/confirmar-con-diferencia.
+    DESTINATARIO: MABEL_TRADING
+
+    Args:
+        pedido_id: UUID del pedido original (padre)
+        numero_pedido: Número del pedido original (padre)
+        numero_pedido_hijo: Número del pedido generado con la diferencia
+        usuario_id: Usuario administrativo de El Rayo que confirmó
+        detalles_diferencia: Lista de {codigo_interno, cantidad_solicitada_original,
+            total_actual, diferencia} (ver calcular_diferencia_produccion)
+        fecha_ejecucion: Fecha y hora de la confirmación (por defecto ahora)
+
+    Returns:
+        True si el email se envió correctamente, False en caso contrario
+    """
+    if not ENABLE_EMAIL_NOTIFICATIONS:
+        logger.debug(_MSG_EMAIL_DESHABILITADO)
+        return False
+
+    if not fecha_ejecucion:
+        fecha_ejecucion = ahora_naive()
+    detalles_diferencia = detalles_diferencia or []
+
+    try:
+        recipients: list[str] = get_destinatarios_por_correo("MABEL_TRADING", _CORREO_DIFERENCIA_PEDIDO)
+
+        if not recipients:
+            logger.warning("⚠️ No hay destinatarios configurados para notificación de diferencia en pedido")
+            return False
+
+        from src.utils.email_template import create_email_message
+
+        subject, body_html = _build_diferencia_pedido_email(
+            pedido_id, numero_pedido, numero_pedido_hijo, usuario_id, detalles_diferencia, fecha_ejecucion
+        )
+
+        filas_texto = "\n".join(
+            f"- {d.get('codigo_interno') or 'N/A'}: solicitado {d.get('cantidad_solicitada_original')}, "
+            f"confirmado {d.get('total_actual')}, diferencia {d.get('diferencia')}"
+            for d in detalles_diferencia
+        )
+        body_text = f"""Diferencia en Pedido - {numero_pedido or pedido_id}
+{'=' * 40}
+
+- Numero de Pedido: {numero_pedido or 'N/A'}
+- Pedido con la Diferencia: {numero_pedido_hijo}
+- Pedido ID: {pedido_id}
+- Usuario Administrativo El Rayo: {usuario_id or 'N/A'}
+- Fecha y hora: {fecha_ejecucion.strftime('%Y-%m-%d %H:%M:%S')}
+
+Productos con diferencia:
+{filas_texto}
+"""
+
+        msg = create_email_message(
+            subject=subject,
+            recipients=recipients,
+            body_html=body_html,
+            body_text=body_text,
+        )
+
+        send_smtp_message(msg, recipients)
+
+        logger.info(f"✅ Notificación de diferencia en pedido enviada a {', '.join(recipients)} (Pedido: {numero_pedido or pedido_id})")
+        return True
+
+    except Exception as e:
+        logger.error(f"❌ Error al enviar notificación de diferencia en pedido: {e}", exc_info=True)
         return False
 
 

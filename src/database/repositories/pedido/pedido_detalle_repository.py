@@ -276,7 +276,28 @@ class PedidoDetalleRepository:
                 )
             
             cursor.execute(sql, values)
-            
+
+            # Req. 1.2: fija cantidad_solicitada_original una sola vez, inmediatamente
+            # después del INSERT (misma transacción, antes del commit). Se hace como
+            # UPDATE separado en vez de sumar una 5ta rama a la matriz de arriba
+            # (tiene_comentario x tiene_orden_linea ya son 4 variantes de SQL) para no
+            # duplicar esa combinatoria. Ningún otro método de este repositorio debe
+            # volver a escribir esta columna.
+            cursor.execute("""
+                SELECT COUNT(*)
+                FROM INFORMATION_SCHEMA.COLUMNS
+                WHERE TABLE_NAME = 'pedido_detalle'
+                AND COLUMN_NAME = 'cantidad_solicitada_original'
+            """)
+            result_cant_original = cursor.fetchone()
+            tiene_cantidad_solicitada_original = result_cant_original[0] > 0 if result_cant_original else False
+            if tiene_cantidad_solicitada_original:
+                cursor.execute("""
+                    UPDATE pedido_detalle
+                    SET cantidad_solicitada_original = ?
+                    WHERE pedido_detalle_id = ?
+                """, (datos_detalle.get("total"), pedido_detalle_id))
+
             # Registrar en audit log
             audit_svc = AuditLogService(self.conn)
             audit_svc.registrar_insert(
@@ -728,38 +749,49 @@ class PedidoDetalleRepository:
         valor_anterior: Optional[str],
         valor_nuevo: Optional[str],
         fecha_actual,
+        rol_modificador: Optional[str] = None,
+        tiene_rol: bool = False,
     ) -> None:
+        """MERGE (upsert) de una fila de pedido_detalle_modificacion_columna.
+
+        valor_anterior/valor_nuevo y rol_modificador son columnas opcionales
+        (agregadas en migraciones posteriores a la creación de la tabla): se
+        arma el MERGE dinámicamente según tiene_valores/tiene_rol para no
+        romper en un ambiente donde la migración correspondiente aún no corrió.
+        """
+        using_cols = ["? AS pedido_detalle_id", "? AS columna_key", "? AS modificado_por"]
+        using_params = [pedido_detalle_id, columna_key, usuario_mod]
+        set_clauses = ["modificado_por = source.modificado_por", "fecha_modificacion = ?"]
+        insert_cols = ["pedido_detalle_id", "columna_key", "modificado_por", "fecha_modificacion"]
+        insert_values = ["source.pedido_detalle_id", "source.columna_key", "source.modificado_por", "?"]
+
         if tiene_valores:
-            cursor.execute("""
-                MERGE pedido_detalle_modificacion_columna AS target
-                USING (SELECT ? AS pedido_detalle_id, ? AS columna_key, ? AS modificado_por,
-                              ? AS valor_anterior, ? AS valor_nuevo) AS source
-                ON target.pedido_detalle_id = source.pedido_detalle_id
-                AND target.columna_key = source.columna_key
-                WHEN MATCHED THEN
-                    UPDATE SET
-                        modificado_por = source.modificado_por,
-                        fecha_modificacion = ?,
-                        valor_anterior = source.valor_anterior,
-                        valor_nuevo = source.valor_nuevo
-                WHEN NOT MATCHED THEN
-                    INSERT (pedido_detalle_id, columna_key, modificado_por, fecha_modificacion, valor_anterior, valor_nuevo)
-                    VALUES (source.pedido_detalle_id, source.columna_key, source.modificado_por, ?, source.valor_anterior, source.valor_nuevo);
-            """, (pedido_detalle_id, columna_key, usuario_mod, valor_anterior, valor_nuevo, fecha_actual, fecha_actual))
-        else:
-            cursor.execute("""
-                MERGE pedido_detalle_modificacion_columna AS target
-                USING (SELECT ? AS pedido_detalle_id, ? AS columna_key, ? AS modificado_por) AS source
-                ON target.pedido_detalle_id = source.pedido_detalle_id
-                AND target.columna_key = source.columna_key
-                WHEN MATCHED THEN
-                    UPDATE SET
-                        modificado_por = source.modificado_por,
-                        fecha_modificacion = ?
-                WHEN NOT MATCHED THEN
-                    INSERT (pedido_detalle_id, columna_key, modificado_por, fecha_modificacion)
-                    VALUES (source.pedido_detalle_id, source.columna_key, source.modificado_por, ?);
-            """, (pedido_detalle_id, columna_key, usuario_mod, fecha_actual, fecha_actual))
+            using_cols += ["? AS valor_anterior", "? AS valor_nuevo"]
+            using_params += [valor_anterior, valor_nuevo]
+            set_clauses += ["valor_anterior = source.valor_anterior", "valor_nuevo = source.valor_nuevo"]
+            insert_cols += ["valor_anterior", "valor_nuevo"]
+            insert_values += ["source.valor_anterior", "source.valor_nuevo"]
+
+        if tiene_rol:
+            using_cols.append("? AS rol_modificador")
+            using_params.append(rol_modificador)
+            set_clauses.append("rol_modificador = source.rol_modificador")
+            insert_cols.append("rol_modificador")
+            insert_values.append("source.rol_modificador")
+
+        sql = f"""
+            MERGE pedido_detalle_modificacion_columna AS target
+            USING (SELECT {', '.join(using_cols)}) AS source
+            ON target.pedido_detalle_id = source.pedido_detalle_id
+            AND target.columna_key = source.columna_key
+            WHEN MATCHED THEN
+                UPDATE SET
+                    {', '.join(set_clauses)}
+            WHEN NOT MATCHED THEN
+                INSERT ({', '.join(insert_cols)})
+                VALUES ({', '.join(insert_values)});
+        """
+        cursor.execute(sql, tuple(using_params + [fecha_actual, fecha_actual]))
 
     def _procesar_modificacion_columna(
         self,
@@ -771,6 +803,8 @@ class PedidoDetalleRepository:
         tiene_valores: bool,
         usuario_mod: Optional[str],
         errores: List[str],
+        rol_modificador: Optional[str] = None,
+        tiene_rol: bool = False,
     ) -> bool:
         pedido_detalle_id = mod.get('pedido_detalle_id')
         columna_key = mod.get('columna_key')
@@ -803,6 +837,8 @@ class PedidoDetalleRepository:
             mod.get('valor_anterior'),
             mod.get('valor_nuevo'),
             ahora_naive(),
+            rol_modificador,
+            tiene_rol,
         )
         return True
 
@@ -811,20 +847,24 @@ class PedidoDetalleRepository:
         numero_pedido: str,
         modificaciones: List[Dict[str, str]],
         modificado_por: Optional[str] = None,
+        rol_modificador: Optional[str] = None,
         audit_context: Optional["AuditContext"] = None,
     ) -> Dict[str, Any]:
         """
         Guarda o actualiza modificaciones de columnas para un pedido.
         Ahora incluye valor_anterior y valor_nuevo en pedido_detalle_modificacion_columna.
-        
+
         Args:
             numero_pedido: Número del pedido
             modificaciones: Lista de diccionarios con formato:
                 [{"pedido_detalle_id": "uuid", "columna_key": "costo_doc_sin_iva",
                   "valor_anterior": "100.00", "valor_nuevo": "120.00"}, ...]
             modificado_por: ID del usuario (deprecated, usar audit_context)
+            rol_modificador: Rol responsable de esta edición (PRODUCCION_ELRAYO u
+                ODCSAP), derivado por el caller del estado del pedido al momento
+                de guardar. Se aplica a todos los items de este llamado.
             audit_context: Contexto de auditoría (Buenas Prácticas - Sección 3)
-        
+
         Returns:
             Dict con información de las modificaciones guardadas
         """
@@ -865,11 +905,21 @@ class PedidoDetalleRepository:
             """)
             row = cursor.fetchone()
             tiene_valores = (row[0] if row else 0) > 0
-            
+
+            # Verificar si la tabla tiene la columna rol_modificador (migración 639)
+            cursor.execute("""
+                SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS
+                WHERE TABLE_NAME = 'pedido_detalle_modificacion_columna'
+                AND COLUMN_NAME = 'rol_modificador'
+            """)
+            row = cursor.fetchone()
+            tiene_rol = (row[0] if row else 0) > 0
+
             for mod in modificaciones:
                 if self._procesar_modificacion_columna(
                     cursor, mod, pedido_id, numero_pedido,
                     columnas_validas, tiene_valores, usuario_mod, errores,
+                    rol_modificador, tiene_rol,
                 ):
                     modificaciones_count += 1
             
@@ -942,31 +992,43 @@ class PedidoDetalleRepository:
                 }
             
             pedido_id = str(row[0])
-            
+
+            # rol_modificador es una columna opcional (migración 639)
             cursor.execute("""
-                SELECT 
+                SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS
+                WHERE TABLE_NAME = 'pedido_detalle_modificacion_columna'
+                AND COLUMN_NAME = 'rol_modificador'
+            """)
+            row = cursor.fetchone()
+            tiene_rol = (row[0] if row else 0) > 0
+            columna_rol_sql = "m.rol_modificador" if tiene_rol else "NULL AS rol_modificador"
+
+            cursor.execute(f"""
+                SELECT
                     m.pedido_detalle_id,
                     m.columna_key,
                     m.modificado_por,
-                    m.fecha_modificacion
+                    m.fecha_modificacion,
+                    {columna_rol_sql}
                 FROM pedido_detalle_modificacion_columna m
                 INNER JOIN pedido_detalle d ON m.pedido_detalle_id = d.pedido_detalle_id
                 WHERE d.pedido_id = ?
                 ORDER BY m.fecha_modificacion DESC
             """, (pedido_id,))
-            
+
             rows = cursor.fetchall()
             modificaciones = []
-            
+
             for row in rows:
                 fecha_mod = row[3]
                 fecha_mod_iso = fecha_mod.isoformat() if fecha_mod else None
-                
+
                 modificaciones.append({
                     "pedido_detalle_id": str(row[0]),
                     "columna_key": row[1],
                     "modificado_por": row[2] if row[2] else None,
-                    "fecha_modificacion": fecha_mod_iso
+                    "fecha_modificacion": fecha_mod_iso,
+                    "rol_modificador": row[4] if row[4] else None
                 })
             
             logger.info(f"✅ Obtenidas {len(modificaciones)} modificaciones para pedido {numero_pedido}")

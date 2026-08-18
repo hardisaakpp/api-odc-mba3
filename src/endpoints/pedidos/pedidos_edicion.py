@@ -21,7 +21,7 @@ from src.models import (
     ObtenerModificacionesColumnasResponse,
     ModificacionColumnaItem
 )
-from .pedidos_crud_helpers import calcular_totales_detalles
+from .pedidos_crud_helpers import calcular_totales_detalles, ocultar_costos_para_produccion_el_rayo, es_solo_produccion_el_rayo
 from .utils import get_user_id
 
 logger = logging.getLogger(__name__)
@@ -33,6 +33,22 @@ MSG_ERROR_ESTADO_NO_EDITABLE = "Solo se pueden editar COSTO UNIT., TOTAL y COMEN
 # Req. 1.8: odcsap.view hereda en CONFIRMADO POR PRODUCCIÓN (23) las mismas
 # funcionalidades de edición que tenía en GESTIONAR PEDIDO (3).
 _ESTADOS_EDITABLES_COSTO_TOTAL_COMENTARIO = frozenset({ESTADO_GESTIONAR_PEDIDO, ESTADO_CONFIRMADO_POR_PRODUCCION})
+
+
+def _resolver_rol_modificador(estado_id: Optional[int]) -> Optional[str]:
+    """Deriva el rol responsable de la edición según el estado del pedido al
+    guardar (no el permiso del usuario): GESTIONAR_PEDIDO es editable en la
+    práctica solo por produccion-elrayo.view y CONFIRMADO_POR_PRODUCCION solo
+    por odcsap.view — la segregación de acceso a la página ya lo garantiza
+    (ver _validar_acceso_produccion_el_rayo / _validar_acceso_estados_permitidos_produccion_el_rayo
+    en pedidos_detalle_endpoints.py). Usado para que el resaltado de columnas
+    modificadas en el frontend persista el color de quien editó, sin importar
+    quién esté viendo la pantalla después."""
+    if estado_id == ESTADO_GESTIONAR_PEDIDO:
+        return 'PRODUCCION_ELRAYO'
+    if estado_id == ESTADO_CONFIRMADO_POR_PRODUCCION:
+        return 'ODCSAP'
+    return None
 
 
 def _get_pedido_por_identificador(repo: PedidoRepository, identificador: str) -> Optional[Dict]:
@@ -155,11 +171,20 @@ def _logic_actualizar_total_detalle(numero_pedido: str, pedido_detalle_id: str, 
         
         if resultado["success"]:
             logger.info(f"✅ Total actualizado para detalle {pedido_detalle_id} por usuario {user.get('username', 'UNKNOWN')}")
+            # RN-03: Producción El Rayo usa este endpoint a diario (edita "Total" como
+            # sustituto de "Cantidad a producir"); sin esto, el costo (individual y
+            # agregado) le llegaba en cada guardado aunque nunca lo pidiera ni lo viera
+            # en pantalla. "costo_actualizado" es en realidad el costo_doc_sin_iva vigente
+            # del detalle (ver PedidoDetalleRepository.update_total), no un booleano.
+            ocultar_costos_para_produccion_el_rayo(user, totales=totales)
+            costo_actualizado = resultado["costo_actualizado"]
+            if es_solo_produccion_el_rayo(user):
+                costo_actualizado = None
             content = {"status": "success", "message": resultado["mensaje"],
                       "pedido_detalle_id": resultado["pedido_detalle_id"],
                       "total_anterior": resultado["total_anterior"],
                       "total_nuevo": resultado["total_nuevo"],
-                      "costo_actualizado": resultado["costo_actualizado"]}
+                      "costo_actualizado": costo_actualizado}
             if totales is not None:
                 content["totales"] = totales
             return JSONResponse(status_code=status.HTTP_200_OK, content=content)
@@ -231,10 +256,18 @@ def _logic_guardar_modificaciones_columnas(numero_pedido: str, request_body: Gua
         with get_db_connection_context() as conn:
             repo = PedidoRepository(conn)
             pedido = _validar_pedido_editable(repo, numero_pedido)
-            
+
+            estado_id = pedido.get("cabecera", {}).get("estado_id")
+            try:
+                estado_id = int(estado_id) if estado_id is not None else None
+            except (TypeError, ValueError):
+                estado_id = None
+            rol_modificador = _resolver_rol_modificador(estado_id)
+
             numero_pedido_real = pedido.get("cabecera", {}).get("numero_pedido") or numero_pedido
             resultado = repo.guardar_modificaciones_columnas(
-                numero_pedido=numero_pedido_real, modificaciones=modificaciones_list, modificado_por=user_id)
+                numero_pedido=numero_pedido_real, modificaciones=modificaciones_list,
+                modificado_por=user_id, rol_modificador=rol_modificador)
         
         if resultado["success"]:
             logger.info(f"✅ Modificaciones guardadas para pedido {numero_pedido_real} por usuario {user.get('username', 'UNKNOWN')}")
@@ -267,7 +300,8 @@ def _logic_obtener_modificaciones_columnas(numero_pedido: str, user: Dict):
         
         modificaciones_items = [ModificacionColumnaItem(
             pedido_detalle_id=mod["pedido_detalle_id"], columna_key=mod["columna_key"],
-            modificado_por=mod["modificado_por"], fecha_modificacion=mod["fecha_modificacion"])
+            modificado_por=mod["modificado_por"], fecha_modificacion=mod["fecha_modificacion"],
+            rol_modificador=mod.get("rol_modificador"))
             for mod in resultado["modificaciones"]]
         
         logger.info(f"✅ Modificaciones obtenidas para pedido {numero_pedido_real} por usuario {user.get('username', 'UNKNOWN')}")

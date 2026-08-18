@@ -416,8 +416,10 @@ class TestCancelarPedido:
     @patch('src.endpoints.pedidos.pedidos_cancelar_endpoints.PedidoRepository')
     @patch('src.endpoints.pedidos.pedidos_cancelar_endpoints.get_db_connection_context')
     @patch('src.utils.notification_manager.notification_manager')
+    @patch('src.utils.email_notifier.send_pedido_cancelado_por_el_rayo_notification')
     def test_cancelar_pedido_por_el_rayo(
         self,
+        mock_email_notifier,
         mock_notification_mgr,
         mock_db_context,
         mock_pedido_repo_class,

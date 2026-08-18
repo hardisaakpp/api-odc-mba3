@@ -736,6 +736,7 @@ class ModificacionColumnaItem(BaseModel):
     columna_key: str = Field(..., description="Clave de la columna modificada")
     modificado_por: Optional[str] = Field(None, description="Usuario que realizó la modificación")
     fecha_modificacion: str = Field(..., description="Fecha de modificación (ISO 8601)")
+    rol_modificador: Optional[str] = Field(None, description="Rol responsable de la última modificación: PRODUCCION_ELRAYO u ODCSAP")
 
 
 class ObtenerModificacionesColumnasResponse(BaseModel):

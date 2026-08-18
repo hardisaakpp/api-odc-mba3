@@ -563,3 +563,45 @@ migrations:
     description: "Retira la fila PRODUCCION_ELRAYO agregada en la migración 637 para 'Pedido Cancelado por El Rayo': con 'Personas y Correos' (notificacion_persona_correo) ya no hace falta una fila de catálogo por audiencia, cualquier persona se vincula directamente sin importar su equipo. Re-vincula sus destinatarios a la fila MABEL_TRADING (evitando duplicar vínculos) y actualiza su descripción. orden_flujo=5 queda vacante (no se renumera, mismo criterio que 632/634). El código ahora usa un solo get_destinatarios_por_correo('MABEL_TRADING', ...) en vez de _build_unique_recipients de 2 tipos. No aplica a 'OC y ST Despacho' (mismo patrón de 2 filas): queda pendiente de revisión aparte porque su contenido podría diferir por audiencia"
     category: "data"
     dependencies: ["637"]
+
+  - version: "639"
+    name: "add_rol_modificador_pedido_detalle_modificacion_columna"
+    file: "migrations/add_rol_modificador_pedido_detalle_modificacion_columna.sql"
+    description: "Agrega columna rol_modificador (NVARCHAR(30) NULL) a pedido_detalle_modificacion_columna para que el resaltado de celdas TOTAL/COMENTARIO editadas en Detalle del Pedido persista el color según quién hizo la última edición (PRODUCCION_ELRAYO = morado, ODCSAP = ámbar) en vez de según quién esté viendo la pantalla. Se deriva del estado del pedido al guardar (GESTIONAR_PEDIDO / CONFIRMADO_POR_PRODUCCION), no del permiso JWT. Filas existentes quedan en NULL, sin backfill: no se puede reconstruir el estado en que se hizo cada edición histórica"
+    category: "alter"
+    dependencies: ["638"]
+
+  - version: "640"
+    name: "consolidar_correo_oc_listo_despacho"
+    file: "migrations/consolidar_correo_oc_listo_despacho.sql"
+    description: "Retira la fila MABEL_TRADING de 'OC y Solicitudes de Transferencia - Listo para Despacho' (mismo patrón de 2 filas que la migración 638 dejó pendiente de revisión): se verificó que el envío real es un solo correo con el mismo asunto y cuerpo para ambas audiencias, sin bifurcar por tipo_notificacion. Re-vincula sus destinatarios a la fila OPERACIONES (evitando duplicar vínculos) y actualiza su descripción. orden_flujo=11 queda vacante (no se renumera). El código ahora usa un solo get_destinatarios_por_correo('OPERACIONES', ...) en vez de _build_unique_recipients de 2 tipos"
+    category: "data"
+    dependencies: ["624"]
+
+  - version: "641"
+    name: "add_cantidad_solicitada_original_pedido_detalle"
+    file: "migrations/add_cantidad_solicitada_original_pedido_detalle.sql"
+    description: "Req. 1.2 (pedidos parciales): agrega cantidad_solicitada_original (DECIMAL(18,4) NULL) a pedido_detalle, escrita una sola vez en el INSERT (carga de Excel) y nunca tocada por los PATCH de 'Total' de produccion-elrayo.view/odcsap.view. Permite calcular la diferencia entre lo solicitado originalmente y el total vigente sin importar cuántas veces se haya editado. Filas existentes quedan en NULL, sin backfill"
+    category: "alter"
+    dependencies: ["004"]
+
+  - version: "642"
+    name: "add_cantidad_solicitada_original_pedido_detalle_tienda"
+    file: "migrations/add_cantidad_solicitada_original_pedido_detalle_tienda.sql"
+    description: "Req. 1.2 (pedidos parciales): mismo campo que la migración 641 pero a nivel de pedido_detalle_tienda, protegiendo a futuro la cantidad original por tienda de la sobreescritura que sufre 'cantidad' al redistribuir/ajustar por confirmación de proveedor. No es consumida por la detección de diferencia de 1.2 (que opera a nivel agregado de pedido_detalle)"
+    category: "alter"
+    dependencies: ["004"]
+
+  - version: "643"
+    name: "add_pedido_padre_id"
+    file: "migrations/add_pedido_padre_id.sql"
+    description: "Req. 1.2 (pedidos parciales): agrega pedido_padre_id (UNIQUEIDENTIFIER NULL, FK a pedido.pedido_id) a pedido para enlazar el pedido 'hijo' generado con la diferencia (numero_pedido = '<original>.NN') con el pedido original. Se infiere es_parcial con pedido_padre_id IS NOT NULL, sin columna booleana aparte"
+    category: "alter"
+    dependencies: ["004"]
+
+  - version: "644"
+    name: "add_correo_diferencia_pedido"
+    file: "migrations/add_correo_diferencia_pedido.sql"
+    description: "Req. 1.2 (pedidos parciales): correo 'Diferencia en Pedido' (MABEL_TRADING) al catálogo, enviado desde POST /api/pedidos/{pedido_id}/confirmar-con-diferencia cuando Administración El Rayo confirma un pedido por debajo de lo solicitado y genera el pedido hijo con la diferencia. orden_flujo=12 (siguiente puesto libre tras el 11 que dejó vacante la migración 640)"
+    category: "data"
+    dependencies: ["624"]

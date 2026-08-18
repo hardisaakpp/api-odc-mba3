@@ -383,6 +383,22 @@ class PedidoCabeceraRepository:
 
             cursor.execute(sql, values)
 
+            # Req. 1.2: pedido_padre_id (pedido "hijo" generado con la diferencia no
+            # entregada) -- UPDATE aparte, misma transacción, en vez de sumar una 4ta
+            # variante a _construir_insert_sql_values (ya se ramifica por
+            # tiene_estado_id/tiene_estado).
+            if datos_cabecera_normalizado.get("pedido_padre_id"):
+                cursor.execute("""
+                    SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS
+                    WHERE TABLE_NAME = 'pedido' AND COLUMN_NAME = 'pedido_padre_id'
+                """)
+                row_padre = cursor.fetchone()
+                if row_padre and row_padre[0] > 0:
+                    cursor.execute(
+                        "UPDATE pedido SET pedido_padre_id = ? WHERE pedido_id = ?",
+                        (datos_cabecera_normalizado["pedido_padre_id"], pedido_id),
+                    )
+
             # Registrar creación inicial en pedido_estado_historial
             self._registrar_transicion_estado(
                 cursor, pedido_id,
@@ -1674,6 +1690,26 @@ class PedidoCabeceraRepository:
         except Exception as e:
             logger.error(f"❌ Error al verificar existencia de número de pedido '{numero_pedido}': {e}", exc_info=True)
             raise
+        finally:
+            cursor.close()
+
+    def contar_hijos(self, pedido_padre_id: str) -> int:
+        """Req. 1.2: cantidad de pedidos "hijo" ya generados a partir de este pedido
+        (pedido_padre_id), usado para calcular el siguiente sufijo de numero_pedido
+        (".01", ".02", ...). Devuelve 0 si la columna pedido_padre_id no existe todavía
+        en este ambiente (migración 643 sin aplicar)."""
+        cursor = self.conn.cursor()
+        try:
+            cursor.execute("""
+                SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS
+                WHERE TABLE_NAME = 'pedido' AND COLUMN_NAME = 'pedido_padre_id'
+            """)
+            row = cursor.fetchone()
+            if not (row and row[0] > 0):
+                return 0
+            cursor.execute("SELECT COUNT(*) FROM pedido WHERE pedido_padre_id = ?", (pedido_padre_id,))
+            row = cursor.fetchone()
+            return row[0] if row else 0
         finally:
             cursor.close()
 

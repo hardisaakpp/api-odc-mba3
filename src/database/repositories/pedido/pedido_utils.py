@@ -541,5 +541,39 @@ class PedidoUtils:
             )
             
             detalles.append(detalle_dict)
-        
+
+        self._agregar_cantidad_solicitada_original(cursor, detalles)
+
         return detalles
+
+    @staticmethod
+    def _agregar_cantidad_solicitada_original(cursor: pyodbc.Cursor, detalles: List[Dict[str, Any]]) -> None:
+        """Req. 1.2: agrega cantidad_solicitada_original a cada detalle (consulta aparte,
+        no metida en la cascada try/except de arriba, para no sumarle una 5ta variante de
+        SQL a esa combinatoria). Columna inmutable, fijada una sola vez en el INSERT
+        (PedidoDetalleRepository.insert) -- None si el pedido es anterior a la migración
+        641 o si la columna todavía no existe en este ambiente."""
+        for d in detalles:
+            d["cantidad_solicitada_original"] = None
+        if not detalles:
+            return
+        cursor.execute("""
+            SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS
+            WHERE TABLE_NAME = 'pedido_detalle' AND COLUMN_NAME = 'cantidad_solicitada_original'
+        """)
+        row = cursor.fetchone()
+        if not (row and row[0] > 0):
+            return
+        ids = [d["pedido_detalle_id"] for d in detalles]
+        placeholders = ",".join("?" for _ in ids)
+        cursor.execute(f"""
+            SELECT pedido_detalle_id, cantidad_solicitada_original
+            FROM pedido_detalle
+            WHERE pedido_detalle_id IN ({placeholders})
+        """, ids)
+        originales = {
+            str(row[0]): (float(row[1]) if row[1] is not None else None)
+            for row in cursor.fetchall()
+        }
+        for d in detalles:
+            d["cantidad_solicitada_original"] = originales.get(d["pedido_detalle_id"])

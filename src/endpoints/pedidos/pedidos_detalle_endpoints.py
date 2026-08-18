@@ -20,6 +20,7 @@ from .pedidos_crud_helpers import (
     enrich_pedido_reintento_envio_odc_sap,
     calcular_totales_detalles,
     get_estado_id_from_pedido,
+    ocultar_costos_para_produccion_el_rayo,
 )
 
 logger = logging.getLogger(__name__)
@@ -150,6 +151,10 @@ def register_pedidos_detalle_endpoints(app: FastAPI):
                 pedido = _obtener_y_enriquecer_pedido(identificador, incluir_respuesta, conn)
                 _validar_acceso_produccion_el_rayo(pedido, user)
                 _validar_acceso_estados_permitidos_produccion_el_rayo(pedido, user)
+
+                # RN-03: Producción El Rayo no debe recibir costos/precios/márgenes, ni
+                # siquiera en el JSON crudo (antes solo se ocultaban en el frontend).
+                ocultar_costos_para_produccion_el_rayo(user, pedido.get("detalles"), pedido.get("totales"))
 
                 # Asegurar que Decimal (p. ej. cantidad_solicitada_total, cantidad_confirmada_total, total, cantidad) sea JSON serializable
                 content = make_json_serializable(pedido)

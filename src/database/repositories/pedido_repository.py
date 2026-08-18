@@ -200,10 +200,18 @@ class PedidoRepository:
     def existe_numero_pedido(self, numero_pedido: str) -> bool:
         """
         Verifica si un número de pedido ya existe en el sistema.
-        
+
         DELEGADO a PedidoCabeceraRepository.
         """
         return self.cabecera_repo.existe_numero_pedido(numero_pedido)
+
+    def contar_hijos(self, pedido_padre_id: str) -> int:
+        """
+        Cantidad de pedidos "hijo" ya generados a partir de este pedido (req. 1.2).
+
+        DELEGADO a PedidoCabeceraRepository.
+        """
+        return self.cabecera_repo.contar_hijos(pedido_padre_id)
 
     def get_ultimo_pedido(self, usuario_id: str) -> Optional[Dict[str, Any]]:
         """
@@ -516,14 +524,16 @@ class PedidoRepository:
         self,
         numero_pedido: str,
         modificaciones: List[Dict[str, str]],
-        modificado_por: Optional[str] = None
+        modificado_por: Optional[str] = None,
+        rol_modificador: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Guarda o actualiza modificaciones de columnas para un pedido.
-        
+
         DELEGADO a PedidoDetalleRepository.
         """
-        return self.detalle_repo.guardar_modificaciones_columnas(numero_pedido, modificaciones, modificado_por)
+        return self.detalle_repo.guardar_modificaciones_columnas(
+            numero_pedido, modificaciones, modificado_por, rol_modificador)
 
     def obtener_modificaciones_columnas(
         self,

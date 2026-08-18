@@ -355,6 +355,56 @@ def _logic_descargar_pedido_original(pedido_id: str):
         raise HTTPException(status_code=500, detail={"error": "internal_error", "message": f"Error interno al generar Excel original: {str(e)}"})
 
 
+def _logic_exportar_margen_excel(pedido_id: str, user: Dict):
+    """Análisis de Margen de Rentabilidad por producto, en Excel (req. 1.4/1.5).
+
+    Acepta UUID o número de pedido, igual que `_logic_exportar_pedido_plano_mba`.
+    """
+    from ._excel_margen import generar_excel_margen
+
+    try:
+        with get_db_connection_context() as conn:
+            repo = PedidoRepository(conn)
+            try:
+                uuid.UUID(pedido_id)
+                pedido_data = repo.get_pedido_completo(pedido_id)
+                pedido_id_real = pedido_id
+            except (ValueError, TypeError):
+                pedido_data = repo.get_pedido_completo_por_numero(pedido_id)
+                pedido_id_real = pedido_data["cabecera"]["pedido_id"] if pedido_data else pedido_id
+
+            if not pedido_data:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail={"error": "not_found", "message": "Pedido no encontrado"}
+                )
+
+            excel_buffer = generar_excel_margen(pedido_id_real, pedido_data, user)
+
+            numero_pedido = pedido_data["cabecera"].get("numero_pedido", pedido_id)
+            numero_pedido_safe = numero_pedido.replace(" ", "_").replace("-", "_").replace("/", "_")
+            filename = f"analisis_margen_{numero_pedido_safe}_{ahora_naive().strftime('%Y%m%d_%H%M%S')}.xlsx"
+
+            logger.info(
+                f"✅ Análisis de Margen exportado para pedido {pedido_id_real} ({numero_pedido}) "
+                f"por usuario {user.get('username', 'UNKNOWN')}"
+            )
+
+            return Response(
+                content=excel_buffer.getvalue(),
+                media_type=MEDIA_TYPE_EXCEL,
+                headers={"Content-Disposition": f'attachment; filename="{filename}"'}
+            )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ Error al exportar Análisis de Margen para pedido {pedido_id}: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={"error": "internal_error", "message": f"Error interno al generar Excel de margen: {str(e)}"}
+        )
+
+
 def register_exportacion_endpoints(app: FastAPI):
     """Registra los endpoints de exportación de pedidos."""
     
@@ -520,3 +570,33 @@ def register_exportacion_endpoints(app: FastAPI):
         - **404**: Pedido no encontrado o sin snapshot original
         """
         return _logic_descargar_pedido_original(pedido_id)
+
+    # ========================================================================
+    # Análisis de Margen (req. 1.4/1.5, SIS-PYTD-0002)
+    # ========================================================================
+    @app.get("/api/pedidos/{pedido_id}/margen/exportar-excel", tags=["Pedidos - Exportación"])
+    async def exportar_margen_excel(
+        pedido_id: str = Path(..., description="UUID del pedido o número de pedido"),
+        user: Dict = Depends(verify_jwt_token),
+        _: None = Depends(require_any_permission([_PERM_MABEL_VIEW, _PERM_ODCSAP_VIEW]))
+    ):
+        """
+        Exporta el Análisis de Margen de Rentabilidad por producto (req. 1.4/1.5).
+
+        Una fila por producto del pedido con PVP, Costo (columna informativa de la
+        plantilla Excel, req. 1.4), Costo Unitario (insumo real del cálculo) y el
+        Margen de Rentabilidad (`1 - (Costo Unitario / (PVP / 1.15))`).
+
+        **Uso:**
+        - Interfaz: Cargar Plantilla / pantalla de carga por producto
+        - Botón: "Descargar Análisis de Margen"
+
+        Sin restricción de estado: disponible en cuanto el pedido tiene productos
+        cargados. **No** incluye el permiso `produccion-elrayo.view` (RN-03: ese
+        perfil no debe acceder a costos, precios ni márgenes).
+
+        **Respuestas:**
+        - **200**: Archivo Excel descargado correctamente
+        - **404**: Pedido no encontrado
+        """
+        return _logic_exportar_margen_excel(pedido_id, user)
