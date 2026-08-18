@@ -64,8 +64,6 @@ async def _event_stream_notificaciones(request, queue, username, relevant_permis
         })
         yield f"event: connected\ndata: {connected_data}\n\n"
 
-        last_heartbeat = time.time()
-
         while True:
             # Verificar si el cliente se desconectó
             if await request.is_disconnected():
@@ -82,12 +80,12 @@ async def _event_stream_notificaciones(request, queue, username, relevant_permis
                 yield f"event: notification\ndata: {event_data}\n\n"
 
             except asyncio.TimeoutError:
-                # Sin notificaciones: enviar heartbeat
-                now = time.time()
-                if now - last_heartbeat >= HEARTBEAT_INTERVAL:
-                    heartbeat_data = json.dumps({"timestamp": now})
-                    yield f"event: heartbeat\ndata: {heartbeat_data}\n\n"
-                    last_heartbeat = now
+                # asyncio.wait_for ya garantiza que pasaron HEARTBEAT_INTERVAL segundos
+                # sin notificaciones: enviar heartbeat siempre, sin gate adicional por
+                # tiempo (comparar time.time() contra el timeout de wait_for podía caer
+                # una fracción por debajo de HEARTBEAT_INTERVAL y saltarse el heartbeat).
+                heartbeat_data = json.dumps({"timestamp": time.time()})
+                yield f"event: heartbeat\ndata: {heartbeat_data}\n\n"
 
     except asyncio.CancelledError:
         logger.info(f"📢 Stream SSE cancelado para '{username}'")

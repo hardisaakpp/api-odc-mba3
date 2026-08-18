@@ -5,6 +5,7 @@ Documenta qué correo (asunto) envía el sistema y a qué tipo_notificacion
 pertenece. Solo Admin.
 """
 
+import asyncio
 import logging
 from typing import Dict, Optional
 
@@ -36,11 +37,22 @@ class ActualizarActivoTipoCorreoRequest(BaseModel):
     activo: bool
 
 
-async def _listar_tipos_correo_handler() -> Dict:
+def _db_listar_tipos_correo() -> Dict:
+    """Consulta bloqueante (pyodbc); se ejecuta vía asyncio.to_thread."""
     with get_db_connection_context() as conn:
         tipos_correo = listar_tipos_correo(conn)
         tipos_notificacion = listar_tipos_notificacion(conn)
     return {"tipos_notificacion": tipos_notificacion, "tipos_correo": tipos_correo}
+
+
+async def _listar_tipos_correo_handler() -> Dict:
+    return await asyncio.to_thread(_db_listar_tipos_correo)
+
+
+def _db_crear_tipo_correo(tipo: str, asunto: str, descripcion: Optional[str], creado_por: str) -> int:
+    """Consulta bloqueante (pyodbc); se ejecuta vía asyncio.to_thread."""
+    with get_db_connection_context() as conn:
+        return crear_tipo_correo(conn, tipo, asunto, descripcion, creado_por)
 
 
 async def _crear_tipo_correo_handler(body: CrearTipoCorreoRequest, user: Dict) -> Dict:
@@ -51,8 +63,7 @@ async def _crear_tipo_correo_handler(body: CrearTipoCorreoRequest, user: Dict) -
 
     creado_por = user.get("username", "unknown")
     try:
-        with get_db_connection_context() as conn:
-            nuevo_id = crear_tipo_correo(conn, tipo, asunto, body.descripcion, creado_por)
+        nuevo_id = await asyncio.to_thread(_db_crear_tipo_correo, tipo, asunto, body.descripcion, creado_por)
     except ValueError as e:
         raise HTTPException(status_code=409, detail=str(e))
 
@@ -67,12 +78,19 @@ async def _crear_tipo_correo_handler(body: CrearTipoCorreoRequest, user: Dict) -
     }
 
 
+def _db_actualizar_activo_tipo_correo(tipo_correo_id: int, activo: bool, modificado_por: str) -> bool:
+    """Consulta bloqueante (pyodbc); se ejecuta vía asyncio.to_thread."""
+    with get_db_connection_context() as conn:
+        return actualizar_activo_tipo_correo(conn, tipo_correo_id, activo, modificado_por)
+
+
 async def _actualizar_activo_tipo_correo_handler(
     tipo_correo_id: int, body: ActualizarActivoTipoCorreoRequest, user: Dict
 ) -> Dict:
     modificado_por = user.get("username", "unknown")
-    with get_db_connection_context() as conn:
-        actualizado = actualizar_activo_tipo_correo(conn, tipo_correo_id, body.activo, modificado_por)
+    actualizado = await asyncio.to_thread(
+        _db_actualizar_activo_tipo_correo, tipo_correo_id, body.activo, modificado_por
+    )
 
     if not actualizado:
         raise HTTPException(status_code=404, detail=f"Catálogo de correo {tipo_correo_id} no encontrado")
@@ -80,7 +98,8 @@ async def _actualizar_activo_tipo_correo_handler(
     return {"id": tipo_correo_id, "activo": body.activo}
 
 
-async def _preview_tipo_correo_handler(tipo_correo_id: int) -> Dict:
+def _db_preview_tipo_correo(tipo_correo_id: int) -> Dict:
+    """Consulta bloqueante (pyodbc); se ejecuta vía asyncio.to_thread."""
     with get_db_connection_context() as conn:
         fila = obtener_tipo_correo(conn, tipo_correo_id)
 
@@ -99,9 +118,18 @@ async def _preview_tipo_correo_handler(tipo_correo_id: int) -> Dict:
     return {"subject": subject, "html": html}
 
 
-async def _eliminar_tipo_correo_handler(tipo_correo_id: int, user: Dict) -> Dict:
+async def _preview_tipo_correo_handler(tipo_correo_id: int) -> Dict:
+    return await asyncio.to_thread(_db_preview_tipo_correo, tipo_correo_id)
+
+
+def _db_eliminar_tipo_correo(tipo_correo_id: int) -> bool:
+    """Consulta bloqueante (pyodbc); se ejecuta vía asyncio.to_thread."""
     with get_db_connection_context() as conn:
-        eliminado = eliminar_tipo_correo(conn, tipo_correo_id)
+        return eliminar_tipo_correo(conn, tipo_correo_id)
+
+
+async def _eliminar_tipo_correo_handler(tipo_correo_id: int, user: Dict) -> Dict:
+    eliminado = await asyncio.to_thread(_db_eliminar_tipo_correo, tipo_correo_id)
 
     if not eliminado:
         raise HTTPException(status_code=404, detail=f"Catálogo de correo {tipo_correo_id} no encontrado")
