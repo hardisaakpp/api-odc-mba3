@@ -11,7 +11,7 @@ from fastapi.responses import JSONResponse
 
 from src.database.connection import get_db_connection_context
 from src.database.repositories.pedido_repository import PedidoRepository
-from src.database.pedido_estados import ESTADO_GESTIONAR_PEDIDO
+from src.database.pedido_estados import ESTADO_CONFIRMADO_ENVIADO
 from src.security.jwt_auth import verify_jwt_token, require_permission, require_any_permission
 from src.exceptions import BusinessException
 from src.logging_config import log_business_operation
@@ -33,26 +33,27 @@ _PERM_PRODUCCION_ELRAYO = 'produccion-elrayo.view'
 
 
 def _validar_puede_editar_fecha_facturacion(datos_cabecera: Dict, pedido_existente: Dict, user: Dict) -> None:
-    """Fecha Facturación (req. 1.8) es exclusiva de produccion-elrayo.view y solo
-    editable mientras el pedido está en GESTIONAR PEDIDO (estado_id = 3)."""
+    """Fecha Facturación (req. 1.8) es exclusiva de odcsap.view y solo editable mientras
+    el pedido está en CONFIRMADO_ENVIADO (estado_id = 12), donde habilita "Despachar y
+    Facturar"."""
     if "fecha_facturacion" not in datos_cabecera:
         return
     permissions = user.get("permissions") or []
-    if _PERM_PRODUCCION_ELRAYO not in permissions:
+    if _PERM_ODCSAP not in permissions:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail={
                 "error": "permiso_denegado",
-                "message": "Fecha Facturación solo puede editarla el perfil Producción El Rayo."
+                "message": "Fecha Facturación solo puede editarla el perfil ODC SAP."
             }
         )
     estado_id = (pedido_existente.get("cabecera") or {}).get("estado_id")
-    if estado_id != ESTADO_GESTIONAR_PEDIDO:
+    if estado_id != ESTADO_CONFIRMADO_ENVIADO:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail={
                 "error": "estado_no_permitido",
-                "message": "Fecha Facturación solo puede editarse mientras el pedido está en Gestionar Pedido."
+                "message": "Fecha Facturación solo puede editarse mientras el pedido está en Confirmado y Enviado."
             }
         )
 
