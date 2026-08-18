@@ -77,15 +77,24 @@ async def _logic_marcar_pedido_gestionar(pedido_id: str, request: Request, user:
     try:
         pedido, estado_id = await asyncio.to_thread(_db_marcar_pedido_gestionar, pedido_id, audit)
 
-        # 📢 Notificación SSE: mismo permiso (otros EL RAYO) + MABEL cuando EL RAYO abre el pedido
+        # 📢 Notificación SSE: mismo permiso (otros EL RAYO) + MABEL cuando EL RAYO abre el pedido.
+        # notify_by_actor no cubre produccion-elrayo.view -> mabel.view (no está en
+        # OPPOSITE_PERMISSION), así que se notifica explícitamente al permiso destino real.
         if estado_id == ESTADO_NUEVO_PEDIDO:
             try:
                 from src.utils.notification_manager import notification_manager, NotificationType
                 numero_pedido = pedido.get("cabecera", {}).get("numero_pedido", "")
                 _username = user.get("username") or user.get("sub") or "unknown"
                 await notification_manager.notify_by_actor(
-                    actor_permission=PERM_ODCSAP_VIEW,
+                    actor_permission=PERM_PRODUCCION_ELRAYO_VIEW,
                     actor_username=_username,
+                    title="EL RAYO está gestionando un pedido",
+                    message=f"El pedido {numero_pedido} está siendo revisado por otro usuario de EL RAYO.",
+                    notification_type=NotificationType.INFO,
+                    metadata={"pedido_id": pedido_id, "numero_pedido": numero_pedido, "accion": "pedido_en_gestion"},
+                )
+                await notification_manager.notify(
+                    target_permission=PERM_MABEL_VIEW,
                     title="EL RAYO está gestionando tu pedido",
                     message=f"El pedido {numero_pedido} está siendo revisado por EL RAYO.",
                     notification_type=NotificationType.INFO,
@@ -119,12 +128,13 @@ def _db_confirmar_produccion(pedido_id: str, audit):
                 }
             )
 
-        if not (pedido.get("cabecera") or {}).get("fecha_facturacion"):
+        fecha_entrega = (pedido.get("cabecera") or {}).get("fecha_entrega")
+        if (fecha_entrega or "").strip().upper() == "INMEDIATO":
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail={
-                    "error": "fecha_facturacion_requerida",
-                    "message": "Debe seleccionar la Fecha Facturación antes de confirmar producción."
+                    "error": "fecha_entrega_requerida",
+                    "message": "Debe seleccionar una fecha de entrega antes de confirmar producción."
                 }
             )
 
@@ -136,8 +146,8 @@ def _db_confirmar_produccion(pedido_id: str, audit):
 async def _logic_confirmar_produccion(pedido_id: str, request: Request, user: Dict):
     """Lógica de 'Confirmar Producción' (req. 1.8, botón exclusivo de produccion-elrayo.view):
     GESTIONAR_PEDIDO (3) -> CONFIRMADO_POR_PRODUCCION (23), notifica por correo a
-    Administración El Rayo (odcsap.view). Requiere que el pedido ya tenga Fecha
-    Facturación seleccionada."""
+    Administración El Rayo (odcsap.view). Requiere que la fecha de entrega ya no sea
+    INMEDIATO (se debe haber seleccionado una fecha real)."""
     audit = get_audit_context(request, user, origen=ORIGEN_WEB)
     try:
         numero_pedido = await asyncio.to_thread(_db_confirmar_produccion, pedido_id, audit)
