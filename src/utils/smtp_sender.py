@@ -2,6 +2,9 @@
 
 import logging
 import smtplib
+import socket
+import ssl
+import time
 from email.message import Message
 from email.utils import formataddr
 from typing import Iterable, Optional
@@ -19,6 +22,20 @@ from src.config import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Errores de conexión/TLS transitorios (ej. un hipo de red justo tras reiniciar el
+# contenedor) que vale la pena reintentar antes de descartar el perfil. Errores de
+# autenticación/destinatarios rechazados no están aquí: reintentarlos no cambia el
+# resultado y solo retrasa el fallback al siguiente perfil.
+_SMTP_RETRYABLE_EXCEPTIONS = (
+    ssl.SSLError,
+    socket.timeout,
+    ConnectionError,
+    smtplib.SMTPConnectError,
+    smtplib.SMTPServerDisconnected,
+)
+_SMTP_MAX_INTENTOS_POR_PERFIL = 2
+_SMTP_RETRY_DELAY_SECONDS = 2
 
 
 def _replace_from_header(msg: Message, value: str) -> None:
@@ -102,19 +119,27 @@ def send_smtp_message(msg: Message, recipients: Iterable[str]) -> bool:
         name = str(profile["name"])
         server_host = str(profile["server"])
         server_port = int(profile["port"] or 25)
-        try:
-            _enviar_via_perfil(profile, msg, to_addrs, original_from, relay_from)
-            return True
-        except Exception as e:
-            last_error = e
-            logger.warning(
-                "Fallo envio email via %s (%s:%s): %s",
-                name,
-                server_host,
-                server_port,
-                e,
-                exc_info=True,
-            )
+        for intento in range(1, _SMTP_MAX_INTENTOS_POR_PERFIL + 1):
+            try:
+                _enviar_via_perfil(profile, msg, to_addrs, original_from, relay_from)
+                return True
+            except Exception as e:
+                last_error = e
+                logger.warning(
+                    "Fallo envio email via %s (%s:%s) intento %s/%s: %s",
+                    name,
+                    server_host,
+                    server_port,
+                    intento,
+                    _SMTP_MAX_INTENTOS_POR_PERFIL,
+                    e,
+                    exc_info=True,
+                )
+                es_reintentable = isinstance(e, _SMTP_RETRYABLE_EXCEPTIONS)
+                if es_reintentable and intento < _SMTP_MAX_INTENTOS_POR_PERFIL:
+                    time.sleep(_SMTP_RETRY_DELAY_SECONDS)
+                    continue
+                break
 
     if original_from:
         _replace_from_header(msg, original_from)
