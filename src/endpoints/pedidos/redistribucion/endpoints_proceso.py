@@ -758,7 +758,10 @@ async def _handle_obtener_resultado_proceso_sap(process_id: str, user: Dict):
     if not process_id.startswith("proceso-sap-"):
         raise HTTPException(status_code=400, detail="process_id debe ser de tipo proceso-sap (proceso-sap-xxx)")
     estado_service = ProcesoEstadoService()
-    estado = estado_service.obtener_estado(process_id)
+    # obtener_estado() consulta Redis de forma sincrona y bloqueante (redis-py);
+    # se ejecuta via asyncio.to_thread para no congelar el event loop si Redis
+    # responde lento (mismo criterio que _celery_workers_available/_encolar_proceso_sap).
+    estado = await asyncio.to_thread(estado_service.obtener_estado, process_id)
     if not estado:
         raise HTTPException(status_code=404, detail="Proceso no encontrado")
     user_id = get_user_id(user)
@@ -826,7 +829,10 @@ async def _event_stream_proceso_sap(estado_service, process_id: str, request):
     while True:
         if await request.is_disconnected():
             break
-        estado_actual = estado_service.obtener_estado(process_id)
+        # obtener_estado() consulta Redis de forma sincrona y bloqueante (redis-py);
+        # se ejecuta via asyncio.to_thread para no congelar el event loop en cada
+        # tick del stream si Redis responde lento.
+        estado_actual = await asyncio.to_thread(estado_service.obtener_estado, process_id)
         if not estado_actual:
             yield f"data: {json.dumps({'error': 'Proceso no encontrado'})}\n\n"
             break
@@ -846,7 +852,10 @@ async def _handle_stream_progreso_proceso_sap(process_id: str, request, user: Di
     if not process_id.startswith("proceso-sap-"):
         raise HTTPException(status_code=400, detail="process_id debe ser de tipo proceso-sap (proceso-sap-xxx)")
     estado_service = ProcesoEstadoService()
-    estado = estado_service.obtener_estado(process_id)
+    # obtener_estado() consulta Redis de forma sincrona y bloqueante (redis-py);
+    # se ejecuta via asyncio.to_thread para no congelar el event loop si Redis
+    # responde lento (mismo criterio que _celery_workers_available/_encolar_proceso_sap).
+    estado = await asyncio.to_thread(estado_service.obtener_estado, process_id)
     if not estado:
         raise HTTPException(status_code=404, detail="Proceso no encontrado")
     user_id = get_user_id(user)

@@ -2,6 +2,7 @@
 Endpoints de listados y maestros de pedidos.
 """
 
+import asyncio
 import logging
 from typing import Dict, List, Optional
 
@@ -76,6 +77,14 @@ class _Paginacion:
         self.page_size_camel = page_size_camel
 
 
+def _query_listar_pedidos(**kwargs):
+    """Ejecuta la consulta bloqueante de listado (pyodbc); se llama vía asyncio.to_thread
+    para no congelar el event loop si SQL Server tarda o no responde."""
+    with get_db_connection_context() as conn:
+        repo = PedidoRepository(conn)
+        return repo.get_pedidos_con_filtros(**kwargs)
+
+
 async def _listar_pedidos_handler(
     estado: Optional[str],
     fecha_desde: Optional[str],
@@ -119,37 +128,36 @@ async def _listar_pedidos_handler(
             use_limit = size if size is not None else 10
             use_offset = ((page or 1) - 1) * use_limit
 
-        with get_db_connection_context() as conn:
-            repo = PedidoRepository(conn)
-            resultado = repo.get_pedidos_con_filtros(
-                estado=estado,
-                fecha_desde=fecha_desde,
-                fecha_hasta=fecha_hasta,
-                proveedor_nombre=proveedor_nombre,
-                numero_pedido=numero_pedido,
-                creado_por=creado_por,
-                limit=use_limit,
-                offset=use_offset,
-                excluir_borrador=True,
-                solo_redistribucion=filtrar_redistribucion,
-                solo_pendientes_accion=filtrar_pendientes,
-                restringir_produccion_el_rayo=filtrar_produccion_elrayo,
-                excluir_estados_produccion_el_rayo=excluir_estados_el_rayo,
-            )
+        resultado = await asyncio.to_thread(
+            _query_listar_pedidos,
+            estado=estado,
+            fecha_desde=fecha_desde,
+            fecha_hasta=fecha_hasta,
+            proveedor_nombre=proveedor_nombre,
+            numero_pedido=numero_pedido,
+            creado_por=creado_por,
+            limit=use_limit,
+            offset=use_offset,
+            excluir_borrador=True,
+            solo_redistribucion=filtrar_redistribucion,
+            solo_pendientes_accion=filtrar_pendientes,
+            restringir_produccion_el_rayo=filtrar_produccion_elrayo,
+            excluir_estados_produccion_el_rayo=excluir_estados_el_rayo,
+        )
 
-            return JSONResponse(
-                status_code=200,
-                content={
-                    "status": "success",
-                    "data": resultado["data"],
-                    "metadata": {
-                        "total": resultado["total"],
-                        "limit": resultado["limit"],
-                        "offset": resultado["offset"],
-                        "has_more": resultado["has_more"]
-                    }
+        return JSONResponse(
+            status_code=200,
+            content={
+                "status": "success",
+                "data": resultado["data"],
+                "metadata": {
+                    "total": resultado["total"],
+                    "limit": resultado["limit"],
+                    "offset": resultado["offset"],
+                    "has_more": resultado["has_more"]
                 }
-            )
+            }
+        )
 
     except Exception as e:
         logger.error(f"❌ Error al listar pedidos: {e}", exc_info=True)
@@ -157,6 +165,13 @@ async def _listar_pedidos_handler(
             status_code=500,
             detail=f"Error interno al listar pedidos: {str(e)}"
         )
+
+
+def _query_listar_pedidos_confirmados(**kwargs):
+    """Consulta bloqueante (pyodbc); se ejecuta vía asyncio.to_thread."""
+    with get_db_connection_context() as conn:
+        repo = PedidoRepository(conn)
+        return repo.get_pedidos_confirmados(**kwargs)
 
 
 async def _listar_pedidos_confirmados_handler(
@@ -180,17 +195,16 @@ async def _listar_pedidos_confirmados_handler(
             use_limit = use_size
             use_offset = ((page or 1) - 1) * use_size
 
-        with get_db_connection_context() as conn:
-            repo = PedidoRepository(conn)
-            resultado = repo.get_pedidos_confirmados(
-                limit=use_limit,
-                offset=use_offset,
-                fecha_desde=fecha_desde,
-                fecha_hasta=fecha_hasta,
-                proveedor_nombre=proveedor_nombre,
-                numero_pedido=numero_pedido,
-                creado_por=creado_por,
-            )
+        resultado = await asyncio.to_thread(
+            _query_listar_pedidos_confirmados,
+            limit=use_limit,
+            offset=use_offset,
+            fecha_desde=fecha_desde,
+            fecha_hasta=fecha_hasta,
+            proveedor_nombre=proveedor_nombre,
+            numero_pedido=numero_pedido,
+            creado_por=creado_por,
+        )
 
         data = []
         for row in resultado["data"]:
@@ -235,6 +249,13 @@ async def _listar_pedidos_confirmados_handler(
         )
 
 
+def _query_ultimo_pedido_redistribucion(usuario_id):
+    """Consulta bloqueante (pyodbc); se ejecuta vía asyncio.to_thread."""
+    with get_db_connection_context() as conn:
+        repo = PedidoRepository(conn)
+        return repo.get_ultimo_pedido_respuesta_proveedor_cargada(usuario_id=usuario_id)
+
+
 async def _get_ultimo_pedido_redistribucion_handler(
     solo_usuario: Optional[bool],
     user: Dict,
@@ -247,9 +268,7 @@ async def _get_ultimo_pedido_redistribucion_handler(
             user_id = None
         else:
             user_id = get_user_id(user) if solo_usuario else None
-        with get_db_connection_context() as conn:
-            repo = PedidoRepository(conn)
-            ultimo = repo.get_ultimo_pedido_respuesta_proveedor_cargada(usuario_id=user_id)
+        ultimo = await asyncio.to_thread(_query_ultimo_pedido_redistribucion, user_id)
         if not ultimo:
             return JSONResponse(status_code=200, content=None)
         return JSONResponse(status_code=200, content=ultimo)
@@ -260,6 +279,17 @@ async def _get_ultimo_pedido_redistribucion_handler(
         raise HTTPException(
             status_code=500,
             detail=f"Error interno al obtener último pedido para redistribución: {str(e)}"
+        )
+
+
+def _query_estados_pedido(excluir_ids, solo_ids):
+    """Consulta bloqueante (pyodbc); se ejecuta vía asyncio.to_thread."""
+    with get_db_connection_context() as conn:
+        repo = PedidoRepository(conn)
+        return repo.get_estados(
+            solo_activos=True,
+            excluir_ids=excluir_ids,
+            solo_ids=solo_ids,
         )
 
 
@@ -293,13 +323,7 @@ async def _listar_estados_pedido_handler(contexto: Optional[str], user: Dict):
             from src.database.pedido_estados import ESTADOS_PRODUCCION_EL_RAYO_IDS
             excluir_ids = list(excluir_ids or []) + list(sorted(ESTADOS_PRODUCCION_EL_RAYO_IDS))
 
-        with get_db_connection_context() as conn:
-            repo = PedidoRepository(conn)
-            estados = repo.get_estados(
-                solo_activos=True,
-                excluir_ids=excluir_ids,
-                solo_ids=solo_ids,
-            )
+        estados = await asyncio.to_thread(_query_estados_pedido, excluir_ids, solo_ids)
 
         return JSONResponse(
             status_code=200,
@@ -317,20 +341,25 @@ async def _listar_estados_pedido_handler(contexto: Optional[str], user: Dict):
         )
 
 
+def _query_tiene_pedidos():
+    """Consulta bloqueante (pyodbc); se ejecuta vía asyncio.to_thread."""
+    with get_db_connection_context() as conn:
+        repo = PedidoRepository(conn)
+        return repo.tiene_pedidos()
+
+
 async def _verificar_pedidos_existen_handler():
     try:
-        with get_db_connection_context() as conn:
-            repo = PedidoRepository(conn)
-            tiene_pedidos = repo.tiene_pedidos()
+        tiene_pedidos = await asyncio.to_thread(_query_tiene_pedidos)
 
-            return JSONResponse(
-                status_code=200,
-                content={
-                    "status": "success",
-                    "tiene_pedidos": tiene_pedidos,
-                    "message": "Existen pedidos en el sistema" if tiene_pedidos else "No hay pedidos en el sistema"
-                }
-            )
+        return JSONResponse(
+            status_code=200,
+            content={
+                "status": "success",
+                "tiene_pedidos": tiene_pedidos,
+                "message": "Existen pedidos en el sistema" if tiene_pedidos else "No hay pedidos en el sistema"
+            }
+        )
 
     except Exception as e:
         logger.error(f"❌ Error al verificar existencia de pedidos: {e}", exc_info=True)

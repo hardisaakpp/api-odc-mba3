@@ -2,6 +2,7 @@
 Endpoints para gestión de preferencias de usuario.
 """
 
+import asyncio
 import logging
 from typing import Dict
 from fastapi import FastAPI, Request, HTTPException, Depends
@@ -129,17 +130,8 @@ def get_user_id_or_username(user: Dict) -> str:
     )
 
 
-async def _get_all_preferences(user: Dict) -> AllPreferencesResponse:
-    logger.info("🔍 GET /api/users/preferences: Iniciado")
-    logger.debug(f"   User object keys: {list(user.keys()) if user else 'None'}")
-
-    try:
-        user_id = get_user_id_or_username(user)
-        logger.debug(f"   User ID obtenido: {user_id}")
-    except HTTPException as e:
-        logger.error(f"❌ Error al obtener user_id: {e.detail}")
-        raise
-
+def _db_get_all_preferences(user_id: str) -> AllPreferencesResponse:
+    """Consulta bloqueante (pyodbc); se ejecuta vía asyncio.to_thread."""
     conn = None
     try:
         conn = get_db_connection()
@@ -153,7 +145,24 @@ async def _get_all_preferences(user: Dict) -> AllPreferencesResponse:
         }
 
         return AllPreferencesResponse(preferences=preferences_dict)
+    finally:
+        if conn:
+            conn.close()
 
+
+async def _get_all_preferences(user: Dict) -> AllPreferencesResponse:
+    logger.info("🔍 GET /api/users/preferences: Iniciado")
+    logger.debug(f"   User object keys: {list(user.keys()) if user else 'None'}")
+
+    try:
+        user_id = get_user_id_or_username(user)
+        logger.debug(f"   User ID obtenido: {user_id}")
+    except HTTPException as e:
+        logger.error(f"❌ Error al obtener user_id: {e.detail}")
+        raise
+
+    try:
+        return await asyncio.to_thread(_db_get_all_preferences, user_id)
     except HTTPException:
         raise
     except Exception as e:
@@ -162,6 +171,22 @@ async def _get_all_preferences(user: Dict) -> AllPreferencesResponse:
             status_code=500,
             detail=f"Error al obtener preferencias: {str(e)}"
         )
+
+
+def _db_get_sidebar_preferences(user_id: str) -> SidebarPreferencesResponse:
+    """Consulta bloqueante (pyodbc); se ejecuta vía asyncio.to_thread."""
+    conn = None
+    try:
+        conn = get_db_connection()
+        repository = UserPreferencesRepository(conn)
+        preferences = repository.get_sidebar_preferences(user_id)
+
+        if preferences:
+            return SidebarPreferencesResponse(
+                preferences=SidebarPreferencesDto(**preferences)
+            )
+        else:
+            return SidebarPreferencesResponse(preferences=None)
     finally:
         if conn:
             conn.close()
@@ -178,19 +203,8 @@ async def _get_sidebar_preferences(user: Dict) -> SidebarPreferencesResponse:
         logger.error(f"❌ Error al obtener user_id: {e.detail}")
         raise
 
-    conn = None
     try:
-        conn = get_db_connection()
-        repository = UserPreferencesRepository(conn)
-        preferences = repository.get_sidebar_preferences(user_id)
-
-        if preferences:
-            return SidebarPreferencesResponse(
-                preferences=SidebarPreferencesDto(**preferences)
-            )
-        else:
-            return SidebarPreferencesResponse(preferences=None)
-
+        return await asyncio.to_thread(_db_get_sidebar_preferences, user_id)
     except HTTPException:
         raise
     except Exception as e:
@@ -199,9 +213,23 @@ async def _get_sidebar_preferences(user: Dict) -> SidebarPreferencesResponse:
             status_code=500,
             detail=f"Error al obtener preferencias del sidebar: {str(e)}"
         )
-    finally:
-        if conn:
-            conn.close()
+
+
+def _db_save_sidebar_preferences(user_id: str, prefs: SidebarPreferencesDto) -> Dict:
+    """Consulta bloqueante (pyodbc); se ejecuta vía asyncio.to_thread."""
+    # Usar context manager para garantizar transacción y cierre de conexión
+    with get_db_connection_context() as conn:
+        repository = UserPreferencesRepository(conn)
+
+        repository.save_sidebar_preferences(
+            user_id,
+            prefs.model_dump(exclude_none=True)
+        )
+
+        return {
+            "success": True,
+            "message": "Preferencias del sidebar guardadas correctamente"
+        }
 
 
 async def _save_sidebar_preferences(request_body: SaveSidebarPreferencesRequest, user: Dict):
@@ -239,20 +267,7 @@ async def _save_sidebar_preferences(request_body: SaveSidebarPreferencesRequest,
     logger.debug(f"   Collapsed value: {prefs.collapsed} (type: {type(prefs.collapsed)})")
 
     try:
-        # Usar context manager para garantizar transacción y cierre de conexión
-        with get_db_connection_context() as conn:
-            repository = UserPreferencesRepository(conn)
-
-            repository.save_sidebar_preferences(
-                user_id,
-                prefs.model_dump(exclude_none=True)
-            )
-
-            return {
-                "success": True,
-                "message": "Preferencias del sidebar guardadas correctamente"
-            }
-
+        return await asyncio.to_thread(_db_save_sidebar_preferences, user_id, prefs)
     except HTTPException:
         raise
     except Exception as e:
@@ -263,17 +278,8 @@ async def _save_sidebar_preferences(request_body: SaveSidebarPreferencesRequest,
         )
 
 
-async def _get_table_preferences(table_id: str, user: Dict) -> PreferencesResponse:
-    logger.info(f"🔍 GET /api/users/preferences/{table_id}: Iniciado")
-    logger.debug(f"   User object keys: {list(user.keys()) if user else 'None'}")
-
-    try:
-        user_id = get_user_id_or_username(user)
-        logger.debug(f"   User ID obtenido: {user_id}")
-    except HTTPException as e:
-        logger.error(f"❌ Error al obtener user_id: {e.detail}")
-        raise
-
+def _db_get_table_preferences(user_id: str, table_id: str) -> PreferencesResponse:
+    """Consulta bloqueante (pyodbc); se ejecuta vía asyncio.to_thread."""
     conn = None
     try:
         conn = get_db_connection()
@@ -288,7 +294,24 @@ async def _get_table_preferences(table_id: str, user: Dict) -> PreferencesRespon
         else:
             logger.debug(f"ℹ️ No se encontraron preferencias para usuario {user_id}, tabla {table_id}")
             return PreferencesResponse(preferences=None)
+    finally:
+        if conn:
+            conn.close()
 
+
+async def _get_table_preferences(table_id: str, user: Dict) -> PreferencesResponse:
+    logger.info(f"🔍 GET /api/users/preferences/{table_id}: Iniciado")
+    logger.debug(f"   User object keys: {list(user.keys()) if user else 'None'}")
+
+    try:
+        user_id = get_user_id_or_username(user)
+        logger.debug(f"   User ID obtenido: {user_id}")
+    except HTTPException as e:
+        logger.error(f"❌ Error al obtener user_id: {e.detail}")
+        raise
+
+    try:
+        return await asyncio.to_thread(_db_get_table_preferences, user_id, table_id)
     except HTTPException:
         raise
     except ValueError as ve:
@@ -305,9 +328,6 @@ async def _get_table_preferences(table_id: str, user: Dict) -> PreferencesRespon
             status_code=500,
             detail=f"Error al obtener preferencias: {str(e)}"
         )
-    finally:
-        if conn:
-            conn.close()
 
 
 def _extraer_preferences_del_body(request_body: SavePreferencesRequest):
@@ -374,6 +394,29 @@ def _validar_columnas_preferences(prefs) -> None:
         )
 
 
+def _db_save_table_preferences(user_id: str, table_id: str, prefs) -> Dict:
+    """Consulta bloqueante (pyodbc); se ejecuta vía asyncio.to_thread."""
+    # Usar context manager para garantizar transacción y cierre de conexión
+    with get_db_connection_context() as conn:
+        repository = UserPreferencesRepository(conn)
+
+        # Convertir a dict para el repositorio
+        prefs_dict = prefs.model_dump(exclude_none=True)
+        logger.debug(f"   Preferences dict: {prefs_dict}")
+
+        repository.save_table_preferences(
+            user_id,
+            table_id,
+            prefs_dict
+        )
+
+        logger.info(f"✅ Preferencias guardadas exitosamente para usuario {user_id}, tabla {table_id}")
+        return {
+            "success": True,
+            "message": "Preferencias guardadas correctamente"
+        }
+
+
 async def _save_table_preferences(table_id: str, request_body: SavePreferencesRequest, user: Dict):
     logger.info(f"🔍 POST /api/users/preferences/{table_id}: Iniciado")
     logger.debug(f"   User object keys: {list(user.keys()) if user else 'None'}")
@@ -393,26 +436,7 @@ async def _save_table_preferences(table_id: str, request_body: SavePreferencesRe
     _validar_columnas_preferences(prefs)
 
     try:
-        # Usar context manager para garantizar transacción y cierre de conexión
-        with get_db_connection_context() as conn:
-            repository = UserPreferencesRepository(conn)
-
-            # Convertir a dict para el repositorio
-            prefs_dict = prefs.model_dump(exclude_none=True)
-            logger.debug(f"   Preferences dict: {prefs_dict}")
-
-            repository.save_table_preferences(
-                user_id,
-                table_id,
-                prefs_dict
-            )
-
-            logger.info(f"✅ Preferencias guardadas exitosamente para usuario {user_id}, tabla {table_id}")
-            return {
-                "success": True,
-                "message": "Preferencias guardadas correctamente"
-            }
-
+        return await asyncio.to_thread(_db_save_table_preferences, user_id, table_id, prefs)
     except HTTPException:
         raise
     except ValueError as ve:
@@ -431,6 +455,25 @@ async def _save_table_preferences(table_id: str, request_body: SavePreferencesRe
         )
 
 
+def _db_delete_table_preferences(user_id: str, table_id: str) -> Dict:
+    """Consulta bloqueante (pyodbc); se ejecuta vía asyncio.to_thread."""
+    # Usar context manager para garantizar transacción y cierre de conexión
+    with get_db_connection_context() as conn:
+        repository = UserPreferencesRepository(conn)
+        deleted = repository.delete_table_preferences(user_id, table_id)
+
+        if not deleted:
+            raise HTTPException(
+                status_code=404,
+                detail=f"No se encontraron preferencias para la tabla {table_id}"
+            )
+
+        return {
+            "success": True,
+            "message": "Preferencias eliminadas correctamente"
+        }
+
+
 async def _delete_table_preferences(table_id: str, user: Dict):
     logger.info(f"🔍 DELETE /api/users/preferences/{table_id}: Iniciado")
     logger.debug(f"   User object keys: {list(user.keys()) if user else 'None'}")
@@ -443,22 +486,7 @@ async def _delete_table_preferences(table_id: str, user: Dict):
         raise
 
     try:
-        # Usar context manager para garantizar transacción y cierre de conexión
-        with get_db_connection_context() as conn:
-            repository = UserPreferencesRepository(conn)
-            deleted = repository.delete_table_preferences(user_id, table_id)
-
-            if not deleted:
-                raise HTTPException(
-                    status_code=404,
-                    detail=f"No se encontraron preferencias para la tabla {table_id}"
-                )
-
-            return {
-                "success": True,
-                "message": "Preferencias eliminadas correctamente"
-            }
-
+        return await asyncio.to_thread(_db_delete_table_preferences, user_id, table_id)
     except HTTPException:
         raise
     except Exception as e:

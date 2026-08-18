@@ -322,8 +322,11 @@ async def _importar_excel_pedido_handler(file, hoja_cabecera, hoja_detalle, vali
         )
 
         # ✅ VALIDACION SAP POST-PARSING (si esta habilitada)
+        # _aplicar_validacion_sap() consulta SAP (HTTP) y MBA3 (DB) de forma
+        # sincrona/bloqueante -> se delega a un thread aparte para no bloquear
+        # el event loop.
         if validar_sap and resultado.get("data"):
-            _aplicar_validacion_sap(resultado, sap_obligatorio)
+            await asyncio.to_thread(_aplicar_validacion_sap, resultado, sap_obligatorio)
 
         return JSONResponse(status_code=200, content=resultado)
 
@@ -367,7 +370,10 @@ async def _crear_pedido_manual_handler(request, request_body, user):
         if datos_pedido.get("articulos"):
             logger.debug(f"📦 Primer articulo recibido: {datos_pedido['articulos'][0]}")
 
-        resultado = service.crear_pedido_manual(
+        # crear_pedido_manual() hace I/O sincrono/bloqueante (DB) -> se delega a un
+        # thread aparte para no bloquear el event loop.
+        resultado = await asyncio.to_thread(
+            service.crear_pedido_manual,
             datos_pedido=datos_pedido,
             usuario_id=usuario_id,
             validar_productos=datos_pedido.get("validar_productos", True),
@@ -412,40 +418,49 @@ async def _crear_pedido_manual_handler(request, request_body, user):
         )
 
 
+def _db_modificar_pedido_cabecera(request, pedido_id, request_body, user):
+    """Consulta bloqueante (pyodbc); se ejecuta vía asyncio.to_thread."""
+    # Crear contexto de auditoria (Buenas Practicas - Seccion 3)
+    audit = get_audit_context(request, user, origen=ORIGEN_WEB)
+
+    datos_cabecera = request_body.model_dump(exclude_unset=True)
+    campos_modificados = list(datos_cabecera.keys())
+
+    with get_db_connection_context() as conn:
+        repo = PedidoRepository(conn)
+
+        pedido_existente = repo.get_pedido_completo(pedido_id)
+        if not pedido_existente:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={
+                    "error": "pedido_not_found",
+                    "message": f"No se encontro el pedido con ID: {pedido_id}"
+                }
+            )
+
+        _validar_puede_editar_fecha_facturacion(datos_cabecera, pedido_existente, user)
+
+        resultado = repo.update_cabecera(pedido_id, datos_cabecera, audit_context=audit)
+
+        if not resultado:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={
+                    "error": "update_failed",
+                    "message": "No se pudo actualizar la cabecera del pedido"
+                }
+            )
+
+    return campos_modificados
+
+
 async def _modificar_pedido_cabecera_handler(request, pedido_id, request_body, user):
     """Lógica del endpoint de modificación de cabecera de pedido (HU-03)."""
     try:
-        # Crear contexto de auditoria (Buenas Practicas - Seccion 3)
-        audit = get_audit_context(request, user, origen=ORIGEN_WEB)
-
-        datos_cabecera = request_body.model_dump(exclude_unset=True)
-        campos_modificados = list(datos_cabecera.keys())
-
-        with get_db_connection_context() as conn:
-            repo = PedidoRepository(conn)
-
-            pedido_existente = repo.get_pedido_completo(pedido_id)
-            if not pedido_existente:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail={
-                        "error": "pedido_not_found",
-                        "message": f"No se encontro el pedido con ID: {pedido_id}"
-                    }
-                )
-
-            _validar_puede_editar_fecha_facturacion(datos_cabecera, pedido_existente, user)
-
-            resultado = repo.update_cabecera(pedido_id, datos_cabecera, audit_context=audit)
-
-            if not resultado:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail={
-                        "error": "update_failed",
-                        "message": "No se pudo actualizar la cabecera del pedido"
-                    }
-                )
+        campos_modificados = await asyncio.to_thread(
+            _db_modificar_pedido_cabecera, request, pedido_id, request_body, user
+        )
 
         logger.info(f"✅ Cabecera del pedido {pedido_id} actualizada por usuario {user.get('username', 'UNKNOWN')}")
 
