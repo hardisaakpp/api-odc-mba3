@@ -485,47 +485,51 @@ class PedidoRepository:
         self,
         pedido_detalle_id: str,
         nuevo_costo: float,
-        modificado_por: Optional[str] = None
+        modificado_por: Optional[str] = None,
+        audit_context: Optional["AuditContext"] = None
     ) -> Dict[str, Any]:
         """
         Actualiza el costo unitario de un detalle de pedido.
-        
+
         DELEGADO a PedidoDetalleRepository.
         """
-        return self.detalle_repo.update_costo(pedido_detalle_id, nuevo_costo, modificado_por)
+        return self.detalle_repo.update_costo(pedido_detalle_id, nuevo_costo, modificado_por, audit_context)
 
     def update_total_detalle(
         self,
         pedido_detalle_id: str,
         nuevo_total: float,
-        modificado_por: Optional[str] = None
+        modificado_por: Optional[str] = None,
+        audit_context: Optional["AuditContext"] = None
     ) -> Dict[str, Any]:
         """
         Actualiza el total de un detalle de pedido.
-        
+
         DELEGADO a PedidoDetalleRepository.
         """
-        return self.detalle_repo.update_total(pedido_detalle_id, nuevo_total, modificado_por)
+        return self.detalle_repo.update_total(pedido_detalle_id, nuevo_total, modificado_por, audit_context)
 
     def update_comentario_detalle(
         self,
         pedido_detalle_id: str,
         nuevo_comentario: Optional[str],
-        modificado_por: Optional[str] = None
+        modificado_por: Optional[str] = None,
+        audit_context: Optional["AuditContext"] = None
     ) -> Dict[str, Any]:
         """
         Actualiza el comentario de un detalle de pedido.
-        
+
         DELEGADO a PedidoDetalleRepository.
         """
-        return self.detalle_repo.update_comentario(pedido_detalle_id, nuevo_comentario, modificado_por)
+        return self.detalle_repo.update_comentario(pedido_detalle_id, nuevo_comentario, modificado_por, audit_context)
 
     def guardar_modificaciones_columnas(
         self,
         numero_pedido: str,
         modificaciones: List[Dict[str, str]],
         modificado_por: Optional[str] = None,
-        rol_modificador: Optional[str] = None
+        rol_modificador: Optional[str] = None,
+        audit_context: Optional["AuditContext"] = None
     ) -> Dict[str, Any]:
         """
         Guarda o actualiza modificaciones de columnas para un pedido.
@@ -533,7 +537,7 @@ class PedidoRepository:
         DELEGADO a PedidoDetalleRepository.
         """
         return self.detalle_repo.guardar_modificaciones_columnas(
-            numero_pedido, modificaciones, modificado_por, rol_modificador)
+            numero_pedido, modificaciones, modificado_por, rol_modificador, audit_context)
 
     def obtener_modificaciones_columnas(
         self,
