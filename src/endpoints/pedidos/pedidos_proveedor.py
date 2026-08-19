@@ -4,7 +4,7 @@ Endpoints de gestión de respuestas de proveedores.
 
 import asyncio
 import logging
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 from fastapi import FastAPI, UploadFile, File, Depends, HTTPException, Path, Body, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
@@ -25,9 +25,24 @@ _PERM_MABEL_VIEW = 'mabel.view'
 _PERM_ODCSAP_VIEW = 'odcsap.view'
 
 
+class DetalleAsignadoHijo(BaseModel):
+    """Cantidad de una línea de la diferencia asignada a un pedido hijo específico."""
+    pedido_detalle_id: str
+    cantidad: float = Field(..., ge=0)
+
+
+class HijoDiferenciaRequest(BaseModel):
+    """Un pedido hijo a generar: su fecha de entrega y la porción de cada línea que se le asigna."""
+    fecha_entrega: str
+    detalles: List[DetalleAsignadoHijo]
+
+
 class ConfirmarConDiferenciaRequest(BaseModel):
-    """Req. 1.2: body de POST confirmar-con-diferencia."""
-    nueva_fecha_entrega: str = Field(..., description="Nueva fecha de entrega para el pedido hijo generado con la diferencia")
+    """Req. 1.2 (+ N hijos): body de POST confirmar-con-diferencia. La diferencia de
+    cada línea se reparte entre uno o más pedidos hijo, cada uno con su propia fecha
+    de entrega; el reparto debe cubrir exactamente el 100% de cada línea (se valida
+    en _handle_confirmar_con_diferencia)."""
+    hijos: List[HijoDiferenciaRequest] = Field(..., min_length=1)
 
 
 class ConfirmarRespuestaRequest(BaseModel):
@@ -327,13 +342,47 @@ def _db_crear_pedido_hijo_diferencia(pedido_padre, detalles_con_diferencia, nuev
     )
 
 
+_TOLERANCIA_REPARTO = 0.001
+
+
+def _validar_reparto_diferencia(diferencia_detalles: List[Dict], hijos: List["HijoDiferenciaRequest"]) -> None:
+    """Cada línea de la diferencia debe quedar cubierta exactamente (ni de más ni de
+    menos) por la suma de lo asignado a todos los hijos. Las cantidades son unidades
+    de producto: no se aceptan valores fraccionados."""
+    asignado_por_detalle: Dict[str, float] = {}
+    for hijo in hijos:
+        for d in hijo.detalles:
+            if not float(d.cantidad).is_integer():
+                raise HTTPException(status_code=400, detail={
+                    "error": "cantidad_fraccionada",
+                    "message": f"La cantidad asignada ({d.cantidad}) no puede ser fraccionada; debe ser un número entero."
+                })
+            asignado_por_detalle[d.pedido_detalle_id] = asignado_por_detalle.get(d.pedido_detalle_id, 0.0) + d.cantidad
+
+    for detalle in diferencia_detalles:
+        pedido_detalle_id = detalle["pedido_detalle_id"]
+        esperado = detalle["diferencia"]
+        asignado = asignado_por_detalle.get(pedido_detalle_id, 0.0)
+        if abs(asignado - esperado) > _TOLERANCIA_REPARTO:
+            raise HTTPException(status_code=400, detail={
+                "error": "reparto_invalido",
+                "message": (
+                    f"El reparto de '{detalle.get('codigo_interno') or pedido_detalle_id}' debe sumar "
+                    f"{esperado} entre todos los pedidos hijo (suma actual: {asignado})."
+                )
+            })
+
+
 async def _handle_confirmar_con_diferencia(pedido_id: str, body: ConfirmarConDiferenciaRequest, request, user: Dict):
-    """Req. 1.2: opción 'Confirmar pedido, generar nuevo pedido con la diferencia' del
-    modal de diferencia de producción. El pedido padre sigue el flujo normal de
-    confirmación (igual que 'Diferencia no será entregada'/crear-respuesta-desde-pedido)
-    y además se crea un pedido hijo con la diferencia, en estado PRODUCCION POSPUESTA."""
+    """Req. 1.2 (+ N hijos): opción 'Confirmar pedido, generar nuevo pedido con la
+    diferencia' del modal de diferencia de producción. El pedido padre sigue el flujo
+    normal de confirmación (igual que 'Diferencia no será entregada'/
+    crear-respuesta-desde-pedido, una sola vez) y además se crea un pedido hijo por
+    cada elemento de body.hijos, cada uno en estado PRODUCCION POSPUESTA con la
+    porción de la diferencia y la fecha de entrega que le correspondan."""
     from src.database.services.pedido_proveedor_web_service import PedidoProveedorWebService
     from src.utils.audit_context import get_audit_context, ORIGEN_WEB
+    from src.utils.email_notifier import send_diferencia_pedido_notification
 
     usuario_id = get_user_id(user)
     audit = get_audit_context(request, user, origen=ORIGEN_WEB)
@@ -349,6 +398,8 @@ async def _handle_confirmar_con_diferencia(pedido_id: str, body: ConfirmarConDif
             "message": "El pedido no tiene productos con total por debajo de la cantidad solicitada original."
         })
 
+    _validar_reparto_diferencia(diferencia["detalles"], body.hijos)
+
     try:
         web_service = PedidoProveedorWebService()
         resultado_confirmacion = await asyncio.to_thread(
@@ -360,34 +411,59 @@ async def _handle_confirmar_con_diferencia(pedido_id: str, body: ConfirmarConDif
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-    resultado_hijo = await asyncio.to_thread(
-        _db_crear_pedido_hijo_diferencia,
-        pedido_padre, diferencia["detalles"], body.nueva_fecha_entrega, usuario_id, audit,
-    )
+    diferencia_por_detalle_id = {d["pedido_detalle_id"]: d for d in diferencia["detalles"]}
+    cab_padre = pedido_padre["cabecera"]
+    resultados_hijos: List[Dict] = []
 
-    try:
-        from src.utils.email_notifier import send_diferencia_pedido_notification
-        cab_padre = pedido_padre["cabecera"]
-        await asyncio.to_thread(
-            send_diferencia_pedido_notification,
-            pedido_id=pedido_id,
-            numero_pedido=cab_padre.get("numero_pedido"),
-            numero_pedido_hijo=resultado_hijo["numero_pedido"],
-            usuario_id=usuario_id,
-            detalles_diferencia=diferencia["detalles"],
+    for hijo_req in body.hijos:
+        detalles_para_hijo = []
+        for asignado in hijo_req.detalles:
+            if asignado.cantidad <= 0:
+                continue
+            detalle_diferencia = diferencia_por_detalle_id.get(asignado.pedido_detalle_id)
+            if not detalle_diferencia:
+                continue
+            detalles_para_hijo.append({
+                "pedido_detalle_id": asignado.pedido_detalle_id,
+                "cantidad_solicitada_original": detalle_diferencia["cantidad_solicitada_original"],
+                "diferencia": asignado.cantidad,
+            })
+
+        if not detalles_para_hijo:
+            logger.warning(f"⚠️ Pedido hijo sin líneas asignadas al confirmar diferencia de {pedido_id}; se omite")
+            continue
+
+        resultado_hijo = await asyncio.to_thread(
+            _db_crear_pedido_hijo_diferencia,
+            pedido_padre, detalles_para_hijo, hijo_req.fecha_entrega, usuario_id, audit,
         )
-    except Exception as email_err:
-        logger.warning(f"⚠️ Error al enviar email de diferencia en pedido (no crítico): {email_err}")
+        resultados_hijos.append(resultado_hijo)
+
+        try:
+            await asyncio.to_thread(
+                send_diferencia_pedido_notification,
+                pedido_id=pedido_id,
+                numero_pedido=cab_padre.get("numero_pedido"),
+                numero_pedido_hijo=resultado_hijo["numero_pedido"],
+                usuario_id=usuario_id,
+                detalles_diferencia=[
+                    {**diferencia_por_detalle_id[d["pedido_detalle_id"]], "diferencia": d["diferencia"]}
+                    for d in detalles_para_hijo
+                ],
+            )
+        except Exception as email_err:
+            logger.warning(f"⚠️ Error al enviar email de diferencia en pedido (no crítico): {email_err}")
 
     logger.info(
         f"✅ Pedido {pedido_id} confirmado con diferencia por usuario {user.get('username', 'UNKNOWN')}; "
-        f"pedido hijo {resultado_hijo['numero_pedido']} creado"
+        f"{len(resultados_hijos)} pedido(s) hijo creado(s): "
+        f"{', '.join(r['numero_pedido'] for r in resultados_hijos)}"
     )
 
     return JSONResponse(status_code=200, content={
         "status": "success",
         "confirmacion": resultado_confirmacion,
-        "pedido_hijo": resultado_hijo,
+        "pedidos_hijos": resultados_hijos,
     })
 
 
@@ -471,10 +547,13 @@ def register_proveedor_endpoints(app: FastAPI):
         _: None = Depends(require_any_permission([_PERM_ODCSAP_VIEW, _PERM_MABEL_VIEW]))
     ):
         """
-        Req. 1.2 (pedidos parciales): opción "Confirmar pedido, generar nuevo pedido con
-        la diferencia" del modal de diferencia de producción. Confirma el pedido padre
-        (mismo flujo que crear-respuesta-desde-pedido) y crea un pedido hijo
-        (numero_pedido = "<padre>.NN") con la diferencia, en estado PRODUCCION POSPUESTA,
-        notificando por correo a MABEL_TRADING.
+        Req. 1.2 (pedidos parciales, + N hijos): opción "Confirmar pedido, generar
+        nuevo pedido con la diferencia" del modal de diferencia de producción. Confirma
+        el pedido padre una sola vez (mismo flujo que crear-respuesta-desde-pedido) y
+        crea uno o más pedidos hijo (numero_pedido = "<padre>.NN"), cada uno con la
+        porción de la diferencia y la fecha de entrega indicadas en body.hijos, en
+        estado PRODUCCION POSPUESTA, notificando por correo a MABEL_TRADING por cada
+        hijo creado. El reparto entre hijos debe cubrir exactamente el 100% de cada
+        línea con diferencia (400 "reparto_invalido" si no cuadra).
         """
         return await _handle_confirmar_con_diferencia(pedido_id, body, request, user)
