@@ -141,6 +141,7 @@ class PedidoRepository:
         estado: Optional[str] = None,
         fecha_desde: Optional[str] = None,
         fecha_hasta: Optional[str] = None,
+        tipo_fecha: Optional[str] = None,
         proveedor_nombre: Optional[str] = None,
         numero_pedido: Optional[str] = None,
         creado_por: Optional[str] = None,
@@ -168,9 +169,20 @@ class PedidoRepository:
                 (req. 1.8 segunda fase, perfil odcsap.view: esos 2 estados dejan de verse)
         """
         return self.cabecera_repo.get_pedidos_con_filtros(
-            estado, fecha_desde, fecha_hasta, proveedor_nombre,
-            numero_pedido, creado_por, limit, offset, excluir_borrador, solo_redistribucion,
-            solo_pendientes_accion, restringir_produccion_el_rayo, excluir_estados_produccion_el_rayo,
+            estado=estado,
+            fecha_desde=fecha_desde,
+            fecha_hasta=fecha_hasta,
+            tipo_fecha=tipo_fecha,
+            proveedor_nombre=proveedor_nombre,
+            numero_pedido=numero_pedido,
+            creado_por=creado_por,
+            limit=limit,
+            offset=offset,
+            excluir_borrador=excluir_borrador,
+            solo_redistribucion=solo_redistribucion,
+            solo_pendientes_accion=solo_pendientes_accion,
+            restringir_produccion_el_rayo=restringir_produccion_el_rayo,
+            excluir_estados_produccion_el_rayo=excluir_estados_produccion_el_rayo,
         )
 
     def get_pedidos_confirmados(
@@ -179,6 +191,7 @@ class PedidoRepository:
         offset: Optional[int] = None,
         fecha_desde: Optional[str] = None,
         fecha_hasta: Optional[str] = None,
+        tipo_fecha: Optional[str] = None,
         proveedor_nombre: Optional[str] = None,
         numero_pedido: Optional[str] = None,
         creado_por: Optional[str] = None,
@@ -192,6 +205,7 @@ class PedidoRepository:
             offset=offset,
             fecha_desde=fecha_desde,
             fecha_hasta=fecha_hasta,
+            tipo_fecha=tipo_fecha,
             proveedor_nombre=proveedor_nombre,
             numero_pedido=numero_pedido,
             creado_por=creado_por,

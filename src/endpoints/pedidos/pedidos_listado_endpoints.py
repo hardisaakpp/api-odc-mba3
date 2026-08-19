@@ -101,6 +101,7 @@ async def _listar_pedidos_handler(
     solo_pendientes_accion: Optional[str],
     solo_produccion_elrayo: Optional[str],
     user: Dict,
+    tipo_fecha: Optional[str] = None,
 ):
     try:
         filtrar_redistribucion = (
@@ -133,6 +134,7 @@ async def _listar_pedidos_handler(
             estado=estado,
             fecha_desde=fecha_desde,
             fecha_hasta=fecha_hasta,
+            tipo_fecha=tipo_fecha,
             proveedor_nombre=proveedor_nombre,
             numero_pedido=numero_pedido,
             creado_por=creado_por,
@@ -185,6 +187,7 @@ async def _listar_pedidos_confirmados_handler(
     proveedor_nombre: Optional[str],
     numero_pedido: Optional[str],
     creado_por: Optional[str],
+    tipo_fecha: Optional[str] = None,
 ):
     try:
         size = page_size_camel if page_size_camel is not None else page_size
@@ -201,6 +204,7 @@ async def _listar_pedidos_confirmados_handler(
             offset=use_offset,
             fecha_desde=fecha_desde,
             fecha_hasta=fecha_hasta,
+            tipo_fecha=tipo_fecha,
             proveedor_nombre=proveedor_nombre,
             numero_pedido=numero_pedido,
             creado_por=creado_por,
@@ -377,9 +381,13 @@ def register_pedidos_listado_endpoints(app: FastAPI):
         estado: Optional[str] = Query(None, description="Filtrar por estado del pedido"),
         fecha_desde: Optional[str] = Query(None, description="Filtrar desde fecha (YYYY-MM-DD)"),
         fecha_hasta: Optional[str] = Query(None, description="Filtrar hasta fecha (YYYY-MM-DD)"),
+        tipo_fecha: Optional[str] = Query(
+            None,
+            description="Columna sobre la que aplica fecha_desde/fecha_hasta: 'pedido' (default), 'entrega' o 'facturacion'",
+        ),
         proveedor_nombre: Optional[str] = Query(None, description="Buscar por nombre de proveedor (parcial)"),
         numero_pedido: Optional[str] = Query(None, description="Buscar por número de pedido (parcial)"),
-        creado_por: Optional[str] = Query(None, description="Filtrar por usuario que creó el pedido"),
+        creado_por: Optional[str] = Query(None, description="Filtrar por usuario que creó el pedido (parcial)"),
         paginacion: _Paginacion = Depends(_Paginacion),
         solo_redistribucion: Optional[str] = Query(
             None,
@@ -409,9 +417,10 @@ def register_pedidos_listado_endpoints(app: FastAPI):
         - `estado` (string, opcional) - Filtrar por estado (ej: "PENDIENTE_CONFIRMACION_PROVEEDOR", "CONFIRMADO_PROVEEDOR")
         - `fecha_desde` (string, opcional) - Filtrar desde fecha (YYYY-MM-DD)
         - `fecha_hasta` (string, opcional) - Filtrar hasta fecha (YYYY-MM-DD)
+        - `tipo_fecha` (string, opcional) - Columna de fecha a filtrar: "pedido" (default), "entrega" o "facturacion"
         - `proveedor_nombre` (string, opcional) - Búsqueda parcial por nombre de proveedor
         - `numero_pedido` (string, opcional) - Búsqueda parcial por número de pedido
-        - `creado_por` (string, opcional) - Filtrar por usuario que creó el pedido
+        - `creado_por` (string, opcional) - Búsqueda parcial por usuario que creó el pedido
         - `limit` (int, default: 50) - Límite de registros por página
         - `offset` (int, default: 0) - Offset para paginación
         - `solo_redistribucion` (string, opcional) - Si "true", solo pedidos aptos para redistribución
@@ -456,6 +465,7 @@ def register_pedidos_listado_endpoints(app: FastAPI):
             estado=estado,
             fecha_desde=fecha_desde,
             fecha_hasta=fecha_hasta,
+            tipo_fecha=tipo_fecha,
             proveedor_nombre=proveedor_nombre,
             numero_pedido=numero_pedido,
             creado_por=creado_por,
@@ -479,9 +489,13 @@ def register_pedidos_listado_endpoints(app: FastAPI):
         offset: Optional[int] = Query(None, description="Offset (alternativa a page)"),
         fecha_desde: Optional[str] = Query(None, description="Filtrar desde fecha (YYYY-MM-DD)"),
         fecha_hasta: Optional[str] = Query(None, description="Filtrar hasta fecha (YYYY-MM-DD)"),
+        tipo_fecha: Optional[str] = Query(
+            None,
+            description="Columna sobre la que aplica fecha_desde/fecha_hasta: 'pedido' (default), 'entrega' o 'facturacion'",
+        ),
         proveedor_nombre: Optional[str] = Query(None, description="Búsqueda parcial por proveedor"),
         numero_pedido: Optional[str] = Query(None, description="Búsqueda parcial por número de pedido"),
-        creado_por: Optional[str] = Query(None, description="Filtrar por usuario creador"),
+        creado_por: Optional[str] = Query(None, description="Búsqueda parcial por usuario creador"),
         redistribucion_confirmada: Optional[str] = Query(
             None,
             description="Si 'true', solo pedidos con redistribución ya confirmada (estado CONFIRMADO REDISTRIBUCION)"
@@ -515,6 +529,7 @@ def register_pedidos_listado_endpoints(app: FastAPI):
             offset=offset,
             fecha_desde=fecha_desde,
             fecha_hasta=fecha_hasta,
+            tipo_fecha=tipo_fecha,
             proveedor_nombre=proveedor_nombre,
             numero_pedido=numero_pedido,
             creado_por=creado_por,

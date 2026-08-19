@@ -42,6 +42,20 @@ logger = logging.getLogger(__name__)
 _SQL_NOMBRE_ESTADO_POR_ID = "SELECT nombre FROM pedido_estado WHERE id = ?"
 _SEP_AND = " AND "
 
+# Columnas de fecha filtrables por fecha_desde/fecha_hasta + tipo_fecha (whitelist:
+# tipo_fecha nunca se interpola directo en SQL, siempre pasa por este dict.get()).
+# fecha_entrega puede contener el literal 'INMEDIATO' en vez de una fecha, por eso
+# el filtro usa TRY_CAST (devuelve NULL en vez de fallar toda la query).
+_COLUMNAS_FECHA_FILTRO = {
+    "pedido": "p.fecha_pedido",
+    "entrega": "p.fecha_entrega",
+    "facturacion": "p.fecha_facturacion",
+}
+
+
+def _columna_fecha_filtro(tipo_fecha: Optional[str]) -> str:
+    return _COLUMNAS_FECHA_FILTRO.get(tipo_fecha or "pedido", _COLUMNAS_FECHA_FILTRO["pedido"])
+
 
 class PedidoCabeceraRepository:
     """Repositorio para operaciones de pedido (cabecera)."""
@@ -1309,7 +1323,7 @@ class PedidoCabeceraRepository:
         self, cursor, *,
         estado, excluir_borrador, solo_redistribucion, solo_pendientes_accion,
         restringir_produccion_el_rayo, excluir_estados_produccion_el_rayo,
-        fecha_desde, fecha_hasta, proveedor_nombre, numero_pedido, creado_por,
+        fecha_desde, fecha_hasta, tipo_fecha, proveedor_nombre, numero_pedido, creado_por,
         tiene_estado_id, tiene_estado,
     ):
         """Construye (where_conditions, params) para get_pedidos_con_filtros."""
@@ -1330,12 +1344,14 @@ class PedidoCabeceraRepository:
             where_conditions.extend(c)
             params.extend(p)
 
+        columna_fecha = _columna_fecha_filtro(tipo_fecha)
+
         if fecha_desde:
-            where_conditions.append("CAST(p.fecha_pedido AS DATE) >= CAST(? AS DATE)")
+            where_conditions.append(f"TRY_CAST({columna_fecha} AS DATE) >= CAST(? AS DATE)")
             params.append(fecha_desde)
 
         if fecha_hasta:
-            where_conditions.append("CAST(p.fecha_pedido AS DATE) <= CAST(? AS DATE)")
+            where_conditions.append(f"TRY_CAST({columna_fecha} AS DATE) <= CAST(? AS DATE)")
             params.append(fecha_hasta)
 
         if proveedor_nombre:
@@ -1347,8 +1363,8 @@ class PedidoCabeceraRepository:
             params.append(f"%{numero_pedido}%")
 
         if creado_por:
-            where_conditions.append("p.creado_por = ?")
-            params.append(creado_por)
+            where_conditions.append("p.creado_por LIKE ?")
+            params.append(f"%{creado_por}%")
 
         if solo_pendientes_accion and (tiene_estado_id or tiene_estado):
             c, p = self._filtro_pendientes_accion(tiene_estado_id)
@@ -1406,6 +1422,7 @@ class PedidoCabeceraRepository:
         estado: Optional[str | int] = None,
         fecha_desde: Optional[str] = None,
         fecha_hasta: Optional[str] = None,
+        tipo_fecha: Optional[str] = None,
         proveedor_nombre: Optional[str] = None,
         numero_pedido: Optional[str] = None,
         creado_por: Optional[str] = None,
@@ -1422,7 +1439,10 @@ class PedidoCabeceraRepository:
 
         Args:
             estado: estado_id (int) o nombre legacy (str) para filtrar
-            fecha_desde, fecha_hasta, proveedor_nombre, numero_pedido, creado_por, limit, offset
+            fecha_desde, fecha_hasta: rango de fechas (YYYY-MM-DD)
+            tipo_fecha: columna sobre la que aplica fecha_desde/fecha_hasta —
+                "pedido" (default), "entrega" o "facturacion"
+            proveedor_nombre, numero_pedido, creado_por, limit, offset
             excluir_borrador: si True, excluye pedidos en estado BORRADOR (estado_id=1)
             solo_redistribucion: si True, solo incluye pedidos aptos para redistribución
                 (estado_id >= 4 "CONFIRMADO POR EL RAYO", excluyendo CANCELADO (19),
@@ -1450,6 +1470,7 @@ class PedidoCabeceraRepository:
                 excluir_estados_produccion_el_rayo=excluir_estados_produccion_el_rayo,
                 fecha_desde=fecha_desde,
                 fecha_hasta=fecha_hasta,
+                tipo_fecha=tipo_fecha,
                 proveedor_nombre=proveedor_nombre,
                 numero_pedido=numero_pedido,
                 creado_por=creado_por,
@@ -1541,15 +1562,16 @@ class PedidoCabeceraRepository:
 
     @staticmethod
     def _aplicar_filtros_extra_confirmados(
-        where_clause, params, fecha_desde, fecha_hasta, proveedor_nombre, numero_pedido, creado_por
+        where_clause, params, fecha_desde, fecha_hasta, tipo_fecha, proveedor_nombre, numero_pedido, creado_por
     ):
         """Agrega filtros opcionales (fechas, proveedor, número, creador) a la consulta base."""
         extra_conditions: List[str] = []
+        columna_fecha = _columna_fecha_filtro(tipo_fecha)
         if fecha_desde:
-            extra_conditions.append("CAST(p.fecha_pedido AS DATE) >= CAST(? AS DATE)")
+            extra_conditions.append(f"TRY_CAST({columna_fecha} AS DATE) >= CAST(? AS DATE)")
             params.append(fecha_desde)
         if fecha_hasta:
-            extra_conditions.append("CAST(p.fecha_pedido AS DATE) <= CAST(? AS DATE)")
+            extra_conditions.append(f"TRY_CAST({columna_fecha} AS DATE) <= CAST(? AS DATE)")
             params.append(fecha_hasta)
         if proveedor_nombre:
             extra_conditions.append("p.proveedor_nombre LIKE ?")
@@ -1558,8 +1580,8 @@ class PedidoCabeceraRepository:
             extra_conditions.append("p.numero_pedido LIKE ?")
             params.append(f"%{numero_pedido}%")
         if creado_por:
-            extra_conditions.append("p.creado_por = ?")
-            params.append(creado_por)
+            extra_conditions.append("p.creado_por LIKE ?")
+            params.append(f"%{creado_por}%")
         if extra_conditions:
             where_clause = f"({where_clause}){_SEP_AND}" + _SEP_AND.join(extra_conditions)
         return where_clause, params
@@ -1588,6 +1610,7 @@ class PedidoCabeceraRepository:
         offset: Optional[int] = None,
         fecha_desde: Optional[str] = None,
         fecha_hasta: Optional[str] = None,
+        tipo_fecha: Optional[str] = None,
         proveedor_nombre: Optional[str] = None,
         numero_pedido: Optional[str] = None,
         creado_por: Optional[str] = None,
@@ -1611,7 +1634,7 @@ class PedidoCabeceraRepository:
 
             where_clause, params, select_fields = self._base_confirmados(tiene_estado_id)
             where_clause, params = self._aplicar_filtros_extra_confirmados(
-                where_clause, params, fecha_desde, fecha_hasta, proveedor_nombre, numero_pedido, creado_por
+                where_clause, params, fecha_desde, fecha_hasta, tipo_fecha, proveedor_nombre, numero_pedido, creado_por
             )
 
             count_query = f"SELECT COUNT(*) FROM pedido p WHERE {where_clause}"
