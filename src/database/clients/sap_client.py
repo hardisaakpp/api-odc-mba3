@@ -71,6 +71,7 @@ class SAPClient:
             "validFor": str(valid_for).strip().upper() if valid_for else "N",
             "CodeBars": result[5] if len(result) > 5 else None,
             "Price": result[6] if len(result) > 6 else None,
+            "U_MARCA": result[7] if len(result) > 7 else None,
         }
 
     @staticmethod
@@ -118,7 +119,7 @@ class SAPClient:
         item_code_escaped = item_code_normalized.replace("'", "''")
         
         # Construir consulta OPENQUERY (incluye validFor para validar ítems activos en carga de plantilla;
-        # CodeBars y Price se agregan al final para no desplazar los índices ya usados en
+        # CodeBars, Price y U_MARCA se agregan al final para no desplazar los índices ya usados en
         # _build_producto_dict. Price viene de ITM1 con PriceList=1 ("Precio Minorista"),
         # confirmada como la lista de precios fuente de PVP para la validacion RN-02).
         query = f"""
@@ -129,7 +130,8 @@ class SAPClient:
             T0."ItmsGrpNam",
             T0."validFor",
             T0."CodeBars",
-            T0."Price"
+            T0."Price",
+            T0."U_MARCA"
         FROM OPENQUERY([{SAP_LINKED_SERVER}], '
             SELECT
                 T0."ItemCode",
@@ -138,7 +140,8 @@ class SAPClient:
                 T1."ItmsGrpNam",
                 T0."validFor",
                 T0."CodeBars",
-                T2."Price"
+                T2."Price",
+                T0."U_MARCA"
             FROM "{SAP_DATABASE}"."OITM" T0
             LEFT JOIN "{SAP_DATABASE}"."OITB" T1 ON T0."ItmsGrpCod" = T1."ItmsGrpCod"
             LEFT JOIN "{SAP_DATABASE}"."ITM1" T2 ON T0."ItemCode" = T2."ItemCode" AND T2."PriceList" = 1

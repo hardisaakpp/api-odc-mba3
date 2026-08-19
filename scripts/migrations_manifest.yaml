@@ -605,3 +605,10 @@ migrations:
     description: "Req. 1.2 (pedidos parciales): correo 'Diferencia en Pedido' (MABEL_TRADING) al catálogo, enviado desde POST /api/pedidos/{pedido_id}/confirmar-con-diferencia cuando Administración El Rayo confirma un pedido por debajo de lo solicitado y genera el pedido hijo con la diferencia. orden_flujo=12 (siguiente puesto libre tras el 11 que dejó vacante la migración 640)"
     category: "data"
     dependencies: ["624"]
+
+  - version: "645"
+    name: "add_marca_sap_producto_sap_cache"
+    file: "migrations/add_marca_sap_producto_sap_cache.sql"
+    description: "producto_sap_cache.marca_sap: cachea U_MARCA de SAP (OITM) para usarla como fuente de la columna 'Marca' del detalle de pedido, reemplazando la derivación anterior por bodega/origen_traslado"
+    category: "alter"
+    dependencies: ["002"]

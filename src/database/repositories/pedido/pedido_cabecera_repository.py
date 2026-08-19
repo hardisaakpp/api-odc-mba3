@@ -14,7 +14,7 @@ from datetime import date, datetime
 
 from src.utils.timezone import ahora_naive
 
-from .pedido_utils import PedidoUtils, clamp_pedido_mensaje, MARCA_POR_CODIGO_BODEGA
+from .pedido_utils import PedidoUtils, clamp_pedido_mensaje
 
 from src.database.pedido_estados import (
     ESTADO_BORRADOR,
@@ -430,18 +430,6 @@ class PedidoCabeceraRepository:
         finally:
             cursor.close()
 
-    @staticmethod
-    def _aplicar_fallback_marca_cabecera(detalles: List[Dict[str, Any]], cabecera: Dict[str, Any]) -> None:
-        """Completa (in-place) la marca de las líneas sin bodega propia con la marca
-        derivada de cabecera.origen_traslado (columna "Marca" en Productos del Pedido)."""
-        origen = str(cabecera.get("origen_traslado") or "").strip().upper()
-        marca_cabecera = MARCA_POR_CODIGO_BODEGA.get(origen)
-        if not marca_cabecera:
-            return
-        for detalle in detalles:
-            if not detalle.get("marca"):
-                detalle["marca"] = marca_cabecera
-
     def get_pedido_completo(self, pedido_id: str) -> Optional[Dict[str, Any]]:
         """
         Obtiene un pedido completo con cabecera, detalles, tiendas y distribuciones.
@@ -502,7 +490,6 @@ class PedidoCabeceraRepository:
                 row, tiene_estado or tiene_estado_id, tiene_estado_id
             )
             detalles = self.utils.obtener_detalles_pedido(cursor, pedido_id)
-            self._aplicar_fallback_marca_cabecera(detalles, cabecera)
 
             # Si el pedido está en estado CONFIRMADO_ENVIADO, obtener datos de SAP
             estado_id = cabecera.get("estado_id")
@@ -581,7 +568,6 @@ class PedidoCabeceraRepository:
                 row, tiene_estado or tiene_estado_id, tiene_estado_id
             )
             detalles = self.utils.obtener_detalles_pedido(cursor, pedido_id)
-            self._aplicar_fallback_marca_cabecera(detalles, cabecera)
 
             # Si el pedido está en estado CONFIRMADO_ENVIADO, obtener datos de SAP
             estado_id = cabecera.get("estado_id")

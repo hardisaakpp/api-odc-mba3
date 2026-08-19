@@ -13,7 +13,7 @@ from unittest.mock import patch
 from src.database.services.sap_service import SAPService, _SIN_RESPUESTA_MIDDLEWARE
 
 
-def _item_middleware(valid="tYES", grupo="R-MEDIAS", codebars=None, price=None):
+def _item_middleware(valid="tYES", grupo="R-MEDIAS", codebars=None, price=None, marca=None):
     return {
         "ItemCode": "5-0012.9",
         "ItemName": "DEPORTIVO C. TOBILLERA MEDIA FELPA SURTIDO X3",
@@ -23,13 +23,14 @@ def _item_middleware(valid="tYES", grupo="R-MEDIAS", codebars=None, price=None):
         "ItmsGrpNam": grupo,
         "CodeBars": codebars,
         "Price": price,
+        "U_MARCA": marca,
     }
 
 
 class TestConsultarProductoViaMiddleware:
     def test_item_activo_mapea_formato_openquery(self):
         with patch("src.database.services.sap_service.SAPServiceLayerClient") as mock_cls:
-            mock_cls.return_value.get_item.return_value = _item_middleware(codebars="7861234567890", price=7.99)
+            mock_cls.return_value.get_item.return_value = _item_middleware(codebars="7861234567890", price=7.99, marca="Roland")
             resultado = SAPService._consultar_producto_via_middleware("5-0012.9")
         assert resultado == {
             "ItemCode": "5-0012.9",
@@ -39,6 +40,7 @@ class TestConsultarProductoViaMiddleware:
             "validFor": "Y",
             "CodeBars": "7861234567890",
             "Price": 7.99,
+            "U_MARCA": "Roland",
         }
 
     def test_item_inactivo_mapea_validfor_n(self):

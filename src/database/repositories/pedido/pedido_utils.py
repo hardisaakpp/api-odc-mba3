@@ -16,36 +16,6 @@ logger = logging.getLogger(__name__)
 
 _MENSAJE_TABLAS: Tuple[str, ...] = ("pedido", "pedido_original")
 
-# Marca (columna "Productos del Pedido", solicitada tras req. 1.8): mismo código de
-# bodega central usado para el vendedor del TXT MBA3 (ver marca_por_origen en
-# pedidos_exportacion.py y BODEGAS_ESPERADAS en pedido_parser_utils.py), pero en
-# formato de despliegue para esta columna.
-MARCA_POR_CODIGO_BODEGA = {
-    "RL-CD": "Roland",
-    "RG-CD": "Regions",
-    "OUT-CD": "Descuentón",
-}
-
-
-def derivar_marca_linea(tiendas_distribucion: List[Dict[str, Any]]) -> Optional[str]:
-    """
-    Marca de una línea de producto: bodegas centrales (RL-CD/RG-CD/OUT-CD) con
-    cantidad > 0 en su distribución, mapeadas a nombre de marca. Si hay más de
-    una, se muestran todas separadas por " / ". None si la línea no tiene
-    cantidad en ninguna bodega central (se resuelve con fallback a
-    cabecera.origen_traslado en el llamador, que sí conoce la cabecera).
-    """
-    marcas: List[str] = []
-    for tienda in tiendas_distribucion:
-        if not tienda.get("es_bodega"):
-            continue
-        if (tienda.get("cantidad") or 0) <= 0:
-            continue
-        nombre = MARCA_POR_CODIGO_BODEGA.get(str(tienda.get("codigo") or "").upper())
-        if nombre and nombre not in marcas:
-            marcas.append(nombre)
-    return " / ".join(marcas) if marcas else None
-
 
 def calcular_margen_rentabilidad(costo_unitario: Optional[float], pvp: Optional[float]) -> Optional[float]:
     """
@@ -368,12 +338,10 @@ class PedidoUtils:
             "pedido_detalle_id": pedido_detalle_id,
             "codigo_interno": row[1],
             "descripcion_sap": row[2],
-            # row[3] (pd.marca) es un campo legacy: la columna "marca" se eliminó de la
-            # plantilla Excel (2026-02-05) y ya no se puebla. "marca" se recalcula aquí a
-            # partir de las bodegas centrales (RL-CD/RG-CD/OUT-CD) de esta línea; el
-            # fallback a cabecera.origen_traslado (si la línea no tiene bodega propia) se
-            # aplica en el llamador (get_pedido_completo/get_pedido_completo_por_numero).
-            "marca": derivar_marca_linea(tiendas_distribucion),
+            # pd.marca: se sincroniza desde SAP (OITM.U_MARCA) al validar la importación
+            # del Excel (ver pedido_service.py::_validar_pack_pvp_temprana); si SAP no
+            # tiene marca para el artículo, queda NULL (sin respaldo).
+            "marca": row[3],
             "codigo_barras": row[4],
             "pack": row[5],
             "costo_doc_sin_iva": float(row[6]) if row[6] else None,

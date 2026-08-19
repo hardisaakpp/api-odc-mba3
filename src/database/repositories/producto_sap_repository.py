@@ -52,7 +52,8 @@ class ProductoSAPRepository:
                     created_at,
                     updated_at,
                     codigo_barras,
-                    pvp_sap
+                    pvp_sap,
+                    marca_sap
                 FROM producto_sap_cache
                 WHERE sku = ? AND activo = 1
                 """,
@@ -76,6 +77,7 @@ class ProductoSAPRepository:
                     "updated_at": result[11],
                     "codigo_barras": result[12],
                     "pvp_sap": float(result[13]) if result[13] is not None else None,
+                    "marca_sap": result[14] if len(result) > 14 else None,
                 }
             return None
         finally:
@@ -124,6 +126,7 @@ class ProductoSAPRepository:
                 - grupo_articulos: Grupo de artículos (ItmsGrpNam)
                 - codigo_barras: Código de barras (CodeBars) de SAP
                 - pvp_sap: PVP de SAP (ITM1.Price, lista de precios "Precio Minorista")
+                - marca_sap: Marca (OITM.U_MARCA) de SAP
 
         Returns:
             True si se insertó/actualizó correctamente
@@ -151,7 +154,8 @@ class ProductoSAPRepository:
                     ultima_consulta = ?,
                     updated_at = ?,
                     codigo_barras = ?,
-                    pvp_sap = ?
+                    pvp_sap = ?,
+                    marca_sap = ?
                 WHERE sku = ? AND activo = 1
                 """
 
@@ -166,6 +170,7 @@ class ProductoSAPRepository:
                     ahora_naive(),
                     producto_data.get("codigo_barras"),
                     producto_data.get("pvp_sap"),
+                    producto_data.get("marca_sap"),
                     sku,
                 )
                 
@@ -194,8 +199,9 @@ class ProductoSAPRepository:
                     created_at,
                     updated_at,
                     codigo_barras,
-                    pvp_sap
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?)
+                    pvp_sap,
+                    marca_sap
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?)
                 """
                 _ahora = ahora_naive()
                 values = (
@@ -211,6 +217,7 @@ class ProductoSAPRepository:
                     _ahora,
                     producto_data.get("codigo_barras"),
                     producto_data.get("pvp_sap"),
+                    producto_data.get("marca_sap"),
                 )
                 
                 cursor.execute(sql, values)

@@ -492,6 +492,7 @@ class _MiddlewareSAPServiceLayerClient:
             # por el middleware (ItemPrices). "codeBars" viene directo del campo OITM.CodeBars.
             "Price": data.get("pvp"),
             "CodeBars": data.get("codeBars"),
+            "U_MARCA": data.get("marca"),
         }
 
     @staticmethod
