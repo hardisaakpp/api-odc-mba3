@@ -577,8 +577,7 @@ class PedidoService:
         tiendas_permitidas: Optional[List[str]] = None,
         bloquea_con_errores: bool = True,
         validar_sap: bool = True,
-        correcciones_codigos: Optional[Dict[str, str]] = None,
-        correcciones_pack_pvp: Optional[Dict[str, Dict[str, Any]]] = None
+        correcciones_codigos: Optional[Dict[str, str]] = None
     ) -> Dict[str, Any]:
         """
         Valida y procesa un archivo Excel de pedido.
@@ -594,10 +593,6 @@ class PedidoService:
             bloquea_con_errores: Si True, no guarda si hay errores críticos
             validar_sap: Si True, valida que códigos de producto existan en SAP
             sap_obligatorio: Si True, errores de SAP bloquean la persistencia
-            correcciones_pack_pvp: Mapa {codigo: {"pack": valor, "pvp": valor}} con el valor
-                elegido por el usuario (SAP o Excel) para reintentar tras una discrepancia
-                de Pack/PVP (RN-02). Si un campo viene presente, se usa ese valor y no se
-                vuelve a comparar contra SAP.
 
         Returns:
             Dict con resultado incluyendo validación
@@ -627,8 +622,7 @@ class PedidoService:
             resultado["formato_detectado"] = "dos_hojas_nuevo_v1_0"
             cabecera, detalles_con_tiendas = self._procesar_formato_nuevo_v1_0(
                 file_content, hoja_cabecera, hoja_detalle,
-                filename, usuario_id, validar_sap, correcciones_codigos,
-                correcciones_pack_pvp
+                filename, usuario_id, validar_sap, correcciones_codigos
             )
             if not detalles_con_tiendas:
                 raise BusinessException(
@@ -814,8 +808,7 @@ class PedidoService:
     def _validar_sap_codigo_y_pack_pvp(
         self,
         datos_parsing: List[Dict],
-        correcciones_codigos: Optional[Dict[str, str]],
-        correcciones_pack_pvp: Optional[Dict[str, Dict[str, Any]]]
+        correcciones_codigos: Optional[Dict[str, str]]
     ) -> None:
         """
         Ejecuta en una sola pasada las 3 validaciones contra SAP (código, pack, pvp) y, si alguna
@@ -831,9 +824,7 @@ class PedidoService:
 
         pack_pvp_exc: Optional[BusinessException] = None
         try:
-            self._validar_pack_pvp_temprana(
-                datos_parsing, correcciones_codigos, validacion_sap_productos, correcciones_pack_pvp
-            )
+            self._validar_pack_pvp_temprana(datos_parsing, correcciones_codigos, validacion_sap_productos)
         except BusinessException as e:
             pack_pvp_exc = e
 
@@ -852,9 +843,10 @@ class PedidoService:
     ) -> None:
         """
         Calcula costo_unitario = costo_doc_sin_iva / unidad_conversion para cada
-        producto, usando el pack ya resuelto (SAP o Excel, según eligió el usuario
-        en _evaluar_pack_producto). Reemplaza a costo_margen (columna "Costo" del
-        Excel, manual) como insumo del Margen de Rentabilidad (req. 1.5).
+        producto, usando el pack del Excel (ya validado contra SAP: solo se llega
+        aquí si coinciden, ver _validar_sap_codigo_y_pack_pvp). Reemplaza a
+        costo_margen (columna "Costo" del Excel, manual) como insumo del Margen
+        de Rentabilidad (req. 1.5).
 
         Bloquea la carga si el pack final no tiene una unidad de conversión
         configurada en pack_conversion (código inexistente, inactivo, o pack vacío).
@@ -1007,27 +999,14 @@ class PedidoService:
                 codigo_a_info_productos.setdefault(codigo, []).append(info_producto)
         return codigo_a_info_productos
 
-    @staticmethod
-    def _aplicar_correccion_campo(
-        info_productos: List[Dict],
-        campo: str,
-        valor_corregido: Any
-    ) -> None:
-        for info_producto in info_productos:
-            info_producto[campo] = valor_corregido
-
     def _evaluar_pack_producto(
         self,
         codigo: str,
         info_productos: List[Dict],
         sap_info: Dict[str, Any],
-        correccion: Dict[str, Any],
         mismatches_pack: List[Dict[str, Any]]
     ) -> None:
         pack_sap = sap_info.get("pack_sap")
-        if "pack" in correccion:
-            self._aplicar_correccion_campo(info_productos, "pack", correccion["pack"])
-            return
         pack_excel = next((ip.get("pack") for ip in info_productos if ip.get("pack")), None)
         if pack_excel and pack_sap and pack_excel.strip().upper() != pack_sap.strip().upper():
             mismatches_pack.append({"codigo": codigo, "pack_excel": pack_excel, "pack_sap": pack_sap})
@@ -1037,13 +1016,9 @@ class PedidoService:
         codigo: str,
         info_productos: List[Dict],
         sap_info: Dict[str, Any],
-        correccion: Dict[str, Any],
         mismatches_pvp: List[Dict[str, Any]]
     ) -> None:
         pvp_sap = sap_info.get("pvp_sap")
-        if "pvp" in correccion:
-            self._aplicar_correccion_campo(info_productos, "pvp", correccion["pvp"])
-            return
         pvp_excel = next((ip.get("pvp") for ip in info_productos if ip.get("pvp")), None)
         if pvp_excel and pvp_sap and self._valores_numericos_difieren(pvp_excel, pvp_sap):
             mismatches_pvp.append({
@@ -1056,16 +1031,17 @@ class PedidoService:
         self,
         datos_parsing: List[Dict],
         correcciones_codigos: Optional[Dict[str, str]],
-        validacion_sap_productos: Optional[Dict[str, Any]],
-        correcciones_pack_pvp: Optional[Dict[str, Dict[str, Any]]] = None
+        validacion_sap_productos: Optional[Dict[str, Any]]
     ) -> None:
         """
-        Valida Pack y PVP contra SAP (obligatorio por RN-02): bloquea la carga si difieren,
-        a menos que `correcciones_pack_pvp` ya traiga el valor elegido por el usuario
-        (re-intento tras elegir "usar SAP" o "usar Excel" en pantalla) para ese código/campo.
+        Valida Pack y PVP contra SAP (obligatorio por RN-02): bloquea la carga si difieren.
+        La corrección es siempre externa al sistema (en SAP o en el Excel, según corresponda) —
+        no hay forma de continuar la carga eligiendo una fuente en pantalla (req. 1.3).
 
-        También sincroniza codigo_barras/descripcion_sap desde SAP (fuente de verdad; el
-        Excel es solo referencia visual para el usuario, esos dos campos no se validan).
+        También sincroniza codigo_barras/descripcion_sap/marca desde SAP (fuente de verdad;
+        el Excel es solo referencia visual para el usuario, esos campos no se validan). marca
+        viene de OITM.U_MARCA; si SAP no la tiene para el artículo, la línea queda sin marca
+        (reemplaza a la derivación anterior por bodega/origen_traslado, sin respaldo).
         """
         if not validacion_sap_productos:
             return
@@ -1085,10 +1061,11 @@ class PedidoService:
                     info_producto["codigo_barras"] = sap_info["codigo_barras"]
                 if sap_info.get("item_name"):
                     info_producto["descripcion_sap"] = sap_info["item_name"]
+                if sap_info.get("marca_sap"):
+                    info_producto["marca"] = sap_info["marca_sap"]
 
-            correccion = (correcciones_pack_pvp or {}).get(codigo, {})
-            self._evaluar_pack_producto(codigo, info_productos, sap_info, correccion, mismatches_pack)
-            self._evaluar_pvp_producto(codigo, info_productos, sap_info, correccion, mismatches_pvp)
+            self._evaluar_pack_producto(codigo, info_productos, sap_info, mismatches_pack)
+            self._evaluar_pvp_producto(codigo, info_productos, sap_info, mismatches_pvp)
 
         if mismatches_pack or mismatches_pvp:
             self._raise_pack_pvp_invalidos(mismatches_pack, mismatches_pvp)
@@ -1169,8 +1146,7 @@ class PedidoService:
         filename: str,
         usuario_id: Optional[str],
         validar_sap: bool,
-        correcciones_codigos: Optional[Dict[str, str]],
-        correcciones_pack_pvp: Optional[Dict[str, Dict[str, Any]]] = None
+        correcciones_codigos: Optional[Dict[str, str]]
     ) -> tuple:
         logger.info("📋 Formato DOS HOJAS NUEVO v1.0 detectado: 'cabecera' + 'detalle' (con bodegas centrales)")
         resultado_parsing = self.parser.parsear_excel_pedido(
@@ -1182,7 +1158,7 @@ class PedidoService:
         self._validar_numero_pedido_duplicado(cabecera_parseada)
         datos_parsing = resultado_parsing.get("data", [])
         if validar_sap and datos_parsing:
-            self._validar_sap_codigo_y_pack_pvp(datos_parsing, correcciones_codigos, correcciones_pack_pvp)
+            self._validar_sap_codigo_y_pack_pvp(datos_parsing, correcciones_codigos)
         cabecera = self._normalizar_cabecera_para_bd(
             resultado_parsing.get("cabecera", {}), filename, usuario_id
         )
