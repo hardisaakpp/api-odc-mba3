@@ -16,6 +16,7 @@ from src.database.connection import get_db_connection_context
 from src.database.repositories.pedido_repository import PedidoRepository
 from src.database.pedido_estados import ESTADO_GESTIONAR_PEDIDO, ESTADO_CONFIRMADO_ENVIADO
 from src.security.jwt_auth import verify_jwt_token, require_permission, require_any_permission
+from .pedidos_crud_helpers import debe_ocultar_pvp
 
 logger = logging.getLogger(__name__)
 
@@ -88,13 +89,37 @@ def _aplicar_estilos_cabecera(ws, label_fill, label_font, thin_border) -> None:
         ws[f"E{row_num}"].border = thin_border
 
 
-def _escribir_encabezados_tabla(ws, bold_font, thin_border) -> None:
-    """Escribe y estiliza los encabezados de la tabla de detalle (fila 13)."""
+def _columnas_tabla(ocultar_pvp: bool) -> Dict[str, str]:
+    """Letra de columna para cada campo de la tabla de detalle (fila 13+). Si
+    ocultar_pvp, la columna PVP se omite por completo (no solo su valor) y TOTAL se
+    recorre una columna a la izquierda -- solo mabel.view debe ver PVP (ver
+    debe_ocultar_pvp)."""
+    claves = ["codigo_interno", "marca", "codigo_barras", "descripcion_sap", "pack",
+              "costo_doc_sin_iva", "descuento_1"]
+    if not ocultar_pvp:
+        claves.append("pvp")
+    claves.append("total")
+    letras = "BCDEFGHIJ"
+    return {clave: letras[i] for i, clave in enumerate(claves)}
+
+
+def _escribir_encabezados_tabla(ws, bold_font, thin_border, ocultar_pvp: bool = False) -> None:
+    """Escribe y estiliza los encabezados de la tabla de detalle (fila 13). Si
+    ocultar_pvp, la columna PVP se omite por completo: TOTAL se recorre una columna
+    a la izquierda (ver debe_ocultar_pvp: solo mabel.view debe ver PVP)."""
+    cols = _columnas_tabla(ocultar_pvp)
     headers = {
-        "B13": "CODIGO INTERNO", "C13": "MARCA", "D13": "CODIGO DE BARRAS",
-        "E13": "DESCRIPCION SAP", "F13": "PACK", "G13": "PRECIO DE LISTA",
-        "H13": "DSCTO", "I13": "PVP", "J13": "TOTAL",
+        f"{cols['codigo_interno']}13": "CODIGO INTERNO",
+        f"{cols['marca']}13": "MARCA",
+        f"{cols['codigo_barras']}13": "CODIGO DE BARRAS",
+        f"{cols['descripcion_sap']}13": "DESCRIPCION SAP",
+        f"{cols['pack']}13": "PACK",
+        f"{cols['costo_doc_sin_iva']}13": "PRECIO DE LISTA",
+        f"{cols['descuento_1']}13": "DSCTO",
+        f"{cols['total']}13": "TOTAL",
     }
+    if not ocultar_pvp:
+        headers[f"{cols['pvp']}13"] = "PVP"
     table_header_fill = PatternFill(start_color="F2F2F2", end_color="F2F2F2", fill_type="solid")
     for cell_ref, header_text in headers.items():
         cell = ws[cell_ref]
@@ -116,54 +141,65 @@ def _set_valor_numerico_celda(ws, col: str, row: int, val) -> None:
         ws[f"{col}{row}"] = val
 
 
-def _escribir_fila_detalle(ws, row: int, detalle: dict, marca_excel: str, thin_border) -> None:
+def _escribir_fila_detalle(ws, row: int, detalle: dict, marca_excel: str, thin_border, ocultar_pvp: bool = False) -> None:
     """Escribe una fila de detalle de producto en la tabla."""
-    ws[f"B{row}"] = detalle.get("codigo_interno", "")
-    ws[f"C{row}"] = marca_excel
-    ws[f"D{row}"] = detalle.get("codigo_barras", "")
-    ws[f"E{row}"] = detalle.get("descripcion_sap", "")
-    ws[f"F{row}"] = detalle.get("pack", "")
-    _set_valor_numerico_celda(ws, "G", row, detalle.get("costo_doc_sin_iva"))
-    _set_valor_numerico_celda(ws, "H", row, detalle.get("descuento_1"))
-    ws[f"H{row}"].number_format = '0.00%'
-    _set_valor_numerico_celda(ws, "I", row, detalle.get("pvp"))
-    _set_valor_numerico_celda(ws, "J", row, detalle.get("total"))
-    for col_letter in ("B", "C", "D", "E", "F", "G", "H", "I", "J"):
+    cols = _columnas_tabla(ocultar_pvp)
+    ws[f"{cols['codigo_interno']}{row}"] = detalle.get("codigo_interno", "")
+    ws[f"{cols['marca']}{row}"] = marca_excel
+    ws[f"{cols['codigo_barras']}{row}"] = detalle.get("codigo_barras", "")
+    ws[f"{cols['descripcion_sap']}{row}"] = detalle.get("descripcion_sap", "")
+    ws[f"{cols['pack']}{row}"] = detalle.get("pack", "")
+    _set_valor_numerico_celda(ws, cols['costo_doc_sin_iva'], row, detalle.get("costo_doc_sin_iva"))
+    _set_valor_numerico_celda(ws, cols['descuento_1'], row, detalle.get("descuento_1"))
+    ws[f"{cols['descuento_1']}{row}"].number_format = '0.00%'
+    if not ocultar_pvp:
+        _set_valor_numerico_celda(ws, cols['pvp'], row, detalle.get("pvp"))
+    _set_valor_numerico_celda(ws, cols['total'], row, detalle.get("total"))
+    for col_letter in cols.values():
         ws[f"{col_letter}{row}"].border = thin_border
 
 
-def _escribir_detalles_productos(ws, detalles: list, cabecera: dict, thin_border) -> None:
+def _escribir_detalles_productos(ws, detalles: list, cabecera: dict, thin_border, ocultar_pvp: bool = False) -> None:
     """Escribe todas las filas de detalle de productos a partir de la fila 14."""
     marca_por_origen = {"RL-CD": "ROLAND", "OUT-CD": "DESCUENTON", "RG-CD": "REGIONS"}
     origen_traslado = (cabecera.get("origen_traslado") or "").strip().upper()
     marca_excel = marca_por_origen.get(origen_traslado, "")
     for idx, detalle in enumerate(detalles):
-        _escribir_fila_detalle(ws, 14 + idx, detalle, marca_excel, thin_border)
+        _escribir_fila_detalle(ws, 14 + idx, detalle, marca_excel, thin_border, ocultar_pvp)
 
 
-def _escribir_fila_total(ws, detalles: list, bold_font, thin_border) -> None:
-    """Escribe la fila de totales al final de la tabla de detalle, si hay productos."""
+def _escribir_fila_total(ws, detalles: list, bold_font, thin_border, ocultar_pvp: bool = False) -> None:
+    """Escribe la fila de totales al final de la tabla de detalle, si hay productos.
+    La etiqueta "TOTAL" va en la columna inmediatamente anterior a la del total
+    sumado (PVP si está presente, DSCTO si se ocultó -- ver _columnas_tabla)."""
     if not detalles:
         return
+    cols = _columnas_tabla(ocultar_pvp)
+    claves_orden = list(cols.keys())
+    col_label = cols[claves_orden[-2]]
+    col_total = cols["total"]
     ultima_fila_datos = 14 + len(detalles) - 1
     fila_total = ultima_fila_datos + 1
-    ws[f"I{fila_total}"] = "TOTAL"
-    ws[f"I{fila_total}"].font = bold_font
-    ws[f"I{fila_total}"].alignment = Alignment(horizontal="right")
-    ws[f"I{fila_total}"].border = thin_border
-    ws[f"J{fila_total}"] = f"=SUM(J14:J{ultima_fila_datos})"
-    ws[f"J{fila_total}"].font = bold_font
-    ws[f"J{fila_total}"].border = thin_border
+    ws[f"{col_label}{fila_total}"] = "TOTAL"
+    ws[f"{col_label}{fila_total}"].font = bold_font
+    ws[f"{col_label}{fila_total}"].alignment = Alignment(horizontal="right")
+    ws[f"{col_label}{fila_total}"].border = thin_border
+    ws[f"{col_total}{fila_total}"] = f"=SUM({col_total}14:{col_total}{ultima_fila_datos})"
+    ws[f"{col_total}{fila_total}"].font = bold_font
+    ws[f"{col_total}{fila_total}"].border = thin_border
 
 
-def _ajustar_anchos_columnas(ws) -> None:
+def _ajustar_anchos_columnas(ws, ocultar_pvp: bool = False) -> None:
     """Ajusta el ancho de las columnas de la tabla de detalle."""
-    anchos = {"B": 18, "C": 12, "D": 18, "E": 50, "F": 8, "G": 16, "H": 10, "I": 10, "J": 10}
-    for col, ancho in anchos.items():
-        ws.column_dimensions[col].width = ancho
+    anchos_por_clave = {
+        "codigo_interno": 18, "marca": 12, "codigo_barras": 18, "descripcion_sap": 50,
+        "pack": 8, "costo_doc_sin_iva": 16, "descuento_1": 10, "pvp": 10, "total": 10,
+    }
+    for clave, letra in _columnas_tabla(ocultar_pvp).items():
+        ws.column_dimensions[letra].width = anchos_por_clave[clave]
 
 
-def _generar_excel_pedido(cabecera: dict, detalles: list) -> bytes:
+def _generar_excel_pedido(cabecera: dict, detalles: list, ocultar_pvp: bool = False) -> bytes:
     wb = Workbook()
     ws = wb.active
     assert ws is not None
@@ -182,10 +218,10 @@ def _generar_excel_pedido(cabecera: dict, detalles: list) -> bytes:
     _agregar_logo_roland(ws)
     _escribir_cabecera_pedido(ws, cabecera, bold_font)
     _aplicar_estilos_cabecera(ws, label_fill, label_font, thin_border)
-    _escribir_encabezados_tabla(ws, bold_font, thin_border)
-    _escribir_detalles_productos(ws, detalles, cabecera, thin_border)
-    _escribir_fila_total(ws, detalles, bold_font, thin_border)
-    _ajustar_anchos_columnas(ws)
+    _escribir_encabezados_tabla(ws, bold_font, thin_border, ocultar_pvp)
+    _escribir_detalles_productos(ws, detalles, cabecera, thin_border, ocultar_pvp)
+    _escribir_fila_total(ws, detalles, bold_font, thin_border, ocultar_pvp)
+    _ajustar_anchos_columnas(ws, ocultar_pvp)
 
     output = io.BytesIO()
     wb.save(output)
@@ -269,7 +305,7 @@ def _logic_exportar_pedido_plano_mba(pedido_id: str, codigo_cliente: str, codigo
         raise HTTPException(status_code=500, detail=f"Error interno al exportar pedido: {str(e)}")
 
 
-def _logic_descargar_pedido(pedido_id: str):
+def _logic_descargar_pedido(pedido_id: str, user: Dict):
     try:
         with get_db_connection_context() as conn:
             repo = PedidoRepository(conn)
@@ -295,7 +331,7 @@ def _logic_descargar_pedido(pedido_id: str):
                 )
 
             detalles = pedido_data.get("detalles", [])
-            excel_bytes = _generar_excel_pedido(cabecera, detalles)
+            excel_bytes = _generar_excel_pedido(cabecera, detalles, ocultar_pvp=debe_ocultar_pvp(user))
 
             logger.info(f"✅ Pedido {cabecera.get('numero_pedido', pedido_id)} descargado como Excel ({len(detalles)} productos)")
 
@@ -310,7 +346,7 @@ def _logic_descargar_pedido(pedido_id: str):
         logger.error(f"❌ Error al descargar pedido: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail={"error": "internal_error", "message": f"Error interno al generar Excel: {str(e)}"})
 
-def _logic_descargar_pedido_original(pedido_id: str):
+def _logic_descargar_pedido_original(pedido_id: str, user: Dict):
     try:
         from src.database.repositories.pedido_original_repository import PedidoOriginalRepository
         with get_db_connection_context() as conn:
@@ -339,7 +375,7 @@ def _logic_descargar_pedido_original(pedido_id: str):
 
             cabecera = pedido_original["cabecera"]
             detalles = pedido_original["detalles"]
-            excel_bytes = _generar_excel_pedido(cabecera, detalles)
+            excel_bytes = _generar_excel_pedido(cabecera, detalles, ocultar_pvp=debe_ocultar_pvp(user))
 
             logger.info(f"✅ Pedido ORIGINAL {cabecera.get('numero_pedido', pedido_id)} descargado como Excel ({len(detalles)} productos)")
 
@@ -535,7 +571,7 @@ def register_exportacion_endpoints(app: FastAPI):
         - **400**: Pedido no está en estado GESTIONAR PEDIDO o superior
         - **404**: Pedido no encontrado
         """
-        return _logic_descargar_pedido(pedido_id)
+        return _logic_descargar_pedido(pedido_id, user)
 
     # ========================================================================
     # Descargar Pedido Original (desde tablas pedido_original)
@@ -569,7 +605,7 @@ def register_exportacion_endpoints(app: FastAPI):
         - **200**: Archivo Excel descargado correctamente
         - **404**: Pedido no encontrado o sin snapshot original
         """
-        return _logic_descargar_pedido_original(pedido_id)
+        return _logic_descargar_pedido_original(pedido_id, user)
 
     # ========================================================================
     # Análisis de Margen (req. 1.4/1.5, SIS-PYTD-0002)

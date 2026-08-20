@@ -21,6 +21,7 @@ from .pedidos_crud_helpers import (
     calcular_totales_detalles,
     get_estado_id_from_pedido,
     ocultar_costos_para_produccion_el_rayo,
+    ocultar_pvp_si_no_mabel,
 )
 
 logger = logging.getLogger(__name__)
@@ -155,6 +156,7 @@ def register_pedidos_detalle_endpoints(app: FastAPI):
                 # RN-03: Producción El Rayo no debe recibir costos/precios/márgenes, ni
                 # siquiera en el JSON crudo (antes solo se ocultaban en el frontend).
                 ocultar_costos_para_produccion_el_rayo(user, pedido.get("detalles"), pedido.get("totales"))
+                ocultar_pvp_si_no_mabel(user, pedido.get("detalles"))
 
                 # Asegurar que Decimal (p. ej. cantidad_solicitada_total, cantidad_confirmada_total, total, cantidad) sea JSON serializable
                 content = make_json_serializable(pedido)
