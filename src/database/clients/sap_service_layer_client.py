@@ -291,6 +291,7 @@ class _MiddlewareSAPServiceLayerClient:
         from_wh = payload["fromWarehouse"]
         to_wh = payload["toWarehouse"]
         logger.info(f"📤 POST /api/v1/stock-transfers/requests ({from_wh} → {to_wh}, {len(lines)} líneas)")
+        logger.debug(f"   Payload: {payload}")
 
         response = self._post("/api/v1/stock-transfers/requests", payload)
         if response is None:
