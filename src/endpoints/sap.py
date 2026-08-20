@@ -358,6 +358,32 @@ def _detalles_error_en_lista(oc_id_item, proveedor_fallback, error):
     }
 
 
+def _enviar_email_despacho_si_corresponde(oc_id_item, oc_info, referencia, detalle_resultado):
+    """
+    Notifica a Operaciones (El Rayo / MABEL TRADING) que la ODC y sus Solicitudes de
+    Transferencia ya están en SAP y se puede proceder con despacho y facturación (HU-04).
+
+    Mismo correo que dispara el flujo de redistribución de pedidos tras un envío exitoso
+    (_enviar_emails_exito_sap en endpoints_proceso.py); acá faltaba para el flujo de
+    /integrar-sap (paso 4 de despachos), que es otra vía de envío exitoso de ODC/ST.
+    """
+    try:
+        from src.utils.email_notifier import send_oc_ready_for_dispatch_notification
+        enviado = send_oc_ready_for_dispatch_notification(
+            oc_cabecera=oc_info or {},
+            doc_num=detalle_resultado.get("doc_num"),
+            doc_entry=detalle_resultado.get("doc_entry"),
+            solicitudes_transferencia=detalle_resultado.get("solicitudes_transferencia"),
+            pedido_numero=referencia,
+        )
+        if not enviado:
+            logger.warning(
+                f"⚠️ No se pudo enviar notificación de despacho para OC {oc_id_item[:8]}..."
+            )
+    except Exception as e:
+        logger.warning(f"⚠️ Error al enviar notificación de despacho (no crítico): {e}")
+
+
 def _procesar_lista_ocs(oc_repo, log_repo, oc_sap_service, proceso_id, username, source, oc_ids_a_procesar):
     detalles = []
     enviadas = 0
@@ -382,6 +408,7 @@ def _procesar_lista_ocs(oc_repo, log_repo, oc_sap_service, proceso_id, username,
             detalles.append(detalle_resultado)
             if success:
                 enviadas += 1
+                _enviar_email_despacho_si_corresponde(oc_id_item, oc_info, referencia, detalle_resultado)
             else:
                 errores += 1
                 logger.error(f"❌ Error ODC {oc_id_item[:8]}...: {error}")
