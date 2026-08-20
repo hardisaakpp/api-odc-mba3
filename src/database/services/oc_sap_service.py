@@ -18,9 +18,12 @@ from src.config import (
     SAP_ODC_RETRY_MAX_ATTEMPTS,
     SAP_ODC_RETRY_BASE_DELAY_SECONDS,
     SAP_ODC_RETRY_MAX_JITTER_SECONDS,
+    SAP_PREVALIDACION_RETRY_MAX_ATTEMPTS,
+    SAP_PREVALIDACION_RETRY_BASE_DELAY_SECONDS,
+    SAP_PREVALIDACION_RETRY_MAX_JITTER_SECONDS,
     USE_BATCH_VALIDATION,
 )
-from .retry_utils import retry_operation, sap_service_layer_result_should_retry
+from .retry_utils import retry_operation, sap_service_layer_result_should_retry, mensaje_sugiere_reintento_transitorio
 from ..repositories.orden_compra_repository import OrdenCompraRepository
 from ..clients.sap_service_layer_client import SAPServiceLayerClient
 from ..mappers.sap_oc_mapper import SAPOCMapper
@@ -41,7 +44,11 @@ class OCSAPService:
     ITR_RETRY_MAX_ATTEMPTS = SAP_ITR_RETRY_MAX_ATTEMPTS
     ITR_RETRY_BASE_DELAY_SECONDS = SAP_ITR_RETRY_BASE_DELAY_SECONDS
     ITR_RETRY_MAX_JITTER_SECONDS = SAP_ITR_RETRY_MAX_JITTER_SECONDS
-    
+
+    PREVALIDACION_RETRY_MAX_ATTEMPTS = SAP_PREVALIDACION_RETRY_MAX_ATTEMPTS
+    PREVALIDACION_RETRY_BASE_DELAY_SECONDS = SAP_PREVALIDACION_RETRY_BASE_DELAY_SECONDS
+    PREVALIDACION_RETRY_MAX_JITTER_SECONDS = SAP_PREVALIDACION_RETRY_MAX_JITTER_SECONDS
+
     def __init__(self):
         """Inicializa el servicio."""
         self.sap_client = SAPServiceLayerClient()
@@ -286,6 +293,33 @@ class OCSAPService:
             logger.warning(f"⚠️ No se pudo determinar bodega para ODC {oc_id}. La ODC se enviará sin WarehouseCode.")
         return warehouse_code
 
+    def _prevalidar_con_reintento(
+        self,
+        oc_cabecera: Dict[str, Any],
+        oc_detalles: List[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        """
+        Prevalida contra SAP Service Layer con reintento y backoff ante saturación
+        transitoria (HTTP 202 encolado por el middleware). Errores de validación
+        reales (item/proveedor inexistente, etc.) no se reintentan.
+        """
+        resultado = retry_operation(
+            execute=lambda: self._precheck_against_service_layer(oc_cabecera, oc_detalles),
+            is_success=lambda response: bool(response and response.get("valid")),
+            extract_error=lambda response: (
+                '; '.join(response.get("errors", [])) if response else "Error desconocido"
+            ),
+            max_attempts=self.PREVALIDACION_RETRY_MAX_ATTEMPTS,
+            should_retry=lambda response: mensaje_sugiere_reintento_transitorio(
+                '; '.join(response.get("errors", [])) if response else None
+            ),
+            base_delay_seconds=self.PREVALIDACION_RETRY_BASE_DELAY_SECONDS,
+            max_jitter_seconds=self.PREVALIDACION_RETRY_MAX_JITTER_SECONDS,
+            logger=logger,
+            operation_label="Prevalidación SAP",
+        )
+        return resultado["response"]
+
     def _ejecutar_validaciones_oc(
         self,
         oc_cabecera: Dict[str, Any],
@@ -318,7 +352,7 @@ class OCSAPService:
             logger.warning(warning)
 
         logger.info("🔍 Paso 3.5: Prevalidación contra SAP Service Layer...")
-        prevalidacion = self._precheck_against_service_layer(oc_cabecera, oc_detalles)
+        prevalidacion = self._prevalidar_con_reintento(oc_cabecera, oc_detalles)
         if not prevalidacion["valid"]:
             errores_prevalidacion = prevalidacion.get("errors", [])
             error_msg = f"Prevalidación SAP falló: {'; '.join(errores_prevalidacion)}"

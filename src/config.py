@@ -262,6 +262,19 @@ SAP_ODC_RETRY_MAX_ATTEMPTS = max(1, int(os.getenv("SAP_ODC_RETRY_MAX_ATTEMPTS", 
 SAP_ODC_RETRY_BASE_DELAY_SECONDS = max(0.1, float(os.getenv("SAP_ODC_RETRY_BASE_DELAY_SECONDS", "3.0")))
 SAP_ODC_RETRY_MAX_JITTER_SECONDS = max(0.0, float(os.getenv("SAP_ODC_RETRY_MAX_JITTER_SECONDS", "1.0")))
 
+# Reintentos automáticos para la PREVALIDACIÓN de la ODC contra SAP Service Layer
+# (paso previo al envío: valida proveedor + artículos). A diferencia del envío en sí,
+# antes no tenía retry_operation propio: cada consulta individual (get_item/
+# get_business_partner) ya reintenta HTTP 202 acotado (~6s, ver _LECTURA_202_MAX_INTENTOS
+# en sap_service_layer_client.py), pero el middleware encola el job y lo vuelve a
+# intentar recién a partir de los 15s (docs/RESOLUCION_ITR_ENCOLADA_202.md) — esa ventana
+# no alcanza a esperar el job, sobre todo en la primera consulta tras levantar el
+# middleware (sesión/caché fríos). Sin este retry externo, la prevalidación fallaba con
+# "SAP saturado" en el primer intento y solo funcionaba si el usuario reintentaba a mano.
+SAP_PREVALIDACION_RETRY_MAX_ATTEMPTS = max(1, int(os.getenv("SAP_PREVALIDACION_RETRY_MAX_ATTEMPTS", "3")))
+SAP_PREVALIDACION_RETRY_BASE_DELAY_SECONDS = max(0.1, float(os.getenv("SAP_PREVALIDACION_RETRY_BASE_DELAY_SECONDS", "3.0")))
+SAP_PREVALIDACION_RETRY_MAX_JITTER_SECONDS = max(0.0, float(os.getenv("SAP_PREVALIDACION_RETRY_MAX_JITTER_SECONDS", "1.0")))
+
 # ============================================================================
 # ConfiguraciÃ³n de Seguridad (Opcional)
 # ============================================================================

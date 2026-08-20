@@ -251,3 +251,64 @@ class TestPrecheckWiring:
         assert resultado["valid"] is True
         assert resultado["errors"] == []
         service.sap_client.validate_item_in_warehouse.assert_called_once()
+
+
+class TestPrevalidarConReintento:
+    """
+    _prevalidar_con_reintento: la prevalidación en sí (_precheck_against_service_layer)
+    no tenía retry propio, a diferencia del envío de la ODC. Ante "SAP saturado"
+    (HTTP 202 del middleware agotando su ventana de reintento interna) debe reintentar
+    con backoff; ante un error de validación real, no debe perder tiempo reintentando.
+    """
+
+    _SATURADO = {
+        "valid": False,
+        "errors": ["SAP saturado: no se pudo validar en este momento, inténtalo de nuevo en unos segundos"],
+        "warnings": [],
+    }
+    _ERROR_REAL = {
+        "valid": False,
+        "errors": ["Item 'XYZ' no existe en SAP"],
+        "warnings": [],
+    }
+    _EXITOSO = {"valid": True, "errors": [], "warnings": []}
+
+    @staticmethod
+    def _service_con_reintento_rapido() -> Any:
+        service = OCSAPService.__new__(OCSAPService)
+        service.sap_client = MagicMock()
+        # Backoff en 0 para no ralentizar el test; el conteo de intentos es lo que se prueba.
+        service.PREVALIDACION_RETRY_MAX_ATTEMPTS = 3
+        service.PREVALIDACION_RETRY_BASE_DELAY_SECONDS = 0.0
+        service.PREVALIDACION_RETRY_MAX_JITTER_SECONDS = 0.0
+        return service
+
+    def test_reintenta_ante_sap_saturado_y_finalmente_exitoso(self):
+        service = self._service_con_reintento_rapido()
+        with patch.object(
+            service, "_precheck_against_service_layer",
+            side_effect=[self._SATURADO, self._EXITOSO],
+        ) as mock_precheck:
+            resultado = service._prevalidar_con_reintento({}, [])
+        assert resultado["valid"] is True
+        assert mock_precheck.call_count == 2
+
+    def test_no_reintenta_ante_error_de_validacion_real(self):
+        service = self._service_con_reintento_rapido()
+        with patch.object(
+            service, "_precheck_against_service_layer",
+            side_effect=[self._ERROR_REAL, self._EXITOSO],
+        ) as mock_precheck:
+            resultado = service._prevalidar_con_reintento({}, [])
+        assert resultado["valid"] is False
+        assert mock_precheck.call_count == 1
+
+    def test_agota_intentos_si_sigue_saturado(self):
+        service = self._service_con_reintento_rapido()
+        with patch.object(
+            service, "_precheck_against_service_layer",
+            side_effect=[self._SATURADO, self._SATURADO, self._SATURADO],
+        ) as mock_precheck:
+            resultado = service._prevalidar_con_reintento({}, [])
+        assert resultado["valid"] is False
+        assert mock_precheck.call_count == 3
