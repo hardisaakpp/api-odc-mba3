@@ -741,10 +741,33 @@ class ModificacionColumnaItem(BaseModel):
 
 class ObtenerModificacionesColumnasResponse(BaseModel):
     """Modelo para la respuesta de obtener modificaciones de columnas."""
-    
+
     status: str = Field(default="success", description=_DESC_ESTADO_OPERACION)
     numero_pedido: str = Field(..., description=_DESC_NUMERO_PEDIDO)
     modificaciones: List[ModificacionColumnaItem] = Field(default_factory=list, description="Lista de modificaciones")
+
+
+class AuditLogEntryItem(BaseModel):
+    """Modelo para una entrada del historial de auditoría (pedido_audit_log) de un pedido."""
+
+    entidad: str = Field(..., description="Tabla/entidad afectada (pedido, pedido_detalle, ...)")
+    entidad_id: Optional[str] = Field(None, description="PK del registro afectado dentro de esa entidad")
+    accion: str = Field(..., description="INSERT, UPDATE o DELETE")
+    campo_modificado: Optional[str] = Field(None, description="Columna modificada (solo para UPDATE)")
+    valor_anterior: Optional[str] = Field(None, description="Valor previo")
+    valor_nuevo: Optional[str] = Field(None, description="Valor nuevo")
+    usuario: str = Field(..., description="Usuario que realizó el cambio (email o username)")
+    fecha: str = Field(..., description="Fecha/hora del cambio (ISO 8601, UTC)")
+    origen: Optional[str] = Field(None, description="Origen de la operación (WEB, API, EXCEL, CELERY, ...)")
+    comentario: Optional[str] = Field(None, description="Observación opcional")
+
+
+class ObtenerAuditLogResponse(BaseModel):
+    """Modelo para la respuesta del historial de auditoría de un pedido."""
+
+    status: str = Field(default="success", description=_DESC_ESTADO_OPERACION)
+    numero_pedido: str = Field(..., description=_DESC_NUMERO_PEDIDO)
+    registros: List[AuditLogEntryItem] = Field(default_factory=list, description="Historial de cambios, más reciente primero")
 
 
 # ============================================================================

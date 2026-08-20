@@ -10,6 +10,7 @@ from fastapi.responses import JSONResponse
 
 from src.database.connection import get_db_connection_context
 from src.database.repositories.pedido_repository import PedidoRepository
+from src.database.services.audit_log_service import AuditLogService
 from src.database.pedido_estados import ESTADO_GESTIONAR_PEDIDO, ESTADO_CONFIRMADO_POR_PRODUCCION
 from src.security.jwt_auth import verify_jwt_token, require_any_permission
 from src.utils.audit_context import get_audit_context, ORIGEN_WEB
@@ -20,9 +21,16 @@ from src.models import (
     GuardarModificacionesColumnasRequest,
     GuardarModificacionesColumnasResponse,
     ObtenerModificacionesColumnasResponse,
-    ModificacionColumnaItem
+    ModificacionColumnaItem,
+    AuditLogEntryItem,
+    ObtenerAuditLogResponse,
 )
-from .pedidos_crud_helpers import calcular_totales_detalles, ocultar_costos_para_produccion_el_rayo, es_solo_produccion_el_rayo
+from .pedidos_crud_helpers import (
+    calcular_totales_detalles,
+    ocultar_costos_para_produccion_el_rayo,
+    es_solo_produccion_el_rayo,
+    es_campo_costo_detalle,
+)
 from .utils import get_user_id
 
 logger = logging.getLogger(__name__)
@@ -32,6 +40,7 @@ DESC_NUMERO_PEDIDO = "Número del pedido o pedido_id (UUID); el backend acepta a
 DESC_PEDIDO_DETALLE_ID = "UUID del detalle del pedido"
 MSG_ERROR_ESTADO_NO_EDITABLE = "Solo se pueden editar COSTO UNIT., TOTAL y COMENTARIO cuando el pedido está en estado GESTIONAR PEDIDO o CONFIRMADO POR PRODUCCIÓN."
 _PERM_ODCSAP = 'odcsap.view'
+_PERM_MABEL = 'mabel.view'
 _PERM_PRODUCCION_ELRAYO = 'produccion-elrayo.view'
 # Req. 1.8: odcsap.view hereda en CONFIRMADO POR PRODUCCIÓN (23) las mismas
 # funcionalidades de edición que tenía en GESTIONAR PEDIDO (3).
@@ -323,6 +332,42 @@ def _logic_obtener_modificaciones_columnas(numero_pedido: str, user: Dict):
                           detail={"error": "internal_error", "message": f"Error interno al obtener modificaciones: {str(e)}"})
 
 
+def _logic_obtener_audit_log(numero_pedido: str, user: Dict):
+    try:
+        with get_db_connection_context() as conn:
+            repo = PedidoRepository(conn)
+            pedido = _obtener_pedido_existente(repo, numero_pedido)
+
+            pedido_id = pedido.get("cabecera", {}).get("pedido_id")
+            numero_pedido_real = pedido.get("cabecera", {}).get("numero_pedido") or numero_pedido
+
+            audit_svc = AuditLogService(conn)
+            registros = audit_svc.obtener_por_pedido(pedido_id)
+
+        # RN-03: Producción El Rayo no debe recibir costos/precios/márgenes,
+        # tampoco a través del historial de auditoría.
+        if es_solo_produccion_el_rayo(user):
+            registros = [r for r in registros if not es_campo_costo_detalle(r.get("campo_modificado"))]
+
+        # ip_origen queda fuera de la respuesta HTTP (no aporta al usuario y
+        # es un dato sensible de acceso interno).
+        registros_items = [
+            AuditLogEntryItem(**{k: v for k, v in r.items() if k != "ip_origen"})
+            for r in registros
+        ]
+
+        logger.info(f"✅ Audit log obtenido para pedido {numero_pedido_real} por usuario {user.get('username', 'UNKNOWN')}")
+        return ObtenerAuditLogResponse(
+            status="success", numero_pedido=numero_pedido_real, registros=registros_items)
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ Error al obtener audit log: {e}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                          detail={"error": "internal_error", "message": f"Error interno al obtener audit log: {str(e)}"})
+
+
 def register_edicion_endpoints(app: FastAPI):
     """Registra los endpoints de edición de detalles de pedidos."""
     
@@ -384,3 +429,17 @@ def register_edicion_endpoints(app: FastAPI):
     ):
         """Obtiene las modificaciones de columnas para un pedido."""
         return _logic_obtener_modificaciones_columnas(numero_pedido, user)
+
+    @app.get("/api/pedidos/{numero_pedido}/audit-log",
+             response_model=ObtenerAuditLogResponse,
+             tags=["Pedidos - Auditoría"])
+    async def obtener_audit_log(
+        numero_pedido: str = Path(..., description=DESC_NUMERO_PEDIDO),
+        user: Dict = Depends(verify_jwt_token),
+        _: None = Depends(require_any_permission([_PERM_ODCSAP, _PERM_MABEL, _PERM_PRODUCCION_ELRAYO])),
+    ):
+        """Obtiene el historial completo de auditoría (pedido_audit_log) de un pedido:
+        quién hizo cada cambio, cuándo, y valor anterior/nuevo. Más reciente primero.
+        Requiere odcsap.view, mabel.view o produccion-elrayo.view (a produccion-elrayo.view
+        se le ocultan los cambios de costo unitario, RN-03)."""
+        return _logic_obtener_audit_log(numero_pedido, user)
