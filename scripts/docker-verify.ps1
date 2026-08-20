@@ -143,7 +143,7 @@ if ($failed.Count -eq 0) {
 }
 else {
     Write-Host "RESULTADO: $($failed.Count) comprobación(es) fallaron." -ForegroundColor Red
-    Write-Host "Levanta el stack: .\scripts\docker-app-up.ps1 -Build" -ForegroundColor DarkGray
+    Write-Host "Levanta el stack: .\scripts\docker-app-up.ps1" -ForegroundColor DarkGray
 }
 Write-Host ""
 Write-Host "Documentación: docs/DOCKER_COMPOSE.md" -ForegroundColor DarkGray

@@ -19,7 +19,7 @@ Todo se conecta a **`redis://localhost:6379/0`** (o la URL que pongas en `REDIS_
 En Windows no viene Redis instalado. **Recomendación para desarrollo: stack Docker con perfil `app`** — levanta Redis, MinIO, API, worker y beat de una vez. Ver [DOCKER_COMPOSE.md](DOCKER_COMPOSE.md) y:
 
 ```powershell
-.\scripts\docker-app-up.ps1 -Build
+.\scripts\docker-app-up.ps1
 .\scripts\docker-verify.ps1
 ```
 

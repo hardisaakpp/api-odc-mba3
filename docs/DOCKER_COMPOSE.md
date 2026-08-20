@@ -6,7 +6,7 @@ Este repositorio define varios modos con `docker-compose.yml` (+ overlay de prod
 |------|-----------|-------------|
 | **Solo Redis** (por defecto) | `docker compose up -d` | Redis (6379). |
 | **Redis + MinIO local** (desarrollo) | `docker compose --profile bundled-minio up -d` | Redis + MinIO (9100/9101). |
-| **Stack desarrollo** (perfil `app` + MinIO embebido) | `.\scripts\docker-app-up.ps1` o `docker compose --profile app --profile bundled-minio up -d --build` | Redis, MinIO, API, Celery worker y beat. |
+| **Stack desarrollo** (perfil `app` + MinIO embebido) | `.\scripts\docker-app-up.ps1` (rebuild por defecto) o `docker compose --profile app --profile bundled-minio up -d --build` | Redis, MinIO, API, Celery worker y beat. |
 | **Stack producción** (`srv-mabuiosapi`) | `docker compose -f docker-compose.yml -f docker-compose.prod.yml --profile app up -d --build` o `./scripts/docker-app-up-prod.sh` | Redis, API, Celery; **MinIO en 192.168.2.211**. Ver [DEPLOY_DOCKER_PRODUCCION.md](DEPLOY_DOCKER_PRODUCCION.md). |
 
 Con el perfil **`app`** corre **toda la aplicación backend de este repo** (mismos endpoints y tareas Celery que en host). No hay funcionalidad reservada al modo host; solo cambia dónde se ejecutan los procesos.
@@ -14,12 +14,12 @@ Con el perfil **`app`** corre **toda la aplicación backend de este repo** (mism
 ## Flujo de desarrollo con stack `app`
 
 1. Crear o actualizar **`.env.develop`** (ver [CONFIGURACION.md](CONFIGURACION.md)).
-2. `.\scripts\docker-app-up.ps1 -Build` (rebuild tras cambios en código Python).
+2. `.\scripts\docker-app-up.ps1` (reconstruye la imagen por defecto, así el contenedor siempre corre el código Python actual; usar `-NoBuild` solo si no cambió nada desde el último build).
 3. `.\scripts\docker-verify.ps1` — smoke test de contenedores y dependencias.
 4. Frontend **scnexus-front**: `npm run dev` con proxy/API en **`http://localhost:8000`** (el navegador no usa el hostname `mba3-api`).
 5. Pruebas de negocio (plantilla async, proceso SAP, ODC, cruce) con JWT como en DESA — checklist: [ALINEACION_FRONT_ASYNC.md](ALINEACION_FRONT_ASYNC.md).
 
-**Ciclo tras implementar una feature:** editar código → `-Build` → verificar con `docker-verify` y el flujo en el front → commit.
+**Ciclo tras implementar una feature:** editar código → `.\scripts\docker-app-up.ps1` (rebuild automático) → verificar con `docker-verify` y el flujo en el front → commit.
 
 **Qué no incluye el compose** (deben ser alcanzables desde la red del contenedor):
 
@@ -70,11 +70,11 @@ docker compose up -d
 # Redis + MinIO local (desarrollo)
 docker compose --profile bundled-minio up -d
 
-# Stack completo desarrollo (primera vez o tras cambios en código Python)
-.\scripts\docker-app-up.ps1 -Build
-
-# Solo levantar sin rebuild
+# Stack completo desarrollo (reconstruye la imagen por defecto)
 .\scripts\docker-app-up.ps1
+
+# Solo levantar sin rebuild (nada cambió desde el último build)
+.\scripts\docker-app-up.ps1 -NoBuild
 
 # Ver logs
 docker logs -f mba3-api

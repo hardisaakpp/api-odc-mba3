@@ -69,6 +69,12 @@ Desktop.ini
 # Archivos que no necesita la imagen de runtime
 docs/
 scripts/
+# Excepto lo que src/api_server.py importa en runtime (development) para
+# auto-aplicar migraciones de esquema pendientes al arrancar: ver 2a6c793.
+!scripts/migration_runner.py
+!scripts/migrations_manifest.yaml
+!scripts/migrations/
+!scripts/migrations/**
 azure-pipeline/
 deploy/
 docker-compose*.yml

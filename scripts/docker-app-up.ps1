@@ -1,17 +1,23 @@
 # Levanta el stack de desarrollo recomendado (perfil "app"):
 # Redis, MinIO, API FastAPI, Celery worker y Celery beat.
 # Requiere: Docker Desktop (o Docker Engine), archivo .env.develop en la raíz del repo.
-# Tras cambiar código Python: usar -Build. Ver docs/DOCKER_COMPOSE.md.
+#
+# Reconstruye la imagen por defecto: el Dockerfile hornea el código con `COPY . .`
+# (no hay bind-mount de src/), así que sin rebuild el contenedor sigue corriendo lo
+# que sea que se compiló la última vez -- código Python desactualizado y en silencio.
+# El costo es bajo (~segundos: las capas de apt/pip quedan en caché). Usar -NoBuild
+# solo cuando se sabe que no cambió código desde el último build (ej. tras reiniciar
+# Docker Desktop sin tocar el repo). Ver docs/DOCKER_COMPOSE.md.
 #
 # Uso (desde la raíz del repo):
 #   .\scripts\docker-app-up.ps1
-#   .\scripts\docker-app-up.ps1 -Build   # fuerza rebuild de la imagen
+#   .\scripts\docker-app-up.ps1 -NoBuild   # omite el rebuild (usa la imagen ya construida)
 #
 # Detener: .\scripts\docker-app-down.ps1
 # Documentación: docs/DOCKER_COMPOSE.md
 
 param(
-    [switch]$Build
+    [switch]$NoBuild
 )
 
 $ErrorActionPreference = "Stop"
@@ -27,7 +33,7 @@ if (-not (Test-Path -LiteralPath $envFile)) {
 }
 
 $args = @("compose", "--profile", "app", "--profile", "bundled-minio", "up", "-d")
-if ($Build) {
+if (-not $NoBuild) {
     $args += "--build"
 }
 

@@ -42,7 +42,7 @@ Levanta Redis, MinIO, API, Celery worker y Celery beat en contenedores (misma ap
 
 ```powershell
 # Primera vez o tras cambiar código Python del backend
-.\scripts\docker-app-up.ps1 -Build
+.\scripts\docker-app-up.ps1
 
 # Comprobar contenedores, /health, Redis, MinIO y Celery
 .\scripts\docker-verify.ps1
@@ -50,7 +50,7 @@ Levanta Redis, MinIO, API, Celery worker y Celery beat en contenedores (misma ap
 # Frontend (repo scnexus-front): npm run dev → proxy a http://localhost:8000
 ```
 
-Documentación completa: [docs/DOCKER_COMPOSE.md](docs/DOCKER_COMPOSE.md). Tras editar código Python: `.\scripts\docker-app-up.ps1 -Build` (la imagen copia el código en build; no hay hot-reload en contenedor). **No** levantes además la API en el host: el puerto **8000** quedaría en conflicto.
+Documentación completa: [docs/DOCKER_COMPOSE.md](docs/DOCKER_COMPOSE.md). Tras editar código Python: `.\scripts\docker-app-up.ps1` (la imagen copia el código en build; no hay hot-reload en contenedor). **No** levantes además la API en el host: el puerto **8000** quedaría en conflicto.
 
 SQL Server, SAP, MBA3 y el Core siguen **fuera** de Docker; configúralos en `.env.develop` (desde el contenedor, evita `SQL_SERVER_SERVER=localhost` si la BD está en tu PC — usa `host.docker.internal` o el host real).
 
@@ -62,7 +62,7 @@ SQL Server, SAP, MBA3 y el Core siguen **fuera** de Docker; configúralos en `.e
 
 ```powershell
 # Stack completo en Docker (recomendado): Redis + MinIO + API + Celery
-.\scripts\docker-app-up.ps1 -Build
+.\scripts\docker-app-up.ps1
 .\scripts\docker-verify.ps1
 
 # Producción Linux (srv-mabuiosapi): desde /opt/odc-sap

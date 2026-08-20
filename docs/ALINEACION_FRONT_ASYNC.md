@@ -133,7 +133,7 @@ código problemático — cada código responde de forma independiente.
 ## Verificación automática (stack Docker)
 
 ```powershell
-.\scripts\docker-app-up.ps1 -Build
+.\scripts\docker-app-up.ps1
 .\scripts\docker-verify.ps1
 ```
 
