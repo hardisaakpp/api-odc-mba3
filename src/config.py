@@ -156,6 +156,18 @@ SQL_SERVER_SAP_UID = os.getenv("SQL_SERVER_SAP_UID", SQL_SERVER_UID)
 SQL_SERVER_SAP_PWD = os.getenv("SQL_SERVER_SAP_PWD", SQL_SERVER_PWD)
 
 # ============================================================================
+# Configuracion de SQL Server sc_maestros (datos maestros legados, SOLO LECTURA)
+# ============================================================================
+# Servidor de PRODUCCION (192.168.2.211). JAMAS escribir desde este servicio.
+# Se usa unicamente para leer dbo.almacenes_local (marca por codigo de tienda/bodega).
+
+SQL_SERVER_MAESTROS_DRIVER = os.getenv("SQL_SERVER_MAESTROS_DRIVER", SQL_SERVER_DRIVER)
+SQL_SERVER_MAESTROS_SERVER = os.getenv("SQL_SERVER_MAESTROS_SERVER", "192.168.2.211")
+SQL_SERVER_MAESTROS_DATABASE = os.getenv("SQL_SERVER_MAESTROS_DATABASE", "sc_maestros")
+SQL_SERVER_MAESTROS_UID = os.getenv("SQL_SERVER_MAESTROS_UID", "")
+SQL_SERVER_MAESTROS_PWD = os.getenv("SQL_SERVER_MAESTROS_PWD", "")
+
+# ============================================================================
 # ConfiguraciÃ³n de SAP (HANA)
 # ============================================================================
 # ConfiguraciÃ³n para consultas a SAP usando OPENQUERY desde SQL Server
@@ -472,7 +484,7 @@ EMAIL_SMTP_TIMEOUT = float(os.getenv("EMAIL_SMTP_TIMEOUT", "5.0"))
 # Direcciones de correo
 EMAIL_FROM = os.getenv("EMAIL_FROM", "integrationsap@mabeltrading.com.ec")
 # Nombre del remitente para los correos
-EMAIL_FROM_NAME = os.getenv("EMAIL_FROM_NAME", "INTEGRACIÃ“N SAP")
+EMAIL_FROM_NAME = os.getenv("EMAIL_FROM_NAME", "INTEGRACIÓN SAP")
 
 # Los destinatarios de cada correo se resuelven en BD vía
 # get_destinatarios_por_correo (notificacion_persona_correo /

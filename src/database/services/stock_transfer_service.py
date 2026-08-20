@@ -30,6 +30,7 @@ from ..repositories.solicitud_transferencia_repository import SolicitudTransfere
 from ..clients.sap_service_layer_client import SAPServiceLayerClient
 from ..mappers.sap_stock_transfer_mapper import SAPStockTransferMapper
 from ..services.bodega_sap_service import BodegaSAPService
+from ..services.marca_tienda_service import MARCA_A_BODEGA
 from src.exceptions import SAPDataMasterError, SolicitudTransferenciaNoAplicaError
 
 logger = logging.getLogger(__name__)
@@ -283,7 +284,7 @@ class StockTransferService:
         )
 
     @staticmethod
-    def obtener_bodega_de_tienda(tienda_codigo: str) -> Optional[str]:
+    def _obtener_bodega_por_prefijo(codigo_upper: str) -> Optional[str]:
         """
         Determina a qué bodega pertenece una tienda basándose en el prefijo de su código.
 
@@ -291,18 +292,7 @@ class StockTransferService:
         - TRL-* (excepto TRL-RG*) → RL-CD (ROLAND)
         - TOUT-* → OUT-CD (DESCUENTON)
         - RG-* o TRL-RG* → RG-CD (REGIONS)
-
-        Args:
-            tienda_codigo: Código de la tienda (ej: "TRL-QSN", "TOUT-BMB", "RG-INT")
-
-        Returns:
-            Código de bodega (OUT-CD, RG-CD, RL-CD) o None si no se puede determinar
         """
-        if not tienda_codigo:
-            return None
-
-        codigo_upper = tienda_codigo.strip().upper()
-
         # REGIONS: RG-* o TRL-RG*
         if codigo_upper.startswith("RG-") or codigo_upper.startswith("TRL-RG"):
             return "RG-CD"
@@ -315,8 +305,81 @@ class StockTransferService:
         if codigo_upper.startswith("TRL-"):
             return "RL-CD"
 
-        # Si no coincide con ningún patrón, retornar None
         return None
+
+    @staticmethod
+    def _obtener_marca_local(codigo_upper: str) -> Optional[str]:
+        """Lee tienda.marca (local, ya sincronizada desde sc_maestros) para un código. No bloqueante."""
+        try:
+            with get_db_connection_context() as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT marca FROM tienda WHERE codigo = ?", (codigo_upper,))
+                row = cursor.fetchone()
+                cursor.close()
+                return row[0].strip().upper() if row and row[0] else None
+        except Exception as e:
+            logger.warning(f"⚠️ No se pudo leer marca local de tienda {codigo_upper}: {e}")
+            return None
+
+    @staticmethod
+    def obtener_bodega_de_tienda(tienda_codigo: str) -> Optional[str]:
+        """
+        Determina a qué bodega pertenece una tienda.
+
+        Prioridad:
+        1. tienda.marca (sincronizada desde sc_maestros.almacenes_local) → MARCA_A_BODEGA
+        2. Heurístico de prefijo del código (fallback si la tienda no existe localmente
+           o su marca aún no fue sincronizada)
+
+        Args:
+            tienda_codigo: Código de la tienda (ej: "TRL-QSN", "TOUT-BMB", "RG-INT")
+
+        Returns:
+            Código de bodega (OUT-CD, RG-CD, RL-CD) o None si no se puede determinar
+        """
+        if not tienda_codigo:
+            return None
+
+        codigo_upper = tienda_codigo.strip().upper()
+
+        marca = StockTransferService._obtener_marca_local(codigo_upper)
+        if marca and marca in MARCA_A_BODEGA:
+            return MARCA_A_BODEGA[marca]
+
+        return StockTransferService._obtener_bodega_por_prefijo(codigo_upper)
+
+    @staticmethod
+    def detectar_origenes_traslado(detalles: List[Dict[str, Any]]) -> List[str]:
+        """
+        Detecta la(s) bodega(s)/CD de un pedido a partir de las tiendas (no bodegas)
+        presentes en sus detalles — no persiste nada, es un valor calculado para
+        mostrar en pantalla (campo "Origen Traslado"). No reemplaza al campo
+        legado `pedido.origen_traslado` (valor único, escrito a mano en el Excel,
+        usado sin cambios por el resto del sistema).
+
+        Args:
+            detalles: Lista de detalles del pedido, cada uno con "tiendas": [{"codigo", "es_bodega", ...}]
+                      (formato de PedidoUtilsRepository.obtener_detalles_pedido).
+
+        Returns:
+            Códigos de bodega distintos, ordenados (ej. ["RG-CD", "RL-CD"]; un solo
+            elemento en el caso normal de una sola marca).
+        """
+        codigos_tiendas: set = set()
+        for detalle in detalles:
+            for tienda in detalle.get("tiendas", []):
+                if tienda.get("es_bodega", False):
+                    continue
+                codigo = tienda.get("codigo")
+                if codigo:
+                    codigos_tiendas.add(codigo.strip().upper())
+
+        bodegas: set = set()
+        for codigo in codigos_tiendas:
+            bodega = StockTransferService.obtener_bodega_de_tienda(codigo)
+            if bodega:
+                bodegas.add(bodega)
+        return sorted(bodegas)
 
     @staticmethod
     def _agrupar_cantidades_requeridas(

@@ -5,7 +5,25 @@ no se modifica). Este documento registra, por cada punto del requerimiento: qué
 implementó, en qué difiere de la letra del documento original y por qué — para que una
 diferencia deliberada no se lea como un defecto en una futura revisión.
 
-Última actualización: 2026-08-17.
+Última actualización: 2026-08-20.
+
+## Glosario
+
+- **RL / ROLAND**: marca ROLAND. Bodega/CD asociado: `RL-CD`.
+- **RG / REGIONS**: marca REGIONS. Bodega/CD asociado: `RG-CD`.
+- **OUT / DESCUENTÓN**: marca DESCUENTÓN. Bodega/CD asociado: `OUT-CD`.
+- **CD**: Centro de Distribución (bodega central de una marca en SAP).
+- **ODC**: Orden de Compra (Purchase Order en SAP Business One).
+- **ST / ITR**: Solicitud de Transferencia / Inventory Transfer Request — documento SAP
+  que traslada stock desde el CD hacia una tienda, generado a partir de la distribución
+  confirmada de un pedido.
+- **`sc_maestros`**: base de datos legada de datos maestros (servidor de producción
+  `192.168.2.211`, **solo lectura** desde este sistema), tabla `dbo.almacenes_local`.
+  `whs_code` es el código del Centro de Distribución (`RL-CD`/`RG-CD`/`OUT-CD`); el
+  código de tienda del Excel vive en `u_bod_tra`. Columna `u_marca` (valores literales
+  `ROLAND`/`REGIONS`/`DESCUENTON`) trae la marca de cada tienda (`u_bod_tra`),
+  sincronizada desde SAP. Es la fuente de verdad usada para resolver marca→CD (ver la
+  sección de generación de 2 ODC).
 
 ## 1.1.1 Inmovilización de columnas — Implementado
 
@@ -143,7 +161,43 @@ parte del punto 1.5 — ver abajo.
 ## 1.6 Traslados entre bodega (CEDI Roland ↔ Regions) — Implementado
 
 Allowlist `BODEGAS_TRASLADO_CRUZADO_PERMITIDO` en `stock_transfer_service.py`. Sin
-desviaciones; verificado que ningún filtro previo de tienda-por-bodega lo bloquea.
+desviaciones; verificado que ningún filtro previo de tienda-por-bodega lo bloquea. Esta es
+la pantalla manual de "Solicitudes de Traslado"; **no** tiene relación con el punto
+siguiente (pedidos que mezclan ROLAND y REGIONS en un mismo Excel).
+
+## Generación de 2 ODC para pedidos que mezclan tiendas ROLAND y REGIONS — Nuevo requerimiento, sin numeración en el documento original, en progreso
+
+**No existía en el documento oficial ni estaba implementado.** Hasta ahora un pedido era
+siempre de una sola marca. El nuevo caso de negocio (acordado con el usuario, 20/08/2026):
+el Excel de un pedido puede traer en la misma hoja tiendas ROLAND y tiendas REGIONS
+mezcladas, y el sistema debe generar **2 ODC** (una por marca), cada una con sus propias
+ST/ITR — igual que se generan siempre, solo que dos veces en paralelo para el mismo
+pedido. Descuentón (`OUT-CD`) queda deliberadamente fuera de esta mezcla: no es un caso de
+negocio real combinarlo con ROLAND o REGIONS.
+
+**Fase 1 — implementada (20/08/2026): resolver marca/CD de cada tienda en base de datos.**
+Antes de poder generar 2 ODC hacía falta saber, de forma confiable, a qué marca pertenece
+cada código de tienda (hasta ahora solo se inferían por prefijo de texto, sin respaldo en
+BD). Se agregó:
+- `tienda.marca` (migración `648_add_marca_tienda`), poblada desde `sc_maestros` (ver
+  Glosario) de forma no bloqueante al crear la tienda
+  (`PedidoTiendaRepository.get_or_create_tienda`) y vía `scripts/backfill_marca_tienda.py`
+  para las tiendas ya existentes.
+- `StockTransferService.obtener_bodega_de_tienda` ahora prioriza `tienda.marca` sobre el
+  heurístico de prefijo (que se mantiene como respaldo si la tienda aún no fue
+  sincronizada). Mismo contrato, mismo único call site — sin cambio de comportamiento
+  observable salvo mayor precisión.
+- Campo calculado (no persistido) `origen_traslado_detectado` en la cabecera del pedido,
+  mostrado como "Origen Traslado" en `PedidoCabecera.vue` (Cargar Plantilla, Detalle de
+  Pedido, Procesamiento SAP): uno o dos códigos de CD según las tiendas del pedido. No
+  reemplaza al campo legado `pedido.origen_traslado` (valor único escrito a mano en el
+  Excel de cabecera), que sigue usándose sin cambios en el resto del sistema (ST, TXT
+  MBA3, export Excel, fallback de bodega de la ODC).
+
+**Fase 2 — pendiente:** generación real de las 2 ODC (`pedido_oc_service.py`,
+`oc_sap_service.py::determinar_bodega_desde_pedido`, hoy toma solo la primera bodega
+encontrada), envío/reintento a SAP y export TXT MBA3 para múltiples ODC por pedido, y las
+pantallas de frontend que hoy asumen 1 pedido = 1 ODC.
 
 ## 1.7 Generación del archivo TXT para MBA3 — Implementado, con una corrección respecto al documento
 

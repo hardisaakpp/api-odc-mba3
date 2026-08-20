@@ -512,6 +512,7 @@ class PedidoCabeceraRepository:
             if estado_id == ESTADO_CONFIRMADO_ENVIADO:
                 cabecera = self._agregar_datos_sap_a_cabecera(cursor, pedido_id, cabecera)
             cabecera = self._agregar_pedido_padre_id_a_cabecera(cursor, pedido_id, cabecera)
+            cabecera["origen_traslado_detectado"] = self._detectar_origenes_traslado(detalles)
 
             return {
                 "cabecera": cabecera,
@@ -591,6 +592,7 @@ class PedidoCabeceraRepository:
             if estado_id == ESTADO_CONFIRMADO_ENVIADO:
                 cabecera = self._agregar_datos_sap_a_cabecera(cursor, pedido_id, cabecera)
             cabecera = self._agregar_pedido_padre_id_a_cabecera(cursor, pedido_id, cabecera)
+            cabecera["origen_traslado_detectado"] = self._detectar_origenes_traslado(detalles)
 
             return {
                 "cabecera": cabecera,
@@ -878,6 +880,18 @@ class PedidoCabeceraRepository:
         except Exception as e:
             logger.warning(f"⚠️ No se pudo obtener pedido_padre_id para pedido {pedido_id}: {e}")
         return cabecera
+
+    @staticmethod
+    def _detectar_origenes_traslado(detalles: List[Dict[str, Any]]) -> List[str]:
+        """Campo calculado "Origen Traslado" (no persistido, no reemplaza a
+        pedido.origen_traslado): bodega(s)/CD detectadas a partir de las tiendas
+        de los detalles. Ver StockTransferService.detectar_origenes_traslado."""
+        try:
+            from ...services.stock_transfer_service import StockTransferService
+            return StockTransferService.detectar_origenes_traslado(detalles)
+        except Exception as e:
+            logger.warning(f"⚠️ No se pudo detectar origen(es) de traslado: {e}")
+            return []
 
     def delete(
         self,

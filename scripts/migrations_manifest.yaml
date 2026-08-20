@@ -626,3 +626,10 @@ migrations:
     description: "pedido_estado id 25: LISTO PARA REDISTRIBUCION. Botón 'Aceptar' sobre un pedido hijo en PRODUCCION POSPUESTA (22): Mabel Trading acepta la diferencia pospuesta y la envía directo a la cola de redistribución sin pasar por 'Confirmado por El Rayo' (4). Visible únicamente en el listado de Redistribución"
     category: "alter"
     dependencies: ["005"]
+
+  - version: "648"
+    name: "add_marca_tienda"
+    file: "migrations/add_marca_tienda.sql"
+    description: "tienda.marca (ROLAND/REGIONS/DESCUENTON), sincronizada desde sc_maestros.dbo.almacenes_local (u_marca por whs_code=tienda.codigo). Base para resolver a qué bodega (RL-CD/RG-CD/OUT-CD) pertenece cada tienda sin depender solo del prefijo del código. Requerimiento PYTD002 (2 ODC para pedidos que mezclan tiendas ROLAND y REGIONS)"
+    category: "alter"
+    dependencies: ["004"]
