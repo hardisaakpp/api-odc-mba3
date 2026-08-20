@@ -58,7 +58,6 @@ class TestPlantillaUploadAsyncNoBloquea:
             confirmar_sincronizacion=False,
             force_sync=False,
             correcciones_codigos=None,
-            correcciones_pack_pvp=None,
             user={"email": "x@y.z"},
         )
 
@@ -96,7 +95,6 @@ class TestPlantillaUploadAsyncNoBloquea:
             confirmar_sincronizacion=False,
             force_sync=False,
             correcciones_codigos=None,
-            correcciones_pack_pvp=None,
             user={"email": "x@y.z"},
         )
 
@@ -152,7 +150,6 @@ class TestPlantillaUploadAsyncNoBloquea:
                 confirmar_sincronizacion=False,
                 force_sync=False,
                 correcciones_codigos=None,
-                correcciones_pack_pvp=None,
                 user={"email": "x@y.z"},
             )
             latidos_al_terminar_la_subida = latidos

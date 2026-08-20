@@ -164,45 +164,6 @@ class TestValidarPackPvpTemprana:
         assert datos[0]["info_producto"]["codigo_barras"] == "EXCEL-BARRAS-VIEJO"
 
 
-class TestCorreccionesPackPvp:
-    """Reintento tras elegir 'usar SAP' o 'usar Excel' en pantalla para un mismatch de Pack/PVP."""
-
-    def test_correccion_de_pack_usando_valor_de_sap_evita_bloqueo(self):
-        service = PedidoService()
-        datos = _datos_parsing(pack="X6", pvp=7.99)
-        validacion = _validacion_sap(pack_sap="X3", pvp_sap=7.99)
-        correcciones = {"5-0012.9": {"pack": "X3"}}
-        service._validar_pack_pvp_temprana(datos, None, validacion, correcciones)
-        assert datos[0]["info_producto"]["pack"] == "X3"
-
-    def test_correccion_de_pack_usando_valor_del_excel_tambien_evita_bloqueo(self):
-        service = PedidoService()
-        datos = _datos_parsing(pack="X6", pvp=7.99)
-        validacion = _validacion_sap(pack_sap="X3", pvp_sap=7.99)
-        correcciones = {"5-0012.9": {"pack": "X6"}}
-        service._validar_pack_pvp_temprana(datos, None, validacion, correcciones)
-        assert datos[0]["info_producto"]["pack"] == "X6"
-
-    def test_correccion_de_pvp_evita_bloqueo(self):
-        service = PedidoService()
-        datos = _datos_parsing(pack="X3", pvp=6.99)
-        validacion = _validacion_sap(pack_sap="X3", pvp_sap=7.99)
-        correcciones = {"5-0012.9": {"pvp": 7.99}}
-        service._validar_pack_pvp_temprana(datos, None, validacion, correcciones)
-        assert datos[0]["info_producto"]["pvp"] == 7.99
-
-    def test_correccion_solo_de_pack_no_exime_la_validacion_de_pvp(self):
-        service = PedidoService()
-        datos = _datos_parsing(pack="X6", pvp=6.99)
-        validacion = _validacion_sap(pack_sap="X3", pvp_sap=7.99)
-        correcciones = {"5-0012.9": {"pack": "X3"}}
-        with pytest.raises(BusinessException) as exc_info:
-            service._validar_pack_pvp_temprana(datos, None, validacion, correcciones)
-        data = exc_info.value.data["validacion_pack_pvp"]
-        assert data["pack_mismatches"] == []
-        assert len(data["pvp_mismatches"]) == 1
-
-
 class TestValidarProductosSapTempranaRetornaResultado:
     """_validar_productos_sap_temprana debe retornar la validación para que
     _validar_pack_pvp_temprana la reutilice sin volver a consultar SAP."""
@@ -282,7 +243,7 @@ class TestValidarSapCodigoYPackPvpCombinado:
             }
         )
         with _mock_conexion_pack_conversion({"X3": 4.0}):
-            service._validar_sap_codigo_y_pack_pvp(datos, None, None)
+            service._validar_sap_codigo_y_pack_pvp(datos, None)
 
     def test_solo_codigo_invalido_no_incluye_pack_pvp_en_la_excepcion(self, monkeypatch):
         service = PedidoService()
@@ -296,7 +257,7 @@ class TestValidarSapCodigoYPackPvpCombinado:
             }
         )
         with pytest.raises(BusinessException) as exc_info:
-            service._validar_sap_codigo_y_pack_pvp(datos, None, None)
+            service._validar_sap_codigo_y_pack_pvp(datos, None)
         exc = exc_info.value
         assert exc.error_code == "PRODUCTOS_NO_VALIDOS_SAP"
         assert exc.message == "Existen códigos de producto no válidos en SAP"
@@ -322,7 +283,7 @@ class TestValidarSapCodigoYPackPvpCombinado:
             }
         )
         with pytest.raises(BusinessException) as exc_info:
-            service._validar_sap_codigo_y_pack_pvp(datos, None, None)
+            service._validar_sap_codigo_y_pack_pvp(datos, None)
         detalle = exc_info.value.data["validacion_sap"]["detalle_validacion"]["BAD1"]
         assert detalle["pack_excel"] == "X1"
         assert detalle["pvp_excel"] == 5.0
@@ -339,7 +300,7 @@ class TestValidarSapCodigoYPackPvpCombinado:
             }
         )
         with pytest.raises(BusinessException) as exc_info:
-            service._validar_sap_codigo_y_pack_pvp(datos, None, None)
+            service._validar_sap_codigo_y_pack_pvp(datos, None)
         detalle = exc_info.value.data["validacion_sap"]["detalle_validacion"]["BAD1"]
         assert detalle["pack_excel"] is None
         assert detalle["pvp_excel"] is None
@@ -370,7 +331,7 @@ class TestValidarSapCodigoYPackPvpCombinado:
             }
         )
         with pytest.raises(BusinessException) as exc_info:
-            service._validar_sap_codigo_y_pack_pvp(datos, None, None)
+            service._validar_sap_codigo_y_pack_pvp(datos, None)
         detalle = exc_info.value.data["validacion_sap"]["detalle_validacion"]["BAD1"]
         assert detalle["pack_excel"] == "X1"
         assert detalle["pvp_excel"] == 5.0
@@ -387,7 +348,7 @@ class TestValidarSapCodigoYPackPvpCombinado:
             }
         )
         with pytest.raises(BusinessException) as exc_info:
-            service._validar_sap_codigo_y_pack_pvp(datos, None, None)
+            service._validar_sap_codigo_y_pack_pvp(datos, None)
         exc = exc_info.value
         assert exc.error_code == "PACK_PVP_INVALIDOS_SAP"
         assert exc.message == "Existen 1 discrepancia(s) de Pack/PVP contra SAP"
@@ -416,7 +377,7 @@ class TestValidarSapCodigoYPackPvpCombinado:
         monkeypatch.setattr(PedidoValidator, "validar_productos_existen_en_sap_con_sugerencias", fake_validar)
 
         with pytest.raises(BusinessException) as exc_info:
-            service._validar_sap_codigo_y_pack_pvp(datos, None, None)
+            service._validar_sap_codigo_y_pack_pvp(datos, None)
 
         exc = exc_info.value
         assert exc.error_code == "PRODUCTOS_NO_VALIDOS_SAP"
@@ -427,8 +388,11 @@ class TestValidarSapCodigoYPackPvpCombinado:
             {"codigo": "GOOD1", "pack_excel": "X6", "pack_sap": "X9"}
         ]
 
-    def test_correcciones_de_ambos_tipos_a_la_vez_evitan_el_bloqueo(self, monkeypatch):
-        """Un solo reintento con correcciones de código Y de pack/pvp a la vez debe pasar limpio."""
+    def test_correccion_de_codigo_no_exime_el_bloqueo_de_pack_pvp_de_otro_producto(self, monkeypatch):
+        """Req. 1.3: ya no existe forma de eximir una discrepancia de Pack/PVP en pantalla.
+        Corregir el código inválido de un producto no libera el bloqueo si otro producto de
+        la misma carga sigue con Pack/PVP distinto de SAP — solo queda corregir el Excel/SAP
+        y volver a subir el archivo."""
         service = PedidoService()
         datos = _datos_dos_productos()
 
@@ -446,12 +410,14 @@ class TestValidarSapCodigoYPackPvpCombinado:
 
         monkeypatch.setattr(PedidoValidator, "validar_productos_existen_en_sap_con_sugerencias", fake_validar)
 
-        with _mock_conexion_pack_conversion({"X1": 12.0, "X9": 1.333333333}):
-            service._validar_sap_codigo_y_pack_pvp(
-                datos,
-                correcciones_codigos={"BAD1": "BAD1-CORREGIDO"},
-                correcciones_pack_pvp={"GOOD1": {"pack": "X9"}}
-            )
+        with pytest.raises(BusinessException) as exc_info:
+            service._validar_sap_codigo_y_pack_pvp(datos, correcciones_codigos={"BAD1": "BAD1-CORREGIDO"})
+
+        exc = exc_info.value
+        assert exc.error_code == "PACK_PVP_INVALIDOS_SAP"
+        assert exc.data["validacion_pack_pvp"]["pack_mismatches"] == [
+            {"codigo": "GOOD1", "pack_excel": "X6", "pack_sap": "X9"}
+        ]
 
 
 def _datos_con_costo(codigo="5-0012.9", pack="X3", costo_doc_sin_iva=13.38):
@@ -510,9 +476,9 @@ class TestResolverCostoUnitarioTemprana:
             service._resolver_costo_unitario_temprana(datos, None)
         assert datos[0]["info_producto"]["costo_unitario"] is None
 
-    def test_pack_ya_resuelto_por_correccion_usa_ese_valor_para_la_conversion(self):
-        """El pack que llega a este método ya fue resuelto SAP/Excel por _evaluar_pack_producto;
-        aquí solo se busca su unidad_conversion, sin importar de qué origen vino."""
+    def test_usa_el_pack_del_producto_para_buscar_la_conversion(self):
+        """El pack que llega a este método ya fue validado contra SAP por _evaluar_pack_producto
+        (coincidente, o el método previo habría bloqueado); aquí solo se busca su unidad_conversion."""
         service = PedidoService()
         datos = _datos_con_costo(pack="X6", costo_doc_sin_iva=12.0)
         with _mock_conexion_pack_conversion({"X6": 2.0}):

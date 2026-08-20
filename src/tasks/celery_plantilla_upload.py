@@ -49,8 +49,7 @@ def procesar_plantilla_upload(
     validar: bool = True,
     bloquea_con_errores: bool = True,
     modo_tiendas: str = "validar_estricto",
-    correcciones_codigos: Optional[Dict[str, str]] = None,
-    correcciones_pack_pvp: Optional[Dict[str, Dict[str, Any]]] = None
+    correcciones_codigos: Optional[Dict[str, str]] = None
 ):
     """
     Procesa una plantilla Excel en background: descarga del storage temporal,
@@ -84,8 +83,7 @@ def procesar_plantilla_upload(
             validar_antes_de_guardar=validar,
             bloquea_con_errores=bloquea_con_errores,
             tiendas_permitidas=None,
-            correcciones_codigos=correcciones_codigos,
-            correcciones_pack_pvp=correcciones_pack_pvp
+            correcciones_codigos=correcciones_codigos
         )
 
         # Guardar archivo original en ruta definitiva si procesamiento OK y está habilitado
