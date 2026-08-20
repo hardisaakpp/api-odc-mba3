@@ -966,6 +966,23 @@ class ConfirmarRedistribucionResponse(BaseModel):
 # Modelos compatibles con Frontend (AjusteDetalle)
 # ============================================================================
 
+class TiendaCatalogoItem(BaseModel):
+    """Item del catálogo maestro de tiendas (usado por el buscador de 'agregar tienda' en redistribución)."""
+
+    tienda_id: str = Field(..., description="UUID de la tienda")
+    codigo: str = Field(..., description="Código de la tienda")
+    nombre: Optional[str] = Field(None, description="Nombre de la tienda")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "tienda_id": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+                "codigo": "T001",
+                "nombre": "Tienda Principal"
+            }
+        }
+
+
 class DistribucionTiendaFrontend(BaseModel):
     """Modelo para distribución por tienda (compatible con frontend). Acepta decimales (ej. 0.5)."""
     

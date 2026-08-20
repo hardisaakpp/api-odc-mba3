@@ -108,8 +108,15 @@ class RedistribucionValidator:
         pedido_data: Dict[str, Any],
         productos_redistribucion: List[Dict[str, Any]]
     ) -> List[str]:
-        """Validación 3: todos los productos existen en el pedido y sus tiendas pertenecen a él."""
+        """Validación 3: todos los productos existen en el pedido y sus tiendas pertenecen a él.
+
+        Excepción: en pedidos hijo (pedido_padre_id no nulo) se permite redistribuir hacia
+        tiendas que no venían en el Excel original del pedido, siempre que existan en el
+        catálogo maestro de tiendas — eso ya lo garantiza convertir_ajustes_a_redistribucion
+        antes de llegar aquí (rechaza con 400 si el tienda_codigo no existe en el catálogo).
+        """
         errores: List[str] = []
+        es_pedido_hijo = pedido_data.get("cabecera", {}).get("pedido_padre_id") is not None
         tiendas_validas: set = set()
         for detalle in pedido_data.get("detalles", []):
             for tienda in detalle.get("tiendas", []):
@@ -123,6 +130,8 @@ class RedistribucionValidator:
             )
             if not producto_existe:
                 errores.append(f"Producto {pedido_detalle_id}: No existe en el pedido")
+                continue
+            if es_pedido_hijo:
                 continue
             for distribucion in producto["distribuciones"]:
                 tienda_id = distribucion["tienda_id"]

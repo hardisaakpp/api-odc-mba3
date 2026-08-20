@@ -320,6 +320,46 @@ class PedidoTiendaRepository:
         finally:
             cursor.close()
 
+    def buscar_tiendas(self, query: Optional[str] = None, limit: int = 20) -> List[Dict[str, Any]]:
+        """
+        Busca tiendas activas del catálogo maestro por nombre o código (búsqueda parcial).
+
+        Usado por el buscador de "agregar tienda" en la redistribución de pedidos hijo
+        (req. redistribución a tiendas fuera del Excel original).
+
+        Args:
+            query: Texto a buscar en código o nombre (None o vacío devuelve las primeras `limit`)
+            limit: Máximo de resultados a devolver
+
+        Returns:
+            Lista de dicts con tienda_id, codigo, nombre, ordenados por nombre
+        """
+        cursor = self.conn.cursor()
+        try:
+            texto = (query or "").strip()
+            if texto:
+                patron = f"%{texto}%"
+                cursor.execute("""
+                    SELECT TOP (?) tienda_id, codigo, nombre
+                    FROM tienda
+                    WHERE activa = 1 AND (codigo LIKE ? OR nombre LIKE ?)
+                    ORDER BY nombre
+                """, (limit, patron, patron))
+            else:
+                cursor.execute("""
+                    SELECT TOP (?) tienda_id, codigo, nombre
+                    FROM tienda
+                    WHERE activa = 1
+                    ORDER BY nombre
+                """, (limit,))
+
+            return [
+                {"tienda_id": str(row[0]), "codigo": row[1], "nombre": row[2]}
+                for row in cursor.fetchall()
+            ]
+        finally:
+            cursor.close()
+
     def validar_tiendas_existen(
         self,
         codigos_tiendas: List[str]

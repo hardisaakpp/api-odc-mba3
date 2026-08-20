@@ -11,6 +11,7 @@ from .redistribucion.endpoints_core import register_core_endpoints
 from .redistribucion.endpoints_borrador import register_borrador_endpoints
 from .redistribucion.endpoints_frontend import register_frontend_endpoints
 from .redistribucion.endpoints_proceso import register_proceso_completo_endpoints
+from .redistribucion.endpoints_tiendas import register_tiendas_endpoints
 
 
 def register_redistribucion_endpoints(app: FastAPI):
@@ -19,3 +20,4 @@ def register_redistribucion_endpoints(app: FastAPI):
     register_borrador_endpoints(app)
     register_frontend_endpoints(app)
     register_proceso_completo_endpoints(app)
+    register_tiendas_endpoints(app)
