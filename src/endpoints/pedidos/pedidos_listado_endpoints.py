@@ -21,6 +21,7 @@ from src.database.pedido_estados import (
     ESTADO_CONFIRMADO_ENVIADO,
     ESTADO_PENDIENTE_LOGISTICA,
     ESTADO_ERROR_DATOS_MAESTROS,
+    ESTADO_LISTO_PARA_REDISTRIBUCION,
 )
 from src.security.jwt_auth import verify_jwt_token, require_any_permission
 from src.schemas import READ_RESPONSES
@@ -145,6 +146,8 @@ async def _listar_pedidos_handler(
             solo_pendientes_accion=filtrar_pendientes,
             restringir_produccion_el_rayo=filtrar_produccion_elrayo,
             excluir_estados_produccion_el_rayo=excluir_estados_el_rayo,
+            # LISTO_PARA_REDISTRIBUCION (25, botón "Aceptar") solo debe verse en /redistribucion
+            excluir_listo_para_redistribucion=not filtrar_redistribucion,
         )
 
         return JSONResponse(
@@ -306,7 +309,11 @@ async def _listar_estados_pedido_handler(contexto: Optional[str], user: Dict):
             from src.database.pedido_estados import ESTADOS_PRODUCCION_EL_RAYO_IDS
             solo_ids = list(sorted(ESTADOS_PRODUCCION_EL_RAYO_IDS))
         elif contexto == "pedidos":
-            excluir_ids = [ESTADO_BORRADOR]
+            # LISTO_PARA_REDISTRIBUCION (25, botón "Aceptar") solo se ve en /redistribucion
+            excluir_ids = [ESTADO_BORRADOR, ESTADO_LISTO_PARA_REDISTRIBUCION]
+        elif contexto == "cargar-plantilla":
+            # LISTO_PARA_REDISTRIBUCION (25, botón "Aceptar") solo se ve en /redistribucion
+            excluir_ids = [ESTADO_LISTO_PARA_REDISTRIBUCION]
         elif contexto == "redistribucion":
             solo_ids = [
                 ESTADO_REDISTRIBUCION,
@@ -317,6 +324,7 @@ async def _listar_estados_pedido_handler(contexto: Optional[str], user: Dict):
                 ESTADO_CONFIRMADO_ENVIADO,
                 ESTADO_PENDIENTE_LOGISTICA,
                 ESTADO_ERROR_DATOS_MAESTROS,
+                ESTADO_LISTO_PARA_REDISTRIBUCION,
             ]
 
         # Req. 1.8 (segunda fase): odcsap.view ya no ve NUEVO_PEDIDO/GESTIONAR_PEDIDO

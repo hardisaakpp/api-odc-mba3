@@ -27,6 +27,8 @@ from src.database.pedido_estados import (
     ESTADO_CANCELADO_POR_EL_RAYO,
     ESTADO_CONFIRMADO_POR_PRODUCCION,
     ESTADO_PRODUCCION_POSPUESTA,
+    ESTADO_RECHAZADO,
+    ESTADO_LISTO_PARA_REDISTRIBUCION,
     estado_id_desde_legacy,
 )
 
@@ -509,6 +511,7 @@ class PedidoCabeceraRepository:
             estado_id = cabecera.get("estado_id")
             if estado_id == ESTADO_CONFIRMADO_ENVIADO:
                 cabecera = self._agregar_datos_sap_a_cabecera(cursor, pedido_id, cabecera)
+            cabecera = self._agregar_pedido_padre_id_a_cabecera(cursor, pedido_id, cabecera)
 
             return {
                 "cabecera": cabecera,
@@ -587,12 +590,13 @@ class PedidoCabeceraRepository:
             estado_id = cabecera.get("estado_id")
             if estado_id == ESTADO_CONFIRMADO_ENVIADO:
                 cabecera = self._agregar_datos_sap_a_cabecera(cursor, pedido_id, cabecera)
-            
+            cabecera = self._agregar_pedido_padre_id_a_cabecera(cursor, pedido_id, cabecera)
+
             return {
                 "cabecera": cabecera,
                 "detalles": detalles
             }
-            
+
         except Exception as e:
             logger.error(f"❌ Error al obtener pedido completo por número: {e}", exc_info=True)
             raise
@@ -839,7 +843,40 @@ class PedidoCabeceraRepository:
             logger.warning(f"⚠️ No se pudieron obtener datos SAP para pedido {pedido_id}: {e}")
             cabecera["numero_oc_sap"] = None
             cabecera["doc_entry"] = None
-            
+
+        return cabecera
+
+    # Cache: existencia de la columna pedido.pedido_padre_id (una vez por conexión;
+    # migración 643, puede no estar aplicada todavía en algunos ambientes)
+    _tiene_pedido_padre_id: Optional[bool] = None
+
+    def _tiene_columna_pedido_padre_id(self, cursor: pyodbc.Cursor) -> bool:
+        if PedidoCabeceraRepository._tiene_pedido_padre_id is None:
+            cursor.execute("""
+                SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS
+                WHERE TABLE_NAME = 'pedido' AND COLUMN_NAME = 'pedido_padre_id'
+            """)
+            row = cursor.fetchone()
+            PedidoCabeceraRepository._tiene_pedido_padre_id = bool(row and row[0] > 0)
+        return PedidoCabeceraRepository._tiene_pedido_padre_id
+
+    def _agregar_pedido_padre_id_a_cabecera(
+        self, cursor: pyodbc.Cursor, pedido_id: str, cabecera: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Agrega pedido_padre_id a la cabecera (req. 1.2): permite al frontend
+        distinguir un pedido "hijo" (generado con la diferencia no producida) de un
+        pedido "padre" -- p. ej. para deshabilitar "Descargar Pedido Original" en los
+        hijos, que no tienen un archivo Excel propio subido por el usuario."""
+        cabecera["pedido_padre_id"] = None
+        if not self._tiene_columna_pedido_padre_id(cursor):
+            return cabecera
+        try:
+            cursor.execute("SELECT pedido_padre_id FROM pedido WHERE pedido_id = ?", (pedido_id,))
+            row = cursor.fetchone()
+            if row and row[0]:
+                cabecera["pedido_padre_id"] = str(row[0])
+        except Exception as e:
+            logger.warning(f"⚠️ No se pudo obtener pedido_padre_id para pedido {pedido_id}: {e}")
         return cabecera
 
     def delete(
@@ -1237,14 +1274,17 @@ class PedidoCabeceraRepository:
 
         Incluye solo pedidos con estado >= 4 (CONFIRMADO POR EL RAYO) y excluye
         DESPACHAR_Y_FACTURAR (17), FINALIZADO (18), CANCELADO (19), CANCELADO POR
-        EL RAYO (20), CONFIRMADO POR PRODUCCION (23) y PRODUCCION POSPUESTA (22).
-        Estos 2 últimos tienen id numérico > 4 pero ocurren ANTES en el flujo real
-        (entre GESTIONAR_PEDIDO y REDISTRIBUCION); sin la exclusión explícita, el
-        ">=" los deja pasar aunque el pedido todavía no llegó a redistribución.
+        EL RAYO (20), CONFIRMADO POR PRODUCCION (23), PRODUCCION POSPUESTA (22) y
+        RECHAZADO (24). Estos últimos tienen id numérico > 4 pero ocurren ANTES en
+        el flujo real (entre GESTIONAR_PEDIDO y REDISTRIBUCION) o son terminales sin
+        nada que redistribuir; sin la exclusión explícita, el ">=" los deja pasar.
+        LISTO_PARA_REDISTRIBUCION (25) NO se excluye a propósito: es justamente el
+        estado que el botón "Aceptar" genera para que el pedido entre a esta cola
+        (ver excluir_listo_para_redistribucion, que lo oculta en los demás listados).
         """
         if tiene_estado_id:
             return (
-                ["p.estado_id >= ?", "p.estado_id NOT IN (?, ?, ?, ?, ?, ?)"],
+                ["p.estado_id >= ?", "p.estado_id NOT IN (?, ?, ?, ?, ?, ?, ?)"],
                 [
                     ESTADO_REDISTRIBUCION,
                     ESTADO_DESPACHAR_Y_FACTURAR,
@@ -1253,11 +1293,29 @@ class PedidoCabeceraRepository:
                     ESTADO_CANCELADO_POR_EL_RAYO,
                     ESTADO_CONFIRMADO_POR_PRODUCCION,
                     ESTADO_PRODUCCION_POSPUESTA,
+                    ESTADO_RECHAZADO,
                 ],
             )
         # Fallback para bases de datos sin columna estado_id
         return (
-            ["p.estado NOT IN (N'BORRADOR', N'NUEVO_PEDIDO', N'GESTIONAR_PEDIDO', N'PENDIENTE_CONFIRMACION_PROVEEDOR', N'DESPACHAR_Y_FACTURAR', N'DESPACHAR Y FACTURAR', N'FINALIZADO', N'CANCELADO', N'CANCELADO POR EL RAYO', N'CONFIRMADO POR PRODUCCION', N'CONFIRMADO_POR_PRODUCCION', N'PRODUCCION POSPUESTA', N'PRODUCCION_POSPUESTA')"],
+            ["p.estado NOT IN (N'BORRADOR', N'NUEVO_PEDIDO', N'GESTIONAR_PEDIDO', N'PENDIENTE_CONFIRMACION_PROVEEDOR', N'DESPACHAR_Y_FACTURAR', N'DESPACHAR Y FACTURAR', N'FINALIZADO', N'CANCELADO', N'CANCELADO POR EL RAYO', N'CONFIRMADO POR PRODUCCION', N'CONFIRMADO_POR_PRODUCCION', N'PRODUCCION POSPUESTA', N'PRODUCCION_POSPUESTA', N'RECHAZADO')"],
+            [],
+        )
+
+    def _filtro_exclusion_listo_para_redistribucion(self, tiene_estado_id: bool) -> tuple:
+        """Condición y parámetros para OCULTAR LISTO_PARA_REDISTRIBUCION (25) de los
+        listados que no son la vista de Redistribución (Pedidos, Cargar Plantilla).
+
+        A diferencia del resto de estados (visibles en todos lados), este solo debe
+        verse en /redistribucion tras el botón "Aceptar" sobre un pedido en
+        PRODUCCION_POSPUESTA (ver _filtro_redistribucion, que sí lo deja pasar)."""
+        if tiene_estado_id:
+            return (
+                ["(p.estado_id IS NULL OR p.estado_id <> ?)"],
+                [ESTADO_LISTO_PARA_REDISTRIBUCION],
+            )
+        return (
+            ["(p.estado IS NULL OR p.estado NOT IN (N'LISTO PARA REDISTRIBUCION', N'LISTO_PARA_REDISTRIBUCION'))"],
             [],
         )
 
@@ -1323,6 +1381,7 @@ class PedidoCabeceraRepository:
         self, cursor, *,
         estado, excluir_borrador, solo_redistribucion, solo_pendientes_accion,
         restringir_produccion_el_rayo, excluir_estados_produccion_el_rayo,
+        excluir_listo_para_redistribucion,
         fecha_desde, fecha_hasta, tipo_fecha, proveedor_nombre, numero_pedido, creado_por,
         tiene_estado_id, tiene_estado,
     ):
@@ -1381,6 +1440,11 @@ class PedidoCabeceraRepository:
             where_conditions.extend(c)
             params.extend(p)
 
+        if excluir_listo_para_redistribucion and (tiene_estado_id or tiene_estado):
+            c, p = self._filtro_exclusion_listo_para_redistribucion(tiene_estado_id)
+            where_conditions.extend(c)
+            params.extend(p)
+
         return where_conditions, params
 
     @staticmethod
@@ -1433,6 +1497,7 @@ class PedidoCabeceraRepository:
         solo_pendientes_accion: bool = False,
         restringir_produccion_el_rayo: bool = False,
         excluir_estados_produccion_el_rayo: bool = False,
+        excluir_listo_para_redistribucion: bool = False,
     ) -> Dict[str, Any]:
         """
         Obtiene pedidos con filtros y paginación.
@@ -1454,6 +1519,10 @@ class PedidoCabeceraRepository:
             excluir_estados_produccion_el_rayo: si True, excluye NUEVO_PEDIDO y GESTIONAR_PEDIDO
                 (req. 1.8 segunda fase, perfil odcsap.view); mutuamente excluyente en la práctica
                 con restringir_produccion_el_rayo (ver _debe_excluir_estados_el_rayo)
+            excluir_listo_para_redistribucion: si True, excluye LISTO_PARA_REDISTRIBUCION (25).
+                Debe ser True en todo listado que no sea la vista de Redistribución: ese estado
+                (botón "Aceptar" sobre un pedido en PRODUCCION_POSPUESTA) solo debe verse ahí
+                (ver `_filtro_exclusion_listo_para_redistribucion`)
         """
         cursor = self.conn.cursor()
         try:
@@ -1468,6 +1537,7 @@ class PedidoCabeceraRepository:
                 solo_pendientes_accion=solo_pendientes_accion,
                 restringir_produccion_el_rayo=restringir_produccion_el_rayo,
                 excluir_estados_produccion_el_rayo=excluir_estados_produccion_el_rayo,
+                excluir_listo_para_redistribucion=excluir_listo_para_redistribucion,
                 fecha_desde=fecha_desde,
                 fecha_hasta=fecha_hasta,
                 tipo_fecha=tipo_fecha,

@@ -1453,6 +1453,46 @@ class PedidoService:
             "estado_id": 1
         }
 
+    @staticmethod
+    def _escalar_distribucion_tiendas_hijo(
+        tiendas_padre: List[Dict[str, Any]],
+        diferencia: float,
+        original_padre: float,
+    ) -> List[Dict[str, Any]]:
+        """Escala la distribución por tienda del padre a la proporción de la diferencia
+        (misma proporción que subtotal_hijo, ver crear_pedido_hijo_diferencia).
+
+        pedido_detalle_tienda.cantidad es INT con CHECK (cantidad > 0), así que se
+        reparte en unidades enteras con el método del mayor residuo (se asigna el piso
+        de cada porción y el resto se reparte a las tiendas con mayor parte decimal,
+        para que la suma cuadre exacto con la diferencia); las tiendas cuya porción
+        quede en 0 no participan de esta porción del pedido.
+        """
+        total_hijo = round(diferencia)
+        if total_hijo <= 0 or not tiendas_padre:
+            return []
+
+        proporcion = diferencia / original_padre
+        crudos = [float(t.get("cantidad") or 0) * proporcion for t in tiendas_padre]
+        cantidades = [int(c) for c in crudos]  # piso de cada porción
+
+        restante = total_hijo - sum(cantidades)
+        orden_por_residuo = sorted(
+            range(len(crudos)), key=lambda i: crudos[i] - cantidades[i], reverse=True
+        )
+        for i in orden_por_residuo[:max(restante, 0)]:
+            cantidades[i] += 1
+
+        return [
+            {
+                "tienda_id": tienda.get("tienda_id"),
+                "cantidad": cantidades[idx],
+                "es_bodega": tienda.get("es_bodega", False),
+            }
+            for idx, tienda in enumerate(tiendas_padre)
+            if cantidades[idx] > 0
+        ]
+
     def crear_pedido_hijo_diferencia(
         self,
         pedido_padre: Dict[str, Any],
@@ -1478,6 +1518,9 @@ class PedidoService:
           correspondiente del padre; total = diferencia; subtotal se escala
           proporcionalmente al subtotal original del padre (subtotal no lo toca ningún
           PATCH de "Total", así que sigue reflejando cantidad_solicitada_original).
+          cantidad_solicitada_original del hijo = la del padre para esa línea (no la
+          diferencia): "Solicitado Mabel" debe seguir mostrando el original real de la
+          plantilla Excel, no la porción pospuesta.
 
         Returns:
             {"pedido_id", "numero_pedido", "pedido_padre_id", "detalles_insertados"}
@@ -1537,9 +1580,29 @@ class PedidoService:
                     "costo_margen": detalle_padre.get("costo_margen"),
                     "costo_unitario": detalle_padre.get("costo_unitario"),
                     "orden_linea": orden_linea,
+                    # El "total" del hijo es la porción en diferencia, no lo solicitado
+                    # originalmente -- "Solicitado Mabel" debe seguir mostrando el
+                    # original real del padre para esta línea, no la diferencia.
+                    "cantidad_solicitada_original": original_padre,
                 }
-                repo.insert_detalle(pedido_hijo_id, detalle_hijo, audit_context=audit_context)
+                pedido_detalle_id_hijo = repo.insert_detalle(
+                    pedido_hijo_id, detalle_hijo, audit_context=audit_context
+                )
                 detalles_insertados += 1
+
+                # Sin esto, el hijo no sabe hacia qué tiendas redistribuir su porción
+                # (RedistribucionTiendas.vue arma las columnas por tienda desde
+                # detalle.tiendas): se escala la distribución por tienda del padre a la
+                # misma proporción que subtotal_hijo, para no perder el rastro.
+                tiendas_padre = detalle_padre.get("tiendas") or []
+                if tiendas_padre and original_padre:
+                    distribuciones_hijo = self._escalar_distribucion_tiendas_hijo(
+                        tiendas_padre, diferencia, original_padre
+                    )
+                    if distribuciones_hijo:
+                        repo.insert_detalle_tiendas(
+                            pedido_detalle_id_hijo, distribuciones_hijo, audit_context=audit_context
+                        )
 
             logger.info(
                 f"✅ Pedido hijo {numero_pedido_hijo} ({pedido_hijo_id}) creado desde "

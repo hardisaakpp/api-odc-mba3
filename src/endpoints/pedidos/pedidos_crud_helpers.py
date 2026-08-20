@@ -15,9 +15,11 @@ from src.database.pedido_estados import (
     ESTADOS_PUEDE_CANCELAR_POR_EL_RAYO,
     ESTADO_LIMITE_CANCELAR_PEDIDO,
     ESTADO_PRODUCCION_POSPUESTA,
+    ESTADOS_PUEDE_ACEPTAR_PRODUCCION_POSPUESTA,
     ESTADOS_PUEDE_CONFIRMAR_REDISTRIBUCION,
     ESTADO_PEDIDO_CONFIRMADO,
     ESTADO_ERROR_ENVIO_SAP_REINTENTO,
+    ESTADO_LISTO_PARA_REDISTRIBUCION,
 )
 
 
@@ -121,7 +123,8 @@ def enrich_pedido_with_ui_flags(pedido: Dict[str, Any]) -> None:
     Modifica el diccionario pedido in-place, agregando los siguientes campos:
     - puede_descartar: bool - Si el pedido puede descartarse (estados BORRADOR o NUEVO_PEDIDO)
     - puede_cancelar_por_el_rayo: bool - Si El Rayo puede cancelar el pedido
-    - puede_cancelar_pedido: bool - Si MABEL puede cancelar el pedido
+    - puede_cancelar_pedido: bool - Si MABEL puede cancelar el pedido (o "Rechazar" si esta en PRODUCCION_POSPUESTA)
+    - puede_aceptar_produccion_pospuesta: bool - Si MABEL puede aceptar la diferencia pospuesta (boton "Aceptar")
     - puede_descargar_csv: bool - Si se puede descargar CSV (solo estado REDISTRIBUCION)
     - puede_generar_txt_mba3: bool - Si se puede generar el TXT MBA3 (solo estado CONFIRMADO_ENVIADO / "CONFIRMADO Y ENVIADO", ver PYTD002_ODC-MABEL-RAYO_SEGUIMIENTO.md 1.7)
     - puede_confirmar_redistribucion: bool - Si se puede confirmar para redistribución
@@ -148,6 +151,8 @@ def enrich_pedido_with_ui_flags(pedido: Dict[str, Any]) -> None:
     pedido["puede_cancelar_pedido"] = estado_id is not None and (
         estado_id < ESTADO_LIMITE_CANCELAR_PEDIDO or estado_id == ESTADO_PRODUCCION_POSPUESTA
     )
+    # Botón "Aceptar" (Producción Pospuesta -> Listo para Redistribución), exclusivo mabel.view
+    pedido["puede_aceptar_produccion_pospuesta"] = estado_id in ESTADOS_PUEDE_ACEPTAR_PRODUCCION_POSPUESTA
     pedido["puede_descargar_csv"] = estado_id == ESTADO_REDISTRIBUCION
     # req. 1.7 / RN-01: el requerimiento pide gatillar con "Confirmado por El Rayo"
     # (ESTADO_REDISTRIBUCION = 4), pero el DocNum de SAP que exige la columna 12 del
@@ -164,9 +169,10 @@ _PERM_PRODUCCION_ELRAYO_VIEW = 'produccion-elrayo.view'
 
 # RN-03: campos de costo/precio/margen que Producción El Rayo no debe recibir. "total"
 # (Cantidad Total solicitada) y "total_total" quedan fuera a propósito: son cantidad, no
-# costo, y 1.8 los declara explícitamente visibles para este perfil. "pvp" también queda
-# fuera a propósito (corregido 2026-08-17): es precio de venta al público, no costo/margen
-# de Mabel, y el usuario confirmó que Producción sí debe verlo.
+# costo, y 1.8 los declara explícitamente visibles para este perfil. "pvp" NO va en esta
+# lista porque tiene su propia regla de visibilidad, más amplia: ver
+# ocultar_pvp_si_no_mabel (corregido 2026-08-19: revierte la excepción del 2026-08-17;
+# ahora también se oculta a odcsap.view, no solo a produccion-elrayo.view).
 _CAMPOS_COSTO_DETALLE = ("costo_doc_sin_iva", "descuento_1", "subtotal", "costo_margen", "costo_unitario", "margen")
 _CAMPOS_COSTO_TOTALES = ("total_costo_unitario", "total_subtotal")
 
@@ -178,6 +184,13 @@ def es_solo_produccion_el_rayo(user: Dict[str, Any]) -> bool:
     if _PERM_ODCSAP_VIEW in permissions or _PERM_MABEL_VIEW in permissions:
         return False
     return _PERM_PRODUCCION_ELRAYO_VIEW in permissions
+
+
+def es_campo_costo_detalle(campo: Optional[str]) -> bool:
+    """RN-03: True si `campo` es uno de los campos de costo/precio/margen de
+    pedido_detalle que Producción El Rayo no debe ver (ver
+    ocultar_costos_para_produccion_el_rayo / _CAMPOS_COSTO_DETALLE)."""
+    return campo in _CAMPOS_COSTO_DETALLE
 
 
 def ocultar_costos_para_produccion_el_rayo(
@@ -205,6 +218,27 @@ def ocultar_costos_para_produccion_el_rayo(
         for campo in _CAMPOS_COSTO_TOTALES:
             if campo in totales:
                 totales[campo] = None
+
+
+def debe_ocultar_pvp(user: Dict[str, Any]) -> bool:
+    """True si el usuario no tiene mabel.view -- el único permiso que debe ver PVP
+    (precio de venta al público). Cubre tanto odcsap.view como produccion-elrayo.view,
+    aunque el usuario tenga ambos a la vez. Corregido 2026-08-19."""
+    permissions = user.get("permissions") or []
+    return _PERM_MABEL_VIEW not in permissions
+
+
+def ocultar_pvp_si_no_mabel(
+    user: Dict[str, Any],
+    detalles: Optional[List[Dict[str, Any]]] = None,
+) -> None:
+    """Anula (in-place, igual que ocultar_costos_para_produccion_el_rayo) el campo
+    "pvp" de cada detalle si el usuario no debe verlo (ver debe_ocultar_pvp)."""
+    if not debe_ocultar_pvp(user):
+        return
+    for detalle in detalles or []:
+        if "pvp" in detalle:
+            detalle["pvp"] = None
 
 
 def _oc_permite_reintento_envio_por_detalle_error(oc: Dict[str, Any]) -> bool:
@@ -256,10 +290,13 @@ def pedido_permite_reintento_envio_odc_sap(
 
     Reglas por estado del pedido:
 
-    - Estado 4 (`ESTADO_REDISTRIBUCION` = "CONFIRMADO POR EL RAYO"):
-      vista de redistribución. El botón es solo "Enviar ODC a SAP" (proceso completo).
-      Aquí NO hay reintento — esa funcionalidad vive en /proceso. Por eso siempre True;
-      el front decide habilitación con `puede_confirmar_redistribucion`.
+    - Estado 4 (`ESTADO_REDISTRIBUCION` = "CONFIRMADO POR EL RAYO") y estado 25
+      (`ESTADO_LISTO_PARA_REDISTRIBUCION`, pedido "hijo" aceptado por el botón "Aceptar"
+      que entra directo a la cola de redistribución sin pasar por "Confirmado por El
+      Rayo" -- ver ESTADOS_PUEDE_ACEPTAR_PRODUCCION_POSPUESTA): vista de redistribución.
+      El botón es solo "Enviar ODC a SAP" (proceso completo). Aquí NO hay reintento —
+      esa funcionalidad vive en /proceso. Por eso siempre True; el front decide
+      habilitación con `puede_confirmar_redistribucion`.
 
     - Estado 10 (`ESTADO_PEDIDO_CONFIRMADO` = "CONFIRMADO REDISTRIBUCION"):
       sin ODC → primer envío; PENDIENTE → sí; ERROR → solo si el detalle sugiere
@@ -270,7 +307,7 @@ def pedido_permite_reintento_envio_odc_sap(
     """
     estado_id = get_estado_id_from_pedido(pedido)
 
-    if estado_id == ESTADO_REDISTRIBUCION:
+    if estado_id in (ESTADO_REDISTRIBUCION, ESTADO_LISTO_PARA_REDISTRIBUCION):
         return True
 
     if estado_id == ESTADO_PEDIDO_CONFIRMADO:

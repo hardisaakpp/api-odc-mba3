@@ -18,6 +18,8 @@ from src.database.pedido_estados import (
     ESTADO_LIMITE_CANCELAR_PEDIDO,
     ESTADO_NUEVO_PEDIDO,
     ESTADO_PRODUCCION_POSPUESTA,
+    ESTADO_RECHAZADO,
+    ESTADO_LISTO_PARA_REDISTRIBUCION,
     ESTADOS_PRODUCCION_EL_RAYO_IDS,
 )
 from src.security.jwt_auth import verify_jwt_token, require_permission, require_any_permission
@@ -221,15 +223,18 @@ def _db_cancelar_pedido(pedido_id, audit):
                 }
             )
 
-        # Cambiar estado a CANCELADO (con campos de auditoria)
-        repo.update_estado(pedido_id, ESTADO_CANCELADO, audit_context=audit)
+        # Botón "Rechazar" (ex "Cancelar Pedido Pospuesto"): un pedido "hijo" en
+        # PRODUCCION_POSPUESTA se marca RECHAZADO en vez de CANCELADO -- son terminales
+        # equivalentes, pero distinguir el id permite diferenciarlos en listados/auditoría.
+        estado_destino = ESTADO_RECHAZADO if estado_id == ESTADO_PRODUCCION_POSPUESTA else ESTADO_CANCELADO
+        repo.update_estado(pedido_id, estado_destino, audit_context=audit)
 
         # Obtener pedido actualizado
         pedido_actualizado = repo.get_pedido_completo(pedido_id)
         if pedido_actualizado is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail={"error": "not_found", "message": "No se encontro el pedido."})
 
-        return pedido_actualizado, cabecera, estado_id
+        return pedido_actualizado, cabecera, estado_id, estado_destino
 
 
 def _db_enrich_reintento_odc_sap(pedido_actualizado):
@@ -244,23 +249,36 @@ async def _cancelar_pedido_handler(request, pedido_id, user):
     audit = get_audit_context(request, user, origen=ORIGEN_WEB)
 
     try:
-        pedido_actualizado, cabecera, estado_id = await asyncio.to_thread(
+        pedido_actualizado, cabecera, estado_id, estado_destino = await asyncio.to_thread(
             _db_cancelar_pedido, pedido_id, audit
         )
         numero_pedido = (pedido_actualizado.get("cabecera") or {}).get("numero_pedido")
+        es_rechazo = estado_destino == ESTADO_RECHAZADO
 
-        # Notificar a EL RAYO (email)
-        await asyncio.to_thread(_notificar_cancelado_email, pedido_id, numero_pedido, user)
+        if es_rechazo:
+            # Botón "Rechazar": decisión terminal de MABEL sobre su propio pedido hijo,
+            # no aplica el correo de "pedido cancelado" (dirigido a EL RAYO) -- solo aviso interno.
+            _username = user.get("username") or user.get("sub") or "unknown"
+            await _notificar_realtime(
+                actor_permission=_PERM_MABEL,
+                actor_username=_username,
+                title="Pedido rechazado por MABEL TRADING",
+                message=f"El pedido {numero_pedido} ha sido rechazado.",
+                metadata={"pedido_id": pedido_id, "numero_pedido": numero_pedido, "accion": "pedido_rechazado"},
+            )
+        else:
+            # Notificar a EL RAYO (email)
+            await asyncio.to_thread(_notificar_cancelado_email, pedido_id, numero_pedido, user)
 
-        # 📢 Notificacion: otros MABEL + EL RAYO (excl. autor)
-        _username = user.get("username") or user.get("sub") or "unknown"
-        await _notificar_realtime(
-            actor_permission=_PERM_MABEL,
-            actor_username=_username,
-            title="Pedido cancelado por MABEL TRADING",
-            message=f"El pedido {numero_pedido} ha sido cancelado.",
-            metadata={"pedido_id": pedido_id, "numero_pedido": numero_pedido, "accion": "pedido_cancelado"},
-        )
+            # 📢 Notificacion: otros MABEL + EL RAYO (excl. autor)
+            _username = user.get("username") or user.get("sub") or "unknown"
+            await _notificar_realtime(
+                actor_permission=_PERM_MABEL,
+                actor_username=_username,
+                title="Pedido cancelado por MABEL TRADING",
+                message=f"El pedido {numero_pedido} ha sido cancelado.",
+                metadata={"pedido_id": pedido_id, "numero_pedido": numero_pedido, "accion": "pedido_cancelado"},
+            )
 
         # Calcular flags de UI
         enrich_pedido_with_ui_flags(pedido_actualizado)
@@ -268,7 +286,7 @@ async def _cancelar_pedido_handler(request, pedido_id, user):
 
         # Log funcional estandarizado (Buenas Practicas - Seccion 5)
         log_business_operation(
-            operation="cancelar_pedido",
+            operation="rechazar_pedido" if es_rechazo else "cancelar_pedido",
             id_usuario=user.get('username', 'UNKNOWN'),
             id_transaccion=pedido_id,
             id_tienda=cabecera.get("codigo_tienda"),
@@ -276,7 +294,7 @@ async def _cancelar_pedido_handler(request, pedido_id, user):
             detalles={
                 "numero_pedido": numero_pedido,
                 "estado_anterior": estado_id,
-                "estado_nuevo": ESTADO_CANCELADO
+                "estado_nuevo": estado_destino
             }
         )
 
@@ -299,6 +317,111 @@ async def _cancelar_pedido_handler(request, pedido_id, user):
             detail={
                 "error": "internal_error",
                 "message": f"Error interno al cancelar el pedido: {str(e)}"
+            }
+        )
+
+
+def _db_aceptar_produccion_pospuesta(pedido_id, audit):
+    """Consulta bloqueante (pyodbc); se ejecuta vía asyncio.to_thread."""
+    with get_db_connection_context() as conn:
+        repo = PedidoRepository(conn)
+        pedido = repo.get_pedido_completo(pedido_id)
+
+        if not pedido:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={
+                    "error": "not_found",
+                    "message": f"No se encontro el pedido con ID: {pedido_id}"
+                }
+            )
+
+        cabecera = pedido.get("cabecera", {})
+        estado_id = _resolver_estado_id(cabecera)
+
+        if estado_id != ESTADO_PRODUCCION_POSPUESTA:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "error": "estado_no_permitido",
+                    "message": "El pedido no puede aceptarse porque no esta en estado Produccion Pospuesta."
+                }
+            )
+
+        # Botón "Aceptar": la diferencia pospuesta entra directo a la cola de
+        # redistribución (sin pasar por "Confirmado por El Rayo") -- ver
+        # _filtro_redistribucion / excluir_listo_para_redistribucion.
+        repo.update_estado(pedido_id, ESTADO_LISTO_PARA_REDISTRIBUCION, audit_context=audit)
+
+        # La vista de Redistribución exige respuesta_proveedor para dejar de mostrar
+        # "Preparando datos para redistribución" (ver RedistribucionTiendas.vue); como
+        # este pedido nunca pasa por "Confirmado por El Rayo" (el único otro punto que
+        # la genera), se genera aquí a partir de sus propios totales.
+        from src.database.services.pedido_proveedor_web_service import PedidoProveedorWebService
+        PedidoProveedorWebService().generar_respuesta_proveedor_automatica(
+            pedido_id, usuario_id=audit.get_creado_por()
+        )
+
+        pedido_actualizado = repo.get_pedido_completo(pedido_id)
+        if pedido_actualizado is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail={"error": "not_found", "message": "No se encontro el pedido."})
+
+        return pedido_actualizado, cabecera, estado_id
+
+
+async def _aceptar_produccion_pospuesta_handler(request, pedido_id, user):
+    """Lógica del endpoint 'aceptar produccion pospuesta' (boton 'Aceptar', MABEL)."""
+    audit = get_audit_context(request, user, origen=ORIGEN_WEB)
+
+    try:
+        pedido_actualizado, cabecera, estado_id = await asyncio.to_thread(
+            _db_aceptar_produccion_pospuesta, pedido_id, audit
+        )
+        numero_pedido = (pedido_actualizado.get("cabecera") or {}).get("numero_pedido")
+
+        _username = user.get("username") or user.get("sub") or "unknown"
+        await _notificar_realtime(
+            actor_permission=_PERM_MABEL,
+            actor_username=_username,
+            title="Pedido listo para redistribución",
+            message=f"El pedido {numero_pedido} fue aceptado por MABEL TRADING y está listo para redistribución.",
+            metadata={"pedido_id": pedido_id, "numero_pedido": numero_pedido, "accion": "pedido_listo_para_redistribucion"},
+        )
+
+        enrich_pedido_with_ui_flags(pedido_actualizado)
+        await asyncio.to_thread(_db_enrich_reintento_odc_sap, pedido_actualizado)
+
+        log_business_operation(
+            operation="aceptar_produccion_pospuesta",
+            id_usuario=user.get('username', 'UNKNOWN'),
+            id_transaccion=pedido_id,
+            id_tienda=cabecera.get("codigo_tienda"),
+            success=True,
+            detalles={
+                "numero_pedido": numero_pedido,
+                "estado_anterior": estado_id,
+                "estado_nuevo": ESTADO_LISTO_PARA_REDISTRIBUCION
+            }
+        )
+
+        return JSONResponse(status_code=200, content=pedido_actualizado)
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        log_business_operation(
+            operation="aceptar_produccion_pospuesta",
+            id_usuario=user.get('username', 'UNKNOWN'),
+            id_transaccion=pedido_id,
+            success=False,
+            detalles={"error": str(e)}
+        )
+        logger.error(f"❌ Error al aceptar pedido {pedido_id}: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={
+                "error": "internal_error",
+                "message": f"Error interno al aceptar el pedido: {str(e)}"
             }
         )
 
@@ -452,11 +575,16 @@ def register_pedidos_cancelar_endpoints(app: FastAPI):
         """
         Cancelar un pedido (cambiar estado a CANCELADO y notificar a EL RAYO).
 
-        **Usado desde:** Vista Redistribucion, boton "Cancelar Pedido".
+        **Usado desde:**
+        - Vista Redistribucion, boton "Cancelar Pedido".
+        - Detalle del pedido / Cargar Plantilla, boton "Rechazar" sobre un pedido
+          "hijo" en PRODUCCION POSPUESTA (estado_id = 22): en ese caso el destino
+          es RECHAZADO (estado_id = 24) en vez de CANCELADO, sin correo a EL RAYO.
 
         **Comportamiento:**
-        - Cambia el estado del pedido a CANCELADO (estado_id = 19).
-        - Envia correo a EL RAYO notificando la cancelacion.
+        - Cambia el estado del pedido a CANCELADO (estado_id = 19), o a RECHAZADO
+          (estado_id = 24) si el pedido estaba en PRODUCCION POSPUESTA.
+        - Envia correo a EL RAYO notificando la cancelacion (no aplica para RECHAZADO).
         - **No elimina** el pedido de la base de datos.
 
         **Restricciones:**
@@ -470,6 +598,35 @@ def register_pedidos_cancelar_endpoints(app: FastAPI):
         - **500**: Error interno.
         """
         return await _cancelar_pedido_handler(request, pedido_id, user)
+
+    @app.post("/api/pedidos/{pedido_id}/aceptar-produccion-pospuesta", tags=["Pedidos"])
+    async def aceptar_produccion_pospuesta(
+        request: Request,
+        pedido_id: str = Path(..., description="UUID del pedido a aceptar"),
+        user: Dict = Depends(verify_jwt_token),
+        _: None = Depends(require_permission(_PERM_MABEL))
+    ):
+        """
+        Aceptar la diferencia pospuesta de un pedido "hijo" (boton "Aceptar").
+
+        **Usado desde:** Detalle del pedido / Cargar Plantilla, boton "Aceptar" sobre
+        un pedido en PRODUCCION POSPUESTA (estado_id = 22).
+
+        **Comportamiento:**
+        - Cambia el estado del pedido a LISTO PARA REDISTRIBUCION (estado_id = 25).
+        - El pedido entra directo a la cola de redistribucion (vista /redistribucion),
+          sin pasar por "Confirmado por El Rayo".
+
+        **Restricciones:**
+        - Solo permitido si el pedido esta en PRODUCCION POSPUESTA (estado_id = 22).
+
+        **Respuestas:**
+        - **200**: Pedido aceptado correctamente, devuelve el pedido actualizado.
+        - **404**: Pedido no encontrado.
+        - **400**: Pedido no esta en estado Produccion Pospuesta.
+        - **500**: Error interno.
+        """
+        return await _aceptar_produccion_pospuesta_handler(request, pedido_id, user)
 
     @app.delete("/api/pedidos/{pedido_id}", status_code=status.HTTP_204_NO_CONTENT, tags=["Pedidos"])
     async def descartar_o_cancelar_pedido(

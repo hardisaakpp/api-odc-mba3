@@ -283,6 +283,10 @@ class PedidoDetalleRepository:
             # (tiene_comentario x tiene_orden_linea ya son 4 variantes de SQL) para no
             # duplicar esa combinatoria. Ningún otro método de este repositorio debe
             # volver a escribir esta columna.
+            # Por defecto toma "total" (caso normal: recién subido desde Excel, total
+            # todavía es la cantidad original). El pedido "hijo" de la diferencia
+            # (crear_pedido_hijo_diferencia) pasa explícitamente el original real del
+            # padre, porque su "total" es la porción en diferencia, no lo solicitado.
             cursor.execute("""
                 SELECT COUNT(*)
                 FROM INFORMATION_SCHEMA.COLUMNS
@@ -292,11 +296,12 @@ class PedidoDetalleRepository:
             result_cant_original = cursor.fetchone()
             tiene_cantidad_solicitada_original = result_cant_original[0] > 0 if result_cant_original else False
             if tiene_cantidad_solicitada_original:
+                cantidad_solicitada_original = datos_detalle.get("cantidad_solicitada_original", datos_detalle.get("total"))
                 cursor.execute("""
                     UPDATE pedido_detalle
                     SET cantidad_solicitada_original = ?
                     WHERE pedido_detalle_id = ?
-                """, (datos_detalle.get("total"), pedido_detalle_id))
+                """, (cantidad_solicitada_original, pedido_detalle_id))
 
             # Registrar en audit log
             audit_svc = AuditLogService(self.conn)

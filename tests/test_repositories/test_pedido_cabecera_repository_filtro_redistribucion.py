@@ -18,6 +18,7 @@ from src.database.pedido_estados import (
     ESTADO_CANCELADO_POR_EL_RAYO,
     ESTADO_CONFIRMADO_POR_PRODUCCION,
     ESTADO_PRODUCCION_POSPUESTA,
+    ESTADO_RECHAZADO,
 )
 from src.database.repositories.pedido.pedido_cabecera_repository import PedidoCabeceraRepository
 
@@ -29,7 +30,7 @@ def _repository():
 def test_excluye_confirmado_por_produccion_y_produccion_pospuesta_con_estado_id():
     conditions, params = _repository()._filtro_redistribucion(tiene_estado_id=True)
 
-    assert conditions == ["p.estado_id >= ?", "p.estado_id NOT IN (?, ?, ?, ?, ?, ?)"]
+    assert conditions == ["p.estado_id >= ?", "p.estado_id NOT IN (?, ?, ?, ?, ?, ?, ?)"]
     assert params[0] == ESTADO_REDISTRIBUCION
     excluidos = params[1:]
     assert set(excluidos) == {
@@ -39,8 +40,9 @@ def test_excluye_confirmado_por_produccion_y_produccion_pospuesta_con_estado_id(
         ESTADO_CANCELADO_POR_EL_RAYO,
         ESTADO_CONFIRMADO_POR_PRODUCCION,
         ESTADO_PRODUCCION_POSPUESTA,
+        ESTADO_RECHAZADO,
     }
-    # 1 placeholder para ">= ?" + 6 para "NOT IN (...)" deben calzar con params.
+    # 1 placeholder para ">= ?" + 7 para "NOT IN (...)" deben calzar con params.
     placeholders_totales = conditions[0].count("?") + conditions[1].count("?")
     assert placeholders_totales == len(params)
 
@@ -54,3 +56,4 @@ def test_excluye_confirmado_por_produccion_y_produccion_pospuesta_fallback_legac
     assert "CONFIRMADO_POR_PRODUCCION" in clause
     assert "PRODUCCION POSPUESTA" in clause
     assert "PRODUCCION_POSPUESTA" in clause
+    assert "RECHAZADO" in clause

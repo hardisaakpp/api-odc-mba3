@@ -152,6 +152,7 @@ class PedidoRepository:
         solo_pendientes_accion: bool = False,
         restringir_produccion_el_rayo: bool = False,
         excluir_estados_produccion_el_rayo: bool = False,
+        excluir_listo_para_redistribucion: bool = False,
     ) -> Dict[str, Any]:
         """
         Obtiene pedidos con filtros y paginación.
@@ -161,12 +162,14 @@ class PedidoRepository:
         Args:
             solo_redistribucion: si True, solo incluye pedidos aptos para redistribución
                 (estado_id >= 4 "CONFIRMADO POR EL RAYO", excluyendo CANCELADO (19),
-                CANCELADO POR EL RAYO (20), CONFIRMADO POR PRODUCCION (23) y
-                PRODUCCION POSPUESTA (22))
+                CANCELADO POR EL RAYO (20), CONFIRMADO POR PRODUCCION (23),
+                PRODUCCION POSPUESTA (22) y RECHAZADO (24))
             restringir_produccion_el_rayo: si True, solo incluye NUEVO_PEDIDO y GESTIONAR_PEDIDO
                 (req. 1.8, perfil Producción El Rayo)
             excluir_estados_produccion_el_rayo: si True, excluye NUEVO_PEDIDO y GESTIONAR_PEDIDO
                 (req. 1.8 segunda fase, perfil odcsap.view: esos 2 estados dejan de verse)
+            excluir_listo_para_redistribucion: si True, excluye LISTO_PARA_REDISTRIBUCION (25);
+                debe ser True salvo en la vista de Redistribución (ver `solo_redistribucion`)
         """
         return self.cabecera_repo.get_pedidos_con_filtros(
             estado=estado,
@@ -183,6 +186,7 @@ class PedidoRepository:
             solo_pendientes_accion=solo_pendientes_accion,
             restringir_produccion_el_rayo=restringir_produccion_el_rayo,
             excluir_estados_produccion_el_rayo=excluir_estados_produccion_el_rayo,
+            excluir_listo_para_redistribucion=excluir_listo_para_redistribucion,
         )
 
     def get_pedidos_confirmados(

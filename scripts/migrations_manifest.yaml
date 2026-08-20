@@ -612,3 +612,17 @@ migrations:
     description: "producto_sap_cache.marca_sap: cachea U_MARCA de SAP (OITM) para usarla como fuente de la columna 'Marca' del detalle de pedido, reemplazando la derivación anterior por bodega/origen_traslado"
     category: "alter"
     dependencies: ["002"]
+
+  - version: "646"
+    name: "add_estado_rechazado"
+    file: "migrations/add_estado_rechazado.sql"
+    description: "pedido_estado id 24: RECHAZADO. Botón 'Rechazar' (ex 'Cancelar Pedido Pospuesto') sobre un pedido hijo en PRODUCCION POSPUESTA (22): Mabel Trading rechaza la diferencia pospuesta en vez de esperar a que El Rayo la retome. Terminal, igual que CANCELADO (19)"
+    category: "alter"
+    dependencies: ["005"]
+
+  - version: "647"
+    name: "add_estado_listo_para_redistribucion"
+    file: "migrations/add_estado_listo_para_redistribucion.sql"
+    description: "pedido_estado id 25: LISTO PARA REDISTRIBUCION. Botón 'Aceptar' sobre un pedido hijo en PRODUCCION POSPUESTA (22): Mabel Trading acepta la diferencia pospuesta y la envía directo a la cola de redistribución sin pasar por 'Confirmado por El Rayo' (4). Visible únicamente en el listado de Redistribución"
+    category: "alter"
+    dependencies: ["005"]
