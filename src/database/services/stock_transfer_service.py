@@ -620,7 +620,11 @@ class StockTransferService:
         try:
             output_dir = PROJECT_ROOT / "output"
             output_dir.mkdir(parents=True, exist_ok=True)
-            out_file = output_dir / f"str_{pedido_id}.json"
+            # Sufijo por oc_id: un pedido con más de una ODC (una por bodega/marca, ver
+            # PedidoOCService.crear_ocs_desde_pedido_confirmado) genera una llamada a este
+            # método por ODC: sin el sufijo, la segunda pisaba el archivo de la primera.
+            nombre_archivo = f"str_{pedido_id}_{oc_id}.json" if oc_id else f"str_{pedido_id}.json"
+            out_file = output_dir / nombre_archivo
             json_data = {
                 "pedido_id": pedido_id,
                 "oc_id": oc_id,
