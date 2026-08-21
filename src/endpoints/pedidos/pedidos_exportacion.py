@@ -141,11 +141,11 @@ def _set_valor_numerico_celda(ws, col: str, row: int, val) -> None:
         ws[f"{col}{row}"] = val
 
 
-def _escribir_fila_detalle(ws, row: int, detalle: dict, marca_excel: str, thin_border, ocultar_pvp: bool = False) -> None:
+def _escribir_fila_detalle(ws, row: int, detalle: dict, thin_border, ocultar_pvp: bool = False) -> None:
     """Escribe una fila de detalle de producto en la tabla."""
     cols = _columnas_tabla(ocultar_pvp)
     ws[f"{cols['codigo_interno']}{row}"] = detalle.get("codigo_interno", "")
-    ws[f"{cols['marca']}{row}"] = marca_excel
+    ws[f"{cols['marca']}{row}"] = detalle.get("marca") or ""
     ws[f"{cols['codigo_barras']}{row}"] = detalle.get("codigo_barras", "")
     ws[f"{cols['descripcion_sap']}{row}"] = detalle.get("descripcion_sap", "")
     ws[f"{cols['pack']}{row}"] = detalle.get("pack", "")
@@ -159,13 +159,10 @@ def _escribir_fila_detalle(ws, row: int, detalle: dict, marca_excel: str, thin_b
         ws[f"{col_letter}{row}"].border = thin_border
 
 
-def _escribir_detalles_productos(ws, detalles: list, cabecera: dict, thin_border, ocultar_pvp: bool = False) -> None:
+def _escribir_detalles_productos(ws, detalles: list, thin_border, ocultar_pvp: bool = False) -> None:
     """Escribe todas las filas de detalle de productos a partir de la fila 14."""
-    marca_por_origen = {"RL-CD": "ROLAND", "OUT-CD": "DESCUENTON", "RG-CD": "REGIONS"}
-    origen_traslado = (cabecera.get("origen_traslado") or "").strip().upper()
-    marca_excel = marca_por_origen.get(origen_traslado, "")
     for idx, detalle in enumerate(detalles):
-        _escribir_fila_detalle(ws, 14 + idx, detalle, marca_excel, thin_border, ocultar_pvp)
+        _escribir_fila_detalle(ws, 14 + idx, detalle, thin_border, ocultar_pvp)
 
 
 def _escribir_fila_total(ws, detalles: list, bold_font, thin_border, ocultar_pvp: bool = False) -> None:
@@ -219,7 +216,7 @@ def _generar_excel_pedido(cabecera: dict, detalles: list, ocultar_pvp: bool = Fa
     _escribir_cabecera_pedido(ws, cabecera, bold_font)
     _aplicar_estilos_cabecera(ws, label_fill, label_font, thin_border)
     _escribir_encabezados_tabla(ws, bold_font, thin_border, ocultar_pvp)
-    _escribir_detalles_productos(ws, detalles, cabecera, thin_border, ocultar_pvp)
+    _escribir_detalles_productos(ws, detalles, thin_border, ocultar_pvp)
     _escribir_fila_total(ws, detalles, bold_font, thin_border, ocultar_pvp)
     _ajustar_anchos_columnas(ws, ocultar_pvp)
 
