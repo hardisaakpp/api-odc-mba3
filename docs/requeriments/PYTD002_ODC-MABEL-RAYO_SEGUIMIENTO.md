@@ -5,7 +5,7 @@ no se modifica). Este documento registra, por cada punto del requerimiento: qué
 implementó, en qué difiere de la letra del documento original y por qué — para que una
 diferencia deliberada no se lea como un defecto en una futura revisión.
 
-Última actualización: 2026-08-20.
+Última actualización: 2026-08-21.
 
 ## Glosario
 
@@ -158,14 +158,23 @@ parte del punto 1.5 — ver abajo.
     la columna (degrada `margen=None` sin error), pero hay que confirmarlo cuando el
     servidor esté disponible.
 
-## 1.6 Traslados entre bodega (CEDI Roland ↔ Regions) — Implementado
+## 1.6 Traslados entre bodega (CEDI Roland ↔ Regions) — Revertido (21/08/2026)
 
-Allowlist `BODEGAS_TRASLADO_CRUZADO_PERMITIDO` en `stock_transfer_service.py`. Sin
-desviaciones; verificado que ningún filtro previo de tienda-por-bodega lo bloquea. Esta es
-la pantalla manual de "Solicitudes de Traslado"; **no** tiene relación con el punto
-siguiente (pedidos que mezclan ROLAND y REGIONS en un mismo Excel).
+La implementación original (allowlist `BODEGAS_TRASLADO_CRUZADO_PERMITIDO` en
+`stock_transfer_service.py`, que permitía crear una Solicitud de Transferencia desde una
+bodega hacia tiendas de la OTRA marca) partía de un entendimiento incorrecto del
+requerimiento: cada bodega debe transferir exclusivamente a tiendas de su propia marca
+(RL-CD→ROLAND, RG-CD→REGIONS, OUT-CD→DESCUENTON), sin excepción. Se eliminó el allowlist
+por completo (21/08/2026, confirmado con el usuario) — la validación de bodega vuelve a
+rechazar siempre cualquier tienda que no pertenezca a la bodega origen del pedido.
 
-## Generación de 2 ODC para pedidos que mezclan tiendas ROLAND y REGIONS — Nuevo requerimiento, sin numeración en el documento original, en progreso
+El caso de negocio real detrás de "CEDI Roland → Regions" es el que cubre el punto
+siguiente (pedidos que mezclan ROLAND y REGIONS en un mismo Excel): la solución correcta
+no es que una bodega le transfiera a tiendas de la otra marca, sino generar 2 ODC
+separadas — una por bodega — cada una con sus propias Solicitudes de Transferencia hacia
+sus propias tiendas.
+
+## Generación de 2 ODC para pedidos que mezclan tiendas ROLAND y REGIONS — Nuevo requerimiento, sin numeración en el documento original, implementado (21/08/2026)
 
 **No existía en el documento oficial ni estaba implementado.** Hasta ahora un pedido era
 siempre de una sola marca. El nuevo caso de negocio (acordado con el usuario, 20/08/2026):
@@ -194,10 +203,30 @@ BD). Se agregó:
   Excel de cabecera), que sigue usándose sin cambios en el resto del sistema (ST, TXT
   MBA3, export Excel, fallback de bodega de la ODC).
 
-**Fase 2 — pendiente:** generación real de las 2 ODC (`pedido_oc_service.py`,
-`oc_sap_service.py::determinar_bodega_desde_pedido`, hoy toma solo la primera bodega
-encontrada), envío/reintento a SAP y export TXT MBA3 para múltiples ODC por pedido, y las
-pantallas de frontend que hoy asumen 1 pedido = 1 ODC.
+**Fase 2 — implementada (21/08/2026): generación y envío real de las 2 ODC.**
+- `PedidoOCService.crear_ocs_desde_pedido_confirmado` (antes `crear_oc_desde_pedido_confirmado`,
+  ahora devuelve una lista): con 1 bodega detectada se comporta igual que antes (1 ODC). Con
+  2, reparte cada producto por bodega (`_dividir_procesamientos_por_bodega`, usando la
+  distribución confirmada tienda a tienda para escalar proporcionalmente `cantidad_sap`/
+  `total_linea_sap`, ya agregados por producto en `pedido_sap_procesamiento_detalle`) y hace
+  upsert de una `orden_compra_cabecera` por bodega (`OrdenCompraRepository.find_by_pedido_id_y_bodega`,
+  nuevo).
+- `OCSAPService.enviar_oc_a_sap` acepta `tiendas_destino_filtro` para que cada ODC, al generar
+  sus Solicitudes de Transferencia, procese solo sus propias tiendas — propagado también en
+  los 2 caminos de reintento (`enviar_ocs_pendientes` y `endpoints/sap.py::_procesar_oc_individual`)
+  vía el nuevo `OCSAPService.resolver_tiendas_destino_filtro`.
+- `endpoints_proceso.py` (botón "Enviar ODC a SAP") orquesta 1 o 2 ODC; el pedido pasa a
+  "Confirmado y Enviado" y el correo de confirmación se disparan una sola vez, solo si
+  **todas** las ODC tuvieron éxito. Respuesta con `envios_sap` (lista completa) además de
+  `envio_sap` (primera ODC, compatibilidad con los 3 componentes de frontend existentes).
+- Como parte de esta fase se detectó y corrigió un problema real en el punto 1.6 (ver arriba):
+  el allowlist `BODEGAS_TRASLADO_CRUZADO_PERMITIDO` permitía que una bodega generara ST hacia
+  tiendas de la OTRA marca, partiendo de un entendimiento incorrecto del requerimiento. Se
+  eliminó por completo — la solución correcta para "traslados entre bodega Roland↔Regions"
+  es, precisamente, esta funcionalidad de 2 ODC.
+- Pendiente, fuera de alcance hasta que se pida explícitamente: export TXT MBA3 para múltiples
+  ODC por pedido (hoy usa un solo DocNum), y UI dedicada para mostrar ambas ODC (el backend ya
+  crea las 2 `orden_compra_cabecera`, visibles vía `get_by_pedido_id`).
 
 ## 1.7 Generación del archivo TXT para MBA3 — Implementado, con una corrección respecto al documento
 

@@ -365,6 +365,32 @@ class OrdenCompraRepository:
         finally:
             cursor.close()
     
+    def find_by_pedido_id_y_bodega(self, pedido_id: str, codigo_bodega: str) -> Optional[str]:
+        """
+        Busca una orden de compra por pedido_id + codigo_bodega.
+
+        Necesario para pedidos que generan más de una ODC (uno por bodega/CD,
+        ver StockTransferService.detectar_origenes_traslado) — find_by_pedido_id
+        por sí solo no puede distinguir cuál de las ODC del pedido es cuál.
+
+        Args:
+            pedido_id: UUID del pedido
+            codigo_bodega: Código de bodega de la ODC (ej. "RL-CD", "RG-CD")
+
+        Returns:
+            oc_id si existe, None si no existe
+        """
+        cursor = self.conn.cursor()
+        try:
+            cursor.execute(
+                "SELECT oc_id FROM orden_compra_cabecera WHERE pedido_id = ? AND codigo_bodega = ?",
+                (pedido_id, codigo_bodega)
+            )
+            result = cursor.fetchone()
+            return str(result[0]) if result else None
+        finally:
+            cursor.close()
+
     def get_doc_num_by_pedido_id(self, pedido_id: str) -> Optional[str]:
         """
         Obtiene el DocNum (numero_oc_sap) de la OC más reciente enviada a SAP para un pedido.

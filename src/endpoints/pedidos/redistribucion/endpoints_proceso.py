@@ -239,30 +239,47 @@ def _paso2_generar_odc(
     resultado_redistribucion,
     resumen,
 ):
-    """PASO 2/3: Genera la ODC desde el pedido confirmado.
+    """PASO 2/3: Genera la(s) ODC desde el pedido confirmado.
+
+    La mayoría de los pedidos generan 1 ODC. Un pedido que mezcla tiendas de más
+    de una marca (origen_traslado_detectado, Fase 1 de PYTD002) genera 2 -- ver
+    PedidoOCService.crear_ocs_desde_pedido_confirmado.
 
     Returns:
-        (oc_id, resultado_odc, None) en éxito
-        (None, None, error_dict) en fallo
+        (odcs, None) en éxito, con odcs = [{"oc_id", "resultado_odc"}, ...] (1 o 2 elementos)
+        (None, error_dict) en fallo
     """
     try:
         from src.database.services.pedido_oc_service import PedidoOCService
         service = PedidoOCService()
-        resultado_oc = service.crear_oc_desde_pedido_confirmado(pedido_id=pedido_id)
-        oc_id = resultado_oc.get("oc_id")
-        if not oc_id:
-            raise ValueError("El servicio no retornó un oc_id válido")
-        resultado_odc = {
-            "oc_id": oc_id,
-            "proveedor": resultado_oc.get("proveedor"),
-            "detalles_insertados": resultado_oc.get("detalles_insertados", 0),
-            "estado": "PENDIENTE"
-        }
-        logger.info(f"✅ PASO 2/3 completado: ODC generada (ID: {oc_id[:8]}...)")
-        return oc_id, resultado_odc, None
+        resultados_oc = service.crear_ocs_desde_pedido_confirmado(pedido_id=pedido_id)
+        odcs = []
+        for resultado_oc in resultados_oc:
+            oc_id = resultado_oc.get("oc_id")
+            if not oc_id:
+                raise ValueError("El servicio no retornó un oc_id válido")
+            odcs.append({
+                "oc_id": oc_id,
+                "resultado_odc": {
+                    "oc_id": oc_id,
+                    "proveedor": resultado_oc.get("proveedor"),
+                    "codigo_bodega": resultado_oc.get("codigo_bodega"),
+                    "detalles_insertados": resultado_oc.get("detalles_insertados", 0),
+                    "estado": "PENDIENTE"
+                },
+                "tiendas_bodega": resultado_oc.get("tiendas_bodega"),
+            })
+        if len(odcs) > 1:
+            logger.info(
+                f"✅ PASO 2/3 completado: {len(odcs)} ODC generadas (pedido mixto): "
+                f"{[o['resultado_odc'].get('codigo_bodega') for o in odcs]}"
+            )
+        else:
+            logger.info(f"✅ PASO 2/3 completado: ODC generada (ID: {odcs[0]['oc_id'][:8]}...)")
+        return odcs, None
     except Exception as e:
         logger.error(f"❌ Error en PASO 2 (Generar ODC): {e}", exc_info=True)
-        return None, None, {
+        return None, {
             "_notify_sap": False,
             "_notify_data": {},
             "response": ProcesoCompletoSAPResponse(
@@ -377,106 +394,72 @@ def _enviar_emails_exito_sap(
         )
 
 
+def _enviar_una_odc_a_sap(oc_sap_service, oc_repo, odc: Dict[str, Any]) -> Dict[str, Any]:
+    """Envía una ODC a SAP y arma su ProcesoCompletoSAPDetalleODC. Función pura por
+    ODC, usada tanto para el caso normal (1 ODC) como para cada bodega de un pedido
+    mixto (2 ODC) en _paso3_enviar_odc_sap."""
+    oc_id = odc["oc_id"]
+    resultado_odc = odc["resultado_odc"]
+    resultado_sap_envio = oc_sap_service.enviar_oc_a_sap(
+        oc_repo=oc_repo,
+        oc_id=oc_id,
+        warehouse_code=None,
+        tiendas_destino_filtro=odc.get("tiendas_bodega"),
+    )
+    success = resultado_sap_envio.get("success", False)
+    doc_entry = resultado_sap_envio.get("doc_entry")
+    error = resultado_sap_envio.get("error")
+    error_code = resultado_sap_envio.get("error_code")
+    doc_num_po, doc_num, solicitudes_para_response = _resolver_doc_num_y_solicitudes(resultado_sap_envio)
+    oc_cabecera, numero_oc_sap_cabecera = _obtener_cabecera_oc(oc_repo, oc_id, doc_num_po)
+    detalle = ProcesoCompletoSAPDetalleODC(
+        oc_id=oc_id,
+        proveedor=resultado_odc.get("proveedor"),
+        success=success,
+        numero_oc_sap=numero_oc_sap_cabecera,
+        doc_entry=doc_entry,
+        doc_num=doc_num,
+        error=error,
+        error_code=error_code,
+        solicitudes_transferencia=solicitudes_para_response,
+        retry_recommended=resultado_sap_envio.get("retry_recommended"),
+    )
+    return {
+        "success": success,
+        "detalle": detalle,
+        "oc_cabecera": oc_cabecera,
+        "doc_num_po": doc_num_po,
+        "doc_num": doc_num,
+        "doc_entry": doc_entry,
+        "solicitudes_transferencia": solicitudes_para_response,
+        "codigo_bodega": resultado_odc.get("codigo_bodega"),
+        "error": error,
+    }
+
+
 def _paso3_enviar_odc_sap(
     oc_repo,
     oc_sap_service,
-    oc_id: str,
+    odcs: List[Dict[str, Any]],
     pedido_id: str,
     numero_pedido: str,
     resultado_redistribucion,
-    resultado_odc,
     resumen,
     repo_pedido,
     audit,
     user_id: str,
 ):
-    """PASO 3/3: Envía la ODC a SAP y construye la respuesta final."""
+    """PASO 3/3: Envía la(s) ODC a SAP y construye la respuesta final.
+
+    odcs: lista de {"oc_id", "resultado_odc", "tiendas_bodega"} (1 o 2 elementos,
+    ver _paso2_generar_odc). El estado del pedido y el correo de confirmación se
+    disparan una sola vez, y solo si TODAS las ODC se enviaron con éxito -- si
+    alguna falla, el pedido queda en reintento y el reintento manual solo debe
+    reenviar la(s) que fallaron (evita reenviar la que sí funcionó).
+    """
+    odcs_generadas = [odc["resultado_odc"] for odc in odcs]
     try:
-        resultado_sap_envio = oc_sap_service.enviar_oc_a_sap(
-            oc_repo=oc_repo,
-            oc_id=oc_id,
-            warehouse_code=None
-        )
-        success = resultado_sap_envio.get("success", False)
-        doc_entry = resultado_sap_envio.get("doc_entry")
-        error = resultado_sap_envio.get("error")
-        error_code = resultado_sap_envio.get("error_code")
-        doc_num_po, doc_num, solicitudes_para_response = _resolver_doc_num_y_solicitudes(resultado_sap_envio)
-        oc_cabecera, numero_oc_sap_cabecera = _obtener_cabecera_oc(oc_repo, oc_id, doc_num_po)
-        resultado_envio_sap = ProcesoCompletoSAPDetalleODC(
-            oc_id=oc_id,
-            proveedor=resultado_odc.get("proveedor"),
-            success=success,
-            numero_oc_sap=numero_oc_sap_cabecera,
-            doc_entry=doc_entry,
-            doc_num=doc_num,
-            error=error,
-            error_code=error_code,
-            solicitudes_transferencia=solicitudes_para_response,
-            retry_recommended=resultado_sap_envio.get("retry_recommended"),
-        )
-        if success:
-            logger.info(f"✅ PASO 3/3 completado: ODC enviada a SAP (DocNum: {doc_num})")
-            repo_pedido.update_estado(pedido_id, ESTADO_CONFIRMADO_ENVIADO, audit_context=audit)
-            logger.debug(f"✅ Estado actualizado para pedido {pedido_id}: estado_id={ESTADO_CONFIRMADO_ENVIADO} (Confirmado y enviado)")
-            _enviar_emails_exito_sap(
-                pedido_id, numero_pedido, user_id, resultado_redistribucion, resumen,
-                oc_cabecera, doc_num_po, doc_entry, solicitudes_para_response, numero_oc_sap_cabecera
-            )
-            num_itr = (solicitudes_para_response or {}).get("transferencias_creadas") or 0
-            if num_itr == 1:
-                message_success = f"Proceso completado exitosamente. ODC enviada a SAP con DocNum: {doc_num}"
-            else:
-                message_success = "Proceso completado exitosamente. ODC y solicitudes de transferencia enviadas a SAP"
-            return {
-                "_notify_sap": True,
-                "_notify_data": {
-                    "pedido_id": pedido_id,
-                    "numero_pedido": numero_pedido,
-                    "doc_num": str(doc_num) if doc_num else None,
-                },
-                "response": ProcesoCompletoSAPResponse(
-                    status="success",
-                    message=message_success,
-                    pedido_id=pedido_id,
-                    numero_pedido=numero_pedido,
-                    redistribucion=resultado_redistribucion,
-                    odc_generada=resultado_odc,
-                    envio_sap=resultado_envio_sap,
-                    solicitudes_transferencia=solicitudes_para_response,
-                    resumen=resumen,
-                    fecha_proceso=ahora_naive(),
-                    paso_fallido=None,
-                    error_detalle=None
-                )
-            }
-        else:
-            logger.error(
-                "❌ PASO 3/3 fallido pedido=%s oc_id=%s: %s",
-                numero_pedido,
-                oc_id,
-                error,
-            )
-            # Cualquier fallo de envío ODC habilita reintento manual en UI.
-            _actualizar_estado_reintento(repo_pedido, pedido_id, audit)
-            return {
-                "_notify_sap": False,
-                "_notify_data": {},
-                "response": ProcesoCompletoSAPResponse(
-                    status="partial",
-                    message=f"Redistribución y ODC generadas, pero falló el envío a SAP: {error}",
-                    pedido_id=pedido_id,
-                    numero_pedido=numero_pedido,
-                    redistribucion=resultado_redistribucion,
-                    odc_generada=resultado_odc,
-                    envio_sap=resultado_envio_sap,
-                    solicitudes_transferencia=solicitudes_para_response,
-                    resumen=resumen,
-                    fecha_proceso=ahora_naive(),
-                    paso_fallido="envio_sap",
-                    error_detalle=error
-                )
-            }
+        envios = [_enviar_una_odc_a_sap(oc_sap_service, oc_repo, odc) for odc in odcs]
     except Exception as e:
         logger.error(f"❌ Error en PASO 3 (Enviar a SAP): {e}", exc_info=True)
         _actualizar_estado_reintento(repo_pedido, pedido_id, audit)
@@ -489,13 +472,102 @@ def _paso3_enviar_odc_sap(
                 pedido_id=pedido_id,
                 numero_pedido=numero_pedido,
                 redistribucion=resultado_redistribucion,
-                odc_generada=resultado_odc,
+                odc_generada=odcs_generadas[0] if odcs_generadas else None,
                 envio_sap=None,
+                envios_sap=None,
                 solicitudes_transferencia=None,
                 resumen=resumen,
                 fecha_proceso=ahora_naive(),
                 paso_fallido="envio_sap",
                 error_detalle=str(e)
+            )
+        }
+
+    detalles = [e["detalle"] for e in envios]
+    todas_exitosas = all(e["success"] for e in envios)
+    primera = envios[0]
+
+    if todas_exitosas:
+        doc_nums = [str(e["doc_num"]) for e in envios if e.get("doc_num")]
+        logger.info(f"✅ PASO 3/3 completado: {len(envios)} ODC enviadas a SAP (DocNum: {', '.join(doc_nums)})")
+        repo_pedido.update_estado(pedido_id, ESTADO_CONFIRMADO_ENVIADO, audit_context=audit)
+        logger.debug(f"✅ Estado actualizado para pedido {pedido_id}: estado_id={ESTADO_CONFIRMADO_ENVIADO} (Confirmado y enviado)")
+        _enviar_emails_exito_sap(
+            pedido_id, numero_pedido, user_id, resultado_redistribucion, resumen,
+            primera["oc_cabecera"], primera["doc_num_po"], primera["doc_entry"],
+            primera["solicitudes_transferencia"], primera["detalle"].numero_oc_sap
+        )
+        if len(envios) > 1:
+            message_success = (
+                f"Proceso completado exitosamente. Pedido mixto: {len(envios)} ODC enviadas a SAP "
+                f"(DocNum: {', '.join(doc_nums)})"
+            )
+        else:
+            num_itr = (primera["solicitudes_transferencia"] or {}).get("transferencias_creadas") or 0
+            if num_itr == 1:
+                message_success = f"Proceso completado exitosamente. ODC enviada a SAP con DocNum: {primera['doc_num']}"
+            else:
+                message_success = "Proceso completado exitosamente. ODC y solicitudes de transferencia enviadas a SAP"
+        return {
+            "_notify_sap": True,
+            "_notify_data": {
+                "pedido_id": pedido_id,
+                "numero_pedido": numero_pedido,
+                "doc_num": primera["doc_num_po"] and str(primera["doc_num_po"]) or None,
+            },
+            "response": ProcesoCompletoSAPResponse(
+                status="success",
+                message=message_success,
+                pedido_id=pedido_id,
+                numero_pedido=numero_pedido,
+                redistribucion=resultado_redistribucion,
+                odc_generada=odcs_generadas[0] if odcs_generadas else None,
+                envio_sap=detalles[0],
+                envios_sap=detalles,
+                solicitudes_transferencia=primera["solicitudes_transferencia"],
+                resumen=resumen,
+                fecha_proceso=ahora_naive(),
+                paso_fallido=None,
+                error_detalle=None
+            )
+        }
+    else:
+        fallidas = [
+            f"{e.get('codigo_bodega') or e['detalle'].oc_id}: {e['error']}"
+            for e in envios if not e["success"]
+        ]
+        error_resumen = "; ".join(fallidas)
+        logger.error(
+            "❌ PASO 3/3 fallido pedido=%s: %s",
+            numero_pedido,
+            error_resumen,
+        )
+        # Cualquier fallo de envío ODC habilita reintento manual en UI.
+        _actualizar_estado_reintento(repo_pedido, pedido_id, audit)
+        if len(envios) > 1:
+            message = (
+                f"Redistribución y ODC generadas, pero falló el envío a SAP de {len(fallidas)}/{len(envios)} "
+                f"ODC del pedido mixto: {error_resumen}"
+            )
+        else:
+            message = f"Redistribución y ODC generadas, pero falló el envío a SAP: {primera['error']}"
+        return {
+            "_notify_sap": False,
+            "_notify_data": {},
+            "response": ProcesoCompletoSAPResponse(
+                status="partial",
+                message=message,
+                pedido_id=pedido_id,
+                numero_pedido=numero_pedido,
+                redistribucion=resultado_redistribucion,
+                odc_generada=odcs_generadas[0] if odcs_generadas else None,
+                envio_sap=detalles[0],
+                envios_sap=detalles,
+                solicitudes_transferencia=primera["solicitudes_transferencia"],
+                resumen=resumen,
+                fecha_proceso=ahora_naive(),
+                paso_fallido="envio_sap",
+                error_detalle=error_resumen
             )
         }
 
@@ -541,12 +613,12 @@ def _ejecutar_proceso_completo_sync(
         )
 
         logger.info("📦 PASO 2/3: Generando ODC...")
-        oc_id, resultado_odc, partial_response = _paso2_generar_odc(
+        odcs, partial_response = _paso2_generar_odc(
             pedido_id, numero_pedido, resultado_redistribucion, resumen
         )
         if partial_response is not None:
             return partial_response
-        assert oc_id is not None
+        assert odcs
 
         logger.info("🚀 PASO 3/3: Enviando ODC a SAP...")
         from src.database.services.oc_sap_service import OCSAPService
@@ -554,8 +626,8 @@ def _ejecutar_proceso_completo_sync(
         oc_repo = OrdenCompraRepository(conn)
         oc_sap_service = OCSAPService()
         return _paso3_enviar_odc_sap(
-            oc_repo, oc_sap_service, oc_id, pedido_id, numero_pedido,
-            resultado_redistribucion, resultado_odc, resumen, repo_pedido, audit, user_id
+            oc_repo, oc_sap_service, odcs, pedido_id, numero_pedido,
+            resultado_redistribucion, resumen, repo_pedido, audit, user_id
         )
 
 

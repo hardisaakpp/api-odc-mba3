@@ -250,10 +250,12 @@ def _procesar_oc_individual(oc_repo, log_repo, oc_sap_service, proceso_id, usern
     # 1. Si hay distribuciones con es_bodega=True y cantidad > 0, usa la primera bodega encontrada
     # 2. Si no, usa origen_traslado del pedido
     # 3. Si no hay ninguno, se envía sin WarehouseCode (SAP usará su configuración por defecto)
+    tiendas_destino_filtro = oc_sap_service.resolver_tiendas_destino_filtro(oc_repo, oc_id_item)
     resultado = oc_sap_service.enviar_oc_a_sap(
         oc_repo=oc_repo,
         oc_id=oc_id_item,
-        warehouse_code=None
+        warehouse_code=None,
+        tiendas_destino_filtro=tiendas_destino_filtro
     )
 
     _log_resultado_oc(log_repo, proceso_id, username, source, oc_id_item, proveedor, referencia, resultado)

@@ -666,9 +666,15 @@ class OCSAPService:
         serie_itr: Optional[int],
         oc_repo: 'OrdenCompraRepository',
         pedido_id: str,
-        result: Dict[str, Any]
+        result: Dict[str, Any],
+        tiendas_destino_filtro: Optional[List[str]] = None
     ) -> None:
-        """Crea Solicitudes de Transferencia para el pedido asociado a la ODC."""
+        """Crea Solicitudes de Transferencia para el pedido asociado a la ODC.
+
+        tiendas_destino_filtro acota las tiendas procesadas -- útil cuando el pedido
+        tiene más de una ODC (una por bodega/marca), para que cada ODC genere ST solo
+        hacia SUS tiendas sin procesar (y omitir con warning) las de la otra bodega
+        (ver enviar_oc_a_sap)."""
         try:
             from .stock_transfer_service import StockTransferService
             bodega_oc = oc_cabecera.get("codigo_bodega")
@@ -683,7 +689,8 @@ class OCSAPService:
                 oc_id=oc_id,
                 bodega_origen=bodega_oc,
                 usuario_id=None,
-                serie=serie_itr
+                serie=serie_itr,
+                tiendas_destino_filtro=tiendas_destino_filtro
             )
             if resultado_transferencias.get("success"):
                 logger.info(
@@ -842,7 +849,8 @@ class OCSAPService:
         sap_response: Dict[str, Any],
         envio_oc_result: Dict[str, Any],
         oc_repo: 'OrdenCompraRepository',
-        result: Dict[str, Any]
+        result: Dict[str, Any],
+        tiendas_destino_filtro: Optional[List[str]] = None
     ) -> None:
         """Procesa el resultado exitoso de envío a SAP: actualiza estado, crea ITRs, STs, notifica y cierra pedido."""
         doc_entry = sap_response.get("doc_entry")
@@ -896,7 +904,10 @@ class OCSAPService:
 
             pedido_id = oc_cabecera.get("pedido_id")
             if pedido_id:
-                self._crear_solicitudes_transferencia_oc(oc_id, oc_cabecera, doc_num, serie_itr, oc_repo, pedido_id, result)
+                self._crear_solicitudes_transferencia_oc(
+                    oc_id, oc_cabecera, doc_num, serie_itr, oc_repo, pedido_id, result,
+                    tiendas_destino_filtro=tiendas_destino_filtro
+                )
                 self._notificar_resultado_oc_st(oc_id, oc_cabecera, doc_num, doc_entry, pedido_id, oc_repo, result)
                 self._cerrar_pedido_desde_resultado_oc(pedido_id, oc_repo, result)
 
@@ -916,26 +927,66 @@ class OCSAPService:
             except Exception:
                 pass
 
+    @staticmethod
+    def resolver_tiendas_destino_filtro(oc_repo: 'OrdenCompraRepository', oc_id: str) -> Optional[List[str]]:
+        """
+        Si esta ODC pertenece a un pedido con más de una ODC (pedido mixto, una por
+        bodega/marca -- ver PedidoOCService.crear_ocs_desde_pedido_confirmado),
+        devuelve las tiendas propias de la bodega de ESTA ODC, para pasarlas como
+        tiendas_destino_filtro a enviar_oc_a_sap y evitar ST duplicadas (ver su
+        docstring). Devuelve None si el pedido tiene una sola ODC (caso normal,
+        sin cambios) o si no se pudo determinar -- fail-open, igual que hoy.
+
+        Usar antes de cualquier reenvío/reintento manual o por lote de una ODC
+        puntual (no aplica al envío inicial de un pedido mixto, que ya arma este
+        filtro directamente en endpoints_proceso.py::_paso2_generar_odc).
+        """
+        try:
+            oc_cabecera = oc_repo.get_existing_cabecera(oc_id)
+            if not oc_cabecera:
+                return None
+            pedido_id = oc_cabecera.get("pedido_id")
+            codigo_bodega = oc_cabecera.get("codigo_bodega")
+            if not pedido_id or not codigo_bodega:
+                return None
+            ocs_del_pedido = oc_repo.get_by_pedido_id(pedido_id)
+            if len(ocs_del_pedido) <= 1:
+                return None
+            from .pedido_oc_service import PedidoOCService
+            tiendas_por_bodega = PedidoOCService._tiendas_por_bodega(oc_repo.conn, pedido_id, [codigo_bodega])
+            return tiendas_por_bodega.get(codigo_bodega) or None
+        except Exception as e:
+            logger.warning(f"⚠️ No se pudo resolver tiendas_destino_filtro para OC {oc_id}: {e}")
+            return None
+
     def enviar_oc_a_sap(
         self,
         oc_repo: OrdenCompraRepository,
         oc_id: str,
-        warehouse_code: Optional[str] = None
+        warehouse_code: Optional[str] = None,
+        tiendas_destino_filtro: Optional[List[str]] = None
     ) -> Dict[str, Any]:
         """
         Envía una orden de compra a SAP Service Layer.
-        
+
         Proceso:
         1. Obtiene la cabecera y detalles de la ODC desde la base de datos
         2. Convierte los datos a formato JSON de SAP
         3. Envía la ODC a SAP Service Layer
         4. Actualiza el estado y número de OC en la base de datos
-        
+
         Args:
             oc_repo: Repositorio de órdenes de compra
             oc_id: UUID de la orden de compra a enviar
             warehouse_code: Código de bodega (opcional)
-            
+            tiendas_destino_filtro: Lista opcional de códigos de tienda a los que
+                acotar las Solicitudes de Transferencia generadas tras el envío
+                (ver StockTransferService.crear_solicitudes_transferencia_desde_pedido).
+                Útil cuando el pedido tiene más de una ODC (una por bodega/marca): sin
+                este filtro, cada ODC igual solo generaría ST hacia sus propias tiendas
+                (la validación de bodega ya rechaza cruces), pero recorrería también las
+                tiendas de la otra bodega solo para omitirlas con warning.
+
         Returns:
             Diccionario con el resultado:
             {
@@ -983,7 +1034,8 @@ class OCSAPService:
                 return result
 
             self._procesar_oc_exitosa(
-                oc_id, oc_cabecera, oc_detalles, sap_response, envio_oc_result, oc_repo, result
+                oc_id, oc_cabecera, oc_detalles, sap_response, envio_oc_result, oc_repo, result,
+                tiendas_destino_filtro=tiendas_destino_filtro
             )
 
         except Exception as e:
@@ -1469,7 +1521,8 @@ class OCSAPService:
                     })
                     continue
                 
-                resultado = self.enviar_oc_a_sap(oc_repo, oc_id, warehouse_code)
+                tiendas_destino_filtro = self.resolver_tiendas_destino_filtro(oc_repo, oc_id)
+                resultado = self.enviar_oc_a_sap(oc_repo, oc_id, warehouse_code, tiendas_destino_filtro)
                 resultados.append({
                     "oc_id": oc_id,
                     "proveedor": oc_info.get("proveedor"),

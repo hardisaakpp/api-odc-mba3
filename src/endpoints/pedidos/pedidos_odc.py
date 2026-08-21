@@ -41,10 +41,20 @@ def _resolver_pedido_id_real(identificador: str, es_uuid: bool) -> str:
 
 
 def _crear_oc_desde_pedido_confirmado_sync(pedido_id_real: str) -> Dict:
-    """Creación de OC (SQL Server + SAP, bloqueante); se ejecuta vía asyncio.to_thread."""
+    """Creación de OC (SQL Server + SAP, bloqueante); se ejecuta vía asyncio.to_thread.
+
+    Un pedido normal genera 1 ODC; un pedido que mezcla tiendas de más de una
+    marca genera 2 (ver PedidoOCService.crear_ocs_desde_pedido_confirmado). Esta
+    función aplana la lista a la forma histórica de la respuesta (compatibilidad
+    con el frontend, que hoy lee oc_id/solicitudes_transferencia en la raíz) y
+    agrega ordenes_compra con el detalle de todas las ODC generadas.
+    """
     from src.database.services.pedido_oc_service import PedidoOCService
     service = PedidoOCService()
-    return service.crear_oc_desde_pedido_confirmado(pedido_id=pedido_id_real)
+    resultados = service.crear_ocs_desde_pedido_confirmado(pedido_id=pedido_id_real)
+    primero = dict(resultados[0])
+    primero["ordenes_compra"] = resultados
+    return primero
 
 
 def register_odc_endpoints(app: FastAPI):

@@ -323,28 +323,151 @@ class PedidoOCService:
         except Exception as e:
             logger.warning(f"⚠️ No se pudo generar JSON SAP al crear ODC: {e}", exc_info=False)
 
-    def crear_oc_desde_pedido_confirmado(
-        self,
+    @staticmethod
+    def _sumar_cantidad_por_bodega(distribuciones: List[Dict[str, Any]]) -> Dict[str, float]:
+        """Suma cantidad_asignada por bodega (tienda→marca→bodega, ver Fase 1 de PYTD002:
+        StockTransferService.obtener_bodega_de_tienda), ignorando filas es_bodega=True."""
+        from .stock_transfer_service import StockTransferService
+        sumas: Dict[str, float] = {}
+        for dist in distribuciones:
+            if dist.get("es_bodega", False):
+                continue
+            cantidad = dist.get("cantidad_asignada", 0) or 0
+            if cantidad <= 0:
+                continue
+            tienda_codigo = dist.get("tienda_codigo")
+            if not tienda_codigo:
+                continue
+            bodega = StockTransferService.obtener_bodega_de_tienda(tienda_codigo)
+            if not bodega:
+                continue
+            sumas[bodega] = sumas.get(bodega, 0) + float(cantidad)
+        return sumas
+
+    @staticmethod
+    def _tiendas_por_bodega(
+        conn: pyodbc.Connection,
         pedido_id: str,
-        upsert: bool = True
+        bodegas: List[str],
+    ) -> Dict[str, List[str]]:
+        """Códigos de tienda (destino real de ST, es_bodega=False) de la distribución
+        confirmada del pedido, agrupados por bodega resuelta (Fase 1). Se usa para
+        acotar tiendas_destino_filtro al enviar cada ODC de un pedido mixto a SAP, para
+        que cada una solo procese sus propias tiendas (la validación de bodega en
+        StockTransferService ya rechaza cruces, esto solo evita ruido de líneas omitidas)."""
+        from ..repositories.distribucion_confirmada_repository import DistribucionConfirmadaRepository
+        from .stock_transfer_service import StockTransferService
+
+        grupos: Dict[str, List[str]] = {b: [] for b in bodegas}
+        vistos: set = set()
+        try:
+            dist_repo = DistribucionConfirmadaRepository(conn)
+            version_actual = dist_repo.get_version_actual(pedido_id)
+            if version_actual <= 0:
+                return grupos
+            distribucion_data = dist_repo.get_distribucion_completa(pedido_id, version_actual)
+            for producto in distribucion_data.get("productos", []):
+                for dist in producto.get("distribuciones", []):
+                    if dist.get("es_bodega", False):
+                        continue
+                    cantidad = dist.get("cantidad_asignada", 0) or 0
+                    if cantidad <= 0:
+                        continue
+                    tienda_codigo = dist.get("tienda_codigo")
+                    if not tienda_codigo:
+                        continue
+                    codigo_upper = tienda_codigo.strip().upper()
+                    if codigo_upper in vistos:
+                        continue
+                    bodega = StockTransferService.obtener_bodega_de_tienda(codigo_upper)
+                    if bodega in grupos:
+                        vistos.add(codigo_upper)
+                        grupos[bodega].append(codigo_upper)
+        except Exception as e:
+            logger.warning(f"⚠️ No se pudo agrupar tiendas por bodega para pedido {pedido_id}: {e}")
+        return grupos
+
+    @staticmethod
+    def _dividir_procesamientos_por_bodega(
+        procesamientos_validos: List[Dict[str, Any]],
+        pedido_id: str,
+        conn: pyodbc.Connection,
+        bodegas: List[str],
+    ) -> Dict[str, List[Dict[str, Any]]]:
+        """
+        Reparte procesamientos_validos entre las bodegas detectadas del pedido (pedido
+        que mezcla tiendas de más de una marca, ver origen_traslado_detectado).
+
+        pedido_sap_procesamiento_detalle guarda una cantidad_sap total por producto, ya
+        sumada entre todas sus tiendas destino. Un producto cuyas tiendas pertenecen
+        todas a una sola bodega pasa sin cambios a esa bodega. Un producto con tiendas
+        de ambas bodegas se divide en 2 copias con cantidad_sap/total_linea_sap
+        escalados según la proporción de cantidad asignada a cada bodega (mismo
+        unidad_conversion ya calculado; no se vuelve a consultar SAP).
+        """
+        from ..repositories.distribucion_confirmada_repository import DistribucionConfirmadaRepository
+
+        resultado: Dict[str, List[Dict[str, Any]]] = {b: [] for b in bodegas}
+
+        productos_por_detalle: Dict[str, Dict[str, Any]] = {}
+        try:
+            dist_repo = DistribucionConfirmadaRepository(conn)
+            version_actual = dist_repo.get_version_actual(pedido_id)
+            if version_actual > 0:
+                distribucion_data = dist_repo.get_distribucion_completa(pedido_id, version_actual)
+                for producto in distribucion_data.get("productos", []):
+                    pdi = producto.get("pedido_detalle_id")
+                    if pdi:
+                        productos_por_detalle[pdi] = producto
+        except Exception as e:
+            logger.warning(f"⚠️ No se pudo obtener distribución confirmada para dividir por bodega: {e}")
+
+        for proc in procesamientos_validos:
+            pedido_detalle_id = proc.get("pedido_detalle_id")
+            producto = productos_por_detalle.get(pedido_detalle_id) or {}
+            sumas_por_bodega = PedidoOCService._sumar_cantidad_por_bodega(producto.get("distribuciones", []))
+            bodegas_con_cantidad = [b for b in bodegas if sumas_por_bodega.get(b, 0) > 0]
+
+            if len(bodegas_con_cantidad) <= 1:
+                bodega_unica = bodegas_con_cantidad[0] if bodegas_con_cantidad else bodegas[0]
+                if not bodegas_con_cantidad:
+                    logger.warning(
+                        f"⚠️ No se pudo determinar bodega por tienda para {proc.get('item_code_sap')} "
+                        f"(pedido_detalle_id={pedido_detalle_id}); se asigna a {bodega_unica} por defecto"
+                    )
+                resultado.setdefault(bodega_unica, []).append(proc)
+                continue
+
+            cantidad_total_tiendas = sum(sumas_por_bodega[b] for b in bodegas_con_cantidad)
+            cantidad_sap_total = proc.get("cantidad_sap") or 0
+            total_linea_sap_total = proc.get("total_linea_sap") or 0
+            for bodega in bodegas_con_cantidad:
+                proporcion = sumas_por_bodega[bodega] / cantidad_total_tiendas
+                proc_bodega = dict(proc)
+                proc_bodega["cantidad_original"] = sumas_por_bodega[bodega]
+                proc_bodega["cantidad_sap"] = cantidad_sap_total * proporcion
+                proc_bodega["total_linea_sap"] = total_linea_sap_total * proporcion
+                resultado.setdefault(bodega, []).append(proc_bodega)
+
+        return resultado
+
+    def _crear_una_oc(
+        self,
+        oc_repo: 'OrdenCompraRepository',
+        pedido_id: str,
+        pedido_cabecera: Dict[str, Any],
+        proveedor: str,
+        codigo_bodega: Optional[str],
+        oc_detalles: List[Dict[str, Any]],
+        existing_oc_id: Optional[str],
     ) -> Dict[str, Any]:
-        """
-        Crea una orden de compra desde un pedido confirmado.
-
-        Similar a copy_despacho_to_orden_compra() pero para pedidos.
-        Lee desde pedido_sap_procesamiento_detalle (datos ya procesados).
-
-        Args:
-            pedido_id: UUID del pedido
-            upsert: Si True, actualiza si existe; si False, inserta siempre
-
-        Returns:
-            Dict con resultado de la creación
-        """
+        """Crea/actualiza una única orden_compra_cabecera + sus detalles. Usada tanto
+        para el caso normal (1 ODC) como para cada bodega de un pedido mixto (2 ODC)."""
         result = {
             "oc_id": None,
             "pedido_id": pedido_id,
-            "proveedor": None,
+            "proveedor": proveedor,
+            "codigo_bodega": codigo_bodega,
             "estado": "PENDIENTE",
             "detalles_insertados": 0,
             "total_lineas": 0,
@@ -353,6 +476,51 @@ class PedidoOCService:
             "warnings": []
         }
 
+        if not oc_detalles:
+            raise ValueError(f"No se pudo crear ninguna línea de detalle válida para la OC (bodega {codigo_bodega})")
+
+        oc_cabecera_data = self._to_orden_compra_cabecera_from_pedido(pedido_cabecera, proveedor, codigo_bodega)
+        oc_cabecera_data["estado"] = "PENDIENTE"
+
+        oc_id = self._upsert_oc_cabecera(oc_repo, oc_cabecera_data, existing_oc_id, pedido_id, result)
+
+        detalles_insertados = oc_repo.insert_detalles(oc_id, oc_detalles)
+        result["detalles_insertados"] = detalles_insertados
+        result["total_lineas"] = len(oc_detalles)
+
+        self._generar_json_sap_oc(oc_repo, oc_id, codigo_bodega, pedido_id, pedido_cabecera, result)
+
+        accion = "actualizada" if result.get("cabecera_actualizada") else "creada"
+        logger.info(
+            f"✅ OC {accion}: {oc_id} para pedido {pedido_id} (bodega: {codigo_bodega}) "
+            f"(detalles: {detalles_insertados}/{len(oc_detalles)})"
+        )
+        return result
+
+    def crear_ocs_desde_pedido_confirmado(
+        self,
+        pedido_id: str,
+        upsert: bool = True
+    ) -> List[Dict[str, Any]]:
+        """
+        Crea una o más órdenes de compra desde un pedido confirmado.
+
+        Similar a copy_despacho_to_orden_compra() pero para pedidos.
+        Lee desde pedido_sap_procesamiento_detalle (datos ya procesados).
+
+        La mayoría de los pedidos generan 1 ODC (lista de 1 elemento). Si el
+        pedido mezcla tiendas de más de una marca (origen_traslado_detectado con
+        2+ códigos — ver Fase 1 de PYTD002), genera una ODC por bodega, cada una
+        con solo sus líneas/tiendas correspondientes: mismo resultado que hoy se
+        logra subiendo 2 pedidos separados, uno por marca.
+
+        Args:
+            pedido_id: UUID del pedido
+            upsert: Si True, actualiza si existe; si False, inserta siempre
+
+        Returns:
+            Lista de dicts con resultado de la creación (uno por ODC)
+        """
         with get_db_connection_context() as conn:
             pedido_repo = PedidoRepository(conn)
             sap_proc_repo = PedidoSAPProcesamientoRepository(conn)
@@ -368,12 +536,6 @@ class PedidoOCService:
 
             self._validar_estado_pedido(pedido_cabecera, pedido_id)
 
-            existing_oc_id = None
-            if upsert:
-                existing_oc_id = oc_repo.find_by_pedido_id(pedido_id)
-                if existing_oc_id:
-                    logger.info(f"ℹ️ OC ya existe para pedido {pedido_id} (oc_id: {existing_oc_id}), se actualizará")
-
             procesamientos = sap_proc_repo.get_procesamientos_por_pedido(pedido_id)
             if not procesamientos:
                 raise ValueError(
@@ -385,12 +547,13 @@ class PedidoOCService:
                 self._filtrar_procesamientos(procesamientos)
             )
 
+            warnings: List[str] = []
             if productos_no_homologados:
-                result["warnings"].append(f"{len(productos_no_homologados)} producto(s) no homologado(s) omitido(s)")
+                warnings.append(f"{len(productos_no_homologados)} producto(s) no homologado(s) omitido(s)")
                 logger.warning(f"⚠️ {len(productos_no_homologados)} productos no homologados omitidos")
 
             if productos_sin_cantidad:
-                result["warnings"].append(f"{len(productos_sin_cantidad)} producto(s) con cantidad 0 omitido(s)")
+                warnings.append(f"{len(productos_sin_cantidad)} producto(s) con cantidad 0 omitido(s)")
                 logger.warning(f"⚠️ {len(productos_sin_cantidad)} productos con cantidad 0 omitidos")
 
             if not procesamientos_validos:
@@ -412,28 +575,50 @@ class PedidoOCService:
                 raise ValueError(f"No se pudo determinar el proveedor (CardCode) para: {proveedor_nombre}")
 
             logger.debug(f"🔄 Mapeo proveedor: {proveedor_nombre} → {proveedor}")
-            result["proveedor"] = proveedor
 
-            codigo_bodega = self._determinar_bodega_oc(pedido_id, oc_repo)
+            bodegas_detectadas = pedido_cabecera.get("origen_traslado_detectado") or []
 
-            oc_cabecera_data = self._to_orden_compra_cabecera_from_pedido(pedido_cabecera, proveedor, codigo_bodega)
-            oc_cabecera_data["estado"] = "PENDIENTE"
+            if len(bodegas_detectadas) <= 1:
+                # Caso normal (una sola marca): comportamiento idéntico al histórico.
+                codigo_bodega = self._determinar_bodega_oc(pedido_id, oc_repo)
+                existing_oc_id = oc_repo.find_by_pedido_id(pedido_id) if upsert else None
+                if existing_oc_id:
+                    logger.info(f"ℹ️ OC ya existe para pedido {pedido_id} (oc_id: {existing_oc_id}), se actualizará")
+                oc_detalles = self._construir_detalles_oc(procesamientos_validos, conn, pedido_id, codigo_bodega)
+                resultado = self._crear_una_oc(
+                    oc_repo, pedido_id, pedido_cabecera, proveedor,
+                    codigo_bodega, oc_detalles, existing_oc_id
+                )
+                resultado["warnings"] = warnings + resultado.get("warnings", [])
+                return [resultado]
 
-            oc_id = self._upsert_oc_cabecera(oc_repo, oc_cabecera_data, existing_oc_id, pedido_id, result)
-
-            oc_detalles = self._construir_detalles_oc(procesamientos_validos, conn, pedido_id, codigo_bodega)
-            if not oc_detalles:
-                raise ValueError("No se pudo crear ninguna línea de detalle válida para la OC")
-
-            detalles_insertados = oc_repo.insert_detalles(oc_id, oc_detalles)
-            result["detalles_insertados"] = detalles_insertados
-            result["total_lineas"] = len(oc_detalles)
-
-            self._generar_json_sap_oc(oc_repo, oc_id, codigo_bodega, pedido_id, pedido_cabecera, result)
-
-            accion = "actualizada" if result.get("cabecera_actualizada") else "creada"
-            logger.info(
-                f"✅ OC {accion}: {oc_id} para pedido {pedido_id} "
-                f"(detalles: {detalles_insertados}/{len(procesamientos_validos)})"
+            # Pedido mixto: una ODC por bodega detectada.
+            logger.info(f"📦 Pedido {pedido_id} mezcla {len(bodegas_detectadas)} bodegas: {bodegas_detectadas}")
+            procesamientos_por_bodega = self._dividir_procesamientos_por_bodega(
+                procesamientos_validos, pedido_id, conn, bodegas_detectadas
             )
-            return result
+            tiendas_por_bodega = self._tiendas_por_bodega(conn, pedido_id, bodegas_detectadas)
+            resultados: List[Dict[str, Any]] = []
+            for codigo_bodega in bodegas_detectadas:
+                procs_bodega = procesamientos_por_bodega.get(codigo_bodega, [])
+                if not procs_bodega:
+                    logger.warning(f"⚠️ Sin productos para bodega {codigo_bodega} en pedido {pedido_id}, se omite esa ODC")
+                    continue
+                existing_oc_id = oc_repo.find_by_pedido_id_y_bodega(pedido_id, codigo_bodega) if upsert else None
+                if existing_oc_id:
+                    logger.info(f"ℹ️ OC ya existe para pedido {pedido_id}/{codigo_bodega} (oc_id: {existing_oc_id}), se actualizará")
+                oc_detalles = self._construir_detalles_oc(procs_bodega, conn, pedido_id, codigo_bodega)
+                resultado = self._crear_una_oc(
+                    oc_repo, pedido_id, pedido_cabecera, proveedor,
+                    codigo_bodega, oc_detalles, existing_oc_id
+                )
+                resultado["warnings"] = warnings + resultado.get("warnings", [])
+                # Tiendas propias de esta bodega: se usa para acotar tiendas_destino_filtro
+                # al enviar la ODC a SAP (ver enviar_oc_a_sap), así cada ODC solo procesa
+                # sus propias tiendas sin ruido de líneas de la otra bodega omitidas.
+                resultado["tiendas_bodega"] = tiendas_por_bodega.get(codigo_bodega, [])
+                resultados.append(resultado)
+
+            if not resultados:
+                raise ValueError(f"No se pudo crear ninguna ODC para el pedido mixto {pedido_id}")
+            return resultados

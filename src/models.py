@@ -1483,7 +1483,18 @@ class ProcesoCompletoSAPResponse(BaseModel):
     odc_generada: Optional[dict] = Field(None, description="Resultado de la generación de ODC")
     
     # Paso 3: Enviar a SAP
-    envio_sap: Optional[ProcesoCompletoSAPDetalleODC] = Field(None, description="Resultado del envío a SAP")
+    envio_sap: Optional[ProcesoCompletoSAPDetalleODC] = Field(
+        None,
+        description="Resultado del envío a SAP de la primera ODC (compatibilidad; ver envios_sap para el pedido completo)"
+    )
+    envios_sap: Optional[List[ProcesoCompletoSAPDetalleODC]] = Field(
+        None,
+        description=(
+            "Resultado del envío a SAP de TODAS las ODC del pedido. La mayoría de los "
+            "pedidos generan 1 sola (mismo contenido que envio_sap); un pedido que mezcla "
+            "tiendas de más de una marca (origen_traslado_detectado) genera 2."
+        )
+    )
     
     # Solicitudes de Transferencia (por tienda): para mostrar en modal todas las ITR con doc_num y tienda
     solicitudes_transferencia: Optional[dict] = Field(

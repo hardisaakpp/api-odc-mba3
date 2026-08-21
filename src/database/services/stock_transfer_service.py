@@ -71,13 +71,6 @@ class StockTransferService:
     RETRY_BASE_DELAY_SECONDS = SAP_ITR_RETRY_BASE_DELAY_SECONDS
     RETRY_MAX_JITTER_SECONDS = SAP_ITR_RETRY_MAX_JITTER_SECONDS
 
-    # Req. 1.6: pares (bodega_origen, bodega_tienda) donde se permite el traslado
-    # cruzado entre CEDIs distintos, además del caso normal bodega_origen == bodega_tienda.
-    BODEGAS_TRASLADO_CRUZADO_PERMITIDO = frozenset({
-        ("RL-CD", "RG-CD"),
-        ("RG-CD", "RL-CD"),
-    })
-
     def __init__(self):
         """Inicializa el servicio."""
         self.sap_client = SAPServiceLayerClient()
@@ -839,17 +832,12 @@ class StockTransferService:
             return None, True
 
         if bodega_tienda != bodega_origen_upper:
-            if (bodega_origen_upper, bodega_tienda) not in self.BODEGAS_TRASLADO_CRUZADO_PERMITIDO:
-                logger.warning(
-                    f"⚠️ Omitiendo distribución: La tienda '{tienda_codigo}' pertenece a la bodega '{bodega_tienda}', "
-                    f"pero el pedido tiene origen '{bodega_origen_upper}'. "
-                    f"No se puede crear transferencia de {bodega_origen_upper} a una tienda de {bodega_tienda}."
-                )
-                return None, True
-            logger.info(
-                f"↔️ Traslado cruzado entre CEDIs permitido (req. 1.6): {bodega_origen_upper} → "
-                f"tienda '{tienda_codigo}' (bodega {bodega_tienda})"
+            logger.warning(
+                f"⚠️ Omitiendo distribución: La tienda '{tienda_codigo}' pertenece a la bodega '{bodega_tienda}', "
+                f"pero el pedido tiene origen '{bodega_origen_upper}'. "
+                f"No se puede crear transferencia de {bodega_origen_upper} a una tienda de {bodega_tienda}."
             )
+            return None, True
 
         # Convertir por tienda: cantidad_sap = cantidad_asignada × unidad_conversion (trazable)
         cantidad_sap_asignada = float(cantidad_asignada) * factor_conversion
@@ -1278,9 +1266,8 @@ class StockTransferService:
           - Si ninguno está disponible, se usa "01" como default
         - Destino: TIENDAS (es_bodega=False), NO bodegas
         - Las bodegas (OUT-CD, RG-CD, RL-CD) se excluyen como destino para evitar transferencias de bodega a bodega
-        - Cada bodega tiene sus propias tiendas, EXCEPTO el traslado cruzado permitido por
-          el req. 1.6 entre RL-CD (CEDI Roland) y RG-CD (Regions) en ambos sentidos
-          (ver BODEGAS_TRASLADO_CRUZADO_PERMITIDO)
+        - Cada bodega solo transfiere hacia sus propias tiendas (según marca); no se permite
+          cruce entre bodegas de distinta marca (ver req. "Generación de 2 ODC" en SEGUIMIENTO.md)
 
         Proceso:
         1. Obtiene la distribución confirmada del pedido
@@ -1290,8 +1277,8 @@ class StockTransferService:
         5. Convierte cantidades por tienda: cantidad_sap = cantidad_asignada × unidad_conversion (trazable, sin usar totales ni bodega)
         6. Excluye bodegas como destino (evita ST de bodega a bodega)
         7. Valida que destino no sea la misma bodega origen
-        8. Valida que cada tienda pertenezca a la bodega origen (basado en prefijos: TRL-→RL-CD, TOUT-→OUT-CD, RG-→RG-CD),
-           salvo el traslado cruzado RL-CD↔RG-CD permitido por el req. 1.6
+        8. Valida que cada tienda pertenezca a la bodega origen (marca de la tienda, con fallback
+           a prefijos: TRL-→RL-CD, TOUT-→OUT-CD, RG-→RG-CD); si no coincide, se omite la línea
         9. Agrupa por tienda y crea un Inventory Transfer Request por tienda en SAP (POST /InventoryTransferRequests)
         10. Registra los resultados
 
