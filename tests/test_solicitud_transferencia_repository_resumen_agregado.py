@@ -132,3 +132,63 @@ def test_error_de_sql_retorna_resumen_vacio():
         "resultados": [],
         "itrs_por_tienda": [],
     }
+
+
+class TestGetResumenAgregadoPorOcIds:
+    """
+    Bug: el badge "Reintentar ST" del listado (tabla /ordenes-compra) usaba
+    get_latest_resumen_by_oc_ids (totales del ÚLTIMO batch de ST) mientras el modal
+    "Integración con SAP Completada" usa el agregado por tienda de TODOS los batches.
+    Si un reintento posterior solo reprocesó las tiendas que habían fallado (ej. 2 de
+    34), el badge mostraba "2/2" en vez de reflejar las 34 tiendas reales del pedido.
+    """
+
+    def test_oc_ids_vacio_no_consulta_bd(self):
+        conn = MagicMock()
+        repo = SolicitudTransferenciaRepository(conn)
+
+        result = repo.get_resumen_agregado_por_oc_ids([])
+
+        assert result == {}
+        conn.cursor.assert_not_called()
+
+    def test_agrupa_totales_por_oc_sobre_todos_los_batches(self):
+        """2 OC: la primera con 3 tiendas (2 creadas, 1 error tras reintento parcial),
+        la segunda con 1 tienda creada. Simula filas ya deduplicadas por tienda (rn=1)."""
+        conn = MagicMock()
+        cursor = MagicMock()
+        cursor.fetchall.return_value = [
+            ("oc-1", "Creada", 111),
+            ("oc-1", "Creada", 112),
+            ("oc-1", "Error", None),
+            ("oc-2", "Creada", 113),
+        ]
+        conn.cursor.return_value = cursor
+
+        repo = SolicitudTransferenciaRepository(conn)
+        result = repo.get_resumen_agregado_por_oc_ids(["oc-1", "oc-2"])
+
+        assert result["oc-1"] == {"total_tiendas": 3, "transferencias_creadas": 2, "transferencias_errores": 1}
+        assert result["oc-2"] == {"total_tiendas": 1, "transferencias_creadas": 1, "transferencias_errores": 0}
+
+    def test_creada_sin_doc_entry_cuenta_como_error(self):
+        conn = MagicMock()
+        cursor = MagicMock()
+        cursor.fetchall.return_value = [("oc-1", "Creada", None)]
+        conn.cursor.return_value = cursor
+
+        repo = SolicitudTransferenciaRepository(conn)
+        result = repo.get_resumen_agregado_por_oc_ids(["oc-1"])
+
+        assert result["oc-1"] == {"total_tiendas": 1, "transferencias_creadas": 0, "transferencias_errores": 1}
+
+    def test_error_de_sql_retorna_vacio(self):
+        conn = MagicMock()
+        cursor = MagicMock()
+        cursor.execute.side_effect = Exception("tabla no existe")
+        conn.cursor.return_value = cursor
+
+        repo = SolicitudTransferenciaRepository(conn)
+        result = repo.get_resumen_agregado_por_oc_ids(["oc-1"])
+
+        assert result == {}

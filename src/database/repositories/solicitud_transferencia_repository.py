@@ -352,67 +352,69 @@ class SolicitudTransferenciaRepository:
             "itrs_por_tienda": itrs_por_tienda,
         }
 
-    def get_latest_resumen_by_oc_ids(self, oc_ids: List[str]) -> Dict[str, Dict[str, Any]]:
+    def get_resumen_agregado_por_oc_ids(self, oc_ids: List[str]) -> Dict[str, Dict[str, Any]]:
         """
-        Obtiene el resumen del último batch de ST por cada oc_id.
+        Como get_resumen_agregado_por_oc_id, pero para varias OC en una sola consulta
+        (para el listado paginado de /ordenes-compra).
+
+        Bug que corrige: el listado usaba get_latest_resumen_by_oc_ids (totales del
+        ÚLTIMO batch de ST) para el badge "Reintentar ST" de la tabla, mientras que el
+        modal "Integración con SAP Completada" usa este agregado por tienda (todos los
+        batches). Si un reintento posterior solo reprocesó las tiendas que habían
+        fallado (ej. 2 de 34), el badge mostraba "2/2" (el batch chico) en vez de un
+        total consistente con las 34 tiendas reales del pedido que muestra el modal.
 
         Returns:
-            Dict oc_id -> {
-                "solicitud_transferencia_id": str,
-                "total_tiendas": int,
-                "transferencias_creadas": int,
-                "transferencias_errores": int,
-                "success": bool,
-            }
+            Dict oc_id -> {"total_tiendas": int, "transferencias_creadas": int, "transferencias_errores": int}
         """
-        if not oc_ids:
-            return {}
         out: Dict[str, Dict[str, Any]] = {}
+        if not oc_ids:
+            return out
         try:
             cursor = self.conn.cursor()
             placeholders = ",".join("?" * len(oc_ids))
-            query = f"""
-                WITH latest AS (
+            cursor.execute(
+                f"""
+                WITH agg AS (
                     SELECT
-                        solicitud_transferencia_id,
-                        oc_id,
-                        total_tiendas,
-                        transferencias_creadas,
-                        transferencias_errores,
-                        success,
+                        st.oc_id,
+                        d.tienda_codigo,
+                        d.doc_entry,
+                        d.estado,
                         ROW_NUMBER() OVER (
-                            PARTITION BY oc_id
-                            ORDER BY creado_fecha DESC, solicitud_transferencia_id DESC
+                            PARTITION BY st.oc_id, UPPER(LTRIM(RTRIM(d.tienda_codigo)))
+                            ORDER BY
+                                CASE WHEN d.estado = 'Creada' AND d.doc_entry IS NOT NULL THEN 0 ELSE 1 END,
+                                st.creado_fecha DESC,
+                                d.solicitud_transferencia_detalle_id DESC
                         ) AS rn
-                    FROM solicitud_transferencia
-                    WHERE oc_id IN ({placeholders})
+                    FROM solicitud_transferencia_detalle d
+                    INNER JOIN solicitud_transferencia st
+                        ON st.solicitud_transferencia_id = d.solicitud_transferencia_id
+                    WHERE st.oc_id IN ({placeholders})
+                      AND d.tienda_codigo IS NOT NULL
+                      AND LTRIM(RTRIM(d.tienda_codigo)) <> ''
                 )
-                SELECT
-                    solicitud_transferencia_id,
-                    oc_id,
-                    total_tiendas,
-                    transferencias_creadas,
-                    transferencias_errores,
-                    success
-                FROM latest
+                SELECT oc_id, estado, doc_entry
+                FROM agg
                 WHERE rn = 1
-            """
-            cursor.execute(query, [str(oid) for oid in oc_ids])
-            for row in cursor.fetchall():
-                oc_id = str(row[1]) if row[1] else None
-                if not oc_id:
-                    continue
-                out[oc_id] = {
-                    "solicitud_transferencia_id": str(row[0]) if row[0] else None,
-                    "total_tiendas": int(row[2] or 0),
-                    "transferencias_creadas": int(row[3] or 0),
-                    "transferencias_errores": int(row[4] or 0),
-                    "success": bool(row[5]),
-                }
+                """,
+                [str(oid) for oid in oc_ids],
+            )
+            rows = cursor.fetchall()
             cursor.close()
+            for oc_id, estado, doc_entry in rows:
+                key = str(oc_id)
+                bucket = out.setdefault(key, {"total_tiendas": 0, "transferencias_creadas": 0, "transferencias_errores": 0})
+                bucket["total_tiendas"] += 1
+                if (estado or "").strip() == "Creada" and doc_entry is not None:
+                    bucket["transferencias_creadas"] += 1
+                else:
+                    bucket["transferencias_errores"] += 1
         except Exception as e:
-            logger.warning(f"No se pudo obtener resumen ST por oc_ids: {e}")
+            logger.warning(f"No se pudo obtener resumen agregado ST por oc_ids: {e}")
         return out
+
 
     def get_latest_failed_tienda_codigos_by_oc_id(self, oc_id: str) -> List[str]:
         """

@@ -324,7 +324,10 @@ def _query_ordenes_compra(estado_param, limit_param, offset_param,
             st_repo = SolicitudTransferenciaRepository(conn)
             oc_ids_list = [o["oc_id"] for o in oc_list]
             itr_doc = st_repo.get_doc_num_itr_por_oc_ids(oc_ids_list)
-            st_resumen_by_oc = st_repo.get_latest_resumen_by_oc_ids(oc_ids_list)
+            # Agregado por tienda sobre TODOS los batches (no solo el último reintento),
+            # para que "total_tiendas"/"errores" del badge "Reintentar ST" coincida con
+            # lo que muestra el modal "Integración con SAP Completada" (mismo criterio).
+            st_resumen_by_oc = st_repo.get_resumen_agregado_por_oc_ids(oc_ids_list)
             st_pendientes_by_oc = st_repo.count_st_pendientes_reintento_por_oc_ids(oc_ids_list)
             for o in oc_list:
                 if o["oc_id"] in itr_doc:
