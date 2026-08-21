@@ -132,6 +132,51 @@ def test_dividir_procesamientos_sin_distribucion_confirmada_usa_primera_bodega()
     assert resultado["RG-CD"] == []
 
 
+def test_buscar_bodega_en_producto_respeta_bodega_objetivo():
+    """Regresión: una línea es_bodega=True de UNA bodega no debe resolverse como
+    la bodega de la OTRA ODC del mismo pedido mixto (bug real: ambas ODC de
+    'pedido prueba 114' terminaron con WarehouseCode=RG-CD en todas sus líneas)."""
+    producto = {
+        "pedido_detalle_id": "det-1",
+        "distribuciones": [_dist("RG-CD", 5, es_bodega=True)],
+    }
+    assert PedidoOCService._buscar_bodega_en_producto(producto, "det-1", bodega_objetivo="RL-CD") is None
+    assert PedidoOCService._buscar_bodega_en_producto(producto, "det-1", bodega_objetivo="RG-CD") == "RG-CD"
+    # Sin bodega objetivo (caso histórico de una sola bodega): comportamiento sin filtrar.
+    assert PedidoOCService._buscar_bodega_en_producto(producto, "det-1") == "RG-CD"
+
+
+def test_to_orden_compra_detalle_no_contamina_bodega_de_otra_odc_en_pedido_mixto():
+    service = PedidoOCService()
+    productos = [{
+        "pedido_detalle_id": "det-1",
+        "distribuciones": [_dist("RG-CD", 5, es_bodega=True)],
+    }]
+    proc = {
+        "pedido_detalle_id": "det-1",
+        "item_code_sap": "ITEM-1",
+        "cantidad_sap": 10,
+        "unidad_sap": "UN",
+        "precio_unitario_sap": 1,
+        "total_linea_sap": 10,
+        "cantidad_original": 10,
+    }
+
+    with patch(
+        "src.database.repositories.distribucion_confirmada_repository.DistribucionConfirmadaRepository",
+        _mock_dist_repo(productos)
+    ):
+        detalle_rl = service._to_orden_compra_detalle_from_procesamiento(
+            proc, conn=MagicMock(), pedido_id="pedido-1", codigo_bodega_cabecera="RL-CD"
+        )
+        detalle_rg = service._to_orden_compra_detalle_from_procesamiento(
+            proc, conn=MagicMock(), pedido_id="pedido-1", codigo_bodega_cabecera="RG-CD"
+        )
+
+    assert detalle_rl["codigo_bodega"] == "RL-CD"
+    assert detalle_rg["codigo_bodega"] == "RG-CD"
+
+
 def test_tiendas_por_bodega_agrupa_codigos_unicos():
     productos = [
         {"pedido_detalle_id": "det-1", "distribuciones": [_dist("TRL-QSN", 20), _dist("RG-INT", 15)]},

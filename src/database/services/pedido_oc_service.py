@@ -76,21 +76,34 @@ class PedidoOCService:
         }
     
     @staticmethod
-    def _buscar_bodega_en_producto(producto: Dict[str, Any], pedido_detalle_id: str) -> Optional[str]:
+    def _buscar_bodega_en_producto(
+        producto: Dict[str, Any],
+        pedido_detalle_id: str,
+        bodega_objetivo: Optional[str] = None,
+    ) -> Optional[str]:
         if producto.get("pedido_detalle_id") != pedido_detalle_id:
             return None
+        bodega_objetivo_norm = bodega_objetivo.strip().upper() if bodega_objetivo else None
         for dist in producto.get("distribuciones", []):
             cantidad_asignada = dist.get("cantidad_asignada", 0)
             tienda_codigo = dist.get("tienda_codigo")
             if dist.get("es_bodega", False) and cantidad_asignada and cantidad_asignada > 0 and tienda_codigo:
-                return tienda_codigo.strip().upper()
+                codigo = tienda_codigo.strip().upper()
+                # En pedido mixto, una línea es_bodega=True de OTRA bodega no debe
+                # "contaminar" la ODC que se está construyendo ahora (ver bug PYTD002:
+                # ambas ODC de un pedido mixto terminaban con WarehouseCode de una sola
+                # bodega porque esta búsqueda no distinguía para cuál ODC se llamaba).
+                if bodega_objetivo_norm and codigo != bodega_objetivo_norm:
+                    continue
+                return codigo
         return None
 
     @staticmethod
     def _buscar_bodega_desde_distribuciones(
         conn: pyodbc.Connection,
         pedido_id: str,
-        pedido_detalle_id: str
+        pedido_detalle_id: str,
+        bodega_objetivo: Optional[str] = None,
     ) -> Optional[str]:
         try:
             from ..repositories.distribucion_confirmada_repository import DistribucionConfirmadaRepository
@@ -100,7 +113,7 @@ class PedidoOCService:
                 return None
             distribucion_data = dist_repo.get_distribucion_completa(pedido_id, version_actual)
             for producto in distribucion_data.get("productos", []):
-                codigo = PedidoOCService._buscar_bodega_en_producto(producto, pedido_detalle_id)
+                codigo = PedidoOCService._buscar_bodega_en_producto(producto, pedido_detalle_id, bodega_objetivo)
                 if codigo:
                     logger.debug(f"📍 Bodega obtenida desde distribución para detalle {pedido_detalle_id}: {codigo}")
                     return codigo
@@ -143,7 +156,9 @@ class PedidoOCService:
         if conn and pedido_id:
             pedido_detalle_id = procesamiento_detalle.get("pedido_detalle_id")
             if pedido_detalle_id:
-                codigo_bodega = PedidoOCService._buscar_bodega_desde_distribuciones(conn, pedido_id, pedido_detalle_id)
+                codigo_bodega = PedidoOCService._buscar_bodega_desde_distribuciones(
+                    conn, pedido_id, pedido_detalle_id, bodega_objetivo=codigo_bodega_cabecera
+                )
 
         if not codigo_bodega and codigo_bodega_cabecera:
             codigo_bodega = codigo_bodega_cabecera
