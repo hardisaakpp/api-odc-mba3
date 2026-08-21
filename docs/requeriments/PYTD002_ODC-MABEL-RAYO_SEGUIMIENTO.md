@@ -228,6 +228,41 @@ BD). Se agregó:
   ODC por pedido (hoy usa un solo DocNum), y UI dedicada para mostrar ambas ODC (el backend ya
   crea las 2 `orden_compra_cabecera`, visibles vía `get_by_pedido_id`).
 
+**Fase 2 — endurecimiento posterior al primer despliegue (21/08/2026, mismo día):**
+
+- **Fix — JSON de diagnóstico de ST pisado entre las 2 ODC**: `StockTransferService`
+  escribía la evidencia local de cada envío de ST en `output/str_{pedido_id}.json`,
+  nombrado solo por pedido. En un pedido mixto la segunda ODC en enviarse pisaba el
+  archivo de la primera. Se verificó en BD que ambas ODC habían creado sus Solicitudes
+  de Transferencia correctamente en SAP en todos los casos — el problema era solo la
+  evidencia local en disco, no el envío real. El archivo ahora incluye el `oc_id`
+  (`str_{pedido_id}_{oc_id}.json`), con el nombre sin sufijo como *fallback* si no hay
+  `oc_id` disponible.
+- **Perf — envío de las 2 ODC en paralelo a SAP**: `_paso3_enviar_odc_sap`
+  (`endpoints_proceso.py`) enviaba las ODC de un pedido mixto una tras otra, duplicando
+  el tiempo total de espera (cada envío es una llamada HTTP independiente a SAP). Con
+  más de 1 ODC, ahora se envían en paralelo vía `ThreadPoolExecutor` (2 hilos,
+  `executor.map` preserva el orden de resultados). Cada hilo abre su propia conexión a
+  BD y su propio `OCSAPService` (`_enviar_una_odc_a_sap_en_thread`) en vez de compartir
+  los del caller: una conexión `pyodbc` no es segura entre threads, y `OCSAPService` en
+  modo conexión directa (sin middleware) guarda la sesión SAP como estado de instancia.
+  El caso normal (1 sola ODC, la mayoría de los pedidos) sigue siendo secuencial, sin
+  cambios de comportamiento.
+
+## Corrección relacionada — columna MARCA en exportación Excel de pedido (21/08/2026)
+
+No es parte de la funcionalidad de 2 ODC en sí, pero surgió del mismo trabajo de
+resolver marca por producto: "Descargar Pedido" y "Descargar Pedido Original"
+(`pedidos_exportacion.py`) escribían un único valor de MARCA para toda la tabla,
+derivado de `origen_traslado` (CD de la cabecera, un solo valor por pedido). Ese campo
+es en realidad por producto (`pedido_detalle.marca`, sincronizado desde SAP
+`OITM.U_MARCA`) y varía fila a fila — igual que ya lo muestra la tabla "Detalle del
+Pedido" de la UI. El Excel ahora escribe `detalle.marca` directamente, sin
+transformación, igual que el resto de columnas. Relevante también para pedidos mixtos:
+antes, un pedido con tiendas ROLAND y REGIONS mostraba una sola marca (la del
+`origen_traslado` de cabecera) en todas las filas del Excel, aunque los productos
+fueran de marcas distintas.
+
 ## 1.7 Generación del archivo TXT para MBA3 — Implementado, con una corrección respecto al documento
 
 **Corrección realizada vs. lo solicitado**: el documento (RN-01) pide habilitar el botón
