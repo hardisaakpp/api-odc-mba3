@@ -12,6 +12,7 @@ NOTA DE RENDIMIENTO:
 """
 
 import asyncio
+import concurrent.futures
 import json
 import logging
 import os
@@ -437,6 +438,22 @@ def _enviar_una_odc_a_sap(oc_sap_service, oc_repo, odc: Dict[str, Any]) -> Dict[
     }
 
 
+def _enviar_una_odc_a_sap_en_thread(odc: Dict[str, Any]) -> Dict[str, Any]:
+    """Como _enviar_una_odc_a_sap, pero abre su propia conexión a BD y su propio
+    OCSAPService en vez de recibirlos del caller. Se usa para enviar en paralelo las
+    2 ODC de un pedido mixto (ver _paso3_enviar_odc_sap): una conexión pyodbc no es
+    segura para compartir entre threads, y OCSAPService (en modo conexión directa a
+    SAP, sin middleware) guarda su propia sesión SAP como estado de instancia -- cada
+    thread necesita las suyas, no las del caller."""
+    from src.database.services.oc_sap_service import OCSAPService
+    from src.database.repositories.orden_compra_repository import OrdenCompraRepository
+
+    with get_db_connection_context() as conn:
+        oc_repo_local = OrdenCompraRepository(conn)
+        oc_sap_service_local = OCSAPService()
+        return _enviar_una_odc_a_sap(oc_sap_service_local, oc_repo_local, odc)
+
+
 def _paso3_enviar_odc_sap(
     oc_repo,
     oc_sap_service,
@@ -459,7 +476,15 @@ def _paso3_enviar_odc_sap(
     """
     odcs_generadas = [odc["resultado_odc"] for odc in odcs]
     try:
-        envios = [_enviar_una_odc_a_sap(oc_sap_service, oc_repo, odc) for odc in odcs]
+        if len(odcs) > 1:
+            # Pedido mixto: enviar las ODC en paralelo (cada una es una llamada HTTP
+            # independiente a SAP) en vez de una tras otra, para no duplicar el
+            # tiempo total de espera. executor.map conserva el orden de odcs en los
+            # resultados sin importar cuál termine primero.
+            with concurrent.futures.ThreadPoolExecutor(max_workers=len(odcs)) as executor:
+                envios = list(executor.map(_enviar_una_odc_a_sap_en_thread, odcs))
+        else:
+            envios = [_enviar_una_odc_a_sap(oc_sap_service, oc_repo, odc) for odc in odcs]
     except Exception as e:
         logger.error(f"❌ Error en PASO 3 (Enviar a SAP): {e}", exc_info=True)
         _actualizar_estado_reintento(repo_pedido, pedido_id, audit)
