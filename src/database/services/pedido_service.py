@@ -11,7 +11,7 @@ REFACTORIZADO (Fase 2): Separado en módulos especializados:
 
 import logging
 import pandas as pd
-from typing import Dict, Any, List, Optional, cast
+from typing import Dict, Any, List, Optional, cast, Callable
 from datetime import datetime, date
 import io
 
@@ -577,7 +577,8 @@ class PedidoService:
         tiendas_permitidas: Optional[List[str]] = None,
         bloquea_con_errores: bool = True,
         validar_sap: bool = True,
-        correcciones_codigos: Optional[Dict[str, str]] = None
+        correcciones_codigos: Optional[Dict[str, str]] = None,
+        on_progress: Optional[Callable[[str, int, str], None]] = None
     ) -> Dict[str, Any]:
         """
         Valida y procesa un archivo Excel de pedido.
@@ -593,10 +594,22 @@ class PedidoService:
             bloquea_con_errores: Si True, no guarda si hay errores críticos
             validar_sap: Si True, valida que códigos de producto existan en SAP
             sap_obligatorio: Si True, errores de SAP bloquean la persistencia
+            on_progress: Callback opcional (step, progress 0-100, message) invocado tras
+                cada sub-etapa real (parseo, validación SAP de productos, tiendas/bodegas,
+                validación de negocio, persistencia). Permite reportar avance granular al
+                caller (ver celery_plantilla_upload.py) en vez de solo inicio/fin. No afecta
+                el resultado si no se provee (uploads síncronos existentes no lo usan).
 
         Returns:
             Dict con resultado incluyendo validación
         """
+        def _reportar(step: str, progress: int, message: str) -> None:
+            if on_progress is None:
+                return
+            try:
+                on_progress(step, progress, message)
+            except Exception as e:
+                logger.warning(f"⚠️ on_progress falló para step={step}: {e}")
         if not ENABLE_SQL_SERVER_STORAGE:
             return {
                 "status": "error",
@@ -620,10 +633,12 @@ class PedidoService:
         try:
             hoja_cabecera, hoja_detalle = self._detectar_y_validar_formato(file_content)
             resultado["formato_detectado"] = "dos_hojas_nuevo_v1_0"
+            _reportar("leyendo_archivo", 35, "Formato de archivo validado, leyendo datos...")
             cabecera, detalles_con_tiendas = self._procesar_formato_nuevo_v1_0(
                 file_content, hoja_cabecera, hoja_detalle,
                 filename, usuario_id, validar_sap, correcciones_codigos
             )
+            _reportar("validando_sap", 50, "Códigos de producto validados en SAP")
             if not detalles_con_tiendas:
                 raise BusinessException(
                     message="El archivo Excel está vacío o no contiene datos válidos",
@@ -640,14 +655,17 @@ class PedidoService:
                 )
             if validar_sap:
                 self._validar_tiendas_bodegas_sap(cabecera, detalles_con_tiendas, resultado)
+                _reportar("validando_sap", 62, "Tiendas y bodegas validadas en SAP")
             if validar_antes_de_guardar:
                 self._ejecutar_validacion_pedido(
                     cabecera, detalles_con_tiendas, resultado,
                     tiendas_permitidas, bloquea_con_errores, filename
                 )
+                _reportar("validando_estructura", 72, "Validación de datos completada")
             validacion_sap = None
             if validar_sap:
                 validacion_sap = self._preparar_validacion_sap_persistencia(detalles_con_tiendas, resultado)
+                _reportar("validando_sap", 85, "Validación SAP de persistencia completada")
             self._persistir_pedido(
                 cabecera=cabecera,
                 detalles_con_tiendas=detalles_con_tiendas,
@@ -655,6 +673,7 @@ class PedidoService:
                 validar_sap=validar_sap,
                 validacion_sap=validacion_sap
             )
+            _reportar("guardando", 95, "Pedido guardado en base de datos")
             pedido_id = resultado.get("pedido_id")
             logger.info(
                 f"✅ Pedido procesado: {filename} "

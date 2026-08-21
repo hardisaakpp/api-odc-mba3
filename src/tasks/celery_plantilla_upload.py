@@ -75,6 +75,9 @@ def procesar_plantilla_upload(
             "Validando y procesando plantilla Excel..."
         )
 
+        def _reportar_progreso(step: str, progress: int, message: str) -> None:
+            estado_service.actualizar_progreso(process_id, step, progress, message)
+
         service = PedidoService()
         resultado = service.validar_y_procesar_archivo_excel(
             file_content=file_content,
@@ -83,7 +86,8 @@ def procesar_plantilla_upload(
             validar_antes_de_guardar=validar,
             bloquea_con_errores=bloquea_con_errores,
             tiendas_permitidas=None,
-            correcciones_codigos=correcciones_codigos
+            correcciones_codigos=correcciones_codigos,
+            on_progress=_reportar_progreso
         )
 
         # Guardar archivo original en ruta definitiva si procesamiento OK y está habilitado

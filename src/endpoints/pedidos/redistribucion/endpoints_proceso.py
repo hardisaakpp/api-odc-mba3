@@ -18,7 +18,7 @@ import logging
 import os
 import threading
 import time
-from typing import Any, Dict, List
+from typing import Any, Callable, Dict, List, Optional
 
 from fastapi import FastAPI, Depends, HTTPException, Path, Body, Query, status, Request
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -602,6 +602,7 @@ def _ejecutar_proceso_completo_sync(
     ajustes_detalle: List,
     user_id: str,
     audit: AuditContext,
+    on_progress: Optional[Callable[[str, int, str], None]] = None,
 ) -> dict:
     """
     Ejecuta toda la lógica síncrona del proceso completo SAP.
@@ -612,6 +613,12 @@ def _ejecutar_proceso_completo_sync(
       - Llamadas HTTP a SAP Service Layer (requests sync)
       - Envío de emails SMTP (smtplib sync)
 
+    Args:
+        on_progress: Callback opcional (step, progress 0-100, message) invocado tras
+            cada uno de los 3 pasos reales (redistribución, generar ODC, enviar SAP).
+            Solo lo usa el task de Celery (ver celery_proceso_sap.py); los callers
+            síncronos no lo pasan.
+
     Returns:
         dict con:
           - 'response': ProcesoCompletoSAPResponse listo para retornar
@@ -621,6 +628,14 @@ def _ejecutar_proceso_completo_sync(
     Raises:
         HTTPException: errores de validación o internos que se propagan al cliente.
     """
+    def _reportar(step: str, progress: int, message: str) -> None:
+        if on_progress is None:
+            return
+        try:
+            on_progress(step, progress, message)
+        except Exception as e:
+            logger.warning(f"⚠️ on_progress falló para step={step}: {e}")
+
     import threading
     _worker_thread = threading.current_thread().name
     logger.info(f"🧵 Ejecutando en thread: {_worker_thread} (NO es el event loop)")
@@ -636,6 +651,7 @@ def _ejecutar_proceso_completo_sync(
         resultado_redistribucion, resumen = _paso1_confirmar_redistribucion(
             conn, repo_pedido, repo_dist, pedido_id, ajustes_detalle, pedido_data, user_id, audit
         )
+        _reportar("redistribucion", 40, "Redistribución confirmada, generando orden de compra...")
 
         logger.info("📦 PASO 2/3: Generando ODC...")
         odcs, partial_response = _paso2_generar_odc(
@@ -644,6 +660,10 @@ def _ejecutar_proceso_completo_sync(
         if partial_response is not None:
             return partial_response
         assert odcs
+        if len(odcs) > 1:
+            _reportar("generando", 70, f"{len(odcs)} ODC generadas (pedido mixto), enviando a SAP en paralelo...")
+        else:
+            _reportar("generando", 70, "Orden de compra generada, enviando a SAP...")
 
         logger.info("🚀 PASO 3/3: Enviando ODC a SAP...")
         from src.database.services.oc_sap_service import OCSAPService
