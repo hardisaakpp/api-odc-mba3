@@ -6,7 +6,10 @@ Implementa las reglas de negocio estrictas para la redistribución.
 import logging
 from typing import Dict, Any, List, Tuple
 
-from src.database.pedido_estados import ESTADO_REDISTRIBUCION, estado_id_desde_legacy
+from src.database.pedido_estados import (
+    ESTADOS_PUEDE_CONFIRMAR_REDISTRIBUCION,
+    estado_id_desde_legacy,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -166,16 +169,19 @@ class RedistribucionValidator:
 
     @staticmethod
     def _validar_estado_pedido(pedido_data: Dict[str, Any]) -> List[str]:
-        """Validación 5: el pedido debe estar en estado REDISTRIBUCION (CONFIRMADO POR EL RAYO)."""
+        """Validación 5: el pedido debe estar en un estado habilitado para confirmar
+        redistribución (ver ESTADOS_PUEDE_CONFIRMAR_REDISTRIBUCION) -- incluye tanto
+        CONFIRMADO POR EL RAYO (4) como LISTO PARA REDISTRIBUCION (25, pedido "hijo"
+        aceptado directo a la cola sin pasar por El Rayo)."""
         cabecera = pedido_data.get("cabecera", {})
         estado_id = cabecera.get("estado_id")
         if estado_id is None:
             estado_id = estado_id_desde_legacy(cabecera.get("estado"))
         estado_nombre = cabecera.get("estado_nombre") or cabecera.get("estado") or "N/A"
-        if estado_id != ESTADO_REDISTRIBUCION:
+        if estado_id not in ESTADOS_PUEDE_CONFIRMAR_REDISTRIBUCION:
             return [
                 f"El estado del pedido ({estado_nombre}) no permite confirmar redistribución. "
-                "Solo se permite en estado CONFIRMADO POR EL RAYO."
+                "Solo se permite en estado CONFIRMADO POR EL RAYO o LISTO PARA REDISTRIBUCION."
             ]
         return []
 
