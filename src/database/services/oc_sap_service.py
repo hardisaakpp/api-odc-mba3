@@ -4,8 +4,10 @@ Servicio para enviar órdenes de compra a SAP Service Layer.
 Este servicio orquesta la construcción del JSON y el envío de ODC a SAP.
 """
 
+import contextlib
 import json
 import logging
+import re
 
 from src.utils.timezone import ahora_naive
 from typing import Optional, Dict, Any, List
@@ -24,6 +26,7 @@ from src.config import (
     USE_BATCH_VALIDATION,
 )
 from .retry_utils import retry_operation, sap_service_layer_result_should_retry, mensaje_sugiere_reintento_transitorio
+from .proceso_estado_service import get_redis_client
 from ..repositories.orden_compra_repository import OrdenCompraRepository
 from ..clients.sap_service_layer_client import SAPServiceLayerClient
 from ..mappers.sap_oc_mapper import SAPOCMapper
@@ -32,6 +35,52 @@ from src.exceptions import SolicitudTransferenciaNoAplicaError
 logger = logging.getLogger(__name__)
 
 _SIN_RESPUESTA_SAP = "Sin respuesta de SAP"
+
+# Empareja errores de prevalidación por línea, ej. "Línea 1 (SKU): motivo" o
+# "Línea 1: motivo", para poder agruparlos por motivo (ver _resumir_errores_prevalidacion).
+_LINEA_ERROR_RE = re.compile(r'^Línea \d+(?:\s*\([^)]*\))?:\s*(.+)$')
+
+# Cubre el caso real observado: prevalidación reintentando varios minutos por SAP
+# saturado antes de fallar o tener éxito (ver redis_lock_envio_odc).
+_LOCK_ENVIO_ODC_TIMEOUT_SEGUNDOS = 600.0
+
+
+@contextlib.contextmanager
+def redis_lock_envio_odc(oc_id: str, blocking_timeout: float = 0.1):
+    """
+    Lock distribuido (Redis) para serializar el ENVÍO a SAP de una misma ODC.
+
+    Bug real que corrige: 2 clics de "Reintentar" (o un clic doble por lentitud
+    de la UI) para la MISMA oc_id podían correr en paralelo -- sin este lock, no
+    hay nada que lo impida, porque ambos requests leen la ODC en estado PENDIENTE
+    antes de que el primero termine. Si el primero llega a SAP con éxito
+    (DocEntry asignado) pero el segundo, corriendo en paralelo y sin saber del
+    primero, falla su propia prevalidación después, su manejador de error pisaba
+    el estado de la OC de vuelta a ERROR aunque ya estuviera ENVIADA con DocEntry
+    real -- dejando la ODC en un loop: cada reintento posterior se resetea a
+    PENDIENTE pero la validación de idempotencia (ya tiene DocEntry) lo rechaza
+    de inmediato y la vuelve a marcar ERROR, sin salida posible desde la UI.
+
+    No bloqueante por defecto (blocking_timeout=0.1): si otro envío de la misma
+    ODC ya está en curso, se debe rechazar de inmediato -- no tiene sentido
+    esperar, puede tardar varios minutos por reintentos ante SAP saturado.
+
+    Yields True si se obtuvo el lock, False si no (el caller debe omitir el envío
+    sin tocar el estado de la ODC, ya que el envío en curso es quien debe
+    determinarlo).
+    """
+    client = get_redis_client()
+    lock = client.lock(f"lock:envio-odc:{oc_id}", timeout=_LOCK_ENVIO_ODC_TIMEOUT_SEGUNDOS)
+    acquired = False
+    try:
+        acquired = lock.acquire(blocking=True, blocking_timeout=blocking_timeout)
+        yield acquired
+    finally:
+        if acquired:
+            try:
+                lock.release()
+            except Exception:
+                pass
 
 
 class OCSAPService:
@@ -320,6 +369,32 @@ class OCSAPService:
         )
         return resultado["response"]
 
+    @staticmethod
+    def _resumir_errores_prevalidacion(errores: List[str], total_lineas_oc: int) -> str:
+        """
+        Colapsa errores de prevalidación repetidos (ej. "SAP saturado" en las 12
+        líneas de la ODC) a una sola oración con el conteo, en vez de listar la
+        misma razón línea por línea. Si las líneas fallan por motivos distintos
+        entre sí, mantiene el detalle completo porque ahí sí importa saber qué
+        línea falló y por qué.
+        """
+        lineas_por_razon: Dict[str, int] = {}
+        otros_errores: List[str] = []
+        for error in errores:
+            match = _LINEA_ERROR_RE.match(error)
+            if match:
+                razon = match.group(1)
+                lineas_por_razon[razon] = lineas_por_razon.get(razon, 0) + 1
+            else:
+                otros_errores.append(error)
+
+        total_lineas_con_error = sum(lineas_por_razon.values())
+        if len(lineas_por_razon) == 1 and total_lineas_con_error > 1:
+            (razon, count), = lineas_por_razon.items()
+            resumen = f"{razon} ({count} de {total_lineas_oc} líneas)"
+            return '; '.join(otros_errores + [resumen])
+        return '; '.join(errores)
+
     def _ejecutar_validaciones_oc(
         self,
         oc_cabecera: Dict[str, Any],
@@ -355,7 +430,8 @@ class OCSAPService:
         prevalidacion = self._prevalidar_con_reintento(oc_cabecera, oc_detalles)
         if not prevalidacion["valid"]:
             errores_prevalidacion = prevalidacion.get("errors", [])
-            error_msg = f"Prevalidación SAP falló: {'; '.join(errores_prevalidacion)}"
+            errores_resumidos = self._resumir_errores_prevalidacion(errores_prevalidacion, len(oc_detalles))
+            error_msg = f"Prevalidación SAP falló: {errores_resumidos}"
             proveedor_oc = (oc_cabecera.get("proveedor") or "").strip()
             pedido_id_oc = oc_cabecera.get("pedido_id")
             result["error"] = error_msg
@@ -1004,57 +1080,67 @@ class OCSAPService:
             "doc_num": None,
             "error": None
         }
-        
-        try:
-            oc_cabecera = self._cargar_y_validar_cabecera(oc_repo, oc_id, result)
-            if oc_cabecera is None:
+
+        with redis_lock_envio_odc(oc_id) as adquirido:
+            if not adquirido:
+                error_msg = "Ya hay un envío a SAP en curso para esta ODC. Espera a que termine antes de reintentar."
+                result["error"] = error_msg
+                result["error_message"] = error_msg
+                result["error_source"] = "BACKEND"
+                result["retry_recommended"] = True
+                logger.warning(f"⚠️ {error_msg} (oc_id={oc_id})")
                 return result
 
-            oc_detalles = self._cargar_y_validar_detalles(oc_repo, oc_id, result)
-            if oc_detalles is None:
-                return result
-
-            warehouse_code = self._resolver_warehouse_code(oc_cabecera, oc_repo, oc_id, warehouse_code)
-
-            if not self._ejecutar_validaciones_oc(oc_cabecera, oc_detalles, oc_id, oc_repo, result):
-                return result
-
-            purchase_order_json = self._construir_json_sap(
-                oc_cabecera, oc_detalles, warehouse_code, oc_repo, oc_id, result
-            )
-            if purchase_order_json is None:
-                return result
-
-            logger.info(f"🔄 Enviando ODC {oc_id} a SAP Service Layer...")
-            envio_oc_result = self._enviar_oc_con_reintento(purchase_order_json)
-            sap_response = envio_oc_result.get("response")
-
-            if not sap_response or not sap_response.get("success"):
-                self._manejar_fallo_envio_sap(oc_id, sap_response, envio_oc_result, oc_repo, result)
-                return result
-
-            self._procesar_oc_exitosa(
-                oc_id, oc_cabecera, oc_detalles, sap_response, envio_oc_result, oc_repo, result,
-                tiendas_destino_filtro=tiendas_destino_filtro
-            )
-
-        except Exception as e:
-            error_msg = f"Error inesperado: {str(e)}"
-            result["error"] = error_msg
-            result["error_message"] = error_msg  # Alias para compatibilidad con frontend
-            result["error_source"] = "BACKEND"
-            result["retry_recommended"] = True
-            logger.error(f"❌ Error al enviar ODC a SAP: {e}", exc_info=True)
             try:
-                oc_repo.update_estado(
-                    oc_id, 
-                    "ERROR",
-                    respuesta_sap=error_msg,
-                    error_message=error_msg,
-                    error_source="BACKEND"
+                oc_cabecera = self._cargar_y_validar_cabecera(oc_repo, oc_id, result)
+                if oc_cabecera is None:
+                    return result
+
+                oc_detalles = self._cargar_y_validar_detalles(oc_repo, oc_id, result)
+                if oc_detalles is None:
+                    return result
+
+                warehouse_code = self._resolver_warehouse_code(oc_cabecera, oc_repo, oc_id, warehouse_code)
+
+                if not self._ejecutar_validaciones_oc(oc_cabecera, oc_detalles, oc_id, oc_repo, result):
+                    return result
+
+                purchase_order_json = self._construir_json_sap(
+                    oc_cabecera, oc_detalles, warehouse_code, oc_repo, oc_id, result
                 )
-            except Exception:
-                pass
+                if purchase_order_json is None:
+                    return result
+
+                logger.info(f"🔄 Enviando ODC {oc_id} a SAP Service Layer...")
+                envio_oc_result = self._enviar_oc_con_reintento(purchase_order_json)
+                sap_response = envio_oc_result.get("response")
+
+                if not sap_response or not sap_response.get("success"):
+                    self._manejar_fallo_envio_sap(oc_id, sap_response, envio_oc_result, oc_repo, result)
+                    return result
+
+                self._procesar_oc_exitosa(
+                    oc_id, oc_cabecera, oc_detalles, sap_response, envio_oc_result, oc_repo, result,
+                    tiendas_destino_filtro=tiendas_destino_filtro
+                )
+
+            except Exception as e:
+                error_msg = f"Error inesperado: {str(e)}"
+                result["error"] = error_msg
+                result["error_message"] = error_msg  # Alias para compatibilidad con frontend
+                result["error_source"] = "BACKEND"
+                result["retry_recommended"] = True
+                logger.error(f"❌ Error al enviar ODC a SAP: {e}", exc_info=True)
+                try:
+                    oc_repo.update_estado(
+                        oc_id,
+                        "ERROR",
+                        respuesta_sap=error_msg,
+                        error_message=error_msg,
+                        error_source="BACKEND"
+                    )
+                except Exception:
+                    pass
         return result
 
     def _validar_antes_de_crear_oc(
