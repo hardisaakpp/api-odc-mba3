@@ -344,31 +344,22 @@ def _obtener_cabecera_oc(oc_repo, oc_id: str, doc_num_po):
     return oc_cabecera, numero_oc_sap_cabecera
 
 
-def _enviar_emails_exito_sap(
-    pedido_id: str,
+def _enviar_email_despacho_odc(
     numero_pedido: str,
-    user_id: str,
-    resultado_redistribucion,
-    resumen,
     oc_cabecera,
     doc_num_po,
     doc_entry,
     solicitudes_para_response,
     numero_oc_sap_cabecera,
-):
-    """Envía los dos emails de confirmación tras un envío exitoso de ODC a SAP."""
-    try:
-        from src.utils.email_notifier import send_mabel_redistribucion_confirmacion_notification
-        send_mabel_redistribucion_confirmacion_notification(
-            pedido_id=pedido_id,
-            numero_pedido=numero_pedido,
-            usuario_mabel=user_id,
-            version_confirmada=resultado_redistribucion.get("version_confirmada"),
-            total_productos=resumen.total_productos if resumen else 0,
-            total_cantidad_ajustada=resumen.total_cantidad_ajustada if resumen else 0
-        )
-    except Exception:
-        pass
+) -> None:
+    """Envía el email de ODC/ST lista para despacho de UNA ODC puntual.
+
+    En un pedido mixto (2 ODC, una por bodega) se llama una vez por ODC -- ver
+    _paso3_enviar_odc_sap -- cada una con su propio doc_num/DocEntry/ST; antes solo se
+    enviaba para la primera ODC ("primera") y la segunda quedaba sin correo. No reenvía
+    la confirmación de redistribución (esa es a nivel de pedido, ver
+    _enviar_emails_exito_sap).
+    """
     try:
         from src.utils.email_notifier import send_oc_ready_for_dispatch_notification
         email_despacho_enviado = send_oc_ready_for_dispatch_notification(
@@ -393,6 +384,38 @@ def _enviar_emails_exito_sap(
             "⚠️ Error al enviar notificación de ODC/ST lista para despacho "
             f"(no crítico): {email_error}"
         )
+
+
+def _enviar_emails_exito_sap(
+    pedido_id: str,
+    numero_pedido: str,
+    user_id: str,
+    resultado_redistribucion,
+    resumen,
+    oc_cabecera,
+    doc_num_po,
+    doc_entry,
+    solicitudes_para_response,
+    numero_oc_sap_cabecera,
+):
+    """Envía los dos emails de confirmación tras un envío exitoso de ODC a SAP: la
+    confirmación de redistribución (a nivel de pedido) y el despacho de la primera ODC.
+    Para las ODC adicionales de un pedido mixto ver _enviar_email_despacho_odc."""
+    try:
+        from src.utils.email_notifier import send_mabel_redistribucion_confirmacion_notification
+        send_mabel_redistribucion_confirmacion_notification(
+            pedido_id=pedido_id,
+            numero_pedido=numero_pedido,
+            usuario_mabel=user_id,
+            version_confirmada=resultado_redistribucion.get("version_confirmada"),
+            total_productos=resumen.total_productos if resumen else 0,
+            total_cantidad_ajustada=resumen.total_cantidad_ajustada if resumen else 0
+        )
+    except Exception:
+        pass
+    _enviar_email_despacho_odc(
+        numero_pedido, oc_cabecera, doc_num_po, doc_entry, solicitudes_para_response, numero_oc_sap_cabecera
+    )
 
 
 def _enviar_una_odc_a_sap(oc_sap_service, oc_repo, odc: Dict[str, Any]) -> Dict[str, Any]:
@@ -522,6 +545,15 @@ def _paso3_enviar_odc_sap(
             primera["oc_cabecera"], primera["doc_num_po"], primera["doc_entry"],
             primera["solicitudes_transferencia"], primera["detalle"].numero_oc_sap
         )
+        # Pedido mixto: la confirmación de redistribución ya se envió arriba (es a nivel
+        # de pedido, no por ODC); cada ODC adicional necesita su propio correo de
+        # despacho con su propio doc_num/ST -- antes solo se enviaba el de "primera".
+        for envio_adicional in envios[1:]:
+            _enviar_email_despacho_odc(
+                numero_pedido, envio_adicional["oc_cabecera"], envio_adicional["doc_num_po"],
+                envio_adicional["doc_entry"], envio_adicional["solicitudes_transferencia"],
+                envio_adicional["detalle"].numero_oc_sap
+            )
         if len(envios) > 1:
             message_success = (
                 f"Proceso completado exitosamente. Pedido mixto: {len(envios)} ODC enviadas a SAP "

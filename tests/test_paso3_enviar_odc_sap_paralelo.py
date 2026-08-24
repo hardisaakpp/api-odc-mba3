@@ -92,3 +92,34 @@ def test_dos_odcs_usa_thread_pool_y_preserva_orden():
     assert resultado["response"].status == "success"
     envios_sap = resultado["response"].envios_sap
     assert [d.numero_oc_sap for d in envios_sap] == ["OC-oc-RL", "OC-oc-RG"]
+
+
+def test_dos_odcs_envia_email_despacho_para_cada_una():
+    """Regresión: solo se enviaba el correo de ODC/ST lista para despacho de la primera
+    ODC (_enviar_emails_exito_sap); la segunda ODC del pedido mixto no generaba correo."""
+    oc_repo = MagicMock()
+    oc_sap_service = MagicMock()
+    odcs = [_odc("oc-RL", "RL-CD"), _odc("oc-RG", "RG-CD")]
+
+    def fake_en_thread(odc):
+        doc_num = 1001 if odc["oc_id"] == "oc-RL" else 1002
+        return _envio_ok(odc["oc_id"], odc["resultado_odc"]["codigo_bodega"], doc_num)
+
+    with patch(
+        "src.endpoints.pedidos.redistribucion.endpoints_proceso._enviar_una_odc_a_sap_en_thread",
+        side_effect=fake_en_thread,
+    ), patch(
+        "src.endpoints.pedidos.redistribucion.endpoints_proceso._enviar_emails_exito_sap"
+    ) as mock_email_primera, patch(
+        "src.endpoints.pedidos.redistribucion.endpoints_proceso._enviar_email_despacho_odc"
+    ) as mock_email_adicional:
+        _paso3_enviar_odc_sap(oc_repo, oc_sap_service, odcs, **_args_comunes())
+
+    # La primera ODC va por el flujo de siempre (confirmación redistribución + despacho)
+    mock_email_primera.assert_called_once()
+    assert mock_email_primera.call_args.args[-1] == "OC-oc-RL"
+
+    # La segunda ODC solo necesita el correo de despacho, con SU PROPIO doc_num/numero_oc_sap
+    mock_email_adicional.assert_called_once()
+    assert mock_email_adicional.call_args.args[0] == "pedido prueba 1"
+    assert mock_email_adicional.call_args.args[-1] == "OC-oc-RG"
