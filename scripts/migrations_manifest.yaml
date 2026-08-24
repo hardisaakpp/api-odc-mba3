@@ -633,3 +633,10 @@ migrations:
     description: "tienda.marca (ROLAND/REGIONS/DESCUENTON), sincronizada desde sc_maestros.dbo.almacenes_local (u_marca por whs_code=tienda.codigo). Base para resolver a qué bodega (RL-CD/RG-CD/OUT-CD) pertenece cada tienda sin depender solo del prefijo del código. Requerimiento PYTD002 (2 ODC para pedidos que mezclan tiendas ROLAND y REGIONS)"
     category: "alter"
     dependencies: ["004"]
+
+  - version: "649"
+    name: "remove_correo_diferencia_pedido"
+    file: "migrations/remove_correo_diferencia_pedido.sql"
+    description: "Retira del catálogo el correo 'Diferencia en Pedido' (MABEL_TRADING, migración 644): se simplificó el flujo de confirmación para que los tres casos (Confirmar sin diferencia, Diferencia no será entregada, Confirmar y generar N pedidos con la diferencia) reutilicen un solo correo, 'Pedido Confirmado por El Rayo', enviado una vez para el pedido padre, en vez de un correo distinto por cada hijo generado. Se retira también send_diferencia_pedido_notification, _build_diferencia_pedido_email y su vista previa en el código, ya sin ningún endpoint que los invocara. orden_flujo=12 queda vacante"
+    category: "data"
+    dependencies: ["644"]
