@@ -16,7 +16,7 @@ from src.models import (
     RespuestaProveedorResponse
 )
 from .utils import validate_excel_file, get_user_id, MAX_FILE_SIZE
-from .pedidos_crud_helpers import calcular_diferencia_produccion
+from .pedidos_crud_helpers import calcular_diferencia_produccion, get_estado_id_from_pedido
 
 logger = logging.getLogger(__name__)
 
@@ -197,7 +197,10 @@ def _obtener_detalles_modificados(conn, pedido_id: str, resultado: Dict) -> int:
     return detalles_modificados
 
 
-def _enviar_email_segun_ambiente(pedido_id: str, numero_pedido, usuario_id, detalles_modificados: int):
+def _enviar_email_segun_ambiente(
+    pedido_id: str, numero_pedido, usuario_id, detalles_modificados: int,
+    numeros_pedido_hijo: Optional[List[str]] = None,
+):
     from src.utils.email_notifier_pedido import send_rayo_confirmacion_notification
     from src.config import EMAIL_PROVEEDOR_PRUEBAS, ENVIRONMENT
     if ENVIRONMENT == "development":
@@ -207,6 +210,7 @@ def _enviar_email_segun_ambiente(pedido_id: str, numero_pedido, usuario_id, deta
             usuario_rayo=usuario_id,
             detalles_modificados=detalles_modificados,
             email_destino=EMAIL_PROVEEDOR_PRUEBAS,
+            numeros_pedido_hijo=numeros_pedido_hijo,
         )
         destino_log = f"correo de prueba ({EMAIL_PROVEEDOR_PRUEBAS})"
     else:
@@ -215,14 +219,19 @@ def _enviar_email_segun_ambiente(pedido_id: str, numero_pedido, usuario_id, deta
             numero_pedido=numero_pedido,
             usuario_rayo=usuario_id,
             detalles_modificados=detalles_modificados,
+            numeros_pedido_hijo=numeros_pedido_hijo,
         )
         destino_log = "destinatarios MABEL_TRADING configurados"
     return email_enviado, destino_log
 
 
 def _enviar_email_confirmacion_rayo(
-    resultado: Dict, transicion_a_confirmado: bool, pedido_id: str, usuario_id
+    resultado: Dict, transicion_a_confirmado: bool, pedido_id: str, usuario_id,
+    numeros_pedido_hijo: Optional[List[str]] = None,
 ):
+    """numeros_pedido_hijo: números de los pedidos "hijo" generados con la diferencia
+    (solo lo pasa _handle_confirmar_con_diferencia); agrega la sección "Acción
+    Requerida" al correo guiando a MABEL TRADING a revisarlos en Cargar Plantilla."""
     if not (
         resultado.get("status") == "success"
         and resultado.get("confirmacion_registrada", False)
@@ -239,7 +248,8 @@ def _enviar_email_confirmacion_rayo(
                 numero_pedido = pedido_completo["cabecera"].get("numero_pedido", "N/A")
                 detalles_modificados = _obtener_detalles_modificados(conn, pedido_id, resultado)
                 email_enviado, destino_log = _enviar_email_segun_ambiente(
-                    pedido_id, numero_pedido, usuario_id, detalles_modificados
+                    pedido_id, numero_pedido, usuario_id, detalles_modificados,
+                    numeros_pedido_hijo=numeros_pedido_hijo,
                 )
                 if email_enviado:
                     logger.info(f"📧 Email de confirmación de El Rayo enviado a {destino_log} (Pedido: {numero_pedido})")
@@ -379,10 +389,15 @@ async def _handle_confirmar_con_diferencia(pedido_id: str, body: ConfirmarConDif
     normal de confirmación (igual que 'Diferencia no será entregada'/
     crear-respuesta-desde-pedido, una sola vez) y además se crea un pedido hijo por
     cada elemento de body.hijos, cada uno en estado PRODUCCION POSPUESTA con la
-    porción de la diferencia y la fecha de entrega que le correspondan."""
+    porción de la diferencia y la fecha de entrega que le correspondan.
+
+    La notificación de confirmación reutiliza el mismo correo "Pedido Confirmado por
+    El Rayo" (_enviar_email_confirmacion_rayo) que usan los otros dos casos de
+    confirmación, una sola vez para el pedido padre -- en vez de un correo "Diferencia
+    en Pedido" separado por cada hijo generado."""
     from src.database.services.pedido_proveedor_web_service import PedidoProveedorWebService
+    from src.database.pedido_estados import ESTADO_REDISTRIBUCION
     from src.utils.audit_context import get_audit_context, ORIGEN_WEB
-    from src.utils.email_notifier import send_diferencia_pedido_notification
 
     usuario_id = get_user_id(user)
     audit = get_audit_context(request, user, origen=ORIGEN_WEB)
@@ -400,6 +415,9 @@ async def _handle_confirmar_con_diferencia(pedido_id: str, body: ConfirmarConDif
 
     _validar_reparto_diferencia(diferencia["detalles"], body.hijos)
 
+    estado_id_antes = get_estado_id_from_pedido(pedido_padre)
+    transicion_a_confirmado = estado_id_antes is not None and estado_id_antes != ESTADO_REDISTRIBUCION
+
     try:
         web_service = PedidoProveedorWebService()
         resultado_confirmacion = await asyncio.to_thread(
@@ -412,7 +430,6 @@ async def _handle_confirmar_con_diferencia(pedido_id: str, body: ConfirmarConDif
         raise HTTPException(status_code=400, detail=str(e))
 
     diferencia_por_detalle_id = {d["pedido_detalle_id"]: d for d in diferencia["detalles"]}
-    cab_padre = pedido_padre["cabecera"]
     resultados_hijos: List[Dict] = []
 
     for hijo_req in body.hijos:
@@ -439,20 +456,10 @@ async def _handle_confirmar_con_diferencia(pedido_id: str, body: ConfirmarConDif
         )
         resultados_hijos.append(resultado_hijo)
 
-        try:
-            await asyncio.to_thread(
-                send_diferencia_pedido_notification,
-                pedido_id=pedido_id,
-                numero_pedido=cab_padre.get("numero_pedido"),
-                numero_pedido_hijo=resultado_hijo["numero_pedido"],
-                usuario_id=usuario_id,
-                detalles_diferencia=[
-                    {**diferencia_por_detalle_id[d["pedido_detalle_id"]], "diferencia": d["diferencia"]}
-                    for d in detalles_para_hijo
-                ],
-            )
-        except Exception as email_err:
-            logger.warning(f"⚠️ Error al enviar email de diferencia en pedido (no crítico): {email_err}")
+    await asyncio.to_thread(
+        _enviar_email_confirmacion_rayo, resultado_confirmacion, transicion_a_confirmado, pedido_id, usuario_id,
+        numeros_pedido_hijo=[r["numero_pedido"] for r in resultados_hijos] or None,
+    )
 
     logger.info(
         f"✅ Pedido {pedido_id} confirmado con diferencia por usuario {user.get('username', 'UNKNOWN')}; "
@@ -549,11 +556,15 @@ def register_proveedor_endpoints(app: FastAPI):
         """
         Req. 1.2 (pedidos parciales, + N hijos): opción "Confirmar pedido, generar
         nuevo pedido con la diferencia" del modal de diferencia de producción. Confirma
-        el pedido padre una sola vez (mismo flujo que crear-respuesta-desde-pedido) y
-        crea uno o más pedidos hijo (numero_pedido = "<padre>.NN"), cada uno con la
-        porción de la diferencia y la fecha de entrega indicadas en body.hijos, en
-        estado PRODUCCION POSPUESTA, notificando por correo a MABEL_TRADING por cada
-        hijo creado. El reparto entre hijos debe cubrir exactamente el 100% de cada
-        línea con diferencia (400 "reparto_invalido" si no cuadra).
+        el pedido padre una sola vez (mismo flujo que crear-respuesta-desde-pedido,
+        notificando por correo a MABEL_TRADING con "Pedido Confirmado por El Rayo",
+        igual que los otros dos casos de confirmación) y crea uno o más pedidos hijo
+        (numero_pedido = "<padre>.NN"), cada uno con la porción de la diferencia y la
+        fecha de entrega indicadas en body.hijos, en estado PRODUCCION POSPUESTA. El
+        reparto entre hijos debe cubrir exactamente el 100% de cada línea con
+        diferencia (400 "reparto_invalido" si no cuadra). A diferencia de los otros dos
+        casos, este correo incluye además una sección "Acción Requerida" con un enlace
+        por cada pedido hijo generado, guiando a MABEL TRADING a revisarlos en Cargar
+        Plantilla y decidir Aceptar/Rechazar.
         """
         return await _handle_confirmar_con_diferencia(pedido_id, body, request, user)
