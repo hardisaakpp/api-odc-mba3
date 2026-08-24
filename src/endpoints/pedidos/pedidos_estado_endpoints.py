@@ -20,7 +20,6 @@ from src.database.pedido_estados import (
     ESTADO_DESPACHAR_Y_FACTURAR,
     ESTADO_FINALIZADO,
     ESTADO_CONFIRMADO_POR_PRODUCCION,
-    ESTADO_PRODUCCION_POSPUESTA,
 )
 from src.security.jwt_auth import verify_jwt_token, require_any_permission, require_permission
 from src.utils.audit_context import get_audit_context, ORIGEN_WEB
@@ -50,7 +49,7 @@ def _obtener_pedido_completo_o_404(repo: PedidoRepository, pedido_id: str) -> Di
     return pedido
 
 
-def _db_marcar_pedido_gestionar(pedido_id: str, audit, es_produccion_elrayo: bool):
+def _db_marcar_pedido_gestionar(pedido_id: str, audit):
     """Consulta/actualización bloqueante (pyodbc); se ejecuta vía asyncio.to_thread."""
     with get_db_connection_context() as conn:
         repo = PedidoRepository(conn)
@@ -58,15 +57,6 @@ def _db_marcar_pedido_gestionar(pedido_id: str, audit, es_produccion_elrayo: boo
         estado_id = get_estado_id_from_pedido(pedido)
 
         if estado_id == ESTADO_NUEVO_PEDIDO:
-            repo.update_estado(pedido_id, ESTADO_GESTIONAR_PEDIDO, audit_context=audit)
-            pedido = _obtener_pedido_completo_o_404(repo, pedido_id)
-        elif estado_id == ESTADO_PRODUCCION_POSPUESTA and es_produccion_elrayo:
-            # Req. 1.2: Producción El Rayo retoma un pedido "hijo" pospuesto (mismo botón
-            # "Ver Detalle" que ya usan todos los roles) -> pasa directo a GESTIONAR_PEDIDO,
-            # sin pasar de nuevo por NUEVO_PEDIDO (ya tuvo su propio ciclo de creación).
-            # Restringido a produccion-elrayo.view: GESTIONAR_PEDIDO es exclusivo de ese
-            # perfil (req. 1.8 segunda fase) -- si odcsap.view lo abriera, la transición lo
-            # dejaría fuera de su propio listado y sin poder volver a acceder al detalle.
             repo.update_estado(pedido_id, ESTADO_GESTIONAR_PEDIDO, audit_context=audit)
             pedido = _obtener_pedido_completo_o_404(repo, pedido_id)
 
@@ -77,10 +67,9 @@ def _db_marcar_pedido_gestionar(pedido_id: str, audit, es_produccion_elrayo: boo
 
 async def _logic_marcar_pedido_gestionar(pedido_id: str, request: Request, user: Dict):
     audit = get_audit_context(request, user, origen=ORIGEN_WEB)
-    es_produccion_elrayo = PERM_PRODUCCION_ELRAYO_VIEW in (user.get("permissions") or [])
     try:
         pedido, estado_id = await asyncio.to_thread(
-            _db_marcar_pedido_gestionar, pedido_id, audit, es_produccion_elrayo
+            _db_marcar_pedido_gestionar, pedido_id, audit
         )
 
         # 📢 Notificación SSE: mismo permiso (otros EL RAYO) + MABEL cuando EL RAYO abre el pedido.
