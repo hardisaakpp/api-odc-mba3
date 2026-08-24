@@ -283,8 +283,19 @@ SAP_ODC_RETRY_MAX_JITTER_SECONDS = max(0.0, float(os.getenv("SAP_ODC_RETRY_MAX_J
 # no alcanza a esperar el job, sobre todo en la primera consulta tras levantar el
 # middleware (sesión/caché fríos). Sin este retry externo, la prevalidación fallaba con
 # "SAP saturado" en el primer intento y solo funcionaba si el usuario reintentaba a mano.
-SAP_PREVALIDACION_RETRY_MAX_ATTEMPTS = max(1, int(os.getenv("SAP_PREVALIDACION_RETRY_MAX_ATTEMPTS", "3")))
-SAP_PREVALIDACION_RETRY_BASE_DELAY_SECONDS = max(0.1, float(os.getenv("SAP_PREVALIDACION_RETRY_BASE_DELAY_SECONDS", "3.0")))
+#
+# 3 intentos / 3s base (backoff exponencial: 3s, 6s ≈ 9-11s totales antes de rendirse)
+# seguían sin alcanzar ese umbral de 15s en la práctica -- el primer envío de cualquier
+# pedido nuevo casi siempre fallaba con "SAP saturado" y solo funcionaba al reintentar
+# manualmente unos segundos/minutos después (jobs ya resueltos y cacheados en el
+# middleware). Subido a 5 intentos / 5s base (esperas de ~5s, 10s, 20s, 40s ≈ 75s
+# acumulados) para que el propio reintento automático cruce el ciclo de 15s del
+# middleware sin necesitar intervención manual. Es aceptable porque el envío corre en
+# Celery (asíncrono, no bloquea la UI); reintentos ya resueltos responden al instante
+# vía el cache de job_en_curso en Redis, así que el costo real no escala linealmente
+# con los intentos.
+SAP_PREVALIDACION_RETRY_MAX_ATTEMPTS = max(1, int(os.getenv("SAP_PREVALIDACION_RETRY_MAX_ATTEMPTS", "5")))
+SAP_PREVALIDACION_RETRY_BASE_DELAY_SECONDS = max(0.1, float(os.getenv("SAP_PREVALIDACION_RETRY_BASE_DELAY_SECONDS", "5.0")))
 SAP_PREVALIDACION_RETRY_MAX_JITTER_SECONDS = max(0.0, float(os.getenv("SAP_PREVALIDACION_RETRY_MAX_JITTER_SECONDS", "1.0")))
 
 # ============================================================================
