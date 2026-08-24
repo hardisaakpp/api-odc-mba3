@@ -1507,17 +1507,23 @@ class StockTransferService:
     def _notificar_st_creadas_en_reintento(
         oc_id: str,
         oc_cabecera: Dict[str, Any],
-        resultado_st: Dict[str, Any],
+        resumen_completo: Dict[str, Any],
         pedido_numero: Optional[str],
         origen: str,
     ) -> None:
         """
-        Notifica a El Rayo (+ MABEL TRADING) los códigos de ST recién creados en un reintento.
+        Notifica a El Rayo (+ MABEL TRADING) el estado de TODAS las Solicitudes de
+        Transferencia de la OC (envío original + todos los reintentos), no solo las
+        de este reintento puntual.
 
         Mismo correo que el envío original (send_oc_ready_for_dispatch_notification):
         el flujo inicial solo lo dispara una vez al crear la ODC, así que sin esto,
         las ITR que se crean recién en un reintento (manual o automático) nunca
-        llegaban a El Rayo con sus códigos.
+        llegaban a El Rayo con sus códigos. Usa el resumen agregado (todos los
+        batches) en vez del resultado de este reintento en particular -- si no, el
+        correo del reintento solo mostraba las tiendas recién reprocesadas y las que
+        ya habían tenido éxito en el envío original desaparecían del correo más
+        reciente que ve El Rayo.
         """
         from src.utils.email_notifier import send_oc_ready_for_dispatch_notification
 
@@ -1526,7 +1532,7 @@ class StockTransferService:
                 oc_cabecera=oc_cabecera,
                 doc_num=oc_cabecera.get("numero_oc_sap"),
                 doc_entry=oc_cabecera.get("doc_entry"),
-                solicitudes_transferencia=resultado_st,
+                solicitudes_transferencia=resumen_completo,
                 pedido_numero=pedido_numero,
             )
             if enviado:
@@ -1616,7 +1622,9 @@ class StockTransferService:
         )
 
         if resultado_st.get("transferencias_creadas", 0) > 0:
-            self._notificar_st_creadas_en_reintento(oc_id, oc_cabecera, resultado_st, pedido_numero, origen)
+            with get_db_connection_context() as conn_resumen:
+                resumen_completo = SolicitudTransferenciaRepository(conn_resumen).get_resumen_agregado_por_oc_id(oc_id)
+            self._notificar_st_creadas_en_reintento(oc_id, oc_cabecera, resumen_completo, pedido_numero, origen)
 
         if resultado_st.get("tiendas_en_cola"):
             status = "en_cola"

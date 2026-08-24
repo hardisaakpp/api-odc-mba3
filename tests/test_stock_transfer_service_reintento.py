@@ -141,6 +141,43 @@ class TestReintentarPendientes:
         assert resultado["tiendas_count"] == 1
         mock_notificar.assert_called_once()
 
+    def test_notificacion_usa_resumen_agregado_no_solo_el_reintento(self):
+        """
+        Bug real: el correo de despacho tras un reintento solo mostraba las tiendas
+        recién reprocesadas (ej. 2 de 5), y las que ya habían tenido éxito en el
+        envío original (ej. las otras 3) desaparecían del correo más reciente que
+        ve El Rayo. _notificar_st_creadas_en_reintento debe recibir el resumen
+        agregado de TODOS los batches, no el resultado parcial de este reintento.
+        """
+        oc_repo = MagicMock()
+        oc_repo.get_existing_cabecera.return_value = {
+            "estado": "ENVIADA", "pedido_id": "pedido-1",
+            "codigo_bodega": "RL-CD", "numero_oc_sap": "555",
+        }
+        st_repo = MagicMock()
+        st_repo.get_tiendas_pendientes_reintento_st.return_value = ["TRL-QSN", "TRL-PSC"]
+        resumen_agregado_completo = {
+            "total_tiendas": 5, "transferencias_creadas": 5, "transferencias_errores": 0,
+            "resultados": [{"tienda_codigo": f"T{i}", "success": True} for i in range(5)],
+        }
+        st_repo.get_resumen_agregado_por_oc_id.return_value = resumen_agregado_completo
+        service = _service()
+        with self._mock_conn_context(oc_repo, st_repo):
+            with patch.object(
+                service, "crear_solicitudes_transferencia_desde_pedido",
+                # Resultado parcial de este reintento: solo las 2 tiendas reprocesadas.
+                return_value={"success": True, "transferencias_creadas": 2},
+            ), patch.object(
+                service, "_notificar_st_creadas_en_reintento"
+            ) as mock_notificar:
+                service.reintentar_pendientes("oc-1", "user1")
+
+        mock_notificar.assert_called_once()
+        args, _ = mock_notificar.call_args
+        resumen_pasado_al_correo = args[2]
+        assert resumen_pasado_al_correo == resumen_agregado_completo
+        assert resumen_pasado_al_correo["total_tiendas"] == 5
+
     def test_reintento_parcial_si_crear_st_falla(self):
         oc_repo = MagicMock()
         oc_repo.get_existing_cabecera.return_value = {
