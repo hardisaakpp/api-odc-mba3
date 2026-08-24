@@ -221,6 +221,141 @@ class TestReintentarPendientes:
         mock_notificar.assert_not_called()
 
 
+class TestReevaluarCierrePedidoTrasReintento:
+    """
+    Bug real (pedido PDES-08.26.2026.XM, 21/08/2026): la ODC se enviaba bien y el
+    primer intento de ST fallaba, dejando el pedido en PENDIENTE_LOGISTICA; un
+    reintento de ST posterior tenía éxito, pero como reintentar_pendientes() nunca
+    volvía a llamar a cerrar_pedido_si_corresponde, el pedido quedaba congelado en
+    PENDIENTE_LOGISTICA para siempre aunque en SAP ya estuviera todo correctamente
+    enviado. Hubo que corregirlo manualmente en BD.
+    """
+
+    def test_reintento_exitoso_dispara_reevaluacion_de_cierre(self):
+        oc_repo = MagicMock()
+        oc_repo.get_existing_cabecera.return_value = {
+            "estado": "ENVIADA", "pedido_id": "pedido-1",
+            "codigo_bodega": "OUT-CD", "numero_oc_sap": "1201916",
+        }
+        st_repo = MagicMock()
+        st_repo.get_tiendas_pendientes_reintento_st.return_value = ["TOUT-REC"]
+        st_repo.get_resumen_agregado_por_oc_id.return_value = {
+            "total_tiendas": 1, "transferencias_creadas": 1, "transferencias_errores": 0,
+            "resultados": [{"tienda_codigo": "TOUT-REC", "success": True}],
+        }
+        service = _service()
+        with TestReintentarPendientes._mock_conn_context(oc_repo, st_repo):
+            with patch.object(
+                service, "crear_solicitudes_transferencia_desde_pedido",
+                return_value={"success": True, "transferencias_creadas": 1},
+            ), patch.object(
+                service, "_notificar_st_creadas_en_reintento"
+            ), patch(
+                "src.database.services.pedido_cierre_service.PedidoCierreService"
+            ) as mock_cierre_cls:
+                mock_cierre = mock_cierre_cls.return_value
+                mock_cierre.cerrar_pedido_si_corresponde.return_value = {
+                    "cerrado": True, "estado_anterior": "PENDIENTE_LOGISTICA",
+                    "estado_nuevo": "CONFIRMADO_ENVIADO",
+                }
+                resultado = service.reintentar_pendientes("oc-1", "user1")
+
+        assert resultado["status"] == "success"
+        mock_cierre.cerrar_pedido_si_corresponde.assert_called_once()
+        _, kwargs = mock_cierre.cerrar_pedido_si_corresponde.call_args
+        assert kwargs["pedido_id"] == "pedido-1"
+        assert kwargs["resultado_st"]["success"] is True
+        assert kwargs["resultado_st"]["transferencias_errores"] == 0
+
+    def test_reintento_aun_con_errores_igual_reevalua_pero_no_fuerza_exito(self):
+        oc_repo = MagicMock()
+        oc_repo.get_existing_cabecera.return_value = {
+            "estado": "ENVIADA", "pedido_id": "pedido-1", "codigo_bodega": "OUT-CD",
+        }
+        st_repo = MagicMock()
+        st_repo.get_tiendas_pendientes_reintento_st.return_value = ["TOUT-REC", "TOUT-BMB"]
+        st_repo.get_resumen_agregado_por_oc_id.return_value = {
+            "total_tiendas": 2, "transferencias_creadas": 1, "transferencias_errores": 1,
+            "resultados": [
+                {"tienda_codigo": "TOUT-REC", "success": True},
+                {"tienda_codigo": "TOUT-BMB", "success": False, "error": "conexión"},
+            ],
+        }
+        service = _service()
+        with TestReintentarPendientes._mock_conn_context(oc_repo, st_repo):
+            with patch.object(
+                service, "crear_solicitudes_transferencia_desde_pedido",
+                return_value={"success": False, "transferencias_creadas": 1},
+            ), patch.object(
+                service, "_notificar_st_creadas_en_reintento"
+            ), patch(
+                "src.database.services.pedido_cierre_service.PedidoCierreService"
+            ) as mock_cierre_cls:
+                mock_cierre = mock_cierre_cls.return_value
+                mock_cierre.cerrar_pedido_si_corresponde.return_value = {
+                    "cerrado": False, "estado_anterior": "PENDIENTE_LOGISTICA",
+                    "estado_nuevo": "PENDIENTE_LOGISTICA",
+                }
+                resultado = service.reintentar_pendientes("oc-1", "user1")
+
+        assert resultado["status"] == "partial"
+        mock_cierre.cerrar_pedido_si_corresponde.assert_called_once()
+        _, kwargs = mock_cierre.cerrar_pedido_si_corresponde.call_args
+        assert kwargs["resultado_st"]["success"] is False
+
+    def test_tiendas_en_cola_no_dispara_reevaluacion(self):
+        """Si el job SAP sigue en curso no hay nada definitivo que reevaluar todavía."""
+        oc_repo = MagicMock()
+        oc_repo.get_existing_cabecera.return_value = {
+            "estado": "ENVIADA", "pedido_id": "pedido-1", "codigo_bodega": "OUT-CD",
+        }
+        st_repo = MagicMock()
+        st_repo.get_tiendas_pendientes_reintento_st.return_value = ["TOUT-REC"]
+        service = _service()
+        with TestReintentarPendientes._mock_conn_context(oc_repo, st_repo):
+            with patch.object(
+                service, "crear_solicitudes_transferencia_desde_pedido",
+                return_value={
+                    "success": True, "transferencias_creadas": 0,
+                    "tiendas_en_cola": ["TOUT-REC"],
+                },
+            ), patch.object(
+                service, "_notificar_st_creadas_en_reintento"
+            ), patch(
+                "src.database.services.pedido_cierre_service.PedidoCierreService"
+            ) as mock_cierre_cls:
+                resultado = service.reintentar_pendientes("oc-1", "user1")
+
+        assert resultado["status"] == "en_cola"
+        mock_cierre_cls.return_value.cerrar_pedido_si_corresponde.assert_not_called()
+
+    def test_error_al_reevaluar_no_rompe_la_respuesta_del_reintento(self):
+        """No crítico: un fallo al reevaluar el cierre no debe tumbar la respuesta
+        del reintento de ST, que ya reporta su propio resultado real."""
+        oc_repo = MagicMock()
+        oc_repo.get_existing_cabecera.return_value = {
+            "estado": "ENVIADA", "pedido_id": "pedido-1", "codigo_bodega": "OUT-CD",
+        }
+        st_repo = MagicMock()
+        st_repo.get_tiendas_pendientes_reintento_st.return_value = ["TOUT-REC"]
+        # transferencias_creadas=0 evita la llamada a get_resumen_agregado_por_oc_id
+        # del bloque de notificación (no es lo que este test cubre); el side_effect
+        # solo debe afectar la llamada que hace _reevaluar_cierre_pedido_tras_reintento.
+        st_repo.get_resumen_agregado_por_oc_id.side_effect = Exception("boom")
+        service = _service()
+        with TestReintentarPendientes._mock_conn_context(oc_repo, st_repo):
+            with patch.object(
+                service, "crear_solicitudes_transferencia_desde_pedido",
+                return_value={"success": True, "transferencias_creadas": 0},
+            ), patch.object(
+                service, "_notificar_st_creadas_en_reintento"
+            ) as mock_notificar:
+                resultado = service.reintentar_pendientes("oc-1", "user1")
+
+        assert resultado["status"] == "success"
+        mock_notificar.assert_not_called()
+
+
 class TestNotificarStCreadasEnReintento:
     """
     Cubre el vacío detectado: antes de esto, El Rayo solo recibía los códigos de ST

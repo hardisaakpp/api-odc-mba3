@@ -1636,6 +1636,7 @@ class StockTransferService:
         else:
             status = "success" if resultado_st.get("success") else "partial"
             message = "Reintento ST ejecutado."
+            self._reevaluar_cierre_pedido_tras_reintento(pedido_id, oc_id)
 
         return {
             "status": status,
@@ -1646,3 +1647,54 @@ class StockTransferService:
             "tiendas_count": len(tiendas_objetivo),
             "resultado_st": resultado_st,
         }
+
+    @staticmethod
+    def _reevaluar_cierre_pedido_tras_reintento(pedido_id: str, oc_id: str) -> None:
+        """
+        Tras un reintento de ST (manual o automático), vuelve a evaluar si el pedido ya
+        puede cerrarse (ver PedidoCierreService.cerrar_pedido_si_corresponde).
+
+        cerrar_pedido_si_corresponde solo se invocaba desde el envío original de la ODC
+        (oc_sap_service.enviar_oc_a_sap); un reintento posterior de ST nunca lo volvía a
+        llamar, así que un pedido cuyo primer intento de ST fallara pero un reintento
+        posterior tuviera éxito quedaba congelado en PENDIENTE_LOGISTICA/
+        ERROR_DATOS_MAESTROS para siempre, aunque en SAP la OC y la ST ya estuvieran
+        correctamente enviadas (bug real, pedido PDES-08.26.2026.XM, 21/08/2026).
+
+        Usa el resumen agregado de TODOS los batches de ST de la OC (no solo este
+        reintento), para que el cierre vea el estado acumulado real.
+
+        No crítico: si falla, solo se registra el warning -- no debe romper la
+        respuesta del reintento de ST, que ya reporta su propio resultado.
+        """
+        from .pedido_cierre_service import PedidoCierreService
+
+        try:
+            with get_db_connection_context() as conn:
+                st_repo = SolicitudTransferenciaRepository(conn)
+                resumen = st_repo.get_resumen_agregado_por_oc_id(oc_id)
+                total_tiendas = resumen.get("total_tiendas", 0)
+                transferencias_errores = resumen.get("transferencias_errores", 0)
+                resultado_st_para_cierre = {
+                    "success": total_tiendas > 0 and transferencias_errores == 0,
+                    "transferencias_creadas": resumen.get("transferencias_creadas", 0),
+                    "transferencias_errores": transferencias_errores,
+                    "total_tiendas": total_tiendas,
+                    "resultados": resumen.get("resultados", []),
+                }
+                resultado_cierre = PedidoCierreService().cerrar_pedido_si_corresponde(
+                    pedido_id=str(pedido_id),
+                    oc_repo=OrdenCompraRepository(conn),
+                    pedido_repo=PedidoRepository(conn),
+                    resultado_st=resultado_st_para_cierre,
+                )
+                if resultado_cierre.get("estado_nuevo"):
+                    logger.info(
+                        f"📋 Pedido {pedido_id} reevaluado tras reintento ST de OC {oc_id[:8]}...: "
+                        f"{resultado_cierre.get('estado_anterior')} → {resultado_cierre.get('estado_nuevo')}"
+                    )
+        except Exception as e:
+            logger.warning(
+                f"⚠️ No se pudo reevaluar cierre del pedido {pedido_id} tras reintento "
+                f"ST de OC {oc_id}: {e}"
+            )

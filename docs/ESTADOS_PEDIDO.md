@@ -162,3 +162,49 @@ La visibilidad del botón **"Reintentar envío ODC a SAP"** se calcula en backen
 
 - Caídas / timeouts / problemas de conexión con Service Layer.
 - `Código SAP: -1116` (Presupuesto excedido RL).
+
+---
+
+## Cierre del pedido tras ODC + ST (`PedidoCierreService`)
+
+`PedidoCierreService.cerrar_pedido_si_corresponde` es la única función que decide si un
+pedido pasa a `CONFIRMADO_ENVIADO` (12), o se queda en `PENDIENTE_LOGISTICA` (13) /
+`ERROR_DATOS_MAESTROS` (14) — ver `src/database/services/pedido_cierre_service.py`.
+
+⭐ Regla:
+- Todas las ODC del pedido `ENVIADA` + ST exitosas → `CONFIRMADO_ENVIADO`.
+- ODC `ENVIADA` pero alguna ST falló → `PENDIENTE_LOGISTICA` (o `ERROR_DATOS_MAESTROS` si
+  el fallo es por datos maestros en SAP).
+- Alguna ODC no está `ENVIADA` (pendiente o en error) → no se toca el estado del pedido.
+
+Se invoca desde:
+- El envío original de la ODC (`oc_sap_service.enviar_oc_a_sap` → `_cerrar_pedido_desde_resultado_oc`).
+- Cualquier reintento de ST — manual (`POST /ordenes-compra/{oc_id}/reintentar-st`) o
+  automático (`celery_reconciliar_transferencias`) — ambos pasan por
+  `StockTransferService.reintentar_pendientes`, que al final vuelve a evaluar el cierre
+  con `_reevaluar_cierre_pedido_tras_reintento`, usando el resumen agregado de **todos**
+  los batches de ST de la ODC (no solo el último intento).
+
+**Importante:** `PENDIENTE_LOGISTICA` / `ERROR_DATOS_MAESTROS` no son estados
+permanentes — si un reintento de ST posterior tiene éxito, el pedido debe pasar a
+`CONFIRMADO_ENVIADO` automáticamente. (Bug real corregido el 24/08/2026: antes de agregar
+la llamada anterior, un reintento exitoso de ST no volvía a evaluar el cierre del pedido,
+así que quedaba congelado en `PENDIENTE_LOGISTICA` para siempre aunque en SAP la ODC y la
+ST ya estuvieran correctamente enviadas — caso real: pedido `PDES-08.26.2026.XM`, hubo que
+corregirlo manualmente en BD.)
+
+### Reintento de Solicitud de Transferencia (ST/ITR)
+
+El botón **"Reintentar ST"** (distinto del botón de reintento de ODC de la sección
+anterior) se calcula en `_enrich_oc_actions` (`src/endpoints/ordenes_compra.py`):
+
+```
+mostrar_reintentar_st = estado == "ENVIADA" and pendientes > 0
+```
+
+`pendientes` viene de `SolicitudTransferenciaRepository.get_st_pendiente_reintento_count`,
+que cuenta tiendas en `Error`/`Encolada` del último batch de ST (con fallback al
+`resultado_json` de la cabecera si no hay filas de detalle). Si la ST ya se reintentó con
+éxito, `pendientes = 0` y el botón desaparece — es el comportamiento correcto una vez
+resuelto, no un bug (fácil de confundir con el caso anterior: revisar primero si la ST ya
+tuvo éxito en un intento posterior antes de asumir que el botón "debería" aparecer).
