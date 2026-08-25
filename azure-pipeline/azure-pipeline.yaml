@@ -18,6 +18,10 @@ pool:
 
 variables:
   - group: acr-credentials
+  - name: buildConfiguration
+    value: 'Release'
+  - name: pythonVersion
+    value: '3.10'
   - name: imageName
     value: 'dockermg-g9hrgcc4etdrh8eg.azurecr.io/api-odc-mba3'
   - name: dockerfilePath
@@ -40,95 +44,115 @@ variables:
 
 stages:
 # =====================================================================
-# ETAPA 1: VALIDACIÓN DE CÓDIGO (CI Puro para Python)
+# ETAPA 1: VALIDACIÓN DE CÓDIGO Y PRUEBAS (CI Puro para Python)
 # =====================================================================
 - stage: CI_Code_Quality
-  displayName: 'Integración Continua - Calidad de Código'
+  displayName: 'Integración Continua - Calidad y Pruebas'
   jobs:
-  - job: Validar_Codigo
-    displayName: 'Validación de Sintaxis Python'
+  - job: Validar_Y_Probar
+    displayName: 'Revisión y Pruebas Unitarias'
     steps:
+    
+    # 1. (Omitido) El agente Self-Hosted usa python3 nativo de Ubuntu
+
+    # 2. Restaurar dependencias (Se usa Virtual Environment para cumplir PEP 668)
     - script: |
-        set -euo pipefail
+        python3 -m venv .venv
+        source .venv/bin/activate
+        python3 -m pip install --upgrade pip
+        python3 -m pip install -r requirements-dev.txt || python3 -m pip install -r requirements.txt
+      displayName: 'Restore dependencies'
+
+    # 3. Validación de sintaxis
+    - script: |
+        source .venv/bin/activate
         echo "Validando sintaxis de Python..."
         find src -name "*.py" -exec python3 -m py_compile {} +
       displayName: 'Validación de sintaxis'
 
+    # 4. Pruebas Unitarias (DESACTIVADAS TEMPORALMENTE)
+    # - script: |
+    #     pytest tests/ --junitxml=junit/test-results.xml
+    #   displayName: 'Run Unit Tests'
+    # - task: PublishTestResults@2
+    #   inputs:
+    #     testResultsFormat: 'JUnit'
+    #     testResultsFiles: '**/test-results.xml'
+    #   displayName: 'Publicar resultados de pruebas'
+
 # =====================================================================
-# ETAPA 2: CONSTRUCCIÓN Y PUBLICACIÓN EN AZURE (Docker)
+# ETAPA 2: CONSTRUCCIÓN Y PUBLICACIÓN EN AZURE CONTAINER REGISTRY
 # =====================================================================
 - stage: Build_Docker
   displayName: 'Construcción de Imagen Docker'
   dependsOn: CI_Code_Quality
+  # Bloqueo: Solo construye Docker si la Etapa 1 pasó Y si no estamos en rama feature/fix
   condition: and(succeeded(), ne(variables.envTag, 'none'))
   jobs:
   - job: BuildAndPush
     displayName: 'Build & Push Docker Azure'
     steps:
-    # Login a ACR (Manteniendo tu método, pero con pipefail para seguridad)
-    - script: |
-        set -euo pipefail
-        echo "$(acrPassword)" | docker login dockermg-g9hrgcc4etdrh8eg.azurecr.io -u $(acrUsername) --password-stdin
-      displayName: 'Login a ACR'
 
-    # Build y Push con robustez
-    - script: |
+    # [ESTANDARIZACIÓN 1]: Autenticación segura, Build y Push
+    - bash: |
         set -euo pipefail
-        echo "1. Construyendo la imagen de Docker para api-odc-mba3 ($(envTag))..."
-        docker build -f $(dockerfilePath) \
-          -t $(imageName):$(uniqueTag) \
-          -t $(imageName):$(envTag) .
+        
+        echo "=== 1. Autenticando en Azure Container Registry ==="
+        printf '%s' "$ACR_PASSWORD" | docker login dockermg-g9hrgcc4etdrh8eg.azurecr.io -u "$ACR_USERNAME" --password-stdin
 
-        echo "2. Subiendo imágenes al registro corporativo en la nube..."
-        docker push $(imageName):$(uniqueTag)
-        docker push $(imageName):$(envTag)
+        echo "=== 2. Construyendo imagen Docker para la API api-odc-mba3 ($ENV_TAG) ==="
+        docker build -f $DOCKERFILE_PATH \
+          -t $IMAGE_NAME:$UNIQUE_TAG \
+          -t $IMAGE_NAME:$ENV_TAG \
+          $(Build.SourcesDirectory)
+          
+        echo "=== 3. Subiendo imágenes al registro corporativo en la nube ==="
+        docker push $IMAGE_NAME:$UNIQUE_TAG
+        docker push $IMAGE_NAME:$ENV_TAG
       displayName: 'Empaquetar y Almacenar Contenedor en Azure'
+      env:
+        ACR_USERNAME: $(acrUsername)
+        ACR_PASSWORD: $(acrPassword)
+        ENV_TAG: $(envTag)
+        UNIQUE_TAG: $(uniqueTag)
+        IMAGE_NAME: $(imageName)
+        DOCKERFILE_PATH: $(dockerfilePath)
 
-    # Limpieza
-    - script: |
+    # [ESTANDARIZACIÓN 2]: Generación del artefacto de texto inmutable
+    - bash: |
         set -euo pipefail
-        docker rmi $(imageName):$(uniqueTag) $(imageName):$(envTag) || true
-        docker image prune -f
-      displayName: 'Limpiar imágenes locales'
-      condition: always()
+        mkdir -p $(Build.ArtifactStagingDirectory)/deploy-info
+        echo "$(uniqueTag)" > $(Build.ArtifactStagingDirectory)/deploy-info/image-tag.txt
+        echo "Tag publicado para CD: $(uniqueTag)"
+      displayName: 'Generar metadata de despliegue'
 
-# =====================================================================
-# ETAPA 3: PUBLICAR ARTEFACTO DE DESPLIEGUE (El puente al CD y Rollback)
-# =====================================================================
-- stage: Publish_Drop
-  displayName: 'Publicar Artefacto de Despliegue'
-  dependsOn: Build_Docker
-  condition: and(succeeded(), ne(variables.envTag, 'none'))
-  jobs:
-  - job: Publicar
-    displayName: 'Publicar archivos y tag de versión'
-    steps:
-
-    # 1. CREAMOS EL ARCHIVO DE VERSIÓN PARA EL ROLLBACK
-    - script: |
-        set -euo pipefail
-        mkdir -p $(Build.ArtifactStagingDirectory)/drop
-        echo "$(uniqueTag)" > $(Build.ArtifactStagingDirectory)/drop/image-tag.txt
-        echo "Tag guardado para el CD: $(uniqueTag)"
-      displayName: 'Generar archivo de versión (Para Rollback)'
-
-    # 2. COPIAMOS LOS ARCHIVOS NECESARIOS
-    # Incluimos los archivos de Docker Y el código fuente puro por si decides usar Bare-Metal
+    # [ADICIONAL]: Preservamos el código fuente para despliegues Bare-Metal que usa el backend
     - task: CopyFiles@2
-      displayName: 'Copiar archivos de despliegue al Staging'
+      displayName: 'Copiar código para despliegues Bare-Metal'
       inputs:
         SourceFolder: '$(Build.SourcesDirectory)'
         Contents: |
           docker-compose*.yml
           requirements*.txt
           src/**
-        TargetFolder: '$(Build.ArtifactStagingDirectory)/drop'
+        TargetFolder: '$(Build.ArtifactStagingDirectory)/deploy-info'
         CleanTargetFolder: false
 
-    # 3. PUBLICAMOS EL ARTEFACTO
+    # [ESTANDARIZACIÓN 3]: Publicación para el CD
     - task: PublishBuildArtifacts@1
-      displayName: 'Publicar Artefacto (Deploy Info)'
       inputs:
-        PathtoPublish: '$(Build.ArtifactStagingDirectory)/drop'
+        PathtoPublish: '$(Build.ArtifactStagingDirectory)/deploy-info'
         ArtifactName: 'deploy-info'
-        publishLocation: 'Container'
+      displayName: 'Publicar artefacto deploy-info'
+
+    # [ESTANDARIZACIÓN 4]: Limpieza de sesión
+    - bash: |
+        docker logout dockermg-g9hrgcc4etdrh8eg.azurecr.io || true
+        docker rmi $IMAGE_NAME:$UNIQUE_TAG $IMAGE_NAME:$ENV_TAG || true
+        docker image prune -f
+      displayName: 'Cerrar sesión de ACR y Limpiar entorno'
+      env:
+        IMAGE_NAME: $(imageName)
+        UNIQUE_TAG: $(uniqueTag)
+        ENV_TAG: $(envTag)
+      condition: always()
