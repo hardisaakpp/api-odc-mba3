@@ -93,4 +93,8 @@ class TestPermisoRequeridoEdicion:
 
         assert resp.status_code != 403
         assert resp.status_code == 404
-        assert resp.json()["detail"]["error"] == "pedido_not_found"
+        # El handler global (_http_exception_handler en
+        # src/middleware/exception_handlers.py) no usa el envelope por defecto
+        # de FastAPI ({"detail": ...}); reescribe la respuesta como
+        # {"error": exc.detail, "type": "http_exception", "status_code": ...}.
+        assert resp.json()["error"]["error"] == "pedido_not_found"
