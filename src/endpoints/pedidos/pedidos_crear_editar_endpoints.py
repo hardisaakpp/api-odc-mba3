@@ -167,6 +167,16 @@ def _agregar_error_pvp(resultado, codigo_a_filas, codigo, pvp_excel, pvp_sap):
         })
 
 
+def _sincronizar_campos_sap_en_producto(info_producto, sap_info):
+    """Sincroniza codigo_barras/descripcion_sap desde SAP (fuente de verdad; el
+    Excel es solo referencia visual, no se valida contra SAP) en el info_producto
+    del parsing. Usado por `_sincronizar_maestro_sap_y_validar_pack_pvp`."""
+    if sap_info.get("codigo_barras"):
+        info_producto["codigo_barras"] = sap_info["codigo_barras"]
+    if sap_info.get("item_name"):
+        info_producto["descripcion_sap"] = sap_info["item_name"]
+
+
 def _sincronizar_maestro_sap_y_validar_pack_pvp(resultado, validacion_sap, codigo_a_filas):
     """
     Para cada código válido en SAP: toma código de barras y descripción desde SAP
@@ -182,10 +192,7 @@ def _sincronizar_maestro_sap_y_validar_pack_pvp(resultado, validacion_sap, codig
             continue
 
         for info_producto in info_productos:
-            if sap_info.get("codigo_barras"):
-                info_producto["codigo_barras"] = sap_info["codigo_barras"]
-            if sap_info.get("item_name"):
-                info_producto["descripcion_sap"] = sap_info["item_name"]
+            _sincronizar_campos_sap_en_producto(info_producto, sap_info)
 
         pack_excel = next((ip.get("pack") for ip in info_productos if ip.get("pack")), None)
         pack_sap = sap_info.get("pack_sap")
