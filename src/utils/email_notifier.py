@@ -30,6 +30,7 @@ _PROBLEMA_NO_EXISTE = "No existe en SAP"
 _SECCION_INFO_PEDIDO = "Informaci&oacute;n del Pedido"
 _LABEL_NUMERO_PEDIDO = "N&uacute;mero de Pedido"
 _LABEL_PEDIDO_ID = "Pedido ID"
+_LABEL_NUEVO_ESTADO = "Nuevo Estado"
 
 # Asuntos exactos del catálogo (notificacion_tipo_correo.tipo_correo): deben
 # coincidir con el seed en scripts/migrations/create_notificacion_tipo_correo.sql
@@ -813,7 +814,7 @@ def _build_pedido_cancelado_email(pedido_id, numero_pedido, usuario_id, fecha_ej
                 (_LABEL_NUMERO_PEDIDO, numero_pedido or "N/A"),
                 (_LABEL_PEDIDO_ID, pedido_id),
                 ("Usuario que cancel&oacute;", usuario_id or "N/A"),
-                ("Nuevo Estado", badge_html("CANCELADO", "#ffebee", "#c62828")),
+                (_LABEL_NUEVO_ESTADO, badge_html("CANCELADO", "#ffebee", "#c62828")),
             ], accent="red"),
             paragraph("El pedido permanece en el sistema con estado CANCELADO y no ser&aacute; procesado.", italic=True),
         ],
@@ -837,7 +838,7 @@ def _build_pedido_confirmado_produccion_email(pedido_id, numero_pedido, usuario_
                 (_LABEL_NUMERO_PEDIDO, numero_pedido or "N/A"),
                 (_LABEL_PEDIDO_ID, pedido_id),
                 ("Usuario de Producci&oacute;n", usuario_id or "N/A"),
-                ("Nuevo Estado", badge_html("CONFIRMADO POR PRODUCCION", "#fff8e1", "#8a6d00")),
+                (_LABEL_NUEVO_ESTADO, badge_html("CONFIRMADO POR PRODUCCION", "#fff8e1", "#8a6d00")),
             ], accent="orange"),
             paragraph("Queda pendiente de revisi&oacute;n y confirmaci&oacute;n por Administraci&oacute;n El Rayo.", italic=True),
         ],
@@ -931,7 +932,7 @@ def _build_pedido_cancelado_por_el_rayo_email(pedido_id, numero_pedido, usuario_
                 (_LABEL_NUMERO_PEDIDO, numero_pedido or "N/A"),
                 (_LABEL_PEDIDO_ID, pedido_id),
                 ("Usuario de El Rayo que cancel&oacute;", usuario_id or "N/A"),
-                ("Nuevo Estado", badge_html("CANCELADO POR EL RAYO", "#ffebee", "#c62828")),
+                (_LABEL_NUEVO_ESTADO, badge_html("CANCELADO POR EL RAYO", "#ffebee", "#c62828")),
             ], accent="red"),
             paragraph(
                 "El pedido permanece en el sistema con estado CANCELADO POR EL RAYO y no "
