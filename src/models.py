@@ -26,6 +26,8 @@ _DESC_NUMERO_PEDIDO = "Número del pedido"
 _DESC_UUID_PEDIDO = "UUID del pedido"
 _DESC_UUID_TIENDA = "UUID de la tienda"
 _DESC_MENSAJE_CONFIRMACION = "Mensaje de confirmación"
+_DESC_CODIGO_TIENDA = "Código de la tienda"
+_DESC_NOMBRE_TIENDA = "Nombre de la tienda"
 _EX_CODIGO_BCO = "R225.1012.BCO"
 _EX_DESCRIPCION = "Producto ejemplo"
 _EX_TIENDA_1 = "Tienda 1"
@@ -836,8 +838,8 @@ class DistribucionConfirmadaItem(BaseModel):
     id: str = Field(..., description="UUID de la distribución confirmada")
     pedido_detalle_id: str = Field(..., description=_DESC_UUID_DETALLE_PEDIDO)
     tienda_id: str = Field(..., description=_DESC_UUID_TIENDA)
-    tienda_codigo: Optional[str] = Field(None, description="Código de la tienda")
-    tienda_nombre: Optional[str] = Field(None, description="Nombre de la tienda")
+    tienda_codigo: Optional[str] = Field(None, description=_DESC_CODIGO_TIENDA)
+    tienda_nombre: Optional[str] = Field(None, description=_DESC_NOMBRE_TIENDA)
     cantidad_solicitada: float = Field(..., ge=0, description="Cantidad (p. ej. docenas, puede ser fraccionaria)")
     cantidad_confirmada: float = Field(..., ge=0)
     cantidad_asignada: float = Field(..., ge=0)
@@ -970,8 +972,8 @@ class TiendaCatalogoItem(BaseModel):
     """Item del catálogo maestro de tiendas (usado por el buscador de 'agregar tienda' en redistribución)."""
 
     tienda_id: str = Field(..., description="UUID de la tienda")
-    codigo: str = Field(..., description="Código de la tienda")
-    nombre: Optional[str] = Field(None, description="Nombre de la tienda")
+    codigo: str = Field(..., description=_DESC_CODIGO_TIENDA)
+    nombre: Optional[str] = Field(None, description=_DESC_NOMBRE_TIENDA)
 
     class Config:
         json_schema_extra = {
@@ -986,8 +988,8 @@ class TiendaCatalogoItem(BaseModel):
 class DistribucionTiendaFrontend(BaseModel):
     """Modelo para distribución por tienda (compatible con frontend). Acepta decimales (ej. 0.5)."""
     
-    tienda_codigo: str = Field(..., description="Código de la tienda")
-    tienda_nombre: Optional[str] = Field(None, description="Nombre de la tienda")
+    tienda_codigo: str = Field(..., description=_DESC_CODIGO_TIENDA)
+    tienda_nombre: Optional[str] = Field(None, description=_DESC_NOMBRE_TIENDA)
     cantidad: float = Field(..., ge=0, description="Cantidad asignada a esta tienda (acepta decimales)")
     es_bodega: Optional[bool] = Field(default=False, description="Indica si es una bodega central (RL-CD, OUT-CD, RG-CD)")
     
