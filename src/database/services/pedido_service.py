@@ -1046,6 +1046,18 @@ class PedidoService:
                 "pvp_sap": float(pvp_sap)
             })
 
+    @staticmethod
+    def _sincronizar_campos_sap_en_producto(info_producto: Dict, sap_info: Dict[str, Any]) -> None:
+        """Sincroniza codigo_barras/descripcion_sap/marca desde SAP (fuente de verdad;
+        el Excel es solo referencia visual) en el info_producto del parsing. Usado por
+        `_validar_pack_pvp_temprana`."""
+        if sap_info.get("codigo_barras"):
+            info_producto["codigo_barras"] = sap_info["codigo_barras"]
+        if sap_info.get("item_name"):
+            info_producto["descripcion_sap"] = sap_info["item_name"]
+        if sap_info.get("marca_sap"):
+            info_producto["marca"] = sap_info["marca_sap"]
+
     def _validar_pack_pvp_temprana(
         self,
         datos_parsing: List[Dict],
@@ -1076,12 +1088,7 @@ class PedidoService:
                 continue
 
             for info_producto in info_productos:
-                if sap_info.get("codigo_barras"):
-                    info_producto["codigo_barras"] = sap_info["codigo_barras"]
-                if sap_info.get("item_name"):
-                    info_producto["descripcion_sap"] = sap_info["item_name"]
-                if sap_info.get("marca_sap"):
-                    info_producto["marca"] = sap_info["marca_sap"]
+                self._sincronizar_campos_sap_en_producto(info_producto, sap_info)
 
             self._evaluar_pack_producto(codigo, info_productos, sap_info, mismatches_pack)
             self._evaluar_pvp_producto(codigo, info_productos, sap_info, mismatches_pvp)
