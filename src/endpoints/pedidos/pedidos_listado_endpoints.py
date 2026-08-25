@@ -10,7 +10,7 @@ from fastapi import FastAPI, Query, Depends, HTTPException
 from fastapi.responses import JSONResponse
 
 from src.database.connection import get_db_connection_context
-from src.database.repositories.pedido_repository import PedidoRepository
+from src.database.repositories.pedido_repository import PedidoRepository, PedidosFiltros
 from src.database.pedido_estados import (
     ESTADO_BORRADOR,
     ESTADO_REDISTRIBUCION,
@@ -78,12 +78,12 @@ class _Paginacion:
         self.page_size_camel = page_size_camel
 
 
-def _query_listar_pedidos(**kwargs):
+def _query_listar_pedidos(filtros: PedidosFiltros, limit: Optional[int], offset: Optional[int]):
     """Ejecuta la consulta bloqueante de listado (pyodbc); se llama vía asyncio.to_thread
     para no congelar el event loop si SQL Server tarda o no responde."""
     with get_db_connection_context() as conn:
         repo = PedidoRepository(conn)
-        return repo.get_pedidos_con_filtros(**kwargs)
+        return repo.get_pedidos_con_filtros(filtros, limit=limit, offset=offset)
 
 
 async def _listar_pedidos_handler(
@@ -128,22 +128,24 @@ async def _listar_pedidos_handler(
 
         resultado = await asyncio.to_thread(
             _query_listar_pedidos,
-            estado=estado,
-            fecha_desde=fecha_desde,
-            fecha_hasta=fecha_hasta,
-            tipo_fecha=tipo_fecha,
-            proveedor_nombre=proveedor_nombre,
-            numero_pedido=numero_pedido,
-            creado_por=creado_por,
-            limit=use_limit,
-            offset=use_offset,
-            excluir_borrador=True,
-            solo_redistribucion=filtrar_redistribucion,
-            solo_pendientes_accion=filtrar_pendientes,
-            restringir_produccion_el_rayo=filtrar_produccion_elrayo,
-            excluir_estados_produccion_el_rayo=excluir_estados_el_rayo,
-            # LISTO_PARA_REDISTRIBUCION (25, botón "Aceptar") solo debe verse en /redistribucion
-            excluir_listo_para_redistribucion=not filtrar_redistribucion,
+            PedidosFiltros(
+                estado=estado,
+                fecha_desde=fecha_desde,
+                fecha_hasta=fecha_hasta,
+                tipo_fecha=tipo_fecha,
+                proveedor_nombre=proveedor_nombre,
+                numero_pedido=numero_pedido,
+                creado_por=creado_por,
+                excluir_borrador=True,
+                solo_redistribucion=filtrar_redistribucion,
+                solo_pendientes_accion=filtrar_pendientes,
+                restringir_produccion_el_rayo=filtrar_produccion_elrayo,
+                excluir_estados_produccion_el_rayo=excluir_estados_el_rayo,
+                # LISTO_PARA_REDISTRIBUCION (25, botón "Aceptar") solo debe verse en /redistribucion
+                excluir_listo_para_redistribucion=not filtrar_redistribucion,
+            ),
+            use_limit,
+            use_offset,
         )
 
         return JSONResponse(

@@ -61,11 +61,11 @@ def _columna_fecha_filtro(tipo_fecha: Optional[str]) -> str:
 
 
 @dataclass
-class _FiltrosPedidosOpcionales:
+class PedidosFiltros:
     """Agrupa los filtros opcionales de get_pedidos_con_filtros en un solo
-    parámetro para _construir_filtros_pedidos (evita exceder el límite de
-    parámetros por función, python:S107). Uso interno del repositorio: no es
-    parte del contrato público de get_pedidos_con_filtros."""
+    parámetro (evita exceder el límite de parámetros por función,
+    python:S107). Parte del contrato público de get_pedidos_con_filtros:
+    limit/offset (paginación) se mantienen como argumentos aparte."""
     estado: Optional[str | int] = None
     excluir_borrador: bool = False
     solo_redistribucion: bool = False
@@ -1434,7 +1434,7 @@ class PedidoCabeceraRepository:
     def _construir_filtros_pedidos(
         self,
         cursor,
-        filtros: _FiltrosPedidosOpcionales,
+        filtros: PedidosFiltros,
         *,
         tiene_estado_id: bool,
         tiene_estado: bool,
@@ -1533,47 +1533,40 @@ class PedidoCabeceraRepository:
 
     def get_pedidos_con_filtros(
         self,
-        estado: Optional[str | int] = None,
-        fecha_desde: Optional[str] = None,
-        fecha_hasta: Optional[str] = None,
-        tipo_fecha: Optional[str] = None,
-        proveedor_nombre: Optional[str] = None,
-        numero_pedido: Optional[str] = None,
-        creado_por: Optional[str] = None,
+        filtros: Optional[PedidosFiltros] = None,
+        *,
         limit: Optional[int] = None,
         offset: Optional[int] = None,
-        excluir_borrador: bool = False,
-        solo_redistribucion: bool = False,
-        solo_pendientes_accion: bool = False,
-        restringir_produccion_el_rayo: bool = False,
-        excluir_estados_produccion_el_rayo: bool = False,
-        excluir_listo_para_redistribucion: bool = False,
     ) -> Dict[str, Any]:
         """
         Obtiene pedidos con filtros y paginación.
 
         Args:
-            estado: estado_id (int) o nombre legacy (str) para filtrar
-            fecha_desde, fecha_hasta: rango de fechas (YYYY-MM-DD)
-            tipo_fecha: columna sobre la que aplica fecha_desde/fecha_hasta —
-                "pedido" (default), "entrega" o "facturacion"
-            proveedor_nombre, numero_pedido, creado_por, limit, offset
-            excluir_borrador: si True, excluye pedidos en estado BORRADOR (estado_id=1)
-            solo_redistribucion: si True, solo incluye pedidos aptos para redistribución
-                (estado_id >= 4 "CONFIRMADO POR EL RAYO", excluyendo CANCELADO (19),
-                CANCELADO POR EL RAYO (20), CONFIRMADO POR PRODUCCION (23) y
-                PRODUCCION POSPUESTA (22) — ver `_filtro_redistribucion`)
-            solo_pendientes_accion: si True, solo estados que requieren acción del proveedor
-            restringir_produccion_el_rayo: si True, solo incluye NUEVO_PEDIDO y GESTIONAR_PEDIDO
-                (req. 1.8, perfil Producción El Rayo); se combina (AND) con `estado` si también se indica
-            excluir_estados_produccion_el_rayo: si True, excluye NUEVO_PEDIDO y GESTIONAR_PEDIDO
-                (req. 1.8 segunda fase, perfil odcsap.view); mutuamente excluyente en la práctica
-                con restringir_produccion_el_rayo (ver _debe_excluir_estados_el_rayo)
-            excluir_listo_para_redistribucion: si True, excluye LISTO_PARA_REDISTRIBUCION (25).
-                Debe ser True en todo listado que no sea la vista de Redistribución: ese estado
-                (botón "Aceptar" sobre un pedido en PRODUCCION_POSPUESTA) solo debe verse ahí
-                (ver `_filtro_exclusion_listo_para_redistribucion`)
+            filtros: filtros opcionales agrupados (python:S107). Ver PedidosFiltros
+                para el detalle de cada campo:
+                - estado: estado_id (int) o nombre legacy (str) para filtrar
+                - fecha_desde, fecha_hasta: rango de fechas (YYYY-MM-DD)
+                - tipo_fecha: columna sobre la que aplica fecha_desde/fecha_hasta —
+                    "pedido" (default), "entrega" o "facturacion"
+                - proveedor_nombre, numero_pedido, creado_por
+                - excluir_borrador: si True, excluye pedidos en estado BORRADOR (estado_id=1)
+                - solo_redistribucion: si True, solo incluye pedidos aptos para redistribución
+                    (estado_id >= 4 "CONFIRMADO POR EL RAYO", excluyendo CANCELADO (19),
+                    CANCELADO POR EL RAYO (20), CONFIRMADO POR PRODUCCION (23) y
+                    PRODUCCION POSPUESTA (22) — ver `_filtro_redistribucion`)
+                - solo_pendientes_accion: si True, solo estados que requieren acción del proveedor
+                - restringir_produccion_el_rayo: si True, solo incluye NUEVO_PEDIDO y GESTIONAR_PEDIDO
+                    (req. 1.8, perfil Producción El Rayo); se combina (AND) con `estado` si también se indica
+                - excluir_estados_produccion_el_rayo: si True, excluye NUEVO_PEDIDO y GESTIONAR_PEDIDO
+                    (req. 1.8 segunda fase, perfil odcsap.view); mutuamente excluyente en la práctica
+                    con restringir_produccion_el_rayo (ver _debe_excluir_estados_el_rayo)
+                - excluir_listo_para_redistribucion: si True, excluye LISTO_PARA_REDISTRIBUCION (25).
+                    Debe ser True en todo listado que no sea la vista de Redistribución: ese estado
+                    (botón "Aceptar" sobre un pedido en PRODUCCION_POSPUESTA) solo debe verse ahí
+                    (ver `_filtro_exclusion_listo_para_redistribucion`)
+            limit, offset: paginación.
         """
+        filtros = filtros or PedidosFiltros()
         cursor = self.conn.cursor()
         try:
             tiene_estado = self.utils.tiene_columna_estado(cursor)
@@ -1581,21 +1574,7 @@ class PedidoCabeceraRepository:
 
             where_conditions, params = self._construir_filtros_pedidos(
                 cursor,
-                _FiltrosPedidosOpcionales(
-                    estado=estado,
-                    excluir_borrador=excluir_borrador,
-                    solo_redistribucion=solo_redistribucion,
-                    solo_pendientes_accion=solo_pendientes_accion,
-                    restringir_produccion_el_rayo=restringir_produccion_el_rayo,
-                    excluir_estados_produccion_el_rayo=excluir_estados_produccion_el_rayo,
-                    excluir_listo_para_redistribucion=excluir_listo_para_redistribucion,
-                    fecha_desde=fecha_desde,
-                    fecha_hasta=fecha_hasta,
-                    tipo_fecha=tipo_fecha,
-                    proveedor_nombre=proveedor_nombre,
-                    numero_pedido=numero_pedido,
-                    creado_por=creado_por,
-                ),
+                filtros,
                 tiene_estado_id=tiene_estado_id,
                 tiene_estado=tiene_estado,
             )

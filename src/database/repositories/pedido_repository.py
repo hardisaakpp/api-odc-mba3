@@ -23,7 +23,7 @@ if TYPE_CHECKING:
     from src.utils.audit_context import AuditContext
 
 # Importar repositorios especializados
-from .pedido.pedido_cabecera_repository import PedidoCabeceraRepository
+from .pedido.pedido_cabecera_repository import PedidoCabeceraRepository, PedidosFiltros
 from .pedido.pedido_detalle_repository import PedidoDetalleRepository
 from .pedido.pedido_tienda_repository import PedidoTiendaRepository
 from ..pedido_estados import ESTADO_LIMITE_CANCELAR_PEDIDO, ESTADOS_PUEDE_DESCARTAR, ESTADOS_PUEDE_CANCELAR_POR_EL_RAYO, estado_id_desde_legacy
@@ -138,21 +138,10 @@ class PedidoRepository:
 
     def get_pedidos_con_filtros(
         self,
-        estado: Optional[str] = None,
-        fecha_desde: Optional[str] = None,
-        fecha_hasta: Optional[str] = None,
-        tipo_fecha: Optional[str] = None,
-        proveedor_nombre: Optional[str] = None,
-        numero_pedido: Optional[str] = None,
-        creado_por: Optional[str] = None,
+        filtros: Optional[PedidosFiltros] = None,
+        *,
         limit: Optional[int] = None,
         offset: Optional[int] = None,
-        excluir_borrador: bool = False,
-        solo_redistribucion: bool = False,
-        solo_pendientes_accion: bool = False,
-        restringir_produccion_el_rayo: bool = False,
-        excluir_estados_produccion_el_rayo: bool = False,
-        excluir_listo_para_redistribucion: bool = False,
     ) -> Dict[str, Any]:
         """
         Obtiene pedidos con filtros y paginación.
@@ -160,34 +149,19 @@ class PedidoRepository:
         DELEGADO a PedidoCabeceraRepository.
 
         Args:
-            solo_redistribucion: si True, solo incluye pedidos aptos para redistribución
-                (estado_id >= 4 "CONFIRMADO POR EL RAYO", excluyendo CANCELADO (19),
-                CANCELADO POR EL RAYO (20), CONFIRMADO POR PRODUCCION (23),
-                PRODUCCION POSPUESTA (22) y RECHAZADO (24))
-            restringir_produccion_el_rayo: si True, solo incluye NUEVO_PEDIDO y GESTIONAR_PEDIDO
-                (req. 1.8, perfil Producción El Rayo)
-            excluir_estados_produccion_el_rayo: si True, excluye NUEVO_PEDIDO y GESTIONAR_PEDIDO
-                (req. 1.8 segunda fase, perfil odcsap.view: esos 2 estados dejan de verse)
-            excluir_listo_para_redistribucion: si True, excluye LISTO_PARA_REDISTRIBUCION (25);
-                debe ser True salvo en la vista de Redistribución (ver `solo_redistribucion`)
+            filtros: filtros opcionales agrupados en PedidosFiltros (python:S107).
+                Incluye, entre otros: solo_redistribucion (estado_id >= 4
+                "CONFIRMADO POR EL RAYO", excluyendo CANCELADO (19), CANCELADO POR
+                EL RAYO (20), CONFIRMADO POR PRODUCCION (23), PRODUCCION POSPUESTA
+                (22) y RECHAZADO (24)); restringir_produccion_el_rayo (req. 1.8,
+                perfil Producción El Rayo: solo NUEVO_PEDIDO y GESTIONAR_PEDIDO);
+                excluir_estados_produccion_el_rayo (req. 1.8 segunda fase, perfil
+                odcsap.view: esos 2 estados dejan de verse); y
+                excluir_listo_para_redistribucion (excluye LISTO_PARA_REDISTRIBUCION
+                (25); debe ser True salvo en la vista de Redistribución).
+            limit, offset: paginación.
         """
-        return self.cabecera_repo.get_pedidos_con_filtros(
-            estado=estado,
-            fecha_desde=fecha_desde,
-            fecha_hasta=fecha_hasta,
-            tipo_fecha=tipo_fecha,
-            proveedor_nombre=proveedor_nombre,
-            numero_pedido=numero_pedido,
-            creado_por=creado_por,
-            limit=limit,
-            offset=offset,
-            excluir_borrador=excluir_borrador,
-            solo_redistribucion=solo_redistribucion,
-            solo_pendientes_accion=solo_pendientes_accion,
-            restringir_produccion_el_rayo=restringir_produccion_el_rayo,
-            excluir_estados_produccion_el_rayo=excluir_estados_produccion_el_rayo,
-            excluir_listo_para_redistribucion=excluir_listo_para_redistribucion,
-        )
+        return self.cabecera_repo.get_pedidos_con_filtros(filtros, limit=limit, offset=offset)
 
     def get_pedidos_confirmados(
         self,

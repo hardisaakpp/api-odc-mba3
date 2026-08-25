@@ -22,7 +22,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 import io
 
 from src.database.connection import get_db_connection_context
-from src.database.repositories.pedido_repository import PedidoRepository
+from src.database.repositories.pedido_repository import PedidoRepository, PedidosFiltros
 from src.database.repositories.pedido_respuesta_repository import PedidoRespuestaRepository
 from src.database.repositories.common.serialization import make_json_serializable
 from src.database.repositories.archivo_plantilla_repository import ArchivoPlantillaRepository
@@ -830,18 +830,20 @@ async def _listar_pedidos_plantillas_handler(
             repo = PedidoRepository(conn)
 
             resultado = repo.get_pedidos_con_filtros(
-                estado=estado,
-                numero_pedido=numero_pedido.strip() if numero_pedido else None,
-                creado_por=creado_por.strip() if creado_por else None,
-                fecha_desde=fecha_desde,
-                fecha_hasta=fecha_hasta,
-                tipo_fecha=tipo_fecha,
+                filtros=PedidosFiltros(
+                    estado=estado,
+                    numero_pedido=numero_pedido.strip() if numero_pedido else None,
+                    creado_por=creado_por.strip() if creado_por else None,
+                    fecha_desde=fecha_desde,
+                    fecha_hasta=fecha_hasta,
+                    tipo_fecha=tipo_fecha,
+                    excluir_borrador=False,  # INCLUIR BORRADOR para cargar-plantilla
+                    solo_pendientes_accion=filtrar_pendientes,
+                    # LISTO_PARA_REDISTRIBUCION (25, botón "Aceptar") solo se ve en /redistribucion
+                    excluir_listo_para_redistribucion=True,
+                ),
                 limit=limit,
                 offset=offset,
-                excluir_borrador=False,  # INCLUIR BORRADOR para cargar-plantilla
-                solo_pendientes_accion=filtrar_pendientes,
-                # LISTO_PARA_REDISTRIBUCION (25, botón "Aceptar") solo se ve en /redistribucion
-                excluir_listo_para_redistribucion=True,
             )
 
             logger.info(
@@ -1086,13 +1088,15 @@ async def _buscar_pedidos_por_numero_handler(numero_pedido: Optional[str], limit
             repo = PedidoRepository(conn)
 
             resultado = repo.get_pedidos_con_filtros(
-                numero_pedido=numero_pedido.strip() if numero_pedido else None,
-                creado_por=None,  # Sin filtrar por usuario — visibles para mabel.view
+                filtros=PedidosFiltros(
+                    numero_pedido=numero_pedido.strip() if numero_pedido else None,
+                    creado_por=None,  # Sin filtrar por usuario — visibles para mabel.view
+                    excluir_borrador=False,  # Incluir BORRADOR para cargar-plantilla
+                    # LISTO_PARA_REDISTRIBUCION (25, botón "Aceptar") solo se ve en /redistribucion
+                    excluir_listo_para_redistribucion=True,
+                ),
                 limit=limit,
                 offset=0,
-                excluir_borrador=False,  # Incluir BORRADOR para cargar-plantilla
-                # LISTO_PARA_REDISTRIBUCION (25, botón "Aceptar") solo se ve en /redistribucion
-                excluir_listo_para_redistribucion=True,
             )
 
             return JSONResponse(
