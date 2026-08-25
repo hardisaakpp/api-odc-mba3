@@ -1454,6 +1454,14 @@ class ProcesoCompletoSAPDetalleODC(BaseModel):
         None,
         description="True si el fallo fue probablemente transitorio (conexión/SL); el usuario puede reintentar envío.",
     )
+    queued: Optional[bool] = Field(
+        None,
+        description=(
+            "True si el middleware encoló la creación de la ODC (HTTP 202, SAP saturado): no es un "
+            "error, SAP la sigue procesando en segundo plano y se confirmará sola. No mostrar como "
+            "error ni ofrecer reintento mientras esto sea True."
+        ),
+    )
     # ITR en envio_sap para que el frontend encuentre las solicitudes en response.envio_sap.solicitudes_transferencia
     solicitudes_transferencia: Optional[dict] = Field(
         None,

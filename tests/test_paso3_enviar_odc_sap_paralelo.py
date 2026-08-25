@@ -36,6 +36,43 @@ def _odc(oc_id: str, codigo_bodega: str):
     }
 
 
+def _envio_encolado(oc_id: str, codigo_bodega: str, job_id: str = "job-1"):
+    """ODC que recibió HTTP 202 del middleware (SAP saturado): no es un error real,
+    solo no se pudo confirmar todavía."""
+    return {
+        "success": False,
+        "queued": True,
+        "detalle": ProcesoCompletoSAPDetalleODC(
+            oc_id=oc_id, success=False, queued=True,
+            error=f"SAP saturado: la solicitud fue encolada por el middleware (jobId={job_id})",
+        ),
+        "oc_cabecera": {"oc_id": oc_id},
+        "doc_num_po": None,
+        "doc_num": None,
+        "doc_entry": None,
+        "solicitudes_transferencia": None,
+        "codigo_bodega": codigo_bodega,
+        "error": f"SAP saturado: la solicitud fue encolada por el middleware (jobId={job_id})",
+    }
+
+
+def _envio_error_real(oc_id: str, codigo_bodega: str):
+    return {
+        "success": False,
+        "queued": False,
+        "detalle": ProcesoCompletoSAPDetalleODC(
+            oc_id=oc_id, success=False, error="SKU no existe en SAP",
+        ),
+        "oc_cabecera": {"oc_id": oc_id},
+        "doc_num_po": None,
+        "doc_num": None,
+        "doc_entry": None,
+        "solicitudes_transferencia": None,
+        "codigo_bodega": codigo_bodega,
+        "error": "SKU no existe en SAP",
+    }
+
+
 def _args_comunes():
     return dict(
         pedido_id="pedido-1",
@@ -130,3 +167,60 @@ def test_dos_odcs_envia_email_despacho_para_cada_una():
     mock_email_adicional.assert_called_once()
     assert mock_email_adicional.call_args.args[0] == "pedido prueba 1"
     assert mock_email_adicional.call_args.args[-1] == "OC-oc-RG"
+
+
+def test_odc_exitosa_recibe_correo_aunque_la_hermana_quede_encolada():
+    """Bug real que corrige: antes, cualquier ODC no-exitosa (incluida una que solo
+    quedó encolada por HTTP 202, no un error real) hacía que NINGUNA ODC del pedido
+    recibiera su correo de despacho -- ni siquiera la que sí tuvo éxito."""
+    oc_repo = MagicMock()
+    oc_sap_service = MagicMock()
+    odcs = [_odc("oc-RL", "RL-CD"), _odc("oc-RG", "RG-CD")]
+
+    def fake_en_thread(odc):
+        if odc["oc_id"] == "oc-RL":
+            return _envio_ok("oc-RL", "RL-CD", 1001)
+        return _envio_encolado("oc-RG", "RG-CD")
+
+    with patch(
+        "src.endpoints.pedidos.redistribucion.endpoints_proceso._enviar_una_odc_a_sap_en_thread",
+        side_effect=fake_en_thread,
+    ), patch(
+        "src.endpoints.pedidos.redistribucion.endpoints_proceso._enviar_email_despacho_odc"
+    ) as mock_despacho:
+        resultado = _paso3_enviar_odc_sap(oc_repo, oc_sap_service, odcs, **_args_comunes())
+
+    # Solo la ODC exitosa (RL) recibe correo de despacho; la encolada (RG) no tiene
+    # nada que despachar todavía.
+    mock_despacho.assert_called_once()
+    assert mock_despacho.call_args.args[1] == {"oc_id": "oc-RL"}
+
+    assert resultado["response"].status == "partial"
+    assert "confirmará automáticamente" in resultado["response"].message
+    assert "falló" not in resultado["response"].message
+
+
+def test_odc_exitosa_recibe_correo_aunque_la_hermana_falle_con_error_real():
+    """La ODC exitosa siempre recibe su correo, sin importar si la hermana quedó
+    encolada o falló con un error real de SAP."""
+    oc_repo = MagicMock()
+    oc_sap_service = MagicMock()
+    odcs = [_odc("oc-RL", "RL-CD"), _odc("oc-RG", "RG-CD")]
+
+    def fake_en_thread(odc):
+        if odc["oc_id"] == "oc-RL":
+            return _envio_ok("oc-RL", "RL-CD", 1001)
+        return _envio_error_real("oc-RG", "RG-CD")
+
+    with patch(
+        "src.endpoints.pedidos.redistribucion.endpoints_proceso._enviar_una_odc_a_sap_en_thread",
+        side_effect=fake_en_thread,
+    ), patch(
+        "src.endpoints.pedidos.redistribucion.endpoints_proceso._enviar_email_despacho_odc"
+    ) as mock_despacho:
+        resultado = _paso3_enviar_odc_sap(oc_repo, oc_sap_service, odcs, **_args_comunes())
+
+    mock_despacho.assert_called_once()
+    assert mock_despacho.call_args.args[1] == {"oc_id": "oc-RL"}
+    assert resultado["response"].status == "partial"
+    assert "SKU no existe en SAP" in resultado["response"].message

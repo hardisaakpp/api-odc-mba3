@@ -431,6 +431,7 @@ def _enviar_una_odc_a_sap(oc_sap_service, oc_repo, odc: Dict[str, Any]) -> Dict[
         tiendas_destino_filtro=odc.get("tiendas_bodega"),
     )
     success = resultado_sap_envio.get("success", False)
+    queued = resultado_sap_envio.get("queued", False)
     doc_entry = resultado_sap_envio.get("doc_entry")
     error = resultado_sap_envio.get("error")
     error_code = resultado_sap_envio.get("error_code")
@@ -447,9 +448,11 @@ def _enviar_una_odc_a_sap(oc_sap_service, oc_repo, odc: Dict[str, Any]) -> Dict[
         error_code=error_code,
         solicitudes_transferencia=solicitudes_para_response,
         retry_recommended=resultado_sap_envio.get("retry_recommended"),
+        queued=queued,
     )
     return {
         "success": success,
+        "queued": queued,
         "detalle": detalle,
         "oc_cabecera": oc_cabecera,
         "doc_num_po": doc_num_po,
@@ -570,14 +573,27 @@ def _respuesta_exito_sap(
     }
 
 
-def _mensaje_fallo_sap(envios: List[Dict[str, Any]], primera: Dict[str, Any], fallidas: List[str], error_resumen: str) -> str:
-    """Mensaje de fallo de PASO 3/3, distinto según sea pedido mixto (2+ ODC,
-    puede fallar solo alguna) o normal (1 ODC). Usado por `_respuesta_fallo_sap`."""
+def _mensaje_fallo_sap(
+    envios: List[Dict[str, Any]], primera: Dict[str, Any],
+    fallidas_reales: List[str], encoladas: List[str], error_resumen: str,
+) -> str:
+    """Mensaje de fallo/parcial de PASO 3/3, distinto según sea pedido mixto (2+ ODC,
+    puede fallar/encolarse solo alguna) o normal (1 ODC). Usado por `_respuesta_fallo_sap`.
+    Una ODC encolada (HTTP 202, SAP saturado) no es un error -- se distingue del
+    resto para no decirle al usuario que "falló" algo que en realidad SAP todavía
+    está procesando."""
     if len(envios) > 1:
-        return (
-            f"Redistribución y ODC generadas, pero falló el envío a SAP de {len(fallidas)}/{len(envios)} "
-            f"ODC del pedido mixto: {error_resumen}"
-        )
+        partes = []
+        if fallidas_reales:
+            partes.append(f"falló el envío a SAP de {len(fallidas_reales)}/{len(envios)} ODC: {error_resumen}")
+        if encoladas:
+            partes.append(
+                f"{len(encoladas)}/{len(envios)} ODC del pedido mixto está siendo procesada por SAP "
+                "(saturación temporal) y se confirmará automáticamente"
+            )
+        return "Redistribución y ODC generadas, pero " + "; además, ".join(partes)
+    if not primera["success"] and primera.get("queued"):
+        return "Redistribución y ODC generada. SAP está procesando la ODC (saturación temporal); se confirmará automáticamente."
     return f"Redistribución y ODC generadas, pero falló el envío a SAP: {primera['error']}"
 
 
@@ -587,21 +603,41 @@ def _respuesta_fallo_sap(
     envios: List[Dict[str, Any]], detalles: List[Any],
     repo_pedido, audit,
 ) -> Dict[str, Any]:
-    """Respuesta de PASO 3/3 cuando alguna ODC falló al enviarse a SAP: marca el
+    """Respuesta de PASO 3/3 cuando alguna ODC no se envió con éxito: marca el
     pedido para reintento manual y arma el ProcesoCompletoSAPResponse. Usado por
-    `_paso3_enviar_odc_sap`."""
+    `_paso3_enviar_odc_sap`.
+
+    Una ODC encolada (HTTP 202 del middleware) no es un fallo real -- no debe
+    impedir el correo de despacho de una ODC hermana que sí tuvo éxito (antes,
+    cualquier ODC no-exitosa, incluida una simplemente encolada, hacía que
+    ninguna ODC del pedido recibiera su correo de despacho)."""
     primera = envios[0]
-    fallidas = [
+    fallidas_reales = [
         f"{e.get('codigo_bodega') or e['detalle'].oc_id}: {e['error']}"
-        for e in envios if not e["success"]
+        for e in envios if not e["success"] and not e.get("queued")
     ]
-    error_resumen = "; ".join(fallidas)
+    encoladas = [
+        e.get("codigo_bodega") or e["detalle"].oc_id
+        for e in envios if not e["success"] and e.get("queued")
+    ]
+    error_resumen = "; ".join(fallidas_reales)
     logger.error(
-        "❌ PASO 3/3 fallido pedido=%s: %s",
+        "❌ PASO 3/3 con incidencias pedido=%s: fallidas=[%s] encoladas=[%s]",
         numero_pedido,
         error_resumen,
+        ", ".join(encoladas),
     )
-    # Cualquier fallo de envío ODC habilita reintento manual en UI.
+    # Cualquier ODC que sí tuvo éxito recibe su correo de despacho, aunque otra
+    # ODC hermana haya fallado o quedado encolada.
+    for envio in envios:
+        if envio["success"]:
+            _enviar_email_despacho_odc(
+                numero_pedido, envio["oc_cabecera"], envio["doc_num_po"], envio["doc_entry"],
+                envio["solicitudes_transferencia"], envio["detalle"].numero_oc_sap,
+            )
+    # Cualquier fallo/encolado de envío ODC habilita reintento manual en UI (para
+    # una ODC encolada, reintentar es seguro: enviar_oc_a_sap resuelve primero el
+    # job pendiente antes de considerar un reenvío, ver _resolver_job_encolado_previo).
     _actualizar_estado_reintento(repo_pedido, pedido_id, audit)
 
     return {
@@ -609,7 +645,7 @@ def _respuesta_fallo_sap(
         "_notify_data": {},
         "response": ProcesoCompletoSAPResponse(
             status="partial",
-            message=_mensaje_fallo_sap(envios, primera, fallidas, error_resumen),
+            message=_mensaje_fallo_sap(envios, primera, fallidas_reales, encoladas, error_resumen),
             pedido_id=pedido_id,
             numero_pedido=numero_pedido,
             redistribucion=resultado_redistribucion,
@@ -620,7 +656,7 @@ def _respuesta_fallo_sap(
             resumen=resumen,
             fecha_proceso=ahora_naive(),
             paso_fallido="envio_sap",
-            error_detalle=error_resumen
+            error_detalle=error_resumen or "; ".join(encoladas)
         )
     }
 

@@ -377,6 +377,41 @@ class TestCreateStockTransfer202:
         assert "queued" not in resultado
 
 
+class TestCreatePurchaseOrder202:
+    """HTTP 202 del middleware (job encolado) NO es un error definitivo.
+
+    Antes de esto, create_purchase_order no distinguía el 202 de un error real de
+    SAP: caía al bloque de error genérico y devolvía "HTTP 202" como si la ODC
+    hubiera fallado. Eso hacía que la app marcara la ODC como "ERROR" (perdiendo
+    el jobId) y ofreciera el botón de reintento -- si el job encolado terminaba
+    completándose en SAP en segundo plano, el reintento creaba una ODC duplicada.
+    """
+
+    def test_202_retorna_queued_con_job_id_no_como_error_terminal(self):
+        client = _client()
+        response = _mock_response(202, {"jobId": "job-456", "status": "ENCOLADO"})
+        with patch.object(client, "_post", return_value=response):
+            resultado = client.create_purchase_order({
+                "CardCode": "PFAKE",
+                "DocumentLines": [],
+            })
+        assert resultado["success"] is False
+        assert resultado["queued"] is True
+        assert resultado["job_id"] == "job-456"
+        assert resultado["status_code"] == 202
+
+    def test_200_sigue_retornando_success_normal(self):
+        client = _client()
+        response = _mock_response(200, {"docEntry": 1, "docNum": 2})
+        with patch.object(client, "_post", return_value=response):
+            resultado = client.create_purchase_order({
+                "CardCode": "PFAKE",
+                "DocumentLines": [],
+            })
+        assert resultado["success"] is True
+        assert "queued" not in resultado
+
+
 class TestReintento202Lecturas:
     """
     HTTP 202 en lecturas/validaciones (GET, o POST de validación sin efecto

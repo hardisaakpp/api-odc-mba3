@@ -239,6 +239,22 @@ class _MiddlewareSAPServiceLayerClient:
             logger.info(f"✅ Purchase Order creada: DocEntry={doc_entry}, DocNum={doc_num}")
             return {"success": True, "doc_entry": doc_entry, "doc_num": doc_num, "data": result}
 
+        if response.status_code == 202:
+            result = response.json()
+            job_id = result.get("jobId")
+            logger.info(
+                f"⏳ Purchase Order encolada por saturación de SAP "
+                f"(jobId={job_id}, CardCode={payload['cardCode']}); no es un error definitivo"
+            )
+            return {
+                "success": False,
+                "queued": True,
+                "job_id": job_id,
+                "job_status": result.get("status"),
+                "error": f"SAP saturado: la solicitud fue encolada por el middleware (jobId={job_id})",
+                "status_code": 202,
+            }
+
         error_msg = self._problem_detail(response)
         sap_error = self._extraer_error_sap_embebido(response)
         logger.error(f"❌ Error al crear Purchase Order: {error_msg} (Código SAP: {sap_error['error_code']})")

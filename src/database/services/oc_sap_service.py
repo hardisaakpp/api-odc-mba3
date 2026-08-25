@@ -267,7 +267,12 @@ class OCSAPService:
         oc_id: str,
         result: Dict[str, Any]
     ) -> Optional[Dict[str, Any]]:
-        """Carga la cabecera de la ODC y valida que exista y esté en estado PENDIENTE."""
+        """Carga la cabecera de la ODC y valida que esté en un estado desde el que se
+        puede seguir: PENDIENTE (nueva), ENCOLADA (un intento previo recibió HTTP 202
+        del middleware, ver `_resolver_job_encolado_previo`) o ENVIADA (ya se envió
+        con éxito -- el caller la trata como no-op idempotente, ver `enviar_oc_a_sap`;
+        puede llegar aquí en un reintento del pedido completo donde esta ODC en
+        particular ya había tenido éxito)."""
         oc_cabecera = oc_repo.get_existing_cabecera(oc_id)
         if not oc_cabecera:
             error_msg = f"No se encontró orden de compra con ID: {oc_id}"
@@ -278,7 +283,7 @@ class OCSAPService:
             logger.error(f"❌ {error_msg}")
             return None
         estado_actual = oc_cabecera.get("estado")
-        if estado_actual != "PENDIENTE":
+        if estado_actual not in ("PENDIENTE", "ENCOLADA", "ENVIADA"):
             error_msg = f"La ODC no está en estado PENDIENTE (estado actual: {estado_actual})"
             result["error"] = error_msg
             result["error_message"] = error_msg
@@ -554,6 +559,29 @@ class OCSAPService:
                     respuesta_sap=error_msg,
                     error_message=error_msg,
                     error_source="SAP_CONNECTION"
+                )
+            except Exception:
+                pass
+            return
+        if sap_response.get("queued"):
+            job_id = sap_response.get("job_id")
+            mensaje = (
+                "SAP está procesando esta OC (saturación temporal). "
+                "Se confirmará automáticamente en cuanto SAP la resuelva."
+            )
+            result["error"] = sap_response.get("error", mensaje)
+            result["error_message"] = mensaje
+            result["error_source"] = "SAP"
+            result["retry_recommended"] = False
+            result["queued"] = True
+            result["job_id"] = job_id
+            logger.info(f"⏳ ODC {oc_id} encolada por el middleware (jobId={job_id}); no se trata como error")
+            try:
+                oc_repo.update_estado(
+                    oc_id,
+                    "ENCOLADA",
+                    respuesta_sap=mensaje,
+                    job_id=job_id,
                 )
             except Exception:
                 pass
@@ -1036,6 +1064,105 @@ class OCSAPService:
             logger.warning(f"⚠️ No se pudo resolver tiendas_destino_filtro para OC {oc_id}: {e}")
             return None
 
+    def _resolver_job_encolado_previo(
+        self,
+        oc_id: str,
+        oc_cabecera: Dict[str, Any],
+        oc_detalles: List[Dict[str, Any]],
+        oc_repo: 'OrdenCompraRepository',
+        result: Dict[str, Any],
+        tiendas_destino_filtro: Optional[List[str]] = None,
+    ) -> Optional[bool]:
+        """
+        Si la ODC quedó ENCOLADA (HTTP 202 de un intento previo al crear la Purchase
+        Order), consulta primero GET /api/v1/jobs/{jobId} en vez de reenviar la
+        creación a ciegas -- el job original todavía puede completarse en segundo
+        plano, y reenviar crearía una ODC duplicada en SAP (mismo patrón ya aplicado
+        a Solicitudes de Transferencia, ver StockTransferService._resolver_jobs_
+        encolados_pendientes; incidente real que motivó esto: ODC 24711 encolada +
+        24712 duplicada por reintento manual).
+
+        Returns:
+            None: la ODC no estaba ENCOLADA -- no aplica, el caller sigue su flujo normal.
+            True: el job resolvió en error real de SAP -- se deja la ODC libre para
+                un intento normal (oc_cabecera se actualiza en el dict para reflejarlo),
+                el caller sigue su flujo normal.
+            False: el job ya quedó resuelto por esta llamada (COMPLETADO, adoptado
+                vía _procesar_oc_exitosa) o sigue ENCOLADO/PROCESANDO/no consultable
+                -- `result` ya quedó armado, el caller debe retornar de inmediato.
+        """
+        if oc_cabecera.get("estado") != "ENCOLADA":
+            return None
+
+        job_id = oc_cabecera.get("job_id")
+        if not job_id:
+            logger.warning(f"⚠️ ODC {oc_id} en estado ENCOLADA sin job_id; se reintenta como si fuera nueva")
+            return None
+
+        job = self.sap_client.get_job_status(job_id)
+        if not job:
+            logger.warning(f"⚠️ No se pudo consultar job {job_id} de ODC {oc_id} encolada; se deja para el próximo intento")
+            result["error"] = "No se pudo consultar el estado del envío encolado a SAP"
+            result["error_message"] = result["error"]
+            result["error_source"] = "SAP_CONNECTION"
+            result["retry_recommended"] = False
+            result["queued"] = True
+            return False
+
+        status = str(job.get("status") or "").upper()
+
+        if status == "COMPLETADO":
+            resultado_job = job.get("result") or {}
+            doc_entry = resultado_job.get("docEntry")
+            doc_num = resultado_job.get("docNum")
+            if not doc_entry:
+                logger.warning(f"⚠️ Job {job_id} COMPLETADO sin docEntry para ODC {oc_id}; se deja para el próximo intento")
+                result["error"] = "SAP confirmó el envío encolado pero no devolvió DocEntry"
+                result["error_message"] = result["error"]
+                result["error_source"] = "SAP"
+                result["retry_recommended"] = False
+                result["queued"] = True
+                return False
+            logger.info(
+                f"♻️ Job SAP encolado COMPLETADO para ODC {oc_id}: se adopta "
+                f"(DocEntry={doc_entry}, DocNum={doc_num}) sin recrear"
+            )
+            sap_response_sintetico = {
+                "success": True, "doc_entry": doc_entry, "doc_num": doc_num, "data": resultado_job,
+            }
+            self._procesar_oc_exitosa(
+                oc_id, oc_cabecera, oc_detalles, sap_response_sintetico, {"attempts": None}, oc_repo, result,
+                tiendas_destino_filtro=tiendas_destino_filtro,
+            )
+            return False
+
+        if status in ("ENCOLADO", "PROCESANDO"):
+            logger.info(f"⏳ Job SAP aún {status} para ODC {oc_id}: se omite este intento")
+            result["error"] = f"SAP saturado: la solicitud sigue encolada (jobId={job_id})"
+            result["error_message"] = result["error"]
+            result["error_source"] = "SAP"
+            result["retry_recommended"] = False
+            result["queued"] = True
+            result["job_id"] = job_id
+            return False
+
+        # status == "ERROR" (motivo real de SAP) o desconocido: a diferencia del
+        # patrón ya existente para ST (que lo descarta silenciosamente), sí se
+        # persiste el motivo para no perder la razón real del fallo original antes
+        # de dejar la ODC libre para un intento normal.
+        motivo = job.get("error") or f"Job SAP finalizó con estado {status or 'desconocido'}"
+        logger.warning(f"❌ Job {job_id} de ODC {oc_id} encolada terminó en error: {motivo}")
+        try:
+            oc_repo.update_estado(
+                oc_id, "PENDIENTE",
+                respuesta_sap=f"Job SAP encolado anterior finalizó en error: {motivo}",
+            )
+        except Exception:
+            pass
+        oc_cabecera["estado"] = "PENDIENTE"
+        oc_cabecera["job_id"] = None
+        return True
+
     def enviar_oc_a_sap(
         self,
         oc_repo: OrdenCompraRepository,
@@ -1097,8 +1224,28 @@ class OCSAPService:
                 if oc_cabecera is None:
                     return result
 
+                if oc_cabecera.get("estado") == "ENVIADA":
+                    # No-op idempotente: esta ODC ya se envió con éxito en un intento
+                    # previo (puede llegar aquí en un reintento del pedido completo
+                    # donde solo otra ODC hermana había fallado/quedado encolada).
+                    # No hay nada que reenviar a SAP.
+                    logger.info(f"ℹ️ ODC {oc_id} ya está ENVIADA; no se reenvía (no-op)")
+                    result["success"] = True
+                    result["doc_entry"] = oc_cabecera.get("doc_entry")
+                    result["doc_num"] = oc_cabecera.get("numero_oc_sap")
+                    result["already_sent"] = True
+                    result["message"] = "Orden ya enviada previamente a SAP"
+                    return result
+
                 oc_detalles = self._cargar_y_validar_detalles(oc_repo, oc_id, result)
                 if oc_detalles is None:
+                    return result
+
+                resuelto = self._resolver_job_encolado_previo(
+                    oc_id, oc_cabecera, oc_detalles, oc_repo, result,
+                    tiendas_destino_filtro=tiendas_destino_filtro,
+                )
+                if resuelto is False:
                     return result
 
                 warehouse_code = self._resolver_warehouse_code(oc_cabecera, oc_repo, oc_id, warehouse_code)

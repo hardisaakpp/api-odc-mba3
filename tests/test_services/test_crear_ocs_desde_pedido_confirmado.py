@@ -184,3 +184,60 @@ def test_pedido_mixto_upsert_reutiliza_oc_existente_por_bodega():
     assert oc_por_bodega["RL-CD"]["cabecera_actualizada"] is True
     assert oc_por_bodega["RG-CD"]["cabecera_insertada"] is True
     oc_repo.update_cabecera.assert_called_once()
+
+
+def test_pedido_mixto_no_recrea_oc_ya_enviada_o_encolada():
+    """Bug real que corrige: un reintento del pedido completo (proceso-completo-sap)
+    vuelve a llamar crear_ocs_desde_pedido_confirmado con upsert=True. Antes, el
+    upsert reseteaba CUALQUIER ODC existente a PENDIENTE y borraba/reinsertaba sus
+    detalles sin mirar su estado real -- si una bodega ya estaba ENVIADA (éxito) o
+    ENCOLADA (HTTP 202 del middleware, aún sin resolver), el reintento la resetaba
+    igual y el paso de envío la volvía a mandar a SAP, duplicando el documento.
+    Esto es lo que generó la ODC 24712 duplicada de la 24711 encolada. Ahora, si la
+    ODC existente ya está ENVIADA o ENCOLADA, se reutiliza tal cual, sin tocar su
+    cabecera ni sus detalles.
+    """
+    cabecera = _cabecera(["RL-CD", "RG-CD"])
+    procesamientos = [
+        _procesamiento("det-1", "ITEM-ROLAND"),
+        _procesamiento("det-2", "ITEM-REGIONS"),
+    ]
+    productos_distribucion = [
+        {"pedido_detalle_id": "det-1", "distribuciones": [
+            {"tienda_codigo": "TRL-QSN", "cantidad_asignada": 10, "es_bodega": False}
+        ]},
+        {"pedido_detalle_id": "det-2", "distribuciones": [
+            {"tienda_codigo": "RG-INT", "cantidad_asignada": 10, "es_bodega": False}
+        ]},
+    ]
+    oc_repo = _oc_repo_mock(existing_oc_id_por_bodega={
+        "RL-CD": "oc-enviada-RL",
+        "RG-CD": "oc-encolada-RG",
+    })
+    cabeceras_existentes = {
+        "oc-enviada-RL": {"estado": "ENVIADA", "doc_entry": 111, "numero_oc_sap": "222"},
+        "oc-encolada-RG": {"estado": "ENCOLADA", "job_id": "job-999"},
+    }
+    oc_repo.get_existing_cabecera.side_effect = lambda oc_id: cabeceras_existentes.get(oc_id)
+
+    patches = _patch_comunes(cabecera, procesamientos, productos_distribucion, oc_repo)
+    try:
+        service = PedidoOCService()
+        resultados = service.crear_ocs_desde_pedido_confirmado("pedido-1", upsert=True)
+    finally:
+        _stop_all(patches)
+
+    oc_por_bodega = {r["codigo_bodega"]: r for r in resultados}
+    assert oc_por_bodega["RL-CD"]["oc_id"] == "oc-enviada-RL"
+    assert oc_por_bodega["RL-CD"]["estado"] == "ENVIADA"
+    assert oc_por_bodega["RL-CD"]["reutilizada_sin_cambios"] is True
+    assert oc_por_bodega["RG-CD"]["oc_id"] == "oc-encolada-RG"
+    assert oc_por_bodega["RG-CD"]["estado"] == "ENCOLADA"
+    assert oc_por_bodega["RG-CD"]["reutilizada_sin_cambios"] is True
+
+    # Ninguna de las dos ODC reutilizadas debe tocarse: nada de upsert de cabecera
+    # ni de borrar/reinsertar detalles -- si se llamara, sería el mismo bug.
+    oc_repo.update_cabecera.assert_not_called()
+    oc_repo.insert_cabecera.assert_not_called()
+    oc_repo.delete_detalles.assert_not_called()
+    oc_repo.insert_detalles.assert_not_called()

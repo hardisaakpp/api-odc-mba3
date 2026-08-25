@@ -510,6 +510,36 @@ class PedidoOCService:
     ) -> Dict[str, Any]:
         """Crea/actualiza una única orden_compra_cabecera + sus detalles. Usada tanto
         para el caso normal (1 ODC) como para cada bodega de un pedido mixto (2 ODC)."""
+        if existing_oc_id:
+            existing_cabecera = oc_repo.get_existing_cabecera(existing_oc_id)
+            existing_estado = existing_cabecera.get("estado") if existing_cabecera else None
+            if existing_estado in ("ENVIADA", "ENCOLADA"):
+                # No reescribir una ODC ya enviada o con un envío encolado (HTTP 202)
+                # sin resolver: el upsert ciego de más abajo (reset a PENDIENTE +
+                # borrar/reinsertar detalles) duplicaría el documento en SAP en un
+                # reintento del pedido completo -- este fue exactamente el mecanismo
+                # que generó la ODC 24712 duplicada de la 24711 encolada. Se reutiliza
+                # la ODC tal cual; enviar_oc_a_sap decide qué hacer con ella (ENVIADA:
+                # nada pendiente; ENCOLADA: resuelve el job antes de reintentar, ver
+                # OCSAPService._resolver_job_encolado_previo).
+                logger.info(
+                    f"♻️ OC {existing_oc_id} ya está en estado {existing_estado} "
+                    f"para pedido {pedido_id} (bodega {codigo_bodega}); no se recrea (evita duplicado en SAP)"
+                )
+                return {
+                    "oc_id": existing_oc_id,
+                    "pedido_id": pedido_id,
+                    "proveedor": proveedor,
+                    "codigo_bodega": codigo_bodega,
+                    "estado": existing_estado,
+                    "detalles_insertados": 0,
+                    "total_lineas": 0,
+                    "cabecera_insertada": False,
+                    "cabecera_actualizada": False,
+                    "reutilizada_sin_cambios": True,
+                    "warnings": [],
+                }
+
         result = {
             "oc_id": None,
             "pedido_id": pedido_id,
