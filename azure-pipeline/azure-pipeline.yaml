@@ -55,14 +55,17 @@ stages:
     
     # 1. (Omitido) El agente Self-Hosted usa python3 nativo de Ubuntu
 
-    # 2. Restaurar dependencias
+    # 2. Restaurar dependencias (Se usa Virtual Environment para cumplir PEP 668)
     - script: |
+        python3 -m venv .venv
+        source .venv/bin/activate
         python3 -m pip install --upgrade pip
         python3 -m pip install -r requirements-dev.txt || python3 -m pip install -r requirements.txt
       displayName: 'Restore dependencies'
 
     # 3. Validación de sintaxis
     - script: |
+        source .venv/bin/activate
         echo "Validando sintaxis de Python..."
         find src -name "*.py" -exec python3 -m py_compile {} +
       displayName: 'Validación de sintaxis'
