@@ -145,6 +145,12 @@ def _preview_oc_st_error() -> Tuple[str, str]:
     )
 
 
+def _preview_oc_creacion_error() -> Tuple[str, str]:
+    return _en._build_oc_creacion_error_email(
+        _OC_CABECERA_EJEMPLO, "Artículo no habilitado para compra en esta bodega", _NUMERO_PEDIDO_EJEMPLO, _FECHA_EJEMPLO,
+    )
+
+
 def _preview_plantilla() -> Tuple[str, str]:
     return _en._build_plantilla_email(
         _PEDIDO_ID_EJEMPLO, _NUMERO_PEDIDO_EJEMPLO, "pedido_agosto.xlsx", _USUARIO_EJEMPLO,
@@ -202,6 +208,7 @@ _DISPATCH: Dict[Tuple[str, str], Callable[[], Tuple[str, str]]] = {
     ("OPERACIONES", "OC y Solicitudes de Transferencia - Listo para Despacho"): _preview_despacho,
     ("MABEL_TRADING", "OC y Solicitudes de Transferencia - Listo para Despacho"): _preview_despacho,
     ("TECNICOS", "Error en OC y Solicitudes de Transferencia"): _preview_oc_st_error,
+    ("TECNICOS", "Error al crear ODC en SAP (reconciliación automática)"): _preview_oc_creacion_error,
     ("OPERACIONES", "Nuevos Registros Migrados"): _preview_migracion,
     ("HOMOLOGACIONES", "Productos NO Homologados Detectados"): _preview_homologacion,
     ("TECNICOS", "Error en Migración Automática"): _preview_error_migracion,

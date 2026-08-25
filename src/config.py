@@ -224,6 +224,14 @@ ENABLE_RECONCILIACION_ST_AUTOMATICA = os.getenv("ENABLE_RECONCILIACION_ST_AUTOMA
 RECONCILIAR_ST_INTERVALO_MINUTOS = int(os.getenv("RECONCILIAR_ST_INTERVALO_MINUTOS", "5"))
 RECONCILIAR_ST_ESCALAMIENTO_HORAS = float(os.getenv("RECONCILIAR_ST_ESCALAMIENTO_HORAS", "1"))
 
+# Reconciliación automática de ODC ENCOLADAS (HTTP 202 del middleware al crear la
+# Purchase Order, SAP saturado). Mismo patrón que la reconciliación de ST arriba,
+# pero SIEMPRE ACTIVA (sin flag de encendido/apagado): cierra el mismo loop que abre
+# OCSAPService._resolver_job_encolado_previo, es parte de la lógica normal del envío
+# a SAP, no una función opcional (evita el duplicado que motivó esto, ver incidente
+# ODC 24711/24712 e IntegracionSAPModal.vue).
+RECONCILIAR_OC_INTERVALO_MINUTOS = int(os.getenv("RECONCILIAR_OC_INTERVALO_MINUTOS", "5"))
+
 # URL base (sin /Login). Prioridad: SAP_SL_BASE_URL > SAP_SERVICE_LAYER_URL
 _sl_url = os.getenv("SAP_SL_BASE_URL") or os.getenv("SAP_SERVICE_LAYER_URL", "http://localhost:50001/b1s/v1")
 SAP_SERVICE_LAYER_URL = _sl_url.rstrip("/").replace("/Login", "").replace("/login", "")

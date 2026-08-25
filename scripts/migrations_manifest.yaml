@@ -640,3 +640,16 @@ migrations:
     description: "Retira del catálogo el correo 'Diferencia en Pedido' (MABEL_TRADING, migración 644): se simplificó el flujo de confirmación para que los tres casos (Confirmar sin diferencia, Diferencia no será entregada, Confirmar y generar N pedidos con la diferencia) reutilicen un solo correo, 'Pedido Confirmado por El Rayo', enviado una vez para el pedido padre, en vez de un correo distinto por cada hijo generado. Se retira también send_diferencia_pedido_notification, _build_diferencia_pedido_email y su vista previa en el código, ya sin ningún endpoint que los invocara. orden_flujo=12 queda vacante"
     category: "data"
     dependencies: ["644"]
+
+  - version: "650"
+    name: "add_job_id_orden_compra_cabecera"
+    file: "migrations/add_job_id_orden_compra_cabecera.sql"
+    description: "orden_compra_cabecera.job_id: permite consultar GET /api/v1/jobs/{jobId} antes de reintentar una ODC encolada (HTTP 202 al crear la Purchase Order), evita duplicados -- mismo patrón que job_id en solicitud_transferencia_detalle (migración 615), replicado tras el incidente de ODC 24711/24712 duplicadas"
+    category: "alter"
+
+  - version: "651"
+    name: "add_correo_odc_creacion_error_tecnicos"
+    file: "migrations/add_correo_odc_creacion_error_tecnicos.sql"
+    description: "Correo 'Error al crear ODC en SAP (reconciliación automática)' al catálogo (TECNICOS): se envía cuando la reconciliación automática de una ODC ENCOLADA reintenta el envío y SAP lo rechaza con un error real. orden_flujo=NULL (no es parte de la secuencia de un pedido)"
+    category: "data"
+    dependencies: ["624"]

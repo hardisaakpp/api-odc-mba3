@@ -42,6 +42,7 @@ _CORREO_CAPACITY_WARNING = "Advertencia de Capacidad"
 _CORREO_OC_PROVEEDOR = "Orden de Compra Generada"
 _CORREO_DESPACHO = "OC y Solicitudes de Transferencia - Listo para Despacho"
 _CORREO_OC_ST_ERROR = "Error en OC y Solicitudes de Transferencia"
+_CORREO_OC_CREACION_ERROR = "Error al crear ODC en SAP (reconciliación automática)"
 _CORREO_PLANTILLA = "Plantilla Excel Procesada (Pedido Enviado)"
 _CORREO_PEDIDO_CANCELADO = "Pedido Cancelado por Mabel"
 _CORREO_PEDIDO_DESCARTADO = "Pedido Descartado"
@@ -766,6 +767,39 @@ def _build_oc_st_error_email(oc_cabecera, doc_num, doc_entry, solicitudes_transf
         timestamp=fecha_ejecucion,
     )
     subject = f"Error en OC y Solicitudes de Transferencia - ODC #{numero_oc_sap}"
+    return subject, body_html
+
+
+def _build_oc_creacion_error_email(oc_cabecera, error_message, pedido_numero, fecha_ejecucion):
+    """Construye (subject, body_html) para 'Error al crear ODC en SAP (reconciliación automática)' (TECNICOS)."""
+    proveedor = oc_cabecera.get("proveedor", "N/A")
+    referencia = oc_cabecera.get("referencia_despacho", "N/A")
+
+    from src.utils.email_template import build_email, info_section, warning_section, paragraph
+
+    body_html = build_email(
+        title="Error al crear ODC en SAP",
+        subtitle="Reconciliación automática de ODC encolada",
+        sections=[
+            paragraph(
+                "Esta ODC había quedado encolada por saturación temporal de SAP. Al "
+                "reintentarla automáticamente, SAP rechazó la creación con un error real "
+                "(no es un problema de conexión transitorio)."
+            ),
+            info_section("Información de la ODC", [
+                ("Proveedor", proveedor),
+                ("Referencia", referencia),
+                ("Pedido", pedido_numero or "N/A"),
+            ], accent="red", highlight_first=True),
+            warning_section(
+                "Detalle del Error",
+                f"<p style='margin:0;color:#5d4037;font-size:14px;line-height:1.6;'>{error_message}</p>",
+            ),
+        ],
+        accent="red",
+        timestamp=fecha_ejecucion,
+    )
+    subject = f"Error al crear ODC en SAP - Pedido {pedido_numero or 'N/A'}"
     return subject, body_html
 
 
@@ -1549,6 +1583,81 @@ def send_oc_st_error_notification_tecnicos(
 
     except Exception as e:
         logger.error(f"❌ Error al enviar notificación de error ODC/ST a técnicos: {e}", exc_info=True)
+        return False
+
+
+def send_oc_creacion_error_notification_tecnicos(
+    oc_cabecera: Dict[str, Any],
+    error_message: str,
+    pedido_numero: Optional[str] = None,
+    fecha_ejecucion: Optional[datetime] = None
+) -> bool:
+    """
+    Envía notificación al USUARIO TÉCNICO cuando la reconciliación automática de una
+    ODC ENCOLADA (HTTP 202 del middleware, ver OCSAPService._resolver_job_encolado_previo
+    y celery_reconciliar_ordenes_compra.py) resuelve en un error real de SAP al crear
+    la Purchase Order -- a diferencia de send_oc_st_error_notification_tecnicos, aquí
+    el fallo es en la ODC misma, no en sus Solicitudes de Transferencia.
+
+    Solo se dispara desde la reconciliación en segundo plano: un reintento manual
+    fallido ya es visible de inmediato para quien lo hizo, sin necesidad de correo.
+
+    DESTINATARIO: TECNICOS
+    """
+    if not ENABLE_EMAIL_NOTIFICATIONS:
+        logger.debug(_MSG_EMAIL_DESHABILITADO)
+        return False
+
+    if not fecha_ejecucion:
+        fecha_ejecucion = ahora_naive()
+
+    try:
+        recipients: list[str] = get_destinatarios_por_correo("TECNICOS", _CORREO_OC_CREACION_ERROR)
+        if not recipients:
+            logger.warning("⚠️ No hay destinatarios TÉCNICOS configurados para error de creación de ODC")
+            return False
+
+        proveedor = oc_cabecera.get("proveedor", "N/A")
+        referencia = oc_cabecera.get("referencia_despacho", "N/A")
+
+        from src.utils.email_template import create_email_message
+
+        subject, body_html = _build_oc_creacion_error_email(
+            oc_cabecera, error_message, pedido_numero, fecha_ejecucion
+        )
+
+        body_text = (
+            f"Error al crear ODC en SAP (reconciliación automática)\n"
+            f"{'=' * 50}\n\n"
+            f"Proveedor: {proveedor}\n"
+            f"Referencia: {referencia}\n"
+            f"Pedido: {pedido_numero or 'N/A'}\n\n"
+            f"Error: {error_message}\n\n"
+            f"Esta ODC estaba encolada por saturación de SAP; al reintentarla "
+            f"automáticamente, SAP la rechazó con el error anterior (no es un problema "
+            f"de conexión, requiere revisión manual). Sigue disponible el botón de "
+            f"reintento en la UI una vez corregido el motivo.\n\n"
+            f"Fecha y Hora: {fecha_ejecucion.strftime('%Y-%m-%d %H:%M:%S')}\n"
+            f"Mensaje automático del sistema de integración SAP - Mabel Trading\n"
+        )
+
+        msg = create_email_message(
+            subject=subject,
+            recipients=recipients,
+            body_html=body_html,
+            body_text=body_text,
+        )
+
+        enviado = send_smtp_message(msg, recipients)
+
+        if enviado:
+            logger.info(f"✅ Notificación de error de creación de ODC enviada a técnicos: {', '.join(recipients)}")
+        else:
+            logger.error(f"❌ Fallo el envío de notificación de error de creación de ODC a técnicos: {', '.join(recipients)}")
+        return enviado
+
+    except Exception as e:
+        logger.error(f"❌ Error al enviar notificación de error de creación de ODC a técnicos: {e}", exc_info=True)
         return False
 
 

@@ -33,6 +33,7 @@ from src.config import (
     SYNC_PRODUCTOS_MINUTE,
     ENABLE_RECONCILIACION_ST_AUTOMATICA,
     RECONCILIAR_ST_INTERVALO_MINUTOS,
+    RECONCILIAR_OC_INTERVALO_MINUTOS,
 )
 
 logger = logging.getLogger(__name__)
@@ -49,6 +50,7 @@ celery_app = Celery(
         'src.tasks.celery_plantilla_upload',
         'src.tasks.celery_proceso_sap',
         'src.tasks.celery_reconciliar_transferencias',
+        'src.tasks.celery_reconciliar_ordenes_compra',
     ]
 )
 
@@ -131,6 +133,15 @@ celery_app.conf.update(
                 'options': {'queue': 'maintenance', 'expires': 240.0},
             }
         } if ENABLE_RECONCILIACION_ST_AUTOMATICA else {}),
+        # Reconciliación de ODC ENCOLADAS: a diferencia de la de ST, no depende de un
+        # flag de encendido/apagado -- es parte de la lógica normal del envío a SAP
+        # (cierra el mismo loop que _resolver_job_encolado_previo abre), no una
+        # función opcional que un ambiente pueda dejar apagada por descuido.
+        'reconciliar-ordenes-compra-pendientes': {
+            'task': 'src.tasks.celery_reconciliar_ordenes_compra.reconciliar_ordenes_compra_pendientes',
+            'schedule': float(RECONCILIAR_OC_INTERVALO_MINUTOS * 60),
+            'options': {'queue': 'maintenance', 'expires': 240.0},
+        },
     },
 
     # Mantener cargas interactivas en la cola por defecto y mover tareas

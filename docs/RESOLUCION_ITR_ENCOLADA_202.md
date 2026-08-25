@@ -56,9 +56,10 @@ transferencia (bug reportado en producción para la tienda TRL-PSC / Portal Shop
 
 ## Fuera de alcance de este fix
 
-- `create_purchase_order` (envío de ODC) puede recibir el mismo 202 del middleware y
-  sigue tratándolo como error genérico — no se tocó porque el reporte y el botón
-  "Reintentar ST" son específicos de Solicitudes de Transferencia (ITR), no de ODC.
+- ~~`create_purchase_order` (envío de ODC) puede recibir el mismo 202 del middleware y
+  sigue tratándolo como error genérico~~ — **resuelto**, ver
+  `docs/RESOLUCION_ODC_ENCOLADA_202.md` (incidente real: ODC 24711 encolada + 24712
+  duplicada por reintento manual, mismo patrón aplicado aquí).
 - `get_inventory_transfer_requests_by_comment` (usado por la verificación preventiva
   contra SAP) también puede recibir 202 y hoy lo trata como "sin resultados" (no
   bloqueante, cae a crear normalmente) — el job-id tracking de este fix cubre
