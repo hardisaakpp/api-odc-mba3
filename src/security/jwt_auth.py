@@ -18,6 +18,8 @@ logger = logging.getLogger(__name__)
 # Esquema de autenticación Bearer
 security = HTTPBearer(auto_error=False)
 
+_MSG_AUTENTICACION_REQUERIDA = "Autenticación requerida"
+
 
 async def verify_jwt_token(
     request: Request,
@@ -253,7 +255,7 @@ def require_permission(permission_key: str, legacy_permission: Optional[str] = N
         if not hasattr(request.state, 'current_user'):
             raise HTTPException(
                 status_code=401,
-                detail="Autenticación requerida"
+                detail=_MSG_AUTENTICACION_REQUERIDA
             )
         _verificar_permiso(user, permission_key, legacy_permission)
 
@@ -282,7 +284,7 @@ def require_any_permission(permission_keys: List[str]):
         if not hasattr(request.state, 'current_user'):
             raise HTTPException(
                 status_code=401,
-                detail="Autenticación requerida"
+                detail=_MSG_AUTENTICACION_REQUERIDA
             )
         permissions = user.get('permissions', [])
         roles = user.get('roles', [])
@@ -321,7 +323,7 @@ def require_admin():
         if not hasattr(request.state, 'current_user'):
             raise HTTPException(
                 status_code=401,
-                detail="Autenticación requerida"
+                detail=_MSG_AUTENTICACION_REQUERIDA
             )
         roles = user.get('roles', [])
         permissions = user.get('permissions', [])
