@@ -17,6 +17,22 @@ logger = logging.getLogger(__name__)
 _MENSAJE_TABLAS: Tuple[str, ...] = ("pedido", "pedido_original")
 
 
+def calcular_margen_rentabilidad(costo_unitario: Optional[float], pvp: Optional[float]) -> Optional[float]:
+    """
+    Calcula el Margen de Rentabilidad (req. 1.5, SIS-PYTD-0002): 1 - (Costo unitario / (PVP / 1.15)).
+    `costo_unitario` = costo_doc_sin_iva / unidad_conversion (pack_conversion, según el pack
+    ya resuelto SAP/Excel) -- reemplaza a la columna "Costo" del Excel (costo_margen), que era
+    manual y no se validaba. Devuelve None si falta el costo o si el PVP es nulo/cero (división
+    inválida). Fracción decimal (ej. 0.35 = 35%), igual que su equivalente en el frontend
+    (mba3-consultas/utils/formatters.ts).
+    """
+    if costo_unitario is None:
+        return None
+    if not pvp:
+        return None
+    return 1 - (costo_unitario / (pvp / 1.15))
+
+
 def clamp_pedido_mensaje(value: Any, *, max_length: Optional[int] = None) -> Any:
     """Trunca mensaje al máximo efectivo (columna SQL o techo de app). Evita error 2628."""
     cap = max_length if max_length is not None else MAX_PEDIDO_MENSAJE_LENGTH
@@ -205,6 +221,10 @@ class PedidoUtils:
         Cuando tiene_estado_id=True, la fila debe incluir estado_id y estado_nombre
         (ej. FROM pedido p LEFT JOIN pedido_estado pe ON pe.id = p.estado_id).
         Se devuelve estado_id, estado_nombre y estado=estado_nombre (compat).
+
+        fecha_facturacion (req. 1.8) se lee de la última columna de la fila
+        (row[-1]): el llamador (get_pedido_completo/get_pedido_completo_por_numero)
+        siempre la agrega al final de cada variante del SELECT.
         """
         base = {
             "pedido_id": str(row[0]),
@@ -227,6 +247,7 @@ class PedidoUtils:
             base.update(self._campos_estado(row))
         else:
             base.update(self._campos_sin_estado(row))
+        base["fecha_facturacion"] = self.normalizar_fecha(row[-1])
         return base
     
     def obtener_distribuciones_tienda(
@@ -286,31 +307,79 @@ class PedidoUtils:
         
         return tiendas_distribucion
     
+    @staticmethod
+    def _comentario_desde_row(row: Any, tiene_comentario: bool) -> Optional[str]:
+        """Valor de "comentario" si la consulta trae esa columna."""
+        if tiene_comentario and len(row) > 11:
+            return row[11] if row[11] else None
+        return None
+
+    @staticmethod
+    def _campos_modificados_desde_row(row: Any, tiene_campos_modificados: bool) -> Dict[str, bool]:
+        """Flags de modificación manual si la consulta trae esas columnas
+        (en BD antigua sin estas columnas, devuelve False por defecto)."""
+        if tiene_campos_modificados and len(row) > 14:
+            return {
+                "costo_modificado_manual": bool(row[12]),
+                "total_modificado_manual": bool(row[13]),
+                "comentario_modificado_manual": bool(row[14]),
+            }
+        return {
+            "costo_modificado_manual": False,
+            "total_modificado_manual": False,
+            "comentario_modificado_manual": False,
+        }
+
+    @staticmethod
+    def _costo_margen_desde_row(row: Any, tiene_costo_margen: bool) -> Optional[float]:
+        """Valor de "costo_margen" (columna "Costo" del Excel, informativa,
+        ya no alimenta el Margen de Rentabilidad) si la consulta trae esa columna."""
+        if tiene_costo_margen and len(row) > 15:
+            return float(row[15]) if row[15] else None
+        return None
+
+    @staticmethod
+    def _costo_unitario_desde_row(row: Any, tiene_costo_unitario: bool) -> Optional[float]:
+        """Valor de "costo_unitario" (costo_doc_sin_iva / unidad_conversion),
+        insumo del Margen de Rentabilidad, si la consulta trae esa columna."""
+        if tiene_costo_unitario and len(row) > 16:
+            return float(row[16]) if row[16] else None
+        return None
+
     def construir_detalle_desde_row(
         self,
         row: Any,
         tiene_comentario: bool,
         tiene_campos_modificados: bool,
-        tiendas_distribucion: List[Dict[str, Any]]
+        tiendas_distribucion: List[Dict[str, Any]],
+        tiene_costo_margen: bool = False,
+        tiene_costo_unitario: bool = False
     ) -> Dict[str, Any]:
         """
         Construye un diccionario de detalle desde una fila de resultado SQL.
-        
+
         Args:
             row: Tupla con los valores de la fila
             tiene_comentario: Si True, incluye el campo comentario
             tiene_campos_modificados: Si True, incluye campos de modificación manual
             tiendas_distribucion: Lista de distribuciones por tienda
-            
+            tiene_costo_margen: Si True, incluye costo_margen (columna "Costo" del Excel,
+                informativa; ya no se usa para el Margen de Rentabilidad, ver costo_unitario)
+            tiene_costo_unitario: Si True, incluye costo_unitario (costo_doc_sin_iva /
+                unidad_conversion), insumo del Margen de Rentabilidad (req. 1.4/1.5)
+
         Returns:
             Diccionario con los datos del detalle
         """
         pedido_detalle_id = str(row[0])
-        
+
         detalle_dict = {
             "pedido_detalle_id": pedido_detalle_id,
             "codigo_interno": row[1],
             "descripcion_sap": row[2],
+            # pd.marca: se sincroniza desde SAP (OITM.U_MARCA) al validar la importación
+            # del Excel (ver pedido_service.py::_validar_pack_pvp_temprana); si SAP no
+            # tiene marca para el artículo, queda NULL (sin respaldo).
             "marca": row[3],
             "codigo_barras": row[4],
             "pack": row[5],
@@ -321,24 +390,23 @@ class PedidoUtils:
             "total": float(row[10]) if row[10] else None,
             "tiendas": tiendas_distribucion,
         }
-        
+
         # Agregar comentario si existe en la consulta
-        if tiene_comentario and len(row) > 11:
-            detalle_dict["comentario"] = row[11] if row[11] else None
-        else:
-            detalle_dict["comentario"] = None
-        
+        detalle_dict["comentario"] = self._comentario_desde_row(row, tiene_comentario)
+
         # Agregar campos de modificación manual si existen en la consulta
-        if tiene_campos_modificados and len(row) > 14:
-            detalle_dict["costo_modificado_manual"] = bool(row[12])
-            detalle_dict["total_modificado_manual"] = bool(row[13])
-            detalle_dict["comentario_modificado_manual"] = bool(row[14])
-        else:
-            # Si los campos no existen en BD antigua, devolver False por defecto
-            detalle_dict["costo_modificado_manual"] = False
-            detalle_dict["total_modificado_manual"] = False
-            detalle_dict["comentario_modificado_manual"] = False
-        
+        detalle_dict.update(self._campos_modificados_desde_row(row, tiene_campos_modificados))
+
+        # Agregar costo_margen si existe en la consulta (columna "Costo" del Excel, informativa,
+        # ya no alimenta el Margen de Rentabilidad; ver costo_unitario)
+        detalle_dict["costo_margen"] = self._costo_margen_desde_row(row, tiene_costo_margen)
+
+        # Agregar costo_unitario si existe en la consulta (costo_doc_sin_iva / unidad_conversion)
+        detalle_dict["costo_unitario"] = self._costo_unitario_desde_row(row, tiene_costo_unitario)
+
+        # Margen de Rentabilidad (req. 1.5): calculado en backend, no en el frontend.
+        detalle_dict["margen"] = calcular_margen_rentabilidad(detalle_dict["costo_unitario"], detalle_dict["pvp"])
+
         return detalle_dict
     
     def obtener_detalles_pedido(
@@ -359,78 +427,143 @@ class PedidoUtils:
         # Orden alfabético por Referencia del Producto (codigo_interno); mismo orden en UI y Excel
         try:
             cursor.execute("""
-                SELECT 
+                SELECT
                     pd.pedido_detalle_id,
                     pd.codigo_interno, pd.descripcion_sap, pd.marca, pd.codigo_barras,
                     pd.pack, pd.costo_doc_sin_iva, pd.descuento_1, pd.pvp,
                     pd.subtotal, pd.total, pd.comentario,
                     ISNULL(pd.costo_modificado_manual, 0) AS costo_modificado_manual,
                     ISNULL(pd.total_modificado_manual, 0) AS total_modificado_manual,
-                    ISNULL(pd.comentario_modificado_manual, 0) AS comentario_modificado_manual
+                    ISNULL(pd.comentario_modificado_manual, 0) AS comentario_modificado_manual,
+                    pd.costo_margen, pd.costo_unitario
                 FROM pedido_detalle pd
                 WHERE pd.pedido_id = ?
                 ORDER BY pd.codigo_interno, pd.pedido_detalle_id
             """, (pedido_id,))
             tiene_comentario = True
             tiene_campos_modificados = True
+            tiene_costo_margen = True
+            tiene_costo_unitario = True
         except Exception:
-            # Si falla la query anterior (ej. columna inexistente), intentar sin campos opcionales
+            # Si falla la query anterior (ej. columna costo_unitario inexistente), intentar sin ella
             try:
                 cursor.execute("""
-                    SELECT 
+                    SELECT
                         pd.pedido_detalle_id,
                         pd.codigo_interno, pd.descripcion_sap, pd.marca, pd.codigo_barras,
                         pd.pack, pd.costo_doc_sin_iva, pd.descuento_1, pd.pvp,
                         pd.subtotal, pd.total, pd.comentario,
                         ISNULL(pd.costo_modificado_manual, 0) AS costo_modificado_manual,
                         ISNULL(pd.total_modificado_manual, 0) AS total_modificado_manual,
-                        ISNULL(pd.comentario_modificado_manual, 0) AS comentario_modificado_manual
+                        ISNULL(pd.comentario_modificado_manual, 0) AS comentario_modificado_manual,
+                        pd.costo_margen
                     FROM pedido_detalle pd
                     WHERE pd.pedido_id = ?
                     ORDER BY pd.codigo_interno, pd.pedido_detalle_id
                 """, (pedido_id,))
                 tiene_comentario = True
                 tiene_campos_modificados = True
+                tiene_costo_margen = True
+                tiene_costo_unitario = False
             except Exception:
+                # Si falla la query anterior (ej. columna costo_margen inexistente), intentar sin campos opcionales
                 try:
                     cursor.execute("""
-                        SELECT 
+                        SELECT
                             pd.pedido_detalle_id,
                             pd.codigo_interno, pd.descripcion_sap, pd.marca, pd.codigo_barras,
                             pd.pack, pd.costo_doc_sin_iva, pd.descuento_1, pd.pvp,
-                            pd.subtotal, pd.total, pd.comentario
+                            pd.subtotal, pd.total, pd.comentario,
+                            ISNULL(pd.costo_modificado_manual, 0) AS costo_modificado_manual,
+                            ISNULL(pd.total_modificado_manual, 0) AS total_modificado_manual,
+                            ISNULL(pd.comentario_modificado_manual, 0) AS comentario_modificado_manual
                         FROM pedido_detalle pd
                         WHERE pd.pedido_id = ?
                         ORDER BY pd.codigo_interno, pd.pedido_detalle_id
                     """, (pedido_id,))
                     tiene_comentario = True
-                    tiene_campos_modificados = False
+                    tiene_campos_modificados = True
+                    tiene_costo_margen = False
+                    tiene_costo_unitario = False
                 except Exception:
-                    cursor.execute("""
-                        SELECT 
-                            pd.pedido_detalle_id,
-                            pd.codigo_interno, pd.descripcion_sap, pd.marca, pd.codigo_barras,
-                            pd.pack, pd.costo_doc_sin_iva, pd.descuento_1, pd.pvp,
-                            pd.subtotal, pd.total
-                        FROM pedido_detalle pd
-                        WHERE pd.pedido_id = ?
-                        ORDER BY pd.codigo_interno, pd.pedido_detalle_id
-                    """, (pedido_id,))
-                    tiene_comentario = False
-                    tiene_campos_modificados = False
-        
+                    try:
+                        cursor.execute("""
+                            SELECT
+                                pd.pedido_detalle_id,
+                                pd.codigo_interno, pd.descripcion_sap, pd.marca, pd.codigo_barras,
+                                pd.pack, pd.costo_doc_sin_iva, pd.descuento_1, pd.pvp,
+                                pd.subtotal, pd.total, pd.comentario
+                            FROM pedido_detalle pd
+                            WHERE pd.pedido_id = ?
+                            ORDER BY pd.codigo_interno, pd.pedido_detalle_id
+                        """, (pedido_id,))
+                        tiene_comentario = True
+                        tiene_campos_modificados = False
+                        tiene_costo_margen = False
+                        tiene_costo_unitario = False
+                    except Exception:
+                        cursor.execute("""
+                            SELECT
+                                pd.pedido_detalle_id,
+                                pd.codigo_interno, pd.descripcion_sap, pd.marca, pd.codigo_barras,
+                                pd.pack, pd.costo_doc_sin_iva, pd.descuento_1, pd.pvp,
+                                pd.subtotal, pd.total
+                            FROM pedido_detalle pd
+                            WHERE pd.pedido_id = ?
+                            ORDER BY pd.codigo_interno, pd.pedido_detalle_id
+                        """, (pedido_id,))
+                        tiene_comentario = False
+                        tiene_campos_modificados = False
+                        tiene_costo_margen = False
+                        tiene_costo_unitario = False
+
         detalles = []
         for row in cursor.fetchall():
             pedido_detalle_id = str(row[0])
-            
+
             # Obtener distribuciones por tienda para este detalle
             tiendas_distribucion = self.obtener_distribuciones_tienda(cursor, pedido_detalle_id)
-            
+
             # Construir detalle
             detalle_dict = self.construir_detalle_desde_row(
-                row, tiene_comentario, tiene_campos_modificados, tiendas_distribucion
+                row, tiene_comentario, tiene_campos_modificados, tiendas_distribucion,
+                tiene_costo_margen, tiene_costo_unitario
             )
             
             detalles.append(detalle_dict)
-        
+
+        self._agregar_cantidad_solicitada_original(cursor, detalles)
+
         return detalles
+
+    @staticmethod
+    def _agregar_cantidad_solicitada_original(cursor: pyodbc.Cursor, detalles: List[Dict[str, Any]]) -> None:
+        """Req. 1.2: agrega cantidad_solicitada_original a cada detalle (consulta aparte,
+        no metida en la cascada try/except de arriba, para no sumarle una 5ta variante de
+        SQL a esa combinatoria). Columna inmutable, fijada una sola vez en el INSERT
+        (PedidoDetalleRepository.insert) -- None si el pedido es anterior a la migración
+        641 o si la columna todavía no existe en este ambiente."""
+        for d in detalles:
+            d["cantidad_solicitada_original"] = None
+        if not detalles:
+            return
+        cursor.execute("""
+            SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS
+            WHERE TABLE_NAME = 'pedido_detalle' AND COLUMN_NAME = 'cantidad_solicitada_original'
+        """)
+        row = cursor.fetchone()
+        if not (row and row[0] > 0):
+            return
+        ids = [d["pedido_detalle_id"] for d in detalles]
+        placeholders = ",".join("?" for _ in ids)
+        cursor.execute(f"""
+            SELECT pedido_detalle_id, cantidad_solicitada_original
+            FROM pedido_detalle
+            WHERE pedido_detalle_id IN ({placeholders})
+        """, ids)
+        originales = {
+            str(row[0]): (float(row[1]) if row[1] is not None else None)
+            for row in cursor.fetchall()
+        }
+        for d in detalles:
+            d["cantidad_solicitada_original"] = originales.get(d["pedido_detalle_id"])

@@ -75,6 +75,9 @@ def procesar_plantilla_upload(
             "Validando y procesando plantilla Excel..."
         )
 
+        def _reportar_progreso(step: str, progress: int, message: str) -> None:
+            estado_service.actualizar_progreso(process_id, step, progress, message)
+
         service = PedidoService()
         resultado = service.validar_y_procesar_archivo_excel(
             file_content=file_content,
@@ -83,7 +86,8 @@ def procesar_plantilla_upload(
             validar_antes_de_guardar=validar,
             bloquea_con_errores=bloquea_con_errores,
             tiendas_permitidas=None,
-            correcciones_codigos=correcciones_codigos
+            correcciones_codigos=correcciones_codigos,
+            on_progress=_reportar_progreso
         )
 
         # Guardar archivo original en ruta definitiva si procesamiento OK y está habilitado
@@ -137,7 +141,7 @@ def procesar_plantilla_upload(
         error_data = _sanitize_resultado_for_redis(e.data) if e.data else None
         if error_data:
             logger.info(f"📋 Guardando error_data para {process_id} (validacion_sap={bool(error_data.get('validacion_sap'))})")
-        estado_service.marcar_error(process_id, e.message, error_data=error_data)
+        estado_service.marcar_error(process_id, e.message, error_data=error_data, error_code=e.error_code)
         raise
     except Exception as e:
         logger.error(f"❌ Error en plantilla Celery {process_id}: {e}", exc_info=True)
@@ -147,7 +151,7 @@ def procesar_plantilla_upload(
         if data_attr and isinstance(data_attr, dict):
             error_data = _sanitize_resultado_for_redis(data_attr)
             logger.info(f"📋 Error con .data detectado, guardando error_data para {process_id}")
-        estado_service.marcar_error(process_id, str(e), error_data=error_data)
+        estado_service.marcar_error(process_id, str(e), error_data=error_data, error_code=getattr(e, "error_code", None))
         raise
     finally:
         # Eliminar archivo temporal

@@ -17,12 +17,13 @@ CHANGELOG:
 import logging
 import pyodbc
 from typing import Dict, Any, List, Optional, Tuple, TYPE_CHECKING
+from datetime import datetime
 
 if TYPE_CHECKING:
     from src.utils.audit_context import AuditContext
 
 # Importar repositorios especializados
-from .pedido.pedido_cabecera_repository import PedidoCabeceraRepository
+from .pedido.pedido_cabecera_repository import PedidoCabeceraRepository, PedidosFiltros
 from .pedido.pedido_detalle_repository import PedidoDetalleRepository
 from .pedido.pedido_tienda_repository import PedidoTiendaRepository
 from ..pedido_estados import ESTADO_LIMITE_CANCELAR_PEDIDO, ESTADOS_PUEDE_DESCARTAR, ESTADOS_PUEDE_CANCELAR_POR_EL_RAYO, estado_id_desde_legacy
@@ -111,10 +112,21 @@ class PedidoRepository:
     def get_pedido_completo_por_numero(self, numero_pedido: str) -> Optional[Dict[str, Any]]:
         """
         Obtiene un pedido completo con cabecera, detalles, tiendas y distribuciones por número de pedido.
-        
+
         DELEGADO a PedidoCabeceraRepository.
         """
         return self.cabecera_repo.get_pedido_completo_por_numero(numero_pedido)
+
+    def get_fecha_confirmacion_estado(
+        self, pedido_id: str, estado_id: int
+    ) -> Optional[datetime]:
+        """
+        Obtiene la fecha/hora (hora Colombia) en que el pedido transicionó a `estado_id`,
+        según la bitácora pedido_estado_historial. None si no hay registro.
+
+        DELEGADO a PedidoCabeceraRepository.
+        """
+        return self.cabecera_repo.get_fecha_confirmacion_estado(pedido_id, estado_id)
 
     def get_by_estado(self, estado: str) -> List[Dict[str, Any]]:
         """
@@ -126,32 +138,30 @@ class PedidoRepository:
 
     def get_pedidos_con_filtros(
         self,
-        estado: Optional[str] = None,
-        fecha_desde: Optional[str] = None,
-        fecha_hasta: Optional[str] = None,
-        proveedor_nombre: Optional[str] = None,
-        numero_pedido: Optional[str] = None,
-        creado_por: Optional[str] = None,
+        filtros: Optional[PedidosFiltros] = None,
+        *,
         limit: Optional[int] = None,
         offset: Optional[int] = None,
-        excluir_borrador: bool = False,
-        solo_redistribucion: bool = False,
-        solo_pendientes_accion: bool = False,
     ) -> Dict[str, Any]:
         """
         Obtiene pedidos con filtros y paginación.
-        
+
         DELEGADO a PedidoCabeceraRepository.
-        
+
         Args:
-            solo_redistribucion: si True, solo incluye pedidos aptos para redistribución
-                (estado_id >= 4 "CONFIRMADO POR EL RAYO" y excluye CANCELADO (19) y CANCELADO POR EL RAYO (20))
+            filtros: filtros opcionales agrupados en PedidosFiltros (python:S107).
+                Incluye, entre otros: solo_redistribucion (estado_id >= 4
+                "CONFIRMADO POR EL RAYO", excluyendo CANCELADO (19), CANCELADO POR
+                EL RAYO (20), CONFIRMADO POR PRODUCCION (23), PRODUCCION POSPUESTA
+                (22) y RECHAZADO (24)); restringir_produccion_el_rayo (req. 1.8,
+                perfil Producción El Rayo: solo NUEVO_PEDIDO y GESTIONAR_PEDIDO);
+                excluir_estados_produccion_el_rayo (req. 1.8 segunda fase, perfil
+                odcsap.view: esos 2 estados dejan de verse); y
+                excluir_listo_para_redistribucion (excluye LISTO_PARA_REDISTRIBUCION
+                (25); debe ser True salvo en la vista de Redistribución).
+            limit, offset: paginación.
         """
-        return self.cabecera_repo.get_pedidos_con_filtros(
-            estado, fecha_desde, fecha_hasta, proveedor_nombre,
-            numero_pedido, creado_por, limit, offset, excluir_borrador, solo_redistribucion,
-            solo_pendientes_accion,
-        )
+        return self.cabecera_repo.get_pedidos_con_filtros(filtros, limit=limit, offset=offset)
 
     def get_pedidos_confirmados(
         self,
@@ -159,6 +169,7 @@ class PedidoRepository:
         offset: Optional[int] = None,
         fecha_desde: Optional[str] = None,
         fecha_hasta: Optional[str] = None,
+        tipo_fecha: Optional[str] = None,
         proveedor_nombre: Optional[str] = None,
         numero_pedido: Optional[str] = None,
         creado_por: Optional[str] = None,
@@ -172,6 +183,7 @@ class PedidoRepository:
             offset=offset,
             fecha_desde=fecha_desde,
             fecha_hasta=fecha_hasta,
+            tipo_fecha=tipo_fecha,
             proveedor_nombre=proveedor_nombre,
             numero_pedido=numero_pedido,
             creado_por=creado_por,
@@ -180,10 +192,18 @@ class PedidoRepository:
     def existe_numero_pedido(self, numero_pedido: str) -> bool:
         """
         Verifica si un número de pedido ya existe en el sistema.
-        
+
         DELEGADO a PedidoCabeceraRepository.
         """
         return self.cabecera_repo.existe_numero_pedido(numero_pedido)
+
+    def contar_hijos(self, pedido_padre_id: str) -> int:
+        """
+        Cantidad de pedidos "hijo" ya generados a partir de este pedido (req. 1.2).
+
+        DELEGADO a PedidoCabeceraRepository.
+        """
+        return self.cabecera_repo.contar_hijos(pedido_padre_id)
 
     def get_ultimo_pedido(self, usuario_id: str) -> Optional[Dict[str, Any]]:
         """
@@ -358,29 +378,29 @@ class PedidoRepository:
 
     def validar_puede_eliminar(self, pedido_id: str) -> tuple[bool, str, str]:
         """
-        Valida si un pedido puede eliminarse con el botón "Eliminar Pedido" (Detalle del Pedido).
-        
-        Solo permite eliminar si:
-        - El pedido está en estado GESTIONAR PEDIDO (3)
+        Valida si un pedido puede cancelarse con el botón "Cancelar Pedido" de EL RAYO (Detalle del Pedido).
+
+        Solo permite cancelar si:
+        - El pedido está en estado CONFIRMADO POR PRODUCCION (23)
         - No tiene respuesta de proveedor, redistribución confirmada u orden de compra
-        
+
         Returns:
-            Tupla: (puede_eliminar, codigo_error, mensaje_error)
+            Tupla: (puede_cancelar, codigo_error, mensaje_error)
         """
         pedido_completo = self.cabecera_repo.get_pedido_completo(pedido_id)
         if not pedido_completo:
             return (False, "not_found", "Pedido no encontrado.")
-        
+
         # Obtener estado_id de la cabecera
         cabecera = pedido_completo.get("cabecera", {})
         estado_id = cabecera.get("estado_id")
-        
-        # Validar estado: solo GESTIONAR PEDIDO (3)
+
+        # Validar estado: solo CONFIRMADO POR PRODUCCION (23)
         if estado_id not in ESTADOS_PUEDE_CANCELAR_POR_EL_RAYO:
             return (
                 False,
                 "estado_no_permitido",
-                "El pedido no puede eliminarse porque no está en estado Gestionar Pedido.",
+                "El pedido no puede cancelarse porque no está en estado Confirmado por Producción.",
             )
         
         # Validar que no tenga datos asociados
@@ -457,53 +477,59 @@ class PedidoRepository:
         self,
         pedido_detalle_id: str,
         nuevo_costo: float,
-        modificado_por: Optional[str] = None
+        modificado_por: Optional[str] = None,
+        audit_context: Optional["AuditContext"] = None
     ) -> Dict[str, Any]:
         """
         Actualiza el costo unitario de un detalle de pedido.
-        
+
         DELEGADO a PedidoDetalleRepository.
         """
-        return self.detalle_repo.update_costo(pedido_detalle_id, nuevo_costo, modificado_por)
+        return self.detalle_repo.update_costo(pedido_detalle_id, nuevo_costo, modificado_por, audit_context)
 
     def update_total_detalle(
         self,
         pedido_detalle_id: str,
         nuevo_total: float,
-        modificado_por: Optional[str] = None
+        modificado_por: Optional[str] = None,
+        audit_context: Optional["AuditContext"] = None
     ) -> Dict[str, Any]:
         """
         Actualiza el total de un detalle de pedido.
-        
+
         DELEGADO a PedidoDetalleRepository.
         """
-        return self.detalle_repo.update_total(pedido_detalle_id, nuevo_total, modificado_por)
+        return self.detalle_repo.update_total(pedido_detalle_id, nuevo_total, modificado_por, audit_context)
 
     def update_comentario_detalle(
         self,
         pedido_detalle_id: str,
         nuevo_comentario: Optional[str],
-        modificado_por: Optional[str] = None
+        modificado_por: Optional[str] = None,
+        audit_context: Optional["AuditContext"] = None
     ) -> Dict[str, Any]:
         """
         Actualiza el comentario de un detalle de pedido.
-        
+
         DELEGADO a PedidoDetalleRepository.
         """
-        return self.detalle_repo.update_comentario(pedido_detalle_id, nuevo_comentario, modificado_por)
+        return self.detalle_repo.update_comentario(pedido_detalle_id, nuevo_comentario, modificado_por, audit_context)
 
     def guardar_modificaciones_columnas(
         self,
         numero_pedido: str,
         modificaciones: List[Dict[str, str]],
-        modificado_por: Optional[str] = None
+        modificado_por: Optional[str] = None,
+        rol_modificador: Optional[str] = None,
+        audit_context: Optional["AuditContext"] = None
     ) -> Dict[str, Any]:
         """
         Guarda o actualiza modificaciones de columnas para un pedido.
-        
+
         DELEGADO a PedidoDetalleRepository.
         """
-        return self.detalle_repo.guardar_modificaciones_columnas(numero_pedido, modificaciones, modificado_por)
+        return self.detalle_repo.guardar_modificaciones_columnas(
+            numero_pedido, modificaciones, modificado_por, rol_modificador, audit_context)
 
     def obtener_modificaciones_columnas(
         self,

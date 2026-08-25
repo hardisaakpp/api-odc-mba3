@@ -280,7 +280,8 @@ class ProcesoEstadoService:
         self,
         process_id: str,
         error: str,
-        error_data: Optional[Dict[str, Any]] = None
+        error_data: Optional[Dict[str, Any]] = None,
+        error_code: Optional[str] = None
     ):
         """
         Marca el proceso como error.
@@ -290,6 +291,8 @@ class ProcesoEstadoService:
             error: Mensaje de error
             error_data: Datos estructurados para el frontend (ej. validacion_sap, sugerencias).
                        Se devuelve en GET resultado para permitir UI de corrección de códigos.
+            error_code: Código de error de BusinessException (ej. PACK_PVP_INVALIDOS_SAP), para
+                       que el frontend distinga el tipo de error sin parsear el mensaje.
         """
         estado = self._obtener_estado(process_id)
         if not estado:
@@ -308,6 +311,8 @@ class ProcesoEstadoService:
         }
         if error_data is not None:
             update["error_data"] = error_data
+        if error_code is not None:
+            update["error_code"] = error_code
         estado.update(update)
         self._guardar_estado(process_id, estado)
         logger.error(f"❌ Proceso con error: {process_id} - {error}")

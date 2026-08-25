@@ -4,8 +4,10 @@ Servicio para enviar órdenes de compra a SAP Service Layer.
 Este servicio orquesta la construcción del JSON y el envío de ODC a SAP.
 """
 
+import contextlib
 import json
 import logging
+import re
 
 from src.utils.timezone import ahora_naive
 from typing import Optional, Dict, Any, List
@@ -18,16 +20,68 @@ from src.config import (
     SAP_ODC_RETRY_MAX_ATTEMPTS,
     SAP_ODC_RETRY_BASE_DELAY_SECONDS,
     SAP_ODC_RETRY_MAX_JITTER_SECONDS,
+    SAP_PREVALIDACION_RETRY_MAX_ATTEMPTS,
+    SAP_PREVALIDACION_RETRY_BASE_DELAY_SECONDS,
+    SAP_PREVALIDACION_RETRY_MAX_JITTER_SECONDS,
     USE_BATCH_VALIDATION,
 )
-from .retry_utils import retry_operation, sap_service_layer_result_should_retry
+from .retry_utils import retry_operation, sap_service_layer_result_should_retry, mensaje_sugiere_reintento_transitorio
+from .proceso_estado_service import get_redis_client
 from ..repositories.orden_compra_repository import OrdenCompraRepository
 from ..clients.sap_service_layer_client import SAPServiceLayerClient
 from ..mappers.sap_oc_mapper import SAPOCMapper
+from src.exceptions import SolicitudTransferenciaNoAplicaError
 
 logger = logging.getLogger(__name__)
 
 _SIN_RESPUESTA_SAP = "Sin respuesta de SAP"
+_ERROR_DESCONOCIDO = "Error desconocido"
+
+# Empareja errores de prevalidación por línea, ej. "Línea 1 (SKU): motivo" o
+# "Línea 1: motivo", para poder agruparlos por motivo (ver _resumir_errores_prevalidacion).
+_LINEA_ERROR_RE = re.compile(r'^Línea \d+(?:\s*\([^)]*\))?:\s*(.+)$')
+
+# Cubre el caso real observado: prevalidación reintentando varios minutos por SAP
+# saturado antes de fallar o tener éxito (ver redis_lock_envio_odc).
+_LOCK_ENVIO_ODC_TIMEOUT_SEGUNDOS = 600.0
+
+
+@contextlib.contextmanager
+def redis_lock_envio_odc(oc_id: str, blocking_timeout: float = 0.1):
+    """
+    Lock distribuido (Redis) para serializar el ENVÍO a SAP de una misma ODC.
+
+    Bug real que corrige: 2 clics de "Reintentar" (o un clic doble por lentitud
+    de la UI) para la MISMA oc_id podían correr en paralelo -- sin este lock, no
+    hay nada que lo impida, porque ambos requests leen la ODC en estado PENDIENTE
+    antes de que el primero termine. Si el primero llega a SAP con éxito
+    (DocEntry asignado) pero el segundo, corriendo en paralelo y sin saber del
+    primero, falla su propia prevalidación después, su manejador de error pisaba
+    el estado de la OC de vuelta a ERROR aunque ya estuviera ENVIADA con DocEntry
+    real -- dejando la ODC en un loop: cada reintento posterior se resetea a
+    PENDIENTE pero la validación de idempotencia (ya tiene DocEntry) lo rechaza
+    de inmediato y la vuelve a marcar ERROR, sin salida posible desde la UI.
+
+    No bloqueante por defecto (blocking_timeout=0.1): si otro envío de la misma
+    ODC ya está en curso, se debe rechazar de inmediato -- no tiene sentido
+    esperar, puede tardar varios minutos por reintentos ante SAP saturado.
+
+    Yields True si se obtuvo el lock, False si no (el caller debe omitir el envío
+    sin tocar el estado de la ODC, ya que el envío en curso es quien debe
+    determinarlo).
+    """
+    client = get_redis_client()
+    lock = client.lock(f"lock:envio-odc:{oc_id}", timeout=_LOCK_ENVIO_ODC_TIMEOUT_SEGUNDOS)
+    acquired = False
+    try:
+        acquired = lock.acquire(blocking=True, blocking_timeout=blocking_timeout)
+        yield acquired
+    finally:
+        if acquired:
+            try:
+                lock.release()
+            except Exception:
+                pass
 
 
 class OCSAPService:
@@ -40,7 +94,11 @@ class OCSAPService:
     ITR_RETRY_MAX_ATTEMPTS = SAP_ITR_RETRY_MAX_ATTEMPTS
     ITR_RETRY_BASE_DELAY_SECONDS = SAP_ITR_RETRY_BASE_DELAY_SECONDS
     ITR_RETRY_MAX_JITTER_SECONDS = SAP_ITR_RETRY_MAX_JITTER_SECONDS
-    
+
+    PREVALIDACION_RETRY_MAX_ATTEMPTS = SAP_PREVALIDACION_RETRY_MAX_ATTEMPTS
+    PREVALIDACION_RETRY_BASE_DELAY_SECONDS = SAP_PREVALIDACION_RETRY_BASE_DELAY_SECONDS
+    PREVALIDACION_RETRY_MAX_JITTER_SECONDS = SAP_PREVALIDACION_RETRY_MAX_JITTER_SECONDS
+
     def __init__(self):
         """Inicializa el servicio."""
         self.sap_client = SAPServiceLayerClient()
@@ -53,7 +111,7 @@ class OCSAPService:
                 response and response.get("success") and response.get("doc_entry")
             ),
             extract_error=lambda response: (
-                response.get("error", "Error desconocido")
+                response.get("error", _ERROR_DESCONOCIDO)
                 if response else "No se recibió respuesta de SAP Service Layer"
             ),
             max_attempts=self.ODC_RETRY_MAX_ATTEMPTS,
@@ -119,7 +177,7 @@ class OCSAPService:
             oc_repo: Repositorio de órdenes de compra (para acceder a la conexión)
             
         Returns:
-            Código de bodega (ej: "RL-CD", "OUT-CD", "REG-CD") o None si no se puede determinar
+            Código de bodega (ej: "RL-CD", "OUT-CD", "RG-CD") o None si no se puede determinar
         """
         pedido_id = oc_cabecera.get("pedido_id")
         if not pedido_id:
@@ -209,7 +267,12 @@ class OCSAPService:
         oc_id: str,
         result: Dict[str, Any]
     ) -> Optional[Dict[str, Any]]:
-        """Carga la cabecera de la ODC y valida que exista y esté en estado PENDIENTE."""
+        """Carga la cabecera de la ODC y valida que esté en un estado desde el que se
+        puede seguir: PENDIENTE (nueva), ENCOLADA (un intento previo recibió HTTP 202
+        del middleware, ver `_resolver_job_encolado_previo`) o ENVIADA (ya se envió
+        con éxito -- el caller la trata como no-op idempotente, ver `enviar_oc_a_sap`;
+        puede llegar aquí en un reintento del pedido completo donde esta ODC en
+        particular ya había tenido éxito)."""
         oc_cabecera = oc_repo.get_existing_cabecera(oc_id)
         if not oc_cabecera:
             error_msg = f"No se encontró orden de compra con ID: {oc_id}"
@@ -220,7 +283,7 @@ class OCSAPService:
             logger.error(f"❌ {error_msg}")
             return None
         estado_actual = oc_cabecera.get("estado")
-        if estado_actual != "PENDIENTE":
+        if estado_actual not in ("PENDIENTE", "ENCOLADA", "ENVIADA"):
             error_msg = f"La ODC no está en estado PENDIENTE (estado actual: {estado_actual})"
             result["error"] = error_msg
             result["error_message"] = error_msg
@@ -285,6 +348,59 @@ class OCSAPService:
             logger.warning(f"⚠️ No se pudo determinar bodega para ODC {oc_id}. La ODC se enviará sin WarehouseCode.")
         return warehouse_code
 
+    def _prevalidar_con_reintento(
+        self,
+        oc_cabecera: Dict[str, Any],
+        oc_detalles: List[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        """
+        Prevalida contra SAP Service Layer con reintento y backoff ante saturación
+        transitoria (HTTP 202 encolado por el middleware). Errores de validación
+        reales (item/proveedor inexistente, etc.) no se reintentan.
+        """
+        resultado = retry_operation(
+            execute=lambda: self._precheck_against_service_layer(oc_cabecera, oc_detalles),
+            is_success=lambda response: bool(response and response.get("valid")),
+            extract_error=lambda response: (
+                '; '.join(response.get("errors", [])) if response else _ERROR_DESCONOCIDO
+            ),
+            max_attempts=self.PREVALIDACION_RETRY_MAX_ATTEMPTS,
+            should_retry=lambda response: mensaje_sugiere_reintento_transitorio(
+                '; '.join(response.get("errors", [])) if response else None
+            ),
+            base_delay_seconds=self.PREVALIDACION_RETRY_BASE_DELAY_SECONDS,
+            max_jitter_seconds=self.PREVALIDACION_RETRY_MAX_JITTER_SECONDS,
+            logger=logger,
+            operation_label="Prevalidación SAP",
+        )
+        return resultado["response"]
+
+    @staticmethod
+    def _resumir_errores_prevalidacion(errores: List[str], total_lineas_oc: int) -> str:
+        """
+        Colapsa errores de prevalidación repetidos (ej. "SAP saturado" en las 12
+        líneas de la ODC) a una sola oración con el conteo, en vez de listar la
+        misma razón línea por línea. Si las líneas fallan por motivos distintos
+        entre sí, mantiene el detalle completo porque ahí sí importa saber qué
+        línea falló y por qué.
+        """
+        lineas_por_razon: Dict[str, int] = {}
+        otros_errores: List[str] = []
+        for error in errores:
+            match = _LINEA_ERROR_RE.match(error)
+            if match:
+                razon = match.group(1)
+                lineas_por_razon[razon] = lineas_por_razon.get(razon, 0) + 1
+            else:
+                otros_errores.append(error)
+
+        total_lineas_con_error = sum(lineas_por_razon.values())
+        if len(lineas_por_razon) == 1 and total_lineas_con_error > 1:
+            (razon, count), = lineas_por_razon.items()
+            resumen = f"{razon} ({count} de {total_lineas_oc} líneas)"
+            return '; '.join(otros_errores + [resumen])
+        return '; '.join(errores)
+
     def _ejecutar_validaciones_oc(
         self,
         oc_cabecera: Dict[str, Any],
@@ -317,10 +433,11 @@ class OCSAPService:
             logger.warning(warning)
 
         logger.info("🔍 Paso 3.5: Prevalidación contra SAP Service Layer...")
-        prevalidacion = self._precheck_against_service_layer(oc_cabecera, oc_detalles)
+        prevalidacion = self._prevalidar_con_reintento(oc_cabecera, oc_detalles)
         if not prevalidacion["valid"]:
             errores_prevalidacion = prevalidacion.get("errors", [])
-            error_msg = f"Prevalidación SAP falló: {'; '.join(errores_prevalidacion)}"
+            errores_resumidos = self._resumir_errores_prevalidacion(errores_prevalidacion, len(oc_detalles))
+            error_msg = f"Prevalidación SAP falló: {errores_resumidos}"
             proveedor_oc = (oc_cabecera.get("proveedor") or "").strip()
             pedido_id_oc = oc_cabecera.get("pedido_id")
             result["error"] = error_msg
@@ -446,7 +563,30 @@ class OCSAPService:
             except Exception:
                 pass
             return
-        error_msg = sap_response.get("error", "Error desconocido")
+        if sap_response.get("queued"):
+            job_id = sap_response.get("job_id")
+            mensaje = (
+                "SAP está procesando esta OC (saturación temporal). "
+                "Se confirmará automáticamente en cuanto SAP la resuelva."
+            )
+            result["error"] = sap_response.get("error", mensaje)
+            result["error_message"] = mensaje
+            result["error_source"] = "SAP"
+            result["retry_recommended"] = False
+            result["queued"] = True
+            result["job_id"] = job_id
+            logger.info(f"⏳ ODC {oc_id} encolada por el middleware (jobId={job_id}); no se trata como error")
+            try:
+                oc_repo.update_estado(
+                    oc_id,
+                    "ENCOLADA",
+                    respuesta_sap=mensaje,
+                    job_id=job_id,
+                )
+            except Exception:
+                pass
+            return
+        error_msg = sap_response.get("error", _ERROR_DESCONOCIDO)
         error_code = sap_response.get("error_code")
         sap_error_details = sap_response.get("sap_error_details")
         if error_code:
@@ -631,9 +771,15 @@ class OCSAPService:
         serie_itr: Optional[int],
         oc_repo: 'OrdenCompraRepository',
         pedido_id: str,
-        result: Dict[str, Any]
+        result: Dict[str, Any],
+        tiendas_destino_filtro: Optional[List[str]] = None
     ) -> None:
-        """Crea Solicitudes de Transferencia para el pedido asociado a la ODC."""
+        """Crea Solicitudes de Transferencia para el pedido asociado a la ODC.
+
+        tiendas_destino_filtro acota las tiendas procesadas -- útil cuando el pedido
+        tiene más de una ODC (una por bodega/marca), para que cada ODC genere ST solo
+        hacia SUS tiendas sin procesar (y omitir con warning) las de la otra bodega
+        (ver enviar_oc_a_sap)."""
         try:
             from .stock_transfer_service import StockTransferService
             bodega_oc = oc_cabecera.get("codigo_bodega")
@@ -648,7 +794,8 @@ class OCSAPService:
                 oc_id=oc_id,
                 bodega_origen=bodega_oc,
                 usuario_id=None,
-                serie=serie_itr
+                serie=serie_itr,
+                tiendas_destino_filtro=tiendas_destino_filtro
             )
             if resultado_transferencias.get("success"):
                 logger.info(
@@ -664,6 +811,21 @@ class OCSAPService:
             else:
                 OCSAPService._log_fallo_itr(pedido_id, resultado_transferencias)
             result["solicitudes_transferencia"] = resultado_transferencias
+        except SolicitudTransferenciaNoAplicaError as e:
+            # No es una falla de SAP/Service Layer: la distribución del pedido no tiene
+            # destino a tienda (ej. todo va a bodega), así que no corresponde generar ITR.
+            # Se guarda con la misma forma que un resultado "sin ST" normal (ver
+            # docs/FRONTEND_MODAL_INTEGRACION_SAP.md, Caso 1) para que ni el modal ni el
+            # correo a técnicos lo traten como un error.
+            logger.info(f"ℹ️ Solicitudes de Transferencia no aplican para pedido {pedido_id}: {e}")
+            result["solicitudes_transferencia"] = {
+                "success": False,
+                "transferencias_creadas": 0,
+                "transferencias_errores": 0,
+                "total_tiendas": 0,
+                "error": str(e),
+                "no_aplica": True,
+            }
         except Exception as e:
             logger.warning(f"⚠️ Error al crear Solicitudes de Transferencia (no crítico): {e}")
             result["solicitudes_transferencia_error"] = str(e)
@@ -688,6 +850,9 @@ class OCSAPService:
             return True
         resultado_st = result.get("solicitudes_transferencia")
         if isinstance(resultado_st, dict):
+            if resultado_st.get("no_aplica"):
+                # Distribución sin destino a tienda: resultado esperado, no un error de SAP.
+                return False
             transferencias_errores = int(resultado_st.get("transferencias_errores", 0) or 0)
             return transferencias_errores > 0 or not bool(resultado_st.get("success"))
         return False
@@ -789,7 +954,8 @@ class OCSAPService:
         sap_response: Dict[str, Any],
         envio_oc_result: Dict[str, Any],
         oc_repo: 'OrdenCompraRepository',
-        result: Dict[str, Any]
+        result: Dict[str, Any],
+        tiendas_destino_filtro: Optional[List[str]] = None
     ) -> None:
         """Procesa el resultado exitoso de envío a SAP: actualiza estado, crea ITRs, STs, notifica y cierra pedido."""
         doc_entry = sap_response.get("doc_entry")
@@ -843,7 +1009,10 @@ class OCSAPService:
 
             pedido_id = oc_cabecera.get("pedido_id")
             if pedido_id:
-                self._crear_solicitudes_transferencia_oc(oc_id, oc_cabecera, doc_num, serie_itr, oc_repo, pedido_id, result)
+                self._crear_solicitudes_transferencia_oc(
+                    oc_id, oc_cabecera, doc_num, serie_itr, oc_repo, pedido_id, result,
+                    tiendas_destino_filtro=tiendas_destino_filtro
+                )
                 self._notificar_resultado_oc_st(oc_id, oc_cabecera, doc_num, doc_entry, pedido_id, oc_repo, result)
                 self._cerrar_pedido_desde_resultado_oc(pedido_id, oc_repo, result)
 
@@ -863,26 +1032,165 @@ class OCSAPService:
             except Exception:
                 pass
 
+    @staticmethod
+    def resolver_tiendas_destino_filtro(oc_repo: 'OrdenCompraRepository', oc_id: str) -> Optional[List[str]]:
+        """
+        Si esta ODC pertenece a un pedido con más de una ODC (pedido mixto, una por
+        bodega/marca -- ver PedidoOCService.crear_ocs_desde_pedido_confirmado),
+        devuelve las tiendas propias de la bodega de ESTA ODC, para pasarlas como
+        tiendas_destino_filtro a enviar_oc_a_sap y evitar ST duplicadas (ver su
+        docstring). Devuelve None si el pedido tiene una sola ODC (caso normal,
+        sin cambios) o si no se pudo determinar -- fail-open, igual que hoy.
+
+        Usar antes de cualquier reenvío/reintento manual o por lote de una ODC
+        puntual (no aplica al envío inicial de un pedido mixto, que ya arma este
+        filtro directamente en endpoints_proceso.py::_paso2_generar_odc).
+        """
+        try:
+            oc_cabecera = oc_repo.get_existing_cabecera(oc_id)
+            if not oc_cabecera:
+                return None
+            pedido_id = oc_cabecera.get("pedido_id")
+            codigo_bodega = oc_cabecera.get("codigo_bodega")
+            if not pedido_id or not codigo_bodega:
+                return None
+            ocs_del_pedido = oc_repo.get_by_pedido_id(pedido_id)
+            if len(ocs_del_pedido) <= 1:
+                return None
+            from .pedido_oc_service import PedidoOCService
+            tiendas_por_bodega = PedidoOCService._tiendas_por_bodega(oc_repo.conn, pedido_id, [codigo_bodega])
+            return tiendas_por_bodega.get(codigo_bodega) or None
+        except Exception as e:
+            logger.warning(f"⚠️ No se pudo resolver tiendas_destino_filtro para OC {oc_id}: {e}")
+            return None
+
+    def _resolver_job_encolado_previo(
+        self,
+        oc_id: str,
+        oc_cabecera: Dict[str, Any],
+        oc_detalles: List[Dict[str, Any]],
+        oc_repo: 'OrdenCompraRepository',
+        result: Dict[str, Any],
+        tiendas_destino_filtro: Optional[List[str]] = None,
+    ) -> Optional[bool]:
+        """
+        Si la ODC quedó ENCOLADA (HTTP 202 de un intento previo al crear la Purchase
+        Order), consulta primero GET /api/v1/jobs/{jobId} en vez de reenviar la
+        creación a ciegas -- el job original todavía puede completarse en segundo
+        plano, y reenviar crearía una ODC duplicada en SAP (mismo patrón ya aplicado
+        a Solicitudes de Transferencia, ver StockTransferService._resolver_jobs_
+        encolados_pendientes; incidente real que motivó esto: ODC 24711 encolada +
+        24712 duplicada por reintento manual).
+
+        Returns:
+            None: la ODC no estaba ENCOLADA -- no aplica, el caller sigue su flujo normal.
+            True: el job resolvió en error real de SAP -- se deja la ODC libre para
+                un intento normal (oc_cabecera se actualiza en el dict para reflejarlo),
+                el caller sigue su flujo normal.
+            False: el job ya quedó resuelto por esta llamada (COMPLETADO, adoptado
+                vía _procesar_oc_exitosa) o sigue ENCOLADO/PROCESANDO/no consultable
+                -- `result` ya quedó armado, el caller debe retornar de inmediato.
+        """
+        if oc_cabecera.get("estado") != "ENCOLADA":
+            return None
+
+        job_id = oc_cabecera.get("job_id")
+        if not job_id:
+            logger.warning(f"⚠️ ODC {oc_id} en estado ENCOLADA sin job_id; se reintenta como si fuera nueva")
+            return None
+
+        job = self.sap_client.get_job_status(job_id)
+        if not job:
+            logger.warning(f"⚠️ No se pudo consultar job {job_id} de ODC {oc_id} encolada; se deja para el próximo intento")
+            result["error"] = "No se pudo consultar el estado del envío encolado a SAP"
+            result["error_message"] = result["error"]
+            result["error_source"] = "SAP_CONNECTION"
+            result["retry_recommended"] = False
+            result["queued"] = True
+            return False
+
+        status = str(job.get("status") or "").upper()
+
+        if status == "COMPLETADO":
+            resultado_job = job.get("result") or {}
+            doc_entry = resultado_job.get("docEntry")
+            doc_num = resultado_job.get("docNum")
+            if not doc_entry:
+                logger.warning(f"⚠️ Job {job_id} COMPLETADO sin docEntry para ODC {oc_id}; se deja para el próximo intento")
+                result["error"] = "SAP confirmó el envío encolado pero no devolvió DocEntry"
+                result["error_message"] = result["error"]
+                result["error_source"] = "SAP"
+                result["retry_recommended"] = False
+                result["queued"] = True
+                return False
+            logger.info(
+                f"♻️ Job SAP encolado COMPLETADO para ODC {oc_id}: se adopta "
+                f"(DocEntry={doc_entry}, DocNum={doc_num}) sin recrear"
+            )
+            sap_response_sintetico = {
+                "success": True, "doc_entry": doc_entry, "doc_num": doc_num, "data": resultado_job,
+            }
+            self._procesar_oc_exitosa(
+                oc_id, oc_cabecera, oc_detalles, sap_response_sintetico, {"attempts": None}, oc_repo, result,
+                tiendas_destino_filtro=tiendas_destino_filtro,
+            )
+            return False
+
+        if status in ("ENCOLADO", "PROCESANDO"):
+            logger.info(f"⏳ Job SAP aún {status} para ODC {oc_id}: se omite este intento")
+            result["error"] = f"SAP saturado: la solicitud sigue encolada (jobId={job_id})"
+            result["error_message"] = result["error"]
+            result["error_source"] = "SAP"
+            result["retry_recommended"] = False
+            result["queued"] = True
+            result["job_id"] = job_id
+            return False
+
+        # status == "ERROR" (motivo real de SAP) o desconocido: a diferencia del
+        # patrón ya existente para ST (que lo descarta silenciosamente), sí se
+        # persiste el motivo para no perder la razón real del fallo original antes
+        # de dejar la ODC libre para un intento normal.
+        motivo = job.get("error") or f"Job SAP finalizó con estado {status or 'desconocido'}"
+        logger.warning(f"❌ Job {job_id} de ODC {oc_id} encolada terminó en error: {motivo}")
+        try:
+            oc_repo.update_estado(
+                oc_id, "PENDIENTE",
+                respuesta_sap=f"Job SAP encolado anterior finalizó en error: {motivo}",
+            )
+        except Exception:
+            pass
+        oc_cabecera["estado"] = "PENDIENTE"
+        oc_cabecera["job_id"] = None
+        return True
+
     def enviar_oc_a_sap(
         self,
         oc_repo: OrdenCompraRepository,
         oc_id: str,
-        warehouse_code: Optional[str] = None
+        warehouse_code: Optional[str] = None,
+        tiendas_destino_filtro: Optional[List[str]] = None
     ) -> Dict[str, Any]:
         """
         Envía una orden de compra a SAP Service Layer.
-        
+
         Proceso:
         1. Obtiene la cabecera y detalles de la ODC desde la base de datos
         2. Convierte los datos a formato JSON de SAP
         3. Envía la ODC a SAP Service Layer
         4. Actualiza el estado y número de OC en la base de datos
-        
+
         Args:
             oc_repo: Repositorio de órdenes de compra
             oc_id: UUID de la orden de compra a enviar
             warehouse_code: Código de bodega (opcional)
-            
+            tiendas_destino_filtro: Lista opcional de códigos de tienda a los que
+                acotar las Solicitudes de Transferencia generadas tras el envío
+                (ver StockTransferService.crear_solicitudes_transferencia_desde_pedido).
+                Útil cuando el pedido tiene más de una ODC (una por bodega/marca): sin
+                este filtro, cada ODC igual solo generaría ST hacia sus propias tiendas
+                (la validación de bodega ya rechaza cruces), pero recorrería también las
+                tiendas de la otra bodega solo para omitirlas con warning.
+
         Returns:
             Diccionario con el resultado:
             {
@@ -900,56 +1208,87 @@ class OCSAPService:
             "doc_num": None,
             "error": None
         }
-        
-        try:
-            oc_cabecera = self._cargar_y_validar_cabecera(oc_repo, oc_id, result)
-            if oc_cabecera is None:
+
+        with redis_lock_envio_odc(oc_id) as adquirido:
+            if not adquirido:
+                error_msg = "Ya hay un envío a SAP en curso para esta ODC. Espera a que termine antes de reintentar."
+                result["error"] = error_msg
+                result["error_message"] = error_msg
+                result["error_source"] = "BACKEND"
+                result["retry_recommended"] = True
+                logger.warning(f"⚠️ {error_msg} (oc_id={oc_id})")
                 return result
 
-            oc_detalles = self._cargar_y_validar_detalles(oc_repo, oc_id, result)
-            if oc_detalles is None:
-                return result
-
-            warehouse_code = self._resolver_warehouse_code(oc_cabecera, oc_repo, oc_id, warehouse_code)
-
-            if not self._ejecutar_validaciones_oc(oc_cabecera, oc_detalles, oc_id, oc_repo, result):
-                return result
-
-            purchase_order_json = self._construir_json_sap(
-                oc_cabecera, oc_detalles, warehouse_code, oc_repo, oc_id, result
-            )
-            if purchase_order_json is None:
-                return result
-
-            logger.info(f"🔄 Enviando ODC {oc_id} a SAP Service Layer...")
-            envio_oc_result = self._enviar_oc_con_reintento(purchase_order_json)
-            sap_response = envio_oc_result.get("response")
-
-            if not sap_response or not sap_response.get("success"):
-                self._manejar_fallo_envio_sap(oc_id, sap_response, envio_oc_result, oc_repo, result)
-                return result
-
-            self._procesar_oc_exitosa(
-                oc_id, oc_cabecera, oc_detalles, sap_response, envio_oc_result, oc_repo, result
-            )
-
-        except Exception as e:
-            error_msg = f"Error inesperado: {str(e)}"
-            result["error"] = error_msg
-            result["error_message"] = error_msg  # Alias para compatibilidad con frontend
-            result["error_source"] = "BACKEND"
-            result["retry_recommended"] = True
-            logger.error(f"❌ Error al enviar ODC a SAP: {e}", exc_info=True)
             try:
-                oc_repo.update_estado(
-                    oc_id, 
-                    "ERROR",
-                    respuesta_sap=error_msg,
-                    error_message=error_msg,
-                    error_source="BACKEND"
+                oc_cabecera = self._cargar_y_validar_cabecera(oc_repo, oc_id, result)
+                if oc_cabecera is None:
+                    return result
+
+                if oc_cabecera.get("estado") == "ENVIADA":
+                    # No-op idempotente: esta ODC ya se envió con éxito en un intento
+                    # previo (puede llegar aquí en un reintento del pedido completo
+                    # donde solo otra ODC hermana había fallado/quedado encolada).
+                    # No hay nada que reenviar a SAP.
+                    logger.info(f"ℹ️ ODC {oc_id} ya está ENVIADA; no se reenvía (no-op)")
+                    result["success"] = True
+                    result["doc_entry"] = oc_cabecera.get("doc_entry")
+                    result["doc_num"] = oc_cabecera.get("numero_oc_sap")
+                    result["already_sent"] = True
+                    result["message"] = "Orden ya enviada previamente a SAP"
+                    return result
+
+                oc_detalles = self._cargar_y_validar_detalles(oc_repo, oc_id, result)
+                if oc_detalles is None:
+                    return result
+
+                resuelto = self._resolver_job_encolado_previo(
+                    oc_id, oc_cabecera, oc_detalles, oc_repo, result,
+                    tiendas_destino_filtro=tiendas_destino_filtro,
                 )
-            except Exception:
-                pass
+                if resuelto is False:
+                    return result
+
+                warehouse_code = self._resolver_warehouse_code(oc_cabecera, oc_repo, oc_id, warehouse_code)
+
+                if not self._ejecutar_validaciones_oc(oc_cabecera, oc_detalles, oc_id, oc_repo, result):
+                    return result
+
+                purchase_order_json = self._construir_json_sap(
+                    oc_cabecera, oc_detalles, warehouse_code, oc_repo, oc_id, result
+                )
+                if purchase_order_json is None:
+                    return result
+
+                logger.info(f"🔄 Enviando ODC {oc_id} a SAP Service Layer...")
+                envio_oc_result = self._enviar_oc_con_reintento(purchase_order_json)
+                sap_response = envio_oc_result.get("response")
+
+                if not sap_response or not sap_response.get("success"):
+                    self._manejar_fallo_envio_sap(oc_id, sap_response, envio_oc_result, oc_repo, result)
+                    return result
+
+                self._procesar_oc_exitosa(
+                    oc_id, oc_cabecera, oc_detalles, sap_response, envio_oc_result, oc_repo, result,
+                    tiendas_destino_filtro=tiendas_destino_filtro
+                )
+
+            except Exception as e:
+                error_msg = f"Error inesperado: {str(e)}"
+                result["error"] = error_msg
+                result["error_message"] = error_msg  # Alias para compatibilidad con frontend
+                result["error_source"] = "BACKEND"
+                result["retry_recommended"] = True
+                logger.error(f"❌ Error al enviar ODC a SAP: {e}", exc_info=True)
+                try:
+                    oc_repo.update_estado(
+                        oc_id,
+                        "ERROR",
+                        respuesta_sap=error_msg,
+                        error_message=error_msg,
+                        error_source="BACKEND"
+                    )
+                except Exception:
+                    pass
         return result
 
     def _validar_antes_de_crear_oc(
@@ -1416,7 +1755,8 @@ class OCSAPService:
                     })
                     continue
                 
-                resultado = self.enviar_oc_a_sap(oc_repo, oc_id, warehouse_code)
+                tiendas_destino_filtro = self.resolver_tiendas_destino_filtro(oc_repo, oc_id)
+                resultado = self.enviar_oc_a_sap(oc_repo, oc_id, warehouse_code, tiendas_destino_filtro)
                 resultados.append({
                     "oc_id": oc_id,
                     "proveedor": oc_info.get("proveedor"),

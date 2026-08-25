@@ -30,10 +30,13 @@ class PedidoCierreService:
         odc_pendientes: int,
         odc_con_error: int,
         odc_sin_doc_entry: int,
+        odc_encoladas: int = 0,
     ) -> str:
         razones = []
         if odc_pendientes > 0:
             razones.append(f"{odc_pendientes} ODC pendientes")
+        if odc_encoladas > 0:
+            razones.append(f"{odc_encoladas} ODC esperando confirmación de SAP")
         if odc_con_error > 0:
             razones.append(f"{odc_con_error} ODC con error")
         if odc_sin_doc_entry > 0:
@@ -67,6 +70,7 @@ class PedidoCierreService:
                 "odc_pendientes": int,
                 "odc_con_error": int,
                 "odc_sin_doc_entry": int,
+                "odc_encoladas": int,
                 "razon_no_cierre": Optional[str]
             }
         """
@@ -80,6 +84,7 @@ class PedidoCierreService:
                 "odc_pendientes": 0,
                 "odc_con_error": 0,
                 "odc_sin_doc_entry": 0,
+                "odc_encoladas": 0,
                 "razon_no_cierre": "No hay ODC asociadas al pedido"
             }
 
@@ -88,6 +93,7 @@ class PedidoCierreService:
         odc_pendientes = 0
         odc_con_error = 0
         odc_sin_doc_entry = 0
+        odc_encoladas = 0
 
         for oc in ocs:
             estado = oc.get("estado")
@@ -101,19 +107,26 @@ class PedidoCierreService:
                 odc_pendientes += 1
             elif estado == "ERROR":
                 odc_con_error += 1
+            elif estado == "ENCOLADA":
+                # HTTP 202 del middleware al crear la Purchase Order: SAP está
+                # procesando el job en segundo plano, aún sin resolver (ver
+                # OCSAPService._resolver_job_encolado_previo). No es un error ni
+                # una ODC pendiente de enviar -- es su propio estado transitorio.
+                odc_encoladas += 1
 
         puede_cerrar = (
             total_odc > 0 and
             odc_enviadas == total_odc and
             odc_pendientes == 0 and
             odc_con_error == 0 and
-            odc_sin_doc_entry == 0
+            odc_sin_doc_entry == 0 and
+            odc_encoladas == 0
         )
 
         razon_no_cierre = None
         if not puede_cerrar:
             razon_no_cierre = PedidoCierreService._construir_razon_no_cierre(
-                odc_enviadas, total_odc, odc_pendientes, odc_con_error, odc_sin_doc_entry
+                odc_enviadas, total_odc, odc_pendientes, odc_con_error, odc_sin_doc_entry, odc_encoladas
             )
 
         return {
@@ -123,6 +136,7 @@ class PedidoCierreService:
             "odc_pendientes": odc_pendientes,
             "odc_con_error": odc_con_error,
             "odc_sin_doc_entry": odc_sin_doc_entry,
+            "odc_encoladas": odc_encoladas,
             "razon_no_cierre": razon_no_cierre
         }
     

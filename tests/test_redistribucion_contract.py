@@ -1,6 +1,6 @@
 """Tests de contrato para endpoints de redistribución."""
 
-from typing import Dict, List, Optional, Set, Type, Tuple
+from typing import List, Optional, Set
 
 from fastapi import FastAPI
 from fastapi.routing import APIRoute
@@ -66,6 +66,7 @@ def test_redistribucion_endpoints_registrados():
         "/api/pedidos/{numero_pedido}/redistribucion/ajustar-bodegas",
         "/api/pedidos/{pedido_id}/distribucion/descargar-excel",
         "/api/pedidos/{numero_pedido}/proceso-completo-sap",
+        "/api/pedidos/tiendas/buscar",
     }
 
     assert expected_paths.issubset({r.path for r in routes})

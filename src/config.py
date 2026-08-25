@@ -23,6 +23,18 @@ else:
 # Configuracion de li­mites
 MAX_QUERY_LENGTH = 5000  # Longitud maxima de consulta en caracteres
 
+# ============================================================================
+# Configuración del ThreadPoolExecutor por defecto de asyncio
+# ============================================================================
+# La app corre como un único proceso uvicorn (sin --workers) y usa
+# asyncio.to_thread(...) extensivamente para llamadas bloqueantes (pyodbc a
+# SQL Server, HTTP a SAP/middleware, storage de archivos). Sin configurar
+# esto, asyncio usa su ThreadPoolExecutor por defecto
+# (min(32, os.cpu_count()+4)), compartido por TODAS esas llamadas en toda la
+# app. El tamaño configurado aquí se aplica como executor por defecto del
+# event loop en el startup de la app (ver api_server.py, startup_event()).
+API_THREAD_POOL_MAX_WORKERS = int(os.getenv("API_THREAD_POOL_MAX_WORKERS", "64"))
+
 # Ruta para guardar la Ãºltima consulta (en la raÃ­z del proyecto)
 # Si api_server.py estÃ¡ en src/, subir un nivel para llegar a la raÃ­z
 _current_file = Path(__file__).resolve()
@@ -144,6 +156,19 @@ SQL_SERVER_SAP_UID = os.getenv("SQL_SERVER_SAP_UID", SQL_SERVER_UID)
 SQL_SERVER_SAP_PWD = os.getenv("SQL_SERVER_SAP_PWD", SQL_SERVER_PWD)
 
 # ============================================================================
+# Configuracion de SQL Server sc_maestros (datos maestros legados, SOLO LECTURA)
+# ============================================================================
+# Servidor de PRODUCCION. JAMAS escribir desde este servicio.
+# Se usa unicamente para leer dbo.almacenes_local (marca por codigo de tienda/bodega).
+# Sin default por seguridad (python:S1313): configurar SQL_SERVER_MAESTROS_SERVER en .env.
+
+SQL_SERVER_MAESTROS_DRIVER = os.getenv("SQL_SERVER_MAESTROS_DRIVER", SQL_SERVER_DRIVER)
+SQL_SERVER_MAESTROS_SERVER = os.getenv("SQL_SERVER_MAESTROS_SERVER", "")
+SQL_SERVER_MAESTROS_DATABASE = os.getenv("SQL_SERVER_MAESTROS_DATABASE", "sc_maestros")
+SQL_SERVER_MAESTROS_UID = os.getenv("SQL_SERVER_MAESTROS_UID", "")
+SQL_SERVER_MAESTROS_PWD = os.getenv("SQL_SERVER_MAESTROS_PWD", "")
+
+# ============================================================================
 # ConfiguraciÃ³n de SAP (HANA)
 # ============================================================================
 # ConfiguraciÃ³n para consultas a SAP usando OPENQUERY desde SQL Server
@@ -200,6 +225,14 @@ ENABLE_RECONCILIACION_ST_AUTOMATICA = os.getenv("ENABLE_RECONCILIACION_ST_AUTOMA
 RECONCILIAR_ST_INTERVALO_MINUTOS = int(os.getenv("RECONCILIAR_ST_INTERVALO_MINUTOS", "5"))
 RECONCILIAR_ST_ESCALAMIENTO_HORAS = float(os.getenv("RECONCILIAR_ST_ESCALAMIENTO_HORAS", "1"))
 
+# Reconciliación automática de ODC ENCOLADAS (HTTP 202 del middleware al crear la
+# Purchase Order, SAP saturado). Mismo patrón que la reconciliación de ST arriba,
+# pero SIEMPRE ACTIVA (sin flag de encendido/apagado): cierra el mismo loop que abre
+# OCSAPService._resolver_job_encolado_previo, es parte de la lógica normal del envío
+# a SAP, no una función opcional (evita el duplicado que motivó esto, ver incidente
+# ODC 24711/24712 e IntegracionSAPModal.vue).
+RECONCILIAR_OC_INTERVALO_MINUTOS = int(os.getenv("RECONCILIAR_OC_INTERVALO_MINUTOS", "5"))
+
 # URL base (sin /Login). Prioridad: SAP_SL_BASE_URL > SAP_SERVICE_LAYER_URL
 _sl_url = os.getenv("SAP_SL_BASE_URL") or os.getenv("SAP_SERVICE_LAYER_URL", "http://localhost:50001/b1s/v1")
 SAP_SERVICE_LAYER_URL = _sl_url.rstrip("/").replace("/Login", "").replace("/login", "")
@@ -249,6 +282,30 @@ SAP_ITR_RETRY_MAX_JITTER_SECONDS = max(0.0, float(os.getenv("SAP_ITR_RETRY_MAX_J
 SAP_ODC_RETRY_MAX_ATTEMPTS = max(1, int(os.getenv("SAP_ODC_RETRY_MAX_ATTEMPTS", "3")))
 SAP_ODC_RETRY_BASE_DELAY_SECONDS = max(0.1, float(os.getenv("SAP_ODC_RETRY_BASE_DELAY_SECONDS", "3.0")))
 SAP_ODC_RETRY_MAX_JITTER_SECONDS = max(0.0, float(os.getenv("SAP_ODC_RETRY_MAX_JITTER_SECONDS", "1.0")))
+
+# Reintentos automáticos para la PREVALIDACIÓN de la ODC contra SAP Service Layer
+# (paso previo al envío: valida proveedor + artículos). A diferencia del envío en sí,
+# antes no tenía retry_operation propio: cada consulta individual (get_item/
+# get_business_partner) ya reintenta HTTP 202 acotado (~6s, ver _LECTURA_202_MAX_INTENTOS
+# en sap_service_layer_client.py), pero el middleware encola el job y lo vuelve a
+# intentar recién a partir de los 15s (docs/RESOLUCION_ITR_ENCOLADA_202.md) — esa ventana
+# no alcanza a esperar el job, sobre todo en la primera consulta tras levantar el
+# middleware (sesión/caché fríos). Sin este retry externo, la prevalidación fallaba con
+# "SAP saturado" en el primer intento y solo funcionaba si el usuario reintentaba a mano.
+#
+# 3 intentos / 3s base (backoff exponencial: 3s, 6s ≈ 9-11s totales antes de rendirse)
+# seguían sin alcanzar ese umbral de 15s en la práctica -- el primer envío de cualquier
+# pedido nuevo casi siempre fallaba con "SAP saturado" y solo funcionaba al reintentar
+# manualmente unos segundos/minutos después (jobs ya resueltos y cacheados en el
+# middleware). Subido a 5 intentos / 5s base (esperas de ~5s, 10s, 20s, 40s ≈ 75s
+# acumulados) para que el propio reintento automático cruce el ciclo de 15s del
+# middleware sin necesitar intervención manual. Es aceptable porque el envío corre en
+# Celery (asíncrono, no bloquea la UI); reintentos ya resueltos responden al instante
+# vía el cache de job_en_curso en Redis, así que el costo real no escala linealmente
+# con los intentos.
+SAP_PREVALIDACION_RETRY_MAX_ATTEMPTS = max(1, int(os.getenv("SAP_PREVALIDACION_RETRY_MAX_ATTEMPTS", "5")))
+SAP_PREVALIDACION_RETRY_BASE_DELAY_SECONDS = max(0.1, float(os.getenv("SAP_PREVALIDACION_RETRY_BASE_DELAY_SECONDS", "5.0")))
+SAP_PREVALIDACION_RETRY_MAX_JITTER_SECONDS = max(0.0, float(os.getenv("SAP_PREVALIDACION_RETRY_MAX_JITTER_SECONDS", "1.0")))
 
 # ============================================================================
 # ConfiguraciÃ³n de Seguridad (Opcional)
@@ -447,38 +504,18 @@ EMAIL_SMTP_TIMEOUT = float(os.getenv("EMAIL_SMTP_TIMEOUT", "5.0"))
 # Direcciones de correo
 EMAIL_FROM = os.getenv("EMAIL_FROM", "integrationsap@mabeltrading.com.ec")
 # Nombre del remitente para los correos
-EMAIL_FROM_NAME = os.getenv("EMAIL_FROM_NAME", "INTEGRACIÃ“N SAP")
+EMAIL_FROM_NAME = os.getenv("EMAIL_FROM_NAME", "INTEGRACIÓN SAP")
 
-# EMAIL_TO - SEGMENTADO POR TIPO (fallback desde .env)
-# La app lee primero de la tabla notificacion_destinatarios; si no hay datos, usa estas listas.
-# Tipos: OPERACIONES, MABEL_TRADING, HOMOLOGACIONES, TECNICOS (ver get_destinatarios_por_tipo).
+# Los destinatarios de cada correo se resuelven en BD vía
+# get_destinatarios_por_correo (notificacion_persona_correo /
+# notificacion_tipo_correo, administrable en "Personas y Correos"); no hay
+# fallback a variables de entorno.
 _DEFAULT_CORTIZ_EMAIL = "cortiz@mabeltrading.com.ec"
-# Usuario Principal: Operaciones/Despachos (recibe notificaciones de NUEVOS DESPACHOS)
-_email_operaciones = os.getenv("EMAIL_TO_OPERACIONES", "cortiz@mabeltrading.com.ec,pchafuel@mabeltrading.com.ec")
-EMAIL_TO_OPERACIONES = [email.strip() for email in _email_operaciones.split(",") if email.strip()]
-
-# Usuario Homologaciones: Productos no homologados (recibe notificaciones de SKUs faltantes)
-_email_homologaciones = os.getenv("EMAIL_TO_HOMOLOGACIONES", _DEFAULT_CORTIZ_EMAIL)
-EMAIL_TO_HOMOLOGACIONES = [email.strip() for email in _email_homologaciones.split(",") if email.strip()]
-
-# Usuario TÃ©cnico: Errores y advertencias del sistema (recibe notificaciones tÃ©cnicas)
-_email_tecnicos = os.getenv("EMAIL_TO_TECNICOS", _DEFAULT_CORTIZ_EMAIL)
-EMAIL_TO_TECNICOS = [email.strip() for email in _email_tecnicos.split(",") if email.strip()]
-
-# EMAIL_TO (legacy - para compatibilidad con cÃ³digo existente)
-# Por defecto usa EMAIL_TO_OPERACIONES
-_email_to_str = os.getenv("EMAIL_TO", _email_operaciones)
-EMAIL_TO = [email.strip() for email in _email_to_str.split(",") if email.strip()]
 
 # Email del proveedor para pruebas (FASE 6)
 # Durante fase de pruebas, se usa este email para notificaciones de ODC
 # NOTE: En producciÃ³n, obtener desde tabla cliente usando CardCode
 EMAIL_PROVEEDOR_PRUEBAS = os.getenv("EMAIL_PROVEEDOR_PRUEBAS", _DEFAULT_CORTIZ_EMAIL)
-
-# Email de MABEL TRADING para notificaciones de confirmacion de pedidos
-# Usado cuando EL RAYO confirma un pedido y se debe notificar a MABEL TRADING
-_email_mabel_trading = os.getenv("EMAIL_MABEL_TRADING", "cortiz@mabeltrading.com.ec,pchafuel@mabeltrading.com.ec")
-EMAIL_MABEL_TRADING = [email.strip() for email in _email_mabel_trading.split(",") if email.strip()]
 
 # Override en desarrollo: todos los correos van a este destinatario (ignora BD).
 # Solo aplica cuando ENVIRONMENT=development. En producción no se usa.

@@ -42,7 +42,7 @@ def _procesar_sap_con_homologacion_impl(
 ) -> Dict[str, Any]:
     """
     Implementación síncrona del procesamiento SAP + homologaciones.
-    Usado tanto por la versión async como por asyncio.to_thread().
+    Se ejecuta vía asyncio.to_thread() desde los endpoints de redistribución.
     """
     from src.database.services.pedido_sap_service import procesar_pedido_con_sap
     from src.database.services.homologacion_service import HomologacionService
@@ -71,23 +71,6 @@ def _procesar_sap_con_homologacion_impl(
     return resultado_sap
 
 
-async def procesar_pedido_sap_con_homologacion(
-    pedido_id: str,
-    user_id: str,
-    conn,
-    *,
-    logger,
-) -> Dict[str, Any]:
-    """Ejecuta procesamiento SAP + verificación de homologaciones + notificación email.
-
-    NOTA: Esta función es async pero internamente solo ejecuta operaciones síncronas.
-    Para endpoints que usan asyncio.to_thread(), usar procesar_pedido_sap_con_homologacion_sync().
-    """
-    return _procesar_sap_con_homologacion_impl(
-        pedido_id=pedido_id, user_id=user_id, conn=conn, logger=logger,
-    )
-
-
 def procesar_pedido_sap_con_homologacion_sync(
     pedido_id: str,
     user_id: str,
@@ -95,11 +78,8 @@ def procesar_pedido_sap_con_homologacion_sync(
     *,
     logger,
 ) -> Dict[str, Any]:
-    """Versión síncrona para usar dentro de asyncio.to_thread().
-
-    Idéntica a procesar_pedido_sap_con_homologacion pero sin async,
-    para ser llamada desde threads que no bloquean el event loop.
-    """
+    """Versión síncrona para usar dentro de asyncio.to_thread(), evitando
+    bloquear el event loop (HTTP a SAP + DB + posible SMTP)."""
     return _procesar_sap_con_homologacion_impl(
         pedido_id=pedido_id, user_id=user_id, conn=conn, logger=logger,
     )

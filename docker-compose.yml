@@ -8,7 +8,7 @@
 #
 # Stack completo API + Celery (desarrollo), perfiles "app" + "bundled-minio":
 #   docker compose --profile app --profile bundled-minio up -d --build
-#   .\scripts\docker-app-up.ps1 -Build
+#   .\scripts\docker-app-up.ps1
 #
 # Producción (srv-mabuiosapi, MinIO externo 192.168.2.211): sin bundled-minio.
 #   docker compose -f docker-compose.yml -f docker-compose.prod.yml --profile app up -d --build
@@ -49,6 +49,7 @@ x-app-common: &app-common
     - .env.develop
   volumes:
     - ./.env.develop:/app/.env.develop:ro
+    - ./output:/app/output
   extra_hosts:
     - "host.docker.internal:host-gateway"
   depends_on:
@@ -135,6 +136,7 @@ services:
     container_name: mba3-celery-beat
     volumes:
       - ./.env.develop:/app/.env.develop:ro
+      - ./output:/app/output
       - celerybeat_data:/var/lib/celery
     command:
       [

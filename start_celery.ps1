@@ -44,7 +44,7 @@ Write-Host "   .\start_api.ps1        (estable) o  .\start_api.ps1 -Dev  (desarr
 Write-Host ""
 Write-Host "Terminal 2: Celery Worker (proceso automático)" -ForegroundColor Green
 Write-Host "   cd C:\Users\cortiz\PycharmProjects\mba3-consultas" -ForegroundColor Gray
-Write-Host "   celery -A src.celery_app worker --loglevel=info --pool=solo" -ForegroundColor Gray
+Write-Host "   celery -A src.celery_app worker --loglevel=info --pool=threads" -ForegroundColor Gray
 Write-Host ""
 Write-Host "Terminal 3: Celery Beat (scheduler)" -ForegroundColor Green
 Write-Host "   cd C:\Users\cortiz\PycharmProjects\mba3-consultas" -ForegroundColor Gray
@@ -64,6 +64,9 @@ Write-Host "Iniciando Celery Worker en esta terminal..." -ForegroundColor Green
 Write-Host ""
 
 # Iniciar Celery Worker desde el directorio raíz del proyecto
-celery -A src.celery_app worker --loglevel=info --pool=solo
+# --pool=threads (no --pool=solo): permite atender pings de control (inspect().ping())
+# mientras se ejecuta una tarea, en vez de bloquear todo en un único hilo secuencial.
+# --pool=prefork (el de Docker) no es viable en Windows nativo por depender de os.fork().
+celery -A src.celery_app worker --loglevel=info --pool=threads
 
 

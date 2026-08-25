@@ -5,13 +5,15 @@ Endpoints de edición de detalles de pedidos.
 import logging
 import uuid as uuid_module
 from typing import Dict, Optional
-from fastapi import FastAPI, Depends, HTTPException, Path, Body, status
+from fastapi import FastAPI, Depends, HTTPException, Path, Body, Request, status
 from fastapi.responses import JSONResponse
 
 from src.database.connection import get_db_connection_context
 from src.database.repositories.pedido_repository import PedidoRepository
-from src.database.pedido_estados import ESTADO_GESTIONAR_PEDIDO
-from src.security.jwt_auth import verify_jwt_token
+from src.database.services.audit_log_service import AuditLogService
+from src.database.pedido_estados import ESTADO_GESTIONAR_PEDIDO, ESTADO_CONFIRMADO_POR_PRODUCCION
+from src.security.jwt_auth import verify_jwt_token, require_any_permission
+from src.utils.audit_context import get_audit_context, ORIGEN_WEB
 from src.models import (
     ActualizarCostoRequest,
     ActualizarTotalRequest,
@@ -19,9 +21,16 @@ from src.models import (
     GuardarModificacionesColumnasRequest,
     GuardarModificacionesColumnasResponse,
     ObtenerModificacionesColumnasResponse,
-    ModificacionColumnaItem
+    ModificacionColumnaItem,
+    AuditLogEntryItem,
+    ObtenerAuditLogResponse,
 )
-from .pedidos_crud_helpers import calcular_totales_detalles
+from .pedidos_crud_helpers import (
+    calcular_totales_detalles,
+    ocultar_costos_para_produccion_el_rayo,
+    es_solo_produccion_el_rayo,
+    es_campo_costo_detalle,
+)
 from .utils import get_user_id
 
 logger = logging.getLogger(__name__)
@@ -29,7 +38,29 @@ logger = logging.getLogger(__name__)
 
 DESC_NUMERO_PEDIDO = "Número del pedido o pedido_id (UUID); el backend acepta ambos."
 DESC_PEDIDO_DETALLE_ID = "UUID del detalle del pedido"
-MSG_ERROR_ESTADO_NO_EDITABLE = "Solo se pueden editar COSTO UNIT., TOTAL y COMENTARIO cuando el pedido está en estado GESTIONAR PEDIDO."
+MSG_ERROR_ESTADO_NO_EDITABLE = "Solo se pueden editar COSTO UNIT., TOTAL y COMENTARIO cuando el pedido está en estado GESTIONAR PEDIDO o CONFIRMADO POR PRODUCCIÓN."
+_PERM_ODCSAP = 'odcsap.view'
+_PERM_MABEL = 'mabel.view'
+_PERM_PRODUCCION_ELRAYO = 'produccion-elrayo.view'
+# Req. 1.8: odcsap.view hereda en CONFIRMADO POR PRODUCCIÓN (23) las mismas
+# funcionalidades de edición que tenía en GESTIONAR PEDIDO (3).
+_ESTADOS_EDITABLES_COSTO_TOTAL_COMENTARIO = frozenset({ESTADO_GESTIONAR_PEDIDO, ESTADO_CONFIRMADO_POR_PRODUCCION})
+
+
+def _resolver_rol_modificador(estado_id: Optional[int]) -> Optional[str]:
+    """Deriva el rol responsable de la edición según el estado del pedido al
+    guardar (no el permiso del usuario): GESTIONAR_PEDIDO es editable en la
+    práctica solo por produccion-elrayo.view y CONFIRMADO_POR_PRODUCCION solo
+    por odcsap.view — la segregación de acceso a la página ya lo garantiza
+    (ver _validar_acceso_produccion_el_rayo / _validar_acceso_estados_permitidos_produccion_el_rayo
+    en pedidos_detalle_endpoints.py). Usado para que el resaltado de columnas
+    modificadas en el frontend persista el color de quien editó, sin importar
+    quién esté viendo la pantalla después."""
+    if estado_id == ESTADO_GESTIONAR_PEDIDO:
+        return 'PRODUCCION_ELRAYO'
+    if estado_id == ESTADO_CONFIRMADO_POR_PRODUCCION:
+        return 'ODCSAP'
+    return None
 
 
 def _get_pedido_por_identificador(repo: PedidoRepository, identificador: str) -> Optional[Dict]:
@@ -61,13 +92,13 @@ def _validar_pedido_editable(repo: PedidoRepository, numero_pedido: str) -> Dict
         estado_id = int(estado_id) if estado_id is not None else None
     except (TypeError, ValueError):
         estado_id = None
-    if estado_id != ESTADO_GESTIONAR_PEDIDO:
+    if estado_id not in _ESTADOS_EDITABLES_COSTO_TOTAL_COMENTARIO:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
                           detail={"error": "estado_no_editable",
                                  "message": MSG_ERROR_ESTADO_NO_EDITABLE})
     return pedido
 
-def _logic_actualizar_costo_detalle(numero_pedido: str, pedido_detalle_id: str, request_body: ActualizarCostoRequest, user: Dict):
+def _logic_actualizar_costo_detalle(numero_pedido: str, pedido_detalle_id: str, request_body: ActualizarCostoRequest, user: Dict, request: Request):
     try:
         nuevo_costo = request_body.costo_doc_sin_iva
         
@@ -86,13 +117,14 @@ def _logic_actualizar_costo_detalle(numero_pedido: str, pedido_detalle_id: str, 
                                      "message": f"El costo ({nuevo_costo}) excede el límite máximo permitido (1,000,000)"})
         
         user_id = get_user_id(user)
+        audit = get_audit_context(request, user, origen=ORIGEN_WEB)
         totales = None
-        
+
         with get_db_connection_context() as conn:
             repo = PedidoRepository(conn)
             _validar_pedido_editable(repo, numero_pedido)
 
-            resultado = repo.update_costo_detalle(pedido_detalle_id, nuevo_costo, modificado_por=user_id)
+            resultado = repo.update_costo_detalle(pedido_detalle_id, nuevo_costo, modificado_por=user_id, audit_context=audit)
             if resultado.get("success"):
                 pedido_actualizado = _get_pedido_por_identificador(repo, numero_pedido)
                 totales = calcular_totales_detalles(pedido_actualizado.get("detalles", [])) if pedido_actualizado else {}
@@ -117,7 +149,7 @@ def _logic_actualizar_costo_detalle(numero_pedido: str, pedido_detalle_id: str, 
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                           detail={"error": "internal_error", "message": f"Error interno al actualizar costo: {str(e)}"})
 
-def _logic_actualizar_total_detalle(numero_pedido: str, pedido_detalle_id: str, request_body: ActualizarTotalRequest, user: Dict):
+def _logic_actualizar_total_detalle(numero_pedido: str, pedido_detalle_id: str, request_body: ActualizarTotalRequest, user: Dict, request: Request):
     try:
         nuevo_total = request_body.total
         
@@ -139,24 +171,34 @@ def _logic_actualizar_total_detalle(numero_pedido: str, pedido_detalle_id: str, 
                                      "message": f"El total ({nuevo_total}) excede el límite máximo permitido (10,000,000)"})
         
         user_id = get_user_id(user)
+        audit = get_audit_context(request, user, origen=ORIGEN_WEB)
         totales = None
-        
+
         with get_db_connection_context() as conn:
             repo = PedidoRepository(conn)
             _validar_pedido_editable(repo, numero_pedido)
 
-            resultado = repo.update_total_detalle(pedido_detalle_id, nuevo_total, modificado_por=user_id)
+            resultado = repo.update_total_detalle(pedido_detalle_id, nuevo_total, modificado_por=user_id, audit_context=audit)
             if resultado.get("success"):
                 pedido_actualizado = _get_pedido_por_identificador(repo, numero_pedido)
                 totales = calcular_totales_detalles(pedido_actualizado.get("detalles", [])) if pedido_actualizado else {}
         
         if resultado["success"]:
             logger.info(f"✅ Total actualizado para detalle {pedido_detalle_id} por usuario {user.get('username', 'UNKNOWN')}")
+            # RN-03: Producción El Rayo usa este endpoint a diario (edita "Total" como
+            # sustituto de "Cantidad a producir"); sin esto, el costo (individual y
+            # agregado) le llegaba en cada guardado aunque nunca lo pidiera ni lo viera
+            # en pantalla. "costo_actualizado" es en realidad el costo_doc_sin_iva vigente
+            # del detalle (ver PedidoDetalleRepository.update_total), no un booleano.
+            ocultar_costos_para_produccion_el_rayo(user, totales=totales)
+            costo_actualizado = resultado["costo_actualizado"]
+            if es_solo_produccion_el_rayo(user):
+                costo_actualizado = None
             content = {"status": "success", "message": resultado["mensaje"],
                       "pedido_detalle_id": resultado["pedido_detalle_id"],
                       "total_anterior": resultado["total_anterior"],
                       "total_nuevo": resultado["total_nuevo"],
-                      "costo_actualizado": resultado["costo_actualizado"]}
+                      "costo_actualizado": costo_actualizado}
             if totales is not None:
                 content["totales"] = totales
             return JSONResponse(status_code=status.HTTP_200_OK, content=content)
@@ -171,7 +213,7 @@ def _logic_actualizar_total_detalle(numero_pedido: str, pedido_detalle_id: str, 
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                           detail={"error": "internal_error", "message": f"Error interno al actualizar total: {str(e)}"})
 
-def _logic_actualizar_comentario_detalle(numero_pedido: str, pedido_detalle_id: str, request_body: ActualizarComentarioRequest, user: Dict):
+def _logic_actualizar_comentario_detalle(numero_pedido: str, pedido_detalle_id: str, request_body: ActualizarComentarioRequest, user: Dict, request: Request):
     try:
         nuevo_comentario = request_body.comentario
         
@@ -188,12 +230,13 @@ def _logic_actualizar_comentario_detalle(numero_pedido: str, pedido_detalle_id: 
                 nuevo_comentario = None
         
         user_id = get_user_id(user)
-        
+        audit = get_audit_context(request, user, origen=ORIGEN_WEB)
+
         with get_db_connection_context() as conn:
             repo = PedidoRepository(conn)
             _validar_pedido_editable(repo, numero_pedido)
 
-            resultado = repo.update_comentario_detalle(pedido_detalle_id, nuevo_comentario, modificado_por=user_id)
+            resultado = repo.update_comentario_detalle(pedido_detalle_id, nuevo_comentario, modificado_por=user_id, audit_context=audit)
         
         if resultado["success"]:
             logger.info(f"✅ Comentario actualizado para detalle {pedido_detalle_id} por usuario {user.get('username', 'UNKNOWN')}")
@@ -214,7 +257,7 @@ def _logic_actualizar_comentario_detalle(numero_pedido: str, pedido_detalle_id: 
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                           detail={"error": "internal_error", "message": f"Error interno al actualizar comentario: {str(e)}"})
 
-def _logic_guardar_modificaciones_columnas(numero_pedido: str, request_body: GuardarModificacionesColumnasRequest, user: Dict):
+def _logic_guardar_modificaciones_columnas(numero_pedido: str, request_body: GuardarModificacionesColumnasRequest, user: Dict, request: Request):
     try:
         if request_body.numero_pedido != numero_pedido:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
@@ -224,14 +267,23 @@ def _logic_guardar_modificaciones_columnas(numero_pedido: str, request_body: Gua
         modificaciones_list = [{"pedido_detalle_id": mod.pedido_detalle_id, "columna_key": mod.columna_key}
                               for mod in request_body.modificaciones]
         user_id = get_user_id(user)
-        
+        audit = get_audit_context(request, user, origen=ORIGEN_WEB)
+
         with get_db_connection_context() as conn:
             repo = PedidoRepository(conn)
             pedido = _validar_pedido_editable(repo, numero_pedido)
-            
+
+            estado_id = pedido.get("cabecera", {}).get("estado_id")
+            try:
+                estado_id = int(estado_id) if estado_id is not None else None
+            except (TypeError, ValueError):
+                estado_id = None
+            rol_modificador = _resolver_rol_modificador(estado_id)
+
             numero_pedido_real = pedido.get("cabecera", {}).get("numero_pedido") or numero_pedido
             resultado = repo.guardar_modificaciones_columnas(
-                numero_pedido=numero_pedido_real, modificaciones=modificaciones_list, modificado_por=user_id)
+                numero_pedido=numero_pedido_real, modificaciones=modificaciones_list,
+                modificado_por=user_id, rol_modificador=rol_modificador, audit_context=audit)
         
         if resultado["success"]:
             logger.info(f"✅ Modificaciones guardadas para pedido {numero_pedido_real} por usuario {user.get('username', 'UNKNOWN')}")
@@ -264,7 +316,8 @@ def _logic_obtener_modificaciones_columnas(numero_pedido: str, user: Dict):
         
         modificaciones_items = [ModificacionColumnaItem(
             pedido_detalle_id=mod["pedido_detalle_id"], columna_key=mod["columna_key"],
-            modificado_por=mod["modificado_por"], fecha_modificacion=mod["fecha_modificacion"])
+            modificado_por=mod["modificado_por"], fecha_modificacion=mod["fecha_modificacion"],
+            rol_modificador=mod.get("rol_modificador"))
             for mod in resultado["modificaciones"]]
         
         logger.info(f"✅ Modificaciones obtenidas para pedido {numero_pedido_real} por usuario {user.get('username', 'UNKNOWN')}")
@@ -279,49 +332,93 @@ def _logic_obtener_modificaciones_columnas(numero_pedido: str, user: Dict):
                           detail={"error": "internal_error", "message": f"Error interno al obtener modificaciones: {str(e)}"})
 
 
+def _logic_obtener_audit_log(numero_pedido: str, user: Dict):
+    try:
+        with get_db_connection_context() as conn:
+            repo = PedidoRepository(conn)
+            pedido = _obtener_pedido_existente(repo, numero_pedido)
+
+            pedido_id = pedido.get("cabecera", {}).get("pedido_id")
+            numero_pedido_real = pedido.get("cabecera", {}).get("numero_pedido") or numero_pedido
+
+            audit_svc = AuditLogService(conn)
+            registros = audit_svc.obtener_por_pedido(pedido_id)
+
+        # RN-03: Producción El Rayo no debe recibir costos/precios/márgenes,
+        # tampoco a través del historial de auditoría.
+        if es_solo_produccion_el_rayo(user):
+            registros = [r for r in registros if not es_campo_costo_detalle(r.get("campo_modificado"))]
+
+        # ip_origen queda fuera de la respuesta HTTP (no aporta al usuario y
+        # es un dato sensible de acceso interno).
+        registros_items = [
+            AuditLogEntryItem(**{k: v for k, v in r.items() if k != "ip_origen"})
+            for r in registros
+        ]
+
+        logger.info(f"✅ Audit log obtenido para pedido {numero_pedido_real} por usuario {user.get('username', 'UNKNOWN')}")
+        return ObtenerAuditLogResponse(
+            status="success", numero_pedido=numero_pedido_real, registros=registros_items)
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ Error al obtener audit log: {e}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                          detail={"error": "internal_error", "message": f"Error interno al obtener audit log: {str(e)}"})
+
+
 def register_edicion_endpoints(app: FastAPI):
     """Registra los endpoints de edición de detalles de pedidos."""
     
     @app.patch("/api/pedidos/{numero_pedido}/detalle/{pedido_detalle_id}/costo", tags=["Pedidos - Edición"])
     async def actualizar_costo_detalle(
+        request: Request,
         numero_pedido: str = Path(..., description=DESC_NUMERO_PEDIDO),
         pedido_detalle_id: str = Path(..., description=DESC_PEDIDO_DETALLE_ID),
         request_body: ActualizarCostoRequest = Body(..., description="Datos del costo a actualizar"),
         user: Dict = Depends(verify_jwt_token),
+        _: None = Depends(require_any_permission([_PERM_ODCSAP, _PERM_PRODUCCION_ELRAYO])),
     ):
-        """Actualiza el costo unitario de una línea de detalle del pedido. Cualquier usuario autenticado puede editar (estado GESTIONAR PEDIDO). Devuelve totales recalculados."""
-        return _logic_actualizar_costo_detalle(numero_pedido, pedido_detalle_id, request_body, user)
-    
+        """Actualiza el costo unitario de una línea de detalle del pedido. Requiere odcsap.view o produccion-elrayo.view (estado GESTIONAR PEDIDO o CONFIRMADO POR PRODUCCIÓN). Devuelve totales recalculados."""
+        return _logic_actualizar_costo_detalle(numero_pedido, pedido_detalle_id, request_body, user, request)
+
     @app.patch("/api/pedidos/{numero_pedido}/detalle/{pedido_detalle_id}/total", tags=["Pedidos - Edición"])
     async def actualizar_total_detalle(
+        request: Request,
         numero_pedido: str = Path(..., description=DESC_NUMERO_PEDIDO),
         pedido_detalle_id: str = Path(..., description=DESC_PEDIDO_DETALLE_ID),
         request_body: ActualizarTotalRequest = Body(..., description="Datos del total a actualizar"),
         user: Dict = Depends(verify_jwt_token),
+        _: None = Depends(require_any_permission([_PERM_ODCSAP, _PERM_PRODUCCION_ELRAYO])),
     ):
-        """Actualiza el total de una línea de detalle del pedido. Cualquier usuario autenticado puede editar (estado GESTIONAR PEDIDO). Devuelve totales recalculados."""
-        return _logic_actualizar_total_detalle(numero_pedido, pedido_detalle_id, request_body, user)
-    
+        """Actualiza el total de una línea de detalle del pedido. Requiere odcsap.view o produccion-elrayo.view (estado GESTIONAR PEDIDO o CONFIRMADO POR PRODUCCIÓN). Devuelve totales recalculados."""
+        return _logic_actualizar_total_detalle(numero_pedido, pedido_detalle_id, request_body, user, request)
+
     @app.patch("/api/pedidos/{numero_pedido}/detalle/{pedido_detalle_id}/comentario", tags=["Pedidos - Edición"])
     async def actualizar_comentario_detalle(
+        request: Request,
         numero_pedido: str = Path(..., description=DESC_NUMERO_PEDIDO),
         pedido_detalle_id: str = Path(..., description=DESC_PEDIDO_DETALLE_ID),
         request_body: ActualizarComentarioRequest = Body(..., description="Datos del comentario a actualizar"),
         user: Dict = Depends(verify_jwt_token),
+        _: None = Depends(require_any_permission([_PERM_ODCSAP, _PERM_PRODUCCION_ELRAYO])),
     ):
-        """Actualiza el comentario de una línea de detalle del pedido."""
-        return _logic_actualizar_comentario_detalle(numero_pedido, pedido_detalle_id, request_body, user)
-    
+        """Actualiza el comentario de una línea de detalle del pedido. Requiere odcsap.view o produccion-elrayo.view."""
+        return _logic_actualizar_comentario_detalle(numero_pedido, pedido_detalle_id, request_body, user, request)
+
     @app.post("/api/pedidos/{numero_pedido}/modificaciones-columnas",
               response_model=GuardarModificacionesColumnasResponse,
               tags=["Pedidos - Modificaciones"])
     async def guardar_modificaciones_columnas(
+        request: Request,
         numero_pedido: str = Path(..., description=DESC_NUMERO_PEDIDO),
         request_body: GuardarModificacionesColumnasRequest = Body(..., description="Datos de las modificaciones"),
         user: Dict = Depends(verify_jwt_token),
+        _: None = Depends(require_any_permission([_PERM_ODCSAP, _PERM_PRODUCCION_ELRAYO])),
     ):
-        """Guarda o actualiza las modificaciones de columnas para un pedido."""
-        return _logic_guardar_modificaciones_columnas(numero_pedido, request_body, user)
+        """Guarda o actualiza las modificaciones de columnas para un pedido. Requiere odcsap.view o produccion-elrayo.view."""
+        return _logic_guardar_modificaciones_columnas(numero_pedido, request_body, user, request)
     
     @app.get("/api/pedidos/{numero_pedido}/modificaciones-columnas",
              response_model=ObtenerModificacionesColumnasResponse,
@@ -332,3 +429,17 @@ def register_edicion_endpoints(app: FastAPI):
     ):
         """Obtiene las modificaciones de columnas para un pedido."""
         return _logic_obtener_modificaciones_columnas(numero_pedido, user)
+
+    @app.get("/api/pedidos/{numero_pedido}/audit-log",
+             response_model=ObtenerAuditLogResponse,
+             tags=["Pedidos - Auditoría"])
+    async def obtener_audit_log(
+        numero_pedido: str = Path(..., description=DESC_NUMERO_PEDIDO),
+        user: Dict = Depends(verify_jwt_token),
+        _: None = Depends(require_any_permission([_PERM_ODCSAP, _PERM_MABEL, _PERM_PRODUCCION_ELRAYO])),
+    ):
+        """Obtiene el historial completo de auditoría (pedido_audit_log) de un pedido:
+        quién hizo cada cambio, cuándo, y valor anterior/nuevo. Más reciente primero.
+        Requiere odcsap.view, mabel.view o produccion-elrayo.view (a produccion-elrayo.view
+        se le ocultan los cambios de costo unitario, RN-03)."""
+        return _logic_obtener_audit_log(numero_pedido, user)

@@ -25,6 +25,7 @@ Uso:
 """
 
 import logging
+import threading
 from datetime import datetime
 
 from src.utils.timezone import ahora_naive
@@ -63,63 +64,73 @@ class FileStorageService:
         self._client = None
         self._bucket = FILE_STORAGE_BUCKET
         self._initialized = False
-        
+        self._client_lock = threading.Lock()
+
     def _get_client(self):
         """
         Obtiene el cliente de S3/MinIO (lazy initialization).
-        
+
+        Thread-safe: usa double-checked locking porque los métodos de este
+        servicio se invocan desde múltiples threads (asyncio.to_thread) y la
+        primera inicialización no debe correr más de una vez en paralelo.
+
         Returns:
             Cliente boto3 S3
-            
+
         Raises:
             FileStorageError: Si no se puede inicializar el cliente
         """
         if self._client is not None:
             return self._client
-            
-        if not ENABLE_FILE_STORAGE:
-            raise FileStorageError(
-                "El almacenamiento de archivos está deshabilitado. "
-                "Configura ENABLE_FILE_STORAGE=true en .env"
-            )
-        
-        try:
-            import boto3
-            from botocore.config import Config
-            
-            # Configuración para MinIO (path style)
-            config = Config(
-                signature_version='s3v4',
-                s3={'addressing_style': 'path'},
-                connect_timeout=5,
-                read_timeout=30,
-                retries={'max_attempts': 2, 'mode': 'standard'}
-            )
-            
-            self._client = boto3.client(
-                's3',
-                endpoint_url=FILE_STORAGE_ENDPOINT,
-                aws_access_key_id=FILE_STORAGE_ACCESS_KEY,
-                aws_secret_access_key=FILE_STORAGE_SECRET_KEY,
-                region_name=FILE_STORAGE_REGION,
-                config=config
-            )
-            
-            # Verificar/crear bucket si no existe
-            self._ensure_bucket_exists()
-            self._initialized = True
-            
-            logger.info(f"✅ FileStorageService inicializado - Endpoint: {FILE_STORAGE_ENDPOINT}, Bucket: {self._bucket}")
-            return self._client
-            
-        except ImportError:
-            raise FileStorageError(
-                "La librería boto3 no está instalada. "
-                "Ejecuta: pip install boto3"
-            )
-        except Exception as e:
-            logger.error(f"❌ Error al inicializar FileStorageService: {e}")
-            raise FileStorageError(f"No se pudo conectar al storage: {str(e)}")
+
+        with self._client_lock:
+            if self._client is not None:
+                return self._client
+
+            if not ENABLE_FILE_STORAGE:
+                raise FileStorageError(
+                    "El almacenamiento de archivos está deshabilitado. "
+                    "Configura ENABLE_FILE_STORAGE=true en .env"
+                )
+
+            try:
+                import boto3
+                from botocore.config import Config
+
+                # Configuración para MinIO (path style)
+                config = Config(
+                    signature_version='s3v4',
+                    s3={'addressing_style': 'path'},
+                    connect_timeout=5,
+                    read_timeout=30,
+                    retries={'max_attempts': 2, 'mode': 'standard'}
+                )
+
+                client = boto3.client(
+                    's3',
+                    endpoint_url=FILE_STORAGE_ENDPOINT,
+                    aws_access_key_id=FILE_STORAGE_ACCESS_KEY,
+                    aws_secret_access_key=FILE_STORAGE_SECRET_KEY,
+                    region_name=FILE_STORAGE_REGION,
+                    config=config
+                )
+                self._client = client
+
+                # Verificar/crear bucket si no existe
+                self._ensure_bucket_exists()
+                self._initialized = True
+
+                logger.info(f"✅ FileStorageService inicializado - Endpoint: {FILE_STORAGE_ENDPOINT}, Bucket: {self._bucket}")
+                return self._client
+
+            except ImportError:
+                raise FileStorageError(
+                    "La librería boto3 no está instalada. "
+                    "Ejecuta: pip install boto3"
+                )
+            except Exception as e:
+                logger.error(f"❌ Error al inicializar FileStorageService: {e}")
+                raise FileStorageError(f"No se pudo conectar al storage: {str(e)}")
     
     def _ensure_bucket_exists(self):
         """Crea el bucket si no existe."""
@@ -511,16 +522,22 @@ class FileStorageService:
 
 # Instancia singleton para uso global (opcional)
 _storage_instance: Optional[FileStorageService] = None
+_storage_instance_lock = threading.Lock()
 
 
 def get_file_storage() -> FileStorageService:
     """
     Obtiene la instancia del servicio de storage (singleton).
-    
+
+    Thread-safe: usa double-checked locking porque puede invocarse desde
+    múltiples threads (asyncio.to_thread) concurrentemente en el primer uso.
+
     Returns:
         Instancia de FileStorageService
     """
     global _storage_instance
     if _storage_instance is None:
-        _storage_instance = FileStorageService()
+        with _storage_instance_lock:
+            if _storage_instance is None:
+                _storage_instance = FileStorageService()
     return _storage_instance

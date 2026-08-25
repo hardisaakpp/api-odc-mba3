@@ -2,6 +2,7 @@
 Endpoint de creación de órdenes de compra.
 """
 
+import asyncio
 import logging
 import re
 from typing import Dict
@@ -12,6 +13,48 @@ from src.database.repositories.pedido_repository import PedidoRepository
 from src.security.jwt_auth import verify_jwt_token, require_any_permission
 
 logger = logging.getLogger(__name__)
+
+
+def _resolver_pedido_id_real(identificador: str, es_uuid: bool) -> str:
+    """Consulta bloqueante (pyodbc); se ejecuta vía asyncio.to_thread."""
+    with get_db_connection_context() as conn:
+        pedido_repo = PedidoRepository(conn)
+
+        if es_uuid:
+            logger.info(f"🔍 Detectado UUID: {identificador}")
+            pedido = pedido_repo.get_pedido_completo(identificador)
+            if not pedido:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail={"error": "pedido_not_found",
+                           "message": f"Pedido no encontrado con UUID: {identificador}"})
+            return identificador
+        else:
+            logger.info(f"🔍 Detectado numero_pedido: {identificador}")
+            pedido = pedido_repo.get_pedido_completo_por_numero(identificador)
+            if not pedido:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail={"error": "pedido_not_found",
+                           "message": f"Pedido no encontrado con número: {identificador}"})
+            return pedido["cabecera"]["pedido_id"]
+
+
+def _crear_oc_desde_pedido_confirmado_sync(pedido_id_real: str) -> Dict:
+    """Creación de OC (SQL Server + SAP, bloqueante); se ejecuta vía asyncio.to_thread.
+
+    Un pedido normal genera 1 ODC; un pedido que mezcla tiendas de más de una
+    marca genera 2 (ver PedidoOCService.crear_ocs_desde_pedido_confirmado). Esta
+    función aplana la lista a la forma histórica de la respuesta (compatibilidad
+    con el frontend, que hoy lee oc_id/solicitudes_transferencia en la raíz) y
+    agrega ordenes_compra con el detalle de todas las ODC generadas.
+    """
+    from src.database.services.pedido_oc_service import PedidoOCService
+    service = PedidoOCService()
+    resultados = service.crear_ocs_desde_pedido_confirmado(pedido_id=pedido_id_real)
+    primero = dict(resultados[0])
+    primero["ordenes_compra"] = resultados
+    return primero
 
 
 def register_odc_endpoints(app: FastAPI):
@@ -31,40 +74,16 @@ def register_odc_endpoints(app: FastAPI):
         y WarehouseCode) para mostrarlo en UI o depurar errores -2028.
         """
         try:
-            from src.database.services.pedido_oc_service import PedidoOCService
-
             # Detectar si es UUID o numero_pedido
             uuid_pattern = re.compile(r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$')
             es_uuid = uuid_pattern.match(identificador.strip()) is not None
-            
+
             # Obtener pedido_id real
-            with get_db_connection_context() as conn:
-                pedido_repo = PedidoRepository(conn)
-                
-                if es_uuid:
-                    logger.info(f"🔍 Detectado UUID: {identificador}")
-                    pedido = pedido_repo.get_pedido_completo(identificador)
-                    if not pedido:
-                        raise HTTPException(
-                            status_code=status.HTTP_404_NOT_FOUND,
-                            detail={"error": "pedido_not_found",
-                                   "message": f"Pedido no encontrado con UUID: {identificador}"})
-                    pedido_id_real = identificador
-                else:
-                    logger.info(f"🔍 Detectado numero_pedido: {identificador}")
-                    pedido = pedido_repo.get_pedido_completo_por_numero(identificador)
-                    if not pedido:
-                        raise HTTPException(
-                            status_code=status.HTTP_404_NOT_FOUND,
-                            detail={"error": "pedido_not_found",
-                                   "message": f"Pedido no encontrado con número: {identificador}"})
-                    pedido_id_real = pedido["cabecera"]["pedido_id"]
-            
+            pedido_id_real = await asyncio.to_thread(_resolver_pedido_id_real, identificador, es_uuid)
+
             # Crear OC usando el pedido_id real
-            service = PedidoOCService()
-            resultado = service.crear_oc_desde_pedido_confirmado(
-                pedido_id=pedido_id_real)
-            
+            resultado = await asyncio.to_thread(_crear_oc_desde_pedido_confirmado_sync, pedido_id_real)
+
             return {"status": "success", "message": "Orden de compra creada exitosamente", **resultado}
             
         except HTTPException:

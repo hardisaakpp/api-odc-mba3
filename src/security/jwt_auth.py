@@ -18,6 +18,8 @@ logger = logging.getLogger(__name__)
 # Esquema de autenticación Bearer
 security = HTTPBearer(auto_error=False)
 
+_MSG_AUTENTICACION_REQUERIDA = "Autenticación requerida"
+
 
 async def verify_jwt_token(
     request: Request,
@@ -253,7 +255,7 @@ def require_permission(permission_key: str, legacy_permission: Optional[str] = N
         if not hasattr(request.state, 'current_user'):
             raise HTTPException(
                 status_code=401,
-                detail="Autenticación requerida"
+                detail=_MSG_AUTENTICACION_REQUERIDA
             )
         _verificar_permiso(user, permission_key, legacy_permission)
 
@@ -282,7 +284,7 @@ def require_any_permission(permission_keys: List[str]):
         if not hasattr(request.state, 'current_user'):
             raise HTTPException(
                 status_code=401,
-                detail="Autenticación requerida"
+                detail=_MSG_AUTENTICACION_REQUERIDA
             )
         permissions = user.get('permissions', [])
         roles = user.get('roles', [])
@@ -300,3 +302,40 @@ def require_any_permission(permission_keys: List[str]):
                 detail=f"Permiso denegado: se requiere uno de {permission_keys}. Permisos: {permissions}"
             )
     return permission_checker
+
+
+def require_admin():
+    """
+    Dependency factory que exige el rol 'Admin' exclusivamente.
+
+    A diferencia de require_permission/require_any_permission (donde Admin es
+    un bypass sobre un permiso de negocio), aquí Admin ES el requisito: pensado
+    para configuración sensible que no está atada a un permiso de negocio
+    puntual (ej. administrar destinatarios de notificaciones de todos los tipos).
+
+    Uso:
+        Depends(require_admin())
+    """
+    async def admin_checker(
+        request: Request,
+        user: Dict[str, Any] = Security(verify_jwt_token)
+    ) -> None:
+        if not hasattr(request.state, 'current_user'):
+            raise HTTPException(
+                status_code=401,
+                detail=_MSG_AUTENTICACION_REQUERIDA
+            )
+        roles = user.get('roles', [])
+        permissions = user.get('permissions', [])
+        is_admin = 'Admin' in roles or 'Admin' in permissions
+        if not is_admin:
+            username = user.get('username', 'unknown')
+            logger.warning(
+                f"❌ Acceso denegado: usuario {username} sin rol Admin intentó acceder a un recurso restringido"
+            )
+            raise HTTPException(
+                status_code=403,
+                detail="Esta acción requiere rol Admin"
+            )
+
+    return admin_checker

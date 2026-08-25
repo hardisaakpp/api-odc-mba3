@@ -33,6 +33,7 @@ from src.config import (
     SYNC_PRODUCTOS_MINUTE,
     ENABLE_RECONCILIACION_ST_AUTOMATICA,
     RECONCILIAR_ST_INTERVALO_MINUTOS,
+    RECONCILIAR_OC_INTERVALO_MINUTOS,
 )
 
 logger = logging.getLogger(__name__)
@@ -49,6 +50,7 @@ celery_app = Celery(
         'src.tasks.celery_plantilla_upload',
         'src.tasks.celery_proceso_sap',
         'src.tasks.celery_reconciliar_transferencias',
+        'src.tasks.celery_reconciliar_ordenes_compra',
     ]
 )
 
@@ -62,7 +64,44 @@ celery_app.conf.update(
     task_serializer='json',
     result_serializer='json',
     accept_content=['json'],
-    
+
+    # Timeouts de red contra Redis. Sin esto, redis-py espera INDEFINIDAMENTE:
+    # si la conexion TCP muere en silencio (caso tipico: port-forward de Docker
+    # Desktop/WSL2 que descarta conexiones ociosas), cualquier llamada al broker
+    # -- incluido el .delay() que hace la API al encolar -- se cuelga para siempre
+    # sin lanzar excepcion. Incidente dev 2026-08-06: la API entera quedo
+    # congelada dos veces al subir una plantilla, sin un solo error en el log.
+    #   - socket_connect_timeout: corta un connect que no responde.
+    #   - socket_timeout: corta una lectura colgada. Debe quedar MUY por encima
+    #     del brpop_timeout de kombu (1s) o el worker cortaria su propio bucle
+    #     de consumo en cada poll sin tareas.
+    #   - socket_keepalive + health_check_interval: redis-py valida la conexion
+    #     ociosa antes de reutilizarla, en vez de escribir en un socket muerto.
+    broker_transport_options={
+        'socket_connect_timeout': 10.0,
+        'socket_timeout': 30.0,
+        'socket_keepalive': True,
+        'health_check_interval': 30,
+        'retry_on_timeout': True,
+    },
+    result_backend_transport_options={
+        'socket_connect_timeout': 10.0,
+        'socket_timeout': 30.0,
+        'socket_keepalive': True,
+        'health_check_interval': 30,
+        'retry_on_timeout': True,
+    },
+    # Acota el reintento de publicacion: sin esto un .delay() contra un broker
+    # degradado reintenta con backoff mucho mas de lo que el usuario espera.
+    task_publish_retry=True,
+    task_publish_retry_policy={
+        'max_retries': 2,
+        'interval_start': 0,
+        'interval_step': 0.5,
+        'interval_max': 2,
+    },
+    broker_connection_retry_on_startup=True,
+
     # Programación de tareas (Celery Beat). Auto-migrate solo si ENABLE_AUTO_MIGRATE=true (legacy)
     beat_schedule={
         **({
@@ -94,6 +133,15 @@ celery_app.conf.update(
                 'options': {'queue': 'maintenance', 'expires': 240.0},
             }
         } if ENABLE_RECONCILIACION_ST_AUTOMATICA else {}),
+        # Reconciliación de ODC ENCOLADAS: a diferencia de la de ST, no depende de un
+        # flag de encendido/apagado -- es parte de la lógica normal del envío a SAP
+        # (cierra el mismo loop que _resolver_job_encolado_previo abre), no una
+        # función opcional que un ambiente pueda dejar apagada por descuido.
+        'reconciliar-ordenes-compra-pendientes': {
+            'task': 'src.tasks.celery_reconciliar_ordenes_compra.reconciliar_ordenes_compra_pendientes',
+            'schedule': float(RECONCILIAR_OC_INTERVALO_MINUTOS * 60),
+            'options': {'queue': 'maintenance', 'expires': 240.0},
+        },
     },
 
     # Mantener cargas interactivas en la cola por defecto y mover tareas

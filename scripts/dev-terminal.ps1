@@ -157,7 +157,11 @@ switch ($Mode) {
                 # python -m celery en vez del launcher celery.exe: el .exe pip-instalado
                 # graba en el propio binario la ruta absoluta del python.exe usado al
                 # instalar; si el venv se copió/movió de carpeta, ese launcher queda roto.
-                python -m celery -A src.celery_app worker --loglevel=info --pool=solo
+                # --pool=threads (no --pool=solo): permite atender pings de control
+                # (inspect().ping()) mientras se ejecuta una tarea, en vez de bloquear todo
+                # en un único hilo secuencial. --pool=prefork (el de Docker) no es viable
+                # en Windows nativo por depender de os.fork().
+                python -m celery -A src.celery_app worker --loglevel=info --pool=threads
             }
             "beat" {
                 python -m celery -A src.celery_app beat --loglevel=info

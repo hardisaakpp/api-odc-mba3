@@ -9,7 +9,7 @@ import logging
 import pandas as pd
 import io
 import re
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, Optional
 
 from .pedido_parser_utils import PedidoParserUtils, normalize_column_name, normalize_codigo_columna
 
@@ -168,7 +168,7 @@ class PedidoParserDetalle:
             logger.info(f"✅ Columnas de producto detectadas: {list(columnas_producto.keys())}")
 
             columnas_bodegas = self.identificar_columnas_bodegas(
-                df_detalle, codigos_columnas, self.utils.INDICES_BODEGAS
+                df_detalle, codigos_columnas, columnas_producto
             )
             columnas_tiendas = self.identificar_columnas_tiendas(
                 df_detalle, columnas_producto, columnas_bodegas,
@@ -263,14 +263,19 @@ class PedidoParserDetalle:
         self,
         df_detalle: pd.DataFrame,
         codigos_columnas: Dict[int, str],
-        indices_bodegas: List[int]
+        columnas_producto: Dict[str, str]
     ) -> Dict[str, str]:
-        """Identifica las columnas de bodegas en el DataFrame."""
-        columnas_bodegas = {}
-        for col_idx in indices_bodegas:
-            if col_idx >= len(df_detalle.columns):
+        """
+        Identifica las columnas de bodegas en el DataFrame por nombre/código
+        (RL-CD/OUT-CD/RG-CD y variantes), en cualquier columna que no haya sido ya
+        reclamada como campo de producto. No depende de una posición fija: insertar
+        o quitar una columna de producto (ej. "Costo") no desalinea esta búsqueda.
+        """
+        columnas_bodegas: Dict[str, str] = {}
+        indices_producto = self._calcular_indices_excluidos(df_detalle, columnas_producto, {})
+        for col_idx, col_name in enumerate(df_detalle.columns):
+            if col_idx in indices_producto:
                 continue
-            col_name = df_detalle.columns[col_idx]
             col_upper = str(col_name).upper().strip()
             clave = self._buscar_bodega_por_codigo(col_idx, codigos_columnas)
             if clave is None:
@@ -298,6 +303,7 @@ class PedidoParserDetalle:
     ) -> None:
         mapeo_campos = {
             'costo sin iva': 'costo_doc_sin_iva',
+            'costo margen': 'costo_margen',
             'descuento': 'descuento_1',
             'pvp': 'pvp',
             'subtotal': 'subtotal',
@@ -427,12 +433,19 @@ class PedidoParserDetalle:
     ) -> Dict[str, Dict[str, Any]]:
         """Identifica las columnas de tiendas en el DataFrame."""
         indices_excluidos = self._calcular_indices_excluidos(df_detalle, columnas_producto, columnas_bodegas)
-        inicio_tiendas_idx = self.utils.INDICE_INICIO_TIENDAS
+        # Sin posición fija de arranque: se excluyen las columnas ya reclamadas como
+        # producto/bodega y el resto se evalúa por patrón (_es_codigo_columna_tienda),
+        # así una columna de producto insertada en cualquier posición no desalinea esto.
+        inicio_tiendas_idx = 0
         ultima_columna_idx = self._detectar_ultima_columna_tiendas(
             df_detalle, inicio_tiendas_idx, indices_excluidos, codigos_columnas, nombres_columnas_fila1
         )
+        col_list = list(df_detalle.columns)
+        indices_producto_dbg = {col_list.index(c) for c in columnas_producto.values() if c in col_list}
+        indices_bodegas_dbg = {col_list.index(c) for c in columnas_bodegas.values() if c in col_list}
         logger.info(
-            f"📊 Rango de columnas: Producto (0-8), Bodegas (9-11), Tiendas ({inicio_tiendas_idx}-{ultima_columna_idx})"
+            "📊 Columnas producto: %s, bodegas: %s, tiendas hasta índice %s",
+            sorted(indices_producto_dbg), sorted(indices_bodegas_dbg), ultima_columna_idx,
         )
         columnas_tiendas: Dict[str, Dict[str, Any]] = {}
         for col_idx, col_name in enumerate(df_detalle.columns):
@@ -478,7 +491,7 @@ class PedidoParserDetalle:
             return None
         try:
             cantidad = float(raw_str)
-            return cantidad if cantidad >= 0 else None
+            return cantidad if cantidad > 0 else None
         except (ValueError, TypeError):
             logger.warning(f"⚠️ Fila {row_num}: Cantidad inválida en {etiqueta}: {cantidad_raw}")
             return None

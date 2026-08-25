@@ -199,12 +199,12 @@ class PedidoValidator:
             )], 0.0
         try:
             cantidad_val = float(cantidad)
-            if cantidad_val < 0:
+            if cantidad_val <= 0:
                 return [ValidationIssue(
                     row_number=row_number,
                     field="cantidad",
                     severity=ValidationSeverity.ERROR,
-                    message=f"La cantidad no puede ser negativa. Valor recibido: {cantidad}",
+                    message=f"La cantidad debe ser mayor a 0. Valor recibido: {cantidad}",
                     value=cantidad,
                 )], 0.0
             issues: List[ValidationIssue] = []

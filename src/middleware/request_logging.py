@@ -77,7 +77,7 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
     
     # Umbral en ms para advertir sobre requests lentos
     SLOW_REQUEST_THRESHOLD_MS = 5000  # 5 segundos
-    
+
     async def dispatch(self, request: Request, call_next: Callable) -> Response:
         """
         Procesa el request y registra métricas completas.
@@ -248,42 +248,27 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
     async def _capture_response_body(self, response: Response) -> tuple:
         """
         Captura el response body para logging.
-        
+
+        Los StreamingResponse (SSE en /notificaciones/stream, descargas de Excel en
+        streaming) NUNCA se capturan aquí: consumir su body_iterator bloquea hasta que
+        el generador termine, lo cual para un stream SSE infinito (heartbeat cada 30s,
+        solo corta cuando el cliente se desconecta) nunca ocurre en el sentido esperado
+        -- en la práctica, `is_disconnected()` se resuelve casi de inmediato bajo
+        BaseHTTPMiddleware, el generador corta después del primer evento "connected" y
+        el stream se cierra en milisegundos, antes de que el cliente reciba ninguna
+        notificación real. Para las demás StreamingResponse (exports grandes) bufferear
+        todo en memoria para logging también anula el propósito del streaming.
+
         Args:
             response: Response HTTP
-            
+
         Returns:
             Tuple (body_string, new_response)
         """
-        try:
-            # Para StreamingResponse, necesitamos consumir y recrear
-            if isinstance(response, StreamingResponse):
-                body_chunks = []
-                async for chunk in response.body_iterator:
-                    body_chunks.append(chunk)
-                
-                body_bytes = b"".join(body_chunks)
-                body_str = body_bytes.decode('utf-8', errors='replace')
-                
-                # Truncar para logging
-                logged_body = body_str[:MAX_BODY_LOG_SIZE]
-                if len(body_str) > MAX_BODY_LOG_SIZE:
-                    logged_body += "...[TRUNCATED]"
-                
-                # Recrear el response con el body
-                new_response = Response(
-                    content=body_bytes,
-                    status_code=response.status_code,
-                    headers=dict(response.headers),
-                    media_type=response.media_type
-                )
-                
-                return logged_body, new_response
-            
+        if isinstance(response, StreamingResponse):
             return None, response
-            
-        except Exception:
-            return "[ERROR READING RESPONSE]", response
+
+        return None, response
     
     def _sanitize_sensitive_data(self, data: dict) -> dict:
         """

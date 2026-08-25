@@ -19,6 +19,8 @@ from .cruce_productos import register_cruce_productos_endpoints
 from .plantillas import register_plantillas_endpoints
 from .pedidos import register_pedidos_endpoints
 from .notificaciones import register_notificaciones_endpoints
+from .notificacion_tipo_correo_endpoints import register_notificacion_tipo_correo_endpoints
+from .notificacion_persona_correo_endpoints import register_notificacion_persona_correo_endpoints
 
 
 def create_endpoints(app: FastAPI):
@@ -69,3 +71,9 @@ def create_endpoints(app: FastAPI):
     
     # Registrar endpoints de notificaciones en tiempo real (SSE)
     register_notificaciones_endpoints(app)
+
+    # Registrar endpoints de administración del catálogo de correos (solo Admin)
+    register_notificacion_tipo_correo_endpoints(app)
+
+    # Registrar endpoints de organización persona-céntrica de correos (solo Admin)
+    register_notificacion_persona_correo_endpoints(app)

@@ -148,6 +148,19 @@ class PedidoTiendaRepository:
     def _necesita_nombre_sap(self, codigo: str, nombre: Optional[str]) -> bool:
         return not nombre or nombre.strip() == "" or nombre.strip().upper() == codigo.strip().upper()
 
+    def _buscar_marca(self, codigo: str) -> Optional[str]:
+        """Resuelve la marca (ROLAND/REGIONS/DESCUENTON) de una tienda contra sc_maestros.
+
+        No bloqueante: MarcaTiendaService ya traga sus propios errores y retorna
+        None si sc_maestros no está disponible o el código no tiene marca conocida.
+        """
+        try:
+            from ...services.marca_tienda_service import MarcaTiendaService
+            return MarcaTiendaService().buscar_marca(codigo)
+        except Exception as e:
+            logger.warning(f"⚠️ No se pudo obtener marca de tienda {codigo}: {e}")
+            return None
+
     def _buscar_nombre_sap(self, codigo: str) -> Optional[str]:
         try:
             from ...services.bodega_sap_service import BodegaSAPService
@@ -255,11 +268,12 @@ class PedidoTiendaRepository:
             tienda_id = str(uuid_result[0])
 
             nombre_guardar = self._determinar_nombre_guardar_tienda(codigo, nombre_final, nombre_sap)
+            marca = self._buscar_marca(codigo) if consultar_sap else None
 
             cursor.execute("""
-                INSERT INTO tienda (tienda_id, codigo, nombre, activa, created_at)
-                VALUES (?, ?, ?, 1, ?)
-            """, (tienda_id, codigo, nombre_guardar, ahora_naive()))
+                INSERT INTO tienda (tienda_id, codigo, nombre, marca, activa, created_at)
+                VALUES (?, ?, ?, ?, 1, ?)
+            """, (tienda_id, codigo, nombre_guardar, marca, ahora_naive()))
             self.conn.commit()
 
             logger.debug(f"✅ Nueva tienda creada: {codigo} ({tienda_id})")
@@ -317,6 +331,46 @@ class PedidoTiendaRepository:
             if row and row[0] and str(row[0]).strip():
                 return str(row[0]).strip()
             return None
+        finally:
+            cursor.close()
+
+    def buscar_tiendas(self, query: Optional[str] = None, limit: int = 20) -> List[Dict[str, Any]]:
+        """
+        Busca tiendas activas del catálogo maestro por nombre o código (búsqueda parcial).
+
+        Usado por el buscador de "agregar tienda" en la redistribución de pedidos hijo
+        (req. redistribución a tiendas fuera del Excel original).
+
+        Args:
+            query: Texto a buscar en código o nombre (None o vacío devuelve las primeras `limit`)
+            limit: Máximo de resultados a devolver
+
+        Returns:
+            Lista de dicts con tienda_id, codigo, nombre, ordenados por nombre
+        """
+        cursor = self.conn.cursor()
+        try:
+            texto = (query or "").strip()
+            if texto:
+                patron = f"%{texto}%"
+                cursor.execute("""
+                    SELECT TOP (?) tienda_id, codigo, nombre
+                    FROM tienda
+                    WHERE activa = 1 AND (codigo LIKE ? OR nombre LIKE ?)
+                    ORDER BY nombre
+                """, (limit, patron, patron))
+            else:
+                cursor.execute("""
+                    SELECT TOP (?) tienda_id, codigo, nombre
+                    FROM tienda
+                    WHERE activa = 1
+                    ORDER BY nombre
+                """, (limit,))
+
+            return [
+                {"tienda_id": str(row[0]), "codigo": row[1], "nombre": row[2]}
+                for row in cursor.fetchall()
+            ]
         finally:
             cursor.close()
 

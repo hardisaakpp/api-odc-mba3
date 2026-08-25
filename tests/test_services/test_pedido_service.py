@@ -9,9 +9,8 @@ El formato v1.0 espera:
   - Fila 3+: Datos de productos
 """
 
-import pytest  # type: ignore[reportMissingImports]
 import io
-from typing import Optional, List
+from typing import Optional
 from openpyxl import Workbook
 
 from src.database.services.pedido_service import PedidoService
@@ -53,16 +52,16 @@ def _crear_excel_v1(
     Args:
         cabecera_campos: Lista de tuplas (campo, valor) para la cabecera
         detalle_filas: Lista de dicts con datos por fila.
-            Cada dict tiene: {"codigo": str, "tiendas": {"T001": 10, "T002": 5}}
+            Cada dict tiene: {"codigo": str, "tiendas": {"ABC01": 10, "ABC02": 5}}
             Opcionalmente: {"descripcion": str, "costo": float, ...}
-        tiendas: Lista de códigos de tienda (ej: ["T001", "T002"])
+        tiendas: Lista de códigos de tienda (ej: ["ABC01", "ABC02"])
         hoja_cabecera: Nombre de la hoja de cabecera
         hoja_detalle: Nombre de la hoja de detalle
         detalle_headers_override: Si se provee, usa estos headers en vez de los estándar
         omitir_hoja_detalle: Si True, no crea la hoja de detalle
     """
     if tiendas is None:
-        tiendas = ["T001", "T002"]
+        tiendas = ["ABC01", "ABC02"]
     
     wb = Workbook()
     
@@ -171,11 +170,11 @@ class TestPedidoServiceParsearExcel:
         ]
         
         detalle = [
-            {"codigo": "R225.1012.BCO", "tiendas": {"T001": 10}},
-            {"codigo": "A889.3321.NEG", "tiendas": {"T002": 5}},
+            {"codigo": "R225.1012.BCO", "tiendas": {"ABC01": 10}},
+            {"codigo": "A889.3321.NEG", "tiendas": {"ABC02": 5}},
         ]
         
-        excel_bytes = _crear_excel_v1(cabecera, detalle, tiendas=["T001", "T002"])
+        excel_bytes = _crear_excel_v1(cabecera, detalle, tiendas=["ABC01", "ABC02"])
         
         service = PedidoService()
         resultado = service.parsear_excel_pedido(excel_bytes)
@@ -211,7 +210,7 @@ class TestPedidoServiceParsearExcel:
         cabecera = [("CODIGO PEDIDO", "P-12.48")]
         
         excel_bytes = _crear_excel_v1(
-            cabecera, [], tiendas=["T001"],
+            cabecera, [], tiendas=["ABC01"],
             omitir_hoja_detalle=True
         )
         
@@ -229,7 +228,7 @@ class TestPedidoServiceParsearExcel:
         
         # Detalle sin columna "Codigo Producto" (solo columnas irreconocibles)
         excel_bytes = _crear_excel_v1(
-            cabecera, [{"codigo": "R225.1012.BCO"}], tiendas=["T001"],
+            cabecera, [{"codigo": "R225.1012.BCO"}], tiendas=["ABC01"],
             detalle_headers_override=["Columna Desconocida", "Otra Columna"]
         )
         
@@ -250,11 +249,11 @@ class TestPedidoServiceParsearExcel:
         
         # Dos filas con mismo producto (en formato ancho, esto genera 2 distribuciones por tienda)
         detalle = [
-            {"codigo": "R225.1012.BCO", "tiendas": {"T001": 10}},
-            {"codigo": "R225.1012.BCO", "tiendas": {"T001": 5}},
+            {"codigo": "R225.1012.BCO", "tiendas": {"ABC01": 10}},
+            {"codigo": "R225.1012.BCO", "tiendas": {"ABC01": 5}},
         ]
         
-        excel_bytes = _crear_excel_v1(cabecera, detalle, tiendas=["T001"])
+        excel_bytes = _crear_excel_v1(cabecera, detalle, tiendas=["ABC01"])
         
         service = PedidoService()
         resultado = service.parsear_excel_pedido(excel_bytes)
@@ -271,10 +270,10 @@ class TestPedidoServiceParsearExcel:
         
         # Cantidad con coma como separador decimal
         detalle = [
-            {"codigo": "R225.1012.BCO", "tiendas": {"T001": "10,0"}},
+            {"codigo": "R225.1012.BCO", "tiendas": {"ABC01": "10,0"}},
         ]
         
-        excel_bytes = _crear_excel_v1(cabecera, detalle, tiendas=["T001"])
+        excel_bytes = _crear_excel_v1(cabecera, detalle, tiendas=["ABC01"])
         
         service = PedidoService()
         resultado = service.parsear_excel_pedido(excel_bytes)
@@ -288,10 +287,10 @@ class TestPedidoServiceParsearExcel:
         cabecera = [("CODIGO PEDIDO", "P-12.48")]
         
         detalle = [
-            {"codigo": "R225.1012.BCO", "tiendas": {"T001": 0}},
+            {"codigo": "R225.1012.BCO", "tiendas": {"ABC01": 0}},
         ]
         
-        excel_bytes = _crear_excel_v1(cabecera, detalle, tiendas=["T001"])
+        excel_bytes = _crear_excel_v1(cabecera, detalle, tiendas=["ABC01"])
         
         service = PedidoService()
         resultado = service.parsear_excel_pedido(excel_bytes)
@@ -305,13 +304,13 @@ class TestPedidoServiceParsearExcel:
         cabecera = [("CODIGO PEDIDO", "P-12.48")]
         
         detalle = [
-            {"codigo": "R225.1012.BCO", "tiendas": {"T001": 10}},
+            {"codigo": "R225.1012.BCO", "tiendas": {"ABC01": 10}},
             {"codigo": None, "tiendas": {}},       # Fila sin código (vacía)
             {"codigo": "", "tiendas": {}},          # Fila con código vacío
-            {"codigo": "A889.3321.NEG", "tiendas": {"T002": 5}},
+            {"codigo": "A889.3321.NEG", "tiendas": {"ABC02": 5}},
         ]
         
-        excel_bytes = _crear_excel_v1(cabecera, detalle, tiendas=["T001", "T002"])
+        excel_bytes = _crear_excel_v1(cabecera, detalle, tiendas=["ABC01", "ABC02"])
         
         service = PedidoService()
         resultado = service.parsear_excel_pedido(excel_bytes)
@@ -327,10 +326,10 @@ class TestPedidoServiceParsearExcel:
         ]
         
         detalle = [
-            {"codigo": "  R225.1012.BCO  ", "tiendas": {"T001": 10}},
+            {"codigo": "  R225.1012.BCO  ", "tiendas": {"ABC01": 10}},
         ]
         
-        excel_bytes = _crear_excel_v1(cabecera, detalle, tiendas=["T001"])
+        excel_bytes = _crear_excel_v1(cabecera, detalle, tiendas=["ABC01"])
         
         service = PedidoService()
         resultado = service.parsear_excel_pedido(excel_bytes)
@@ -347,7 +346,7 @@ class TestPedidoServiceParsearExcel:
         headers = [
             "codigo producto", "", "", "", "", "", "", "", "",
             "", "", "",
-            "T001"
+            "ABC01"
         ]
         
         wb = Workbook()
@@ -366,7 +365,7 @@ class TestPedidoServiceParsearExcel:
         for col_idx, header in enumerate(headers, start=1):
             ws_det.cell(row=1, column=col_idx, value=header)
         # Fila 2: códigos
-        ws_det.cell(row=2, column=13, value="T001")
+        ws_det.cell(row=2, column=13, value="ABC01")
         # Fila 3: datos
         ws_det.cell(row=3, column=1, value="R225.1012.BCO")
         ws_det.cell(row=3, column=13, value=10)
@@ -388,12 +387,12 @@ class TestPedidoServiceParsearExcel:
         cabecera = [("CODIGO PEDIDO", "P-12.48")]
         
         detalle = [
-            {"codigo": "R225.1012.BCO", "tiendas": {"T001": 10}},  # Válida
-            {"codigo": "A889.3321.NEG", "tiendas": {"T002": 5}},   # Válida
+            {"codigo": "R225.1012.BCO", "tiendas": {"ABC01": 10}},  # Válida
+            {"codigo": "A889.3321.NEG", "tiendas": {"ABC02": 5}},   # Válida
             {"codigo": None, "tiendas": {}},                         # Inválida (sin código)
         ]
         
-        excel_bytes = _crear_excel_v1(cabecera, detalle, tiendas=["T001", "T002"])
+        excel_bytes = _crear_excel_v1(cabecera, detalle, tiendas=["ABC01", "ABC02"])
         
         service = PedidoService()
         resultado = service.parsear_excel_pedido(excel_bytes)
@@ -407,10 +406,10 @@ class TestPedidoServiceParsearExcel:
         cabecera = [("CODIGO PEDIDO", "P-12.48")]
         
         detalle = [
-            {"codigo": "R225.1012.BCO", "tiendas": {"T001": 10, "T002": 5, "T003": 3}},
+            {"codigo": "R225.1012.BCO", "tiendas": {"ABC01": 10, "ABC02": 5, "ABC03": 3}},
         ]
         
-        excel_bytes = _crear_excel_v1(cabecera, detalle, tiendas=["T001", "T002", "T003"])
+        excel_bytes = _crear_excel_v1(cabecera, detalle, tiendas=["ABC01", "ABC02", "ABC03"])
         
         service = PedidoService()
         resultado = service.parsear_excel_pedido(excel_bytes)
@@ -420,19 +419,20 @@ class TestPedidoServiceParsearExcel:
         cantidades = sorted([d["cantidad"] for d in resultado["data"]])
         assert cantidades == [3, 5, 10]
 
-    def test_parsear_excel_cantidad_decimal_truncada(self):
-        """Test que cantidades decimales se truncan a entero."""
+    def test_parsear_excel_cantidad_decimal_preserva_decimales(self):
+        """Test que cantidades decimales se preservan (soporte DECIMAL(18,4), no se truncan a entero)."""
         cabecera = [("CODIGO PEDIDO", "P-12.48")]
-        
+
         detalle = [
-            {"codigo": "R225.1012.BCO", "tiendas": {"T001": 10.7}},
+            {"codigo": "R225.1012.BCO", "tiendas": {"ABC01": 10.7}},
         ]
-        
-        excel_bytes = _crear_excel_v1(cabecera, detalle, tiendas=["T001"])
-        
+
+        excel_bytes = _crear_excel_v1(cabecera, detalle, tiendas=["ABC01"])
+
         service = PedidoService()
         resultado = service.parsear_excel_pedido(excel_bytes)
-        
-        # El parser convierte decimales a entero: int(float("10.7")) = 10
+
+        # Desde el soporte de cantidades decimales (columna DECIMAL(18,4)),
+        # el parser ya no trunca a entero: preserva el valor tal cual.
         assert len(resultado["data"]) == 1
-        assert resultado["data"][0]["cantidad"] == 10
+        assert resultado["data"][0]["cantidad"] == 10.7

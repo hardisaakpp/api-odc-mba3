@@ -11,7 +11,10 @@ import logging
 import base64
 import json
 import asyncio
-from typing import Dict, Optional
+import os
+import threading
+import time
+from typing import Any, Dict, List, Optional
 
 from src.utils.timezone import ahora_naive
 from fastapi import FastAPI, UploadFile, File, Depends, HTTPException, Query, Form, Path, Request
@@ -19,7 +22,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 import io
 
 from src.database.connection import get_db_connection_context
-from src.database.repositories.pedido_repository import PedidoRepository
+from src.database.repositories.pedido_repository import PedidoRepository, PedidosFiltros
 from src.database.repositories.pedido_respuesta_repository import PedidoRespuestaRepository
 from src.database.repositories.common.serialization import make_json_serializable
 from src.database.repositories.archivo_plantilla_repository import ArchivoPlantillaRepository
@@ -29,6 +32,7 @@ from src.exceptions import BusinessException
 from src.endpoints.pedidos.utils import validate_excel_file, get_user_id, MAX_FILE_SIZE
 from src.config import ENABLE_FILE_STORAGE
 from src.database.services.proceso_estado_service import ProcesoEstadoService
+import src.celery_app as celery_app_module
 
 logger = logging.getLogger(__name__)
 
@@ -36,30 +40,175 @@ logger = logging.getLogger(__name__)
 __all__ = ["register_plantillas_endpoints"]
 
 # Timeout para comprobar si hay workers Celery disponibles (evitar colgar si Redis responde pero no hay worker)
-CELERY_WORKER_PING_TIMEOUT = 2.5
+CELERY_WORKER_PING_TIMEOUT = float(os.getenv("CELERY_WORKER_PING_TIMEOUT", "5.0"))
+
+# Margen extra sobre CELERY_WORKER_PING_TIMEOUT para el join() externo (ver más abajo
+# por qué es necesario: inspect().ping() no corta exactamente en su propio timeout).
+CELERY_WORKER_PING_JOIN_BUFFER = float(os.getenv("CELERY_WORKER_PING_JOIN_BUFFER", "2.0"))
+
+# TTL del cache de disponibilidad de workers Celery (ver docstring de
+# _celery_workers_available para el porqué: evita que llamadas repetidas en
+# ráfaga disparen un nuevo hilo de ping cada vez).
+CELERY_WORKER_AVAILABILITY_CACHE_TTL = float(os.getenv("CELERY_WORKER_AVAILABILITY_CACHE_TTL", "4.0"))
+
+# Tope de códigos por consulta a /sap-info-productos. Coincide con el límite del
+# batch del middleware (POST /api/v1/items/batch admite hasta 100).
+MAX_CODIGOS_SAP_INFO = 100
 
 _PERM_MABEL = 'mabel.view'
 _PERM_ODCSAP = 'odcsap.view'
+_PERM_PRODUCCION_ELRAYO = 'produccion-elrayo.view'
 _DEFAULT_FILENAME = "sin_nombre.xlsx"
 _KEY_TAMANO_BYTES = "tamaño_bytes"
+
+# Estado del cache single-flight de disponibilidad de workers Celery (ver
+# _celery_workers_available). Módulo-privado.
+_disponibilidad_lock = threading.Lock()
+_disponibilidad_cache = {"resultado": False, "timestamp": 0.0, "verificando": False}
 
 
 def _celery_workers_available() -> bool:
     """
     Comprueba si hay al menos un worker Celery disponible.
     Si no hay workers o hay error/timeout, retorna False (priorizar flujo síncrono).
+
+    inspect().ping() no siempre respeta su propio parámetro `timeout` (el canal
+    de control de Celery puede quedarse colgado bastante más tiempo); por eso
+    se ejecuta en un hilo daemon con un límite externo real, para no arrastrar
+    ese cuelgue a la petición HTTP que espera este chequeo.
+
+    Cache single-flight con TTL corto (CELERY_WORKER_AVAILABILITY_CACHE_TTL):
+    se verificó en vivo que cuando el join() externo se rinde, el hilo daemon
+    abandonado sigue corriendo en segundo plano intentando obtener su pong, y
+    ese hilo huérfano CONTIENDE con el hilo de ping de la siguiente llamada
+    (aparentemente por un pool de conexiones Kombu/Celery compartido y
+    limitado): pings aislados resolvían en ~5.4s, pero pings que competían
+    con un hilo abandonado tardaban 9.6-14s. El resultado era que llamadas
+    repetidas/rápidas a esta función seguían devolviendo falsos negativos,
+    porque chocaban con sus propios rezagados, incluso después del fix del
+    margen de join() (CELERY_WORKER_PING_JOIN_BUFFER) de la ronda anterior.
+
+    Este cache soluciona eso de tres formas:
+      (a) llamadas repetidas dentro del TTL reutilizan la última respuesta en
+          vez de lanzar un hilo de ping nuevo cada vez;
+      (b) si ya hay un ping en curso, los llamadores nuevos reutilizan el
+          último valor conocido en vez de lanzar un hilo de ping COMPETIDOR
+          (esto es lo que elimina la acumulación/contención de hilos);
+      (c) si un hilo de ping abandonado/lento finalmente recibe su pong
+          (incluso después de que su propio llamador se haya rendido),
+          igual actualiza el cache compartido para que el SIGUIENTE llamador
+          se beneficie de inmediato en vez de disparar otro ping lento.
     """
-    try:
-        from src.celery_app import celery_app
-        inspect = celery_app.control.inspect(timeout=CELERY_WORKER_PING_TIMEOUT)
-        result = inspect.ping()
-        available = bool(result and len(result) > 0)
-        if not available:
-            logger.debug("No hay workers Celery disponibles (ping sin respuesta)")
-        return available
-    except Exception as e:
-        logger.debug("Comprobación de workers Celery fallida: %s", e)
+    ahora = time.time()
+    with _disponibilidad_lock:
+        edad = ahora - _disponibilidad_cache["timestamp"]
+        if edad < CELERY_WORKER_AVAILABILITY_CACHE_TTL:
+            return _disponibilidad_cache["resultado"]
+        if _disponibilidad_cache["verificando"]:
+            return _disponibilidad_cache["resultado"]
+        _disponibilidad_cache["verificando"] = True
+
+    resultado: Dict[str, Any] = {}
+
+    def _ping():
+        try:
+            inspect = celery_app_module.celery_app.control.inspect(timeout=CELERY_WORKER_PING_TIMEOUT)
+            resultado["ping"] = inspect.ping()
+        except Exception as e:
+            resultado["error"] = e
+        finally:
+            disponible = bool(resultado.get("ping"))
+            with _disponibilidad_lock:
+                _disponibilidad_cache["resultado"] = disponible
+                _disponibilidad_cache["timestamp"] = time.time()
+                _disponibilidad_cache["verificando"] = False
+
+    hilo = threading.Thread(target=_ping, daemon=True)
+    hilo.start()
+    # inspect(timeout=X).ping() no respeta X con precisión: se confirmó en vivo que
+    # excede el timeout pedido por ~0.3-0.4s incluso con un worker sano; sin este
+    # margen el join externo pierde esa carrera casi siempre y devuelve falso negativo.
+    hilo.join(timeout=CELERY_WORKER_PING_TIMEOUT + CELERY_WORKER_PING_JOIN_BUFFER)
+
+    if hilo.is_alive():
+        logger.debug(
+            "Comprobación de workers Celery excedió el timeout (%.1fs); "
+            "el hilo sigue en curso y actualizará el cache al terminar",
+            CELERY_WORKER_PING_TIMEOUT + CELERY_WORKER_PING_JOIN_BUFFER,
+        )
         return False
+    if "error" in resultado:
+        logger.debug("Comprobación de workers Celery fallida: %s", resultado["error"])
+        return False
+
+    available = bool(resultado.get("ping"))
+    if not available:
+        logger.debug("No hay workers Celery disponibles (ping sin respuesta)")
+    return available
+
+
+def _consultar_sap_info_productos(codigos: List[str]) -> Dict[str, Dict[str, Any]]:
+    """
+    Resuelve Pack / PVP / código de barras en SAP para una lista de códigos.
+
+    Bloqueante (cache en SQL Server + middleware o su fallback OPENQUERY): debe
+    invocarse via asyncio.to_thread para no congelar el event loop.
+    """
+    from src.database.services.sap_service import SAPService
+
+    resultados = SAPService().get_or_fetch_productos_batch(codigos)
+    salida: Dict[str, Dict[str, Any]] = {}
+    for codigo in codigos:
+        info = resultados.get(codigo)
+        # get_or_fetch_productos_batch devuelve None (no resuelto) o un dict con
+        # _error/_error_type ("no_existe" | "inactivo" | "mismatch") en vez de datos.
+        if not info or info.get("_error"):
+            salida[codigo] = {
+                "encontrado": False,
+                "motivo": (info or {}).get("_error_type"),
+                "pack_sap": None,
+                "pvp_sap": None,
+                "codigo_barras": None,
+                "item_name": None,
+            }
+            continue
+        salida[codigo] = {
+            "encontrado": True,
+            "motivo": None,
+            "pack_sap": info.get("pack_sap"),
+            "pvp_sap": info.get("pvp_sap"),
+            "codigo_barras": info.get("codigo_barras"),
+            "item_name": info.get("item_name"),
+        }
+    return salida
+
+
+def _parsear_codigos_sap_info(codigos: str) -> List[str]:
+    """Divide, limpia y deduplica (preservando orden) la lista de códigos recibida."""
+    vistos = set()
+    lista: List[str] = []
+    for crudo in codigos.split(","):
+        codigo = crudo.strip()
+        if codigo and codigo not in vistos:
+            vistos.add(codigo)
+            lista.append(codigo)
+    if not lista:
+        raise HTTPException(status_code=400, detail="Debe enviar al menos un código en 'codigos'")
+    if len(lista) > MAX_CODIGOS_SAP_INFO:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Máximo {MAX_CODIGOS_SAP_INFO} códigos por consulta "
+                f"(se recibieron {len(lista)}). Divida la consulta en varias llamadas."
+            )
+        )
+    return lista
+
+
+async def _sap_info_productos_handler(codigos: str) -> JSONResponse:
+    lista = _parsear_codigos_sap_info(codigos)
+    productos = await asyncio.to_thread(_consultar_sap_info_productos, lista)
+    return JSONResponse(status_code=200, content={"productos": productos})
 
 
 def _validar_modo_sincronizar_maestro(modo_tiendas: str, confirmar_sincronizacion: bool, user: Dict) -> None:
@@ -296,7 +445,10 @@ async def _upload_plantilla_handler(
         if respuesta_error is not None:
             return respuesta_error
 
-        _adjuntar_archivo_original(
+        # Guardado en storage (MinIO/S3, put_object) es I/O síncrono/bloqueante ->
+        # se delega a un thread aparte para no bloquear el event loop.
+        await asyncio.to_thread(
+            _adjuntar_archivo_original,
             response_data, content, resultado,
             file.filename or _DEFAULT_FILENAME, file_size, user_id
         )
@@ -426,7 +578,10 @@ async def _procesar_plantilla_sync_fallback(
     respuesta_error = _respuesta_error_procesamiento(resultado, tiene_pedido_guardado, response_data)
     if respuesta_error is not None:
         return respuesta_error
-    _adjuntar_archivo_original_fallback(
+    # Guardado en storage (MinIO/S3, put_object) es I/O síncrono/bloqueante ->
+    # se delega a un thread aparte para no bloquear el event loop.
+    await asyncio.to_thread(
+        _adjuntar_archivo_original_fallback,
         response_data, content, resultado,
         file.filename or _DEFAULT_FILENAME, file_size, user_id
     )
@@ -457,7 +612,9 @@ async def _upload_plantilla_async_handler(
     correcciones_dict = _parsear_correcciones_codigos(correcciones_codigos)
 
     run_async = not force_sync
-    if run_async and not _celery_workers_available():
+    # to_thread: el ping de inspeccion habla con Redis de forma sincrona y
+    # bloqueante. En el event loop, un Redis lento congela TODA la API.
+    if run_async and not await asyncio.to_thread(_celery_workers_available):
         logger.info(
             "No hay workers Celery disponibles. Procesando plantilla en primer plano (fallback sync)."
         )
@@ -476,7 +633,10 @@ async def _upload_plantilla_async_handler(
         )
 
     if run_async:
-        respuesta_async = _encolar_plantilla_async(
+        # to_thread: encolar toca SQL Server, MinIO y Redis de forma sincrona.
+        # Sin el thread, cualquiera de los tres bloquea el event loop completo.
+        respuesta_async = await asyncio.to_thread(
+            _encolar_plantilla_async,
             content, file, validar, bloquea_con_errores,
             modo_tiendas, correcciones_dict, user_id
         )
@@ -484,7 +644,8 @@ async def _upload_plantilla_async_handler(
             return respuesta_async
 
     return await _procesar_plantilla_sync_fallback(
-        content, file, file_size, validar, bloquea_con_errores, correcciones_dict, user_id
+        content, file, file_size, validar, bloquea_con_errores,
+        correcciones_dict, user_id
     )
 
 
@@ -511,13 +672,15 @@ async def _obtener_resultado_plantilla_handler(process_id: str, user: Dict):
         content = {
             "status": "error",
             "message": estado.get("message", estado.get("error", "Error desconocido")),
-            "error": estado.get("error")
+            "error": estado.get("error"),
+            "error_code": estado.get("error_code")
         }
         error_data = estado.get("error_data")
         if error_data:
             content["validacion"] = error_data.get("validacion")
             content["validacion_sap"] = error_data.get("validacion_sap")
-            logger.debug(f"GET resultado {process_id}: enviando validacion_sap con detalle_validacion")
+            content["validacion_pack_pvp"] = error_data.get("validacion_pack_pvp")
+            logger.debug(f"GET resultado {process_id}: enviando validacion_sap/validacion_pack_pvp con detalle_validacion")
         else:
             logger.warning(f"GET resultado {process_id}: no hay error_data en estado (reiniciar Celery worker si se esperaban sugerencias SAP)")
         return JSONResponse(status_code=400, content=content)
@@ -651,6 +814,10 @@ async def _listar_pedidos_plantillas_handler(
     offset: int,
     solo_pendientes_accion: Optional[str],
     user: Dict,
+    creado_por: Optional[str] = None,
+    fecha_desde: Optional[str] = None,
+    fecha_hasta: Optional[str] = None,
+    tipo_fecha: Optional[str] = None,
 ):
     try:
         user_id = get_user_id(user)
@@ -663,13 +830,20 @@ async def _listar_pedidos_plantillas_handler(
             repo = PedidoRepository(conn)
 
             resultado = repo.get_pedidos_con_filtros(
-                estado=estado,
-                numero_pedido=numero_pedido.strip() if numero_pedido else None,
-                creado_por=None,  # Sin filtrar por usuario — visibles para mabel.view
+                filtros=PedidosFiltros(
+                    estado=estado,
+                    numero_pedido=numero_pedido.strip() if numero_pedido else None,
+                    creado_por=creado_por.strip() if creado_por else None,
+                    fecha_desde=fecha_desde,
+                    fecha_hasta=fecha_hasta,
+                    tipo_fecha=tipo_fecha,
+                    excluir_borrador=False,  # INCLUIR BORRADOR para cargar-plantilla
+                    solo_pendientes_accion=filtrar_pendientes,
+                    # LISTO_PARA_REDISTRIBUCION (25, botón "Aceptar") solo se ve en /redistribucion
+                    excluir_listo_para_redistribucion=True,
+                ),
                 limit=limit,
                 offset=offset,
-                excluir_borrador=False,  # INCLUIR BORRADOR para cargar-plantilla
-                solo_pendientes_accion=filtrar_pendientes,
             )
 
             logger.info(
@@ -814,7 +988,9 @@ async def _descargar_plantilla(
                     }
                 )
 
-        contenido = _descargar_contenido_storage(archivo_info["storage_path"])
+        # Descarga de storage (MinIO/S3, get_object + read) es I/O síncrono/bloqueante ->
+        # se delega a un thread aparte para no bloquear el event loop.
+        contenido = await asyncio.to_thread(_descargar_contenido_storage, archivo_info["storage_path"])
 
         with get_db_connection_context() as conn:
             archivo_repo = ArchivoPlantillaRepository(conn)
@@ -912,11 +1088,15 @@ async def _buscar_pedidos_por_numero_handler(numero_pedido: Optional[str], limit
             repo = PedidoRepository(conn)
 
             resultado = repo.get_pedidos_con_filtros(
-                numero_pedido=numero_pedido.strip() if numero_pedido else None,
-                creado_por=None,  # Sin filtrar por usuario — visibles para mabel.view
+                filtros=PedidosFiltros(
+                    numero_pedido=numero_pedido.strip() if numero_pedido else None,
+                    creado_por=None,  # Sin filtrar por usuario — visibles para mabel.view
+                    excluir_borrador=False,  # Incluir BORRADOR para cargar-plantilla
+                    # LISTO_PARA_REDISTRIBUCION (25, botón "Aceptar") solo se ve en /redistribucion
+                    excluir_listo_para_redistribucion=True,
+                ),
                 limit=limit,
                 offset=0,
-                excluir_borrador=False,  # Incluir BORRADOR para cargar-plantilla
             )
 
             return JSONResponse(
@@ -1093,7 +1273,11 @@ async def _eliminar_archivo_original_handler(archivo_id: int, eliminar_fisicamen
                     from src.services.file_storage_service import get_file_storage, FileStorageError
 
                     storage = get_file_storage()
-                    storage.eliminar_archivo(archivo_info["storage_path"])
+                    # delete_object es I/O síncrono/bloqueante -> se delega a un thread
+                    # aparte para no bloquear el event loop (esto ocurre dentro de un
+                    # "with get_db_connection_context()" abierto, así que es especialmente
+                    # importante no bloquear aquí).
+                    await asyncio.to_thread(storage.eliminar_archivo, archivo_info["storage_path"])
                     eliminacion_storage = True
 
                     logger.info(
@@ -1144,7 +1328,9 @@ async def _storage_health_check_handler():
         from src.services.file_storage_service import get_file_storage
 
         storage = get_file_storage()
-        health = storage.health_check()
+        # head_bucket es I/O síncrono/bloqueante -> se delega a un thread aparte
+        # para no bloquear el event loop.
+        health = await asyncio.to_thread(storage.health_check)
 
         return JSONResponse(status_code=200, content=health)
 
@@ -1187,7 +1373,8 @@ def register_plantillas_endpoints(app: FastAPI):
         """Sube y valida una plantilla Excel para procesamiento."""
         return await _upload_plantilla_handler(
             file, validar, bloquea_con_errores, exportar_log,
-            modo_tiendas, confirmar_sincronizacion, correcciones_codigos, user
+            modo_tiendas, confirmar_sincronizacion, correcciones_codigos,
+            user
         )
 
     @app.post("/api/plantillas/upload-async", tags=["Plantillas"])
@@ -1220,8 +1407,35 @@ def register_plantillas_endpoints(app: FastAPI):
         """
         return await _upload_plantilla_async_handler(
             file, validar, bloquea_con_errores, modo_tiendas,
-            confirmar_sincronizacion, force_sync, correcciones_codigos, user
+            confirmar_sincronizacion, force_sync, correcciones_codigos,
+            user
         )
+
+    @app.get("/api/plantillas/sap-info-productos", tags=["Plantillas"])
+    async def sap_info_productos(
+        codigos: str = Query(
+            ...,
+            description=(
+                "Códigos SAP separados por coma (máx. 100). "
+                "Ej: R311.AMAZ-4-1012,R311.SIE-20.1012"
+            )
+        ),
+        user: Dict = Depends(verify_jwt_token),
+        _: None = Depends(require_permission(_PERM_MABEL))
+    ):
+        """
+        Devuelve Pack, PVP (Precio Minorista) y código de barras de SAP para los
+        códigos indicados.
+
+        Pensado para el modal de corrección de plantillas: cuando el usuario elige
+        una sugerencia para un código inválido, permite saber en el momento si esa
+        elección va a implicar además una discrepancia de Pack/PVP, y resolver todo
+        en una sola ronda en vez de descubrirlo en el reintento siguiente.
+
+        Los códigos no resueltos vuelven con `encontrado: false` y un `motivo`
+        (`no_existe` | `inactivo` | `mismatch` | `null`); nunca tumban la consulta.
+        """
+        return await _sap_info_productos_handler(codigos)
 
     @app.get("/api/plantillas/resultado/{process_id}", tags=["Plantillas"])
     async def obtener_resultado_plantilla(
@@ -1261,19 +1475,27 @@ def register_plantillas_endpoints(app: FastAPI):
             None,
             description="Si 'true', solo pedidos que requieren acción del proveedor",
         ),
+        creado_por: Optional[str] = Query(None, description="Búsqueda parcial por usuario que creó el pedido"),
+        fecha_desde: Optional[str] = Query(None, description="Filtrar desde fecha (YYYY-MM-DD)"),
+        fecha_hasta: Optional[str] = Query(None, description="Filtrar hasta fecha (YYYY-MM-DD)"),
+        tipo_fecha: Optional[str] = Query(
+            None,
+            description="Columna sobre la que aplica fecha_desde/fecha_hasta: 'pedido' (default), 'entrega' o 'facturacion'",
+        ),
         user: Dict = Depends(verify_jwt_token),
         _: None = Depends(require_permission(_PERM_MABEL))
     ):
         """Lista pedidos para la página cargar-plantilla (incluye estado BORRADOR)."""
         return await _listar_pedidos_plantillas_handler(
-            estado, numero_pedido, limit, offset, solo_pendientes_accion, user
+            estado, numero_pedido, limit, offset, solo_pendientes_accion, user, creado_por,
+            fecha_desde, fecha_hasta, tipo_fecha,
         )
 
     @app.get("/api/plantillas/{pedido_id}/descargar-original", tags=["Plantillas"])
     async def descargar_plantilla_original(
         pedido_id: str = Path(..., description="ID del pedido (GUID)"),
         user: Dict = Depends(verify_jwt_token),
-        _: None = Depends(require_any_permission([_PERM_MABEL, _PERM_ODCSAP]))
+        _: None = Depends(require_any_permission([_PERM_MABEL, _PERM_ODCSAP, _PERM_PRODUCCION_ELRAYO]))
     ):
         """Descarga el archivo Excel original subido para un pedido."""
         return await _descargar_plantilla(
@@ -1285,7 +1507,7 @@ def register_plantillas_endpoints(app: FastAPI):
     async def descargar_plantilla_original_por_archivo(
         archivo_id: int = Path(..., description="ID del archivo original"),
         user: Dict = Depends(verify_jwt_token),
-        _: None = Depends(require_any_permission([_PERM_MABEL, _PERM_ODCSAP]))
+        _: None = Depends(require_any_permission([_PERM_MABEL, _PERM_ODCSAP, _PERM_PRODUCCION_ELRAYO]))
     ):
         """Descarga un archivo Excel original por su ID de archivo."""
         return await _descargar_plantilla(
@@ -1297,7 +1519,7 @@ def register_plantillas_endpoints(app: FastAPI):
     async def info_archivo_plantilla(
         pedido_id: str = Path(..., description="ID del pedido (GUID)"),
         user: Dict = Depends(verify_jwt_token),
-        _: None = Depends(require_any_permission([_PERM_MABEL, _PERM_ODCSAP]))
+        _: None = Depends(require_any_permission([_PERM_MABEL, _PERM_ODCSAP, _PERM_PRODUCCION_ELRAYO]))
     ):
         """Obtiene información sobre el archivo Excel original de un pedido."""
         return await _info_archivo_plantilla_handler(pedido_id)

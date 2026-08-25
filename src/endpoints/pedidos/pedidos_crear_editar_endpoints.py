@@ -2,6 +2,7 @@
 Endpoints de creacion, edicion e importacion de pedidos.
 """
 
+import asyncio
 import logging
 from typing import Dict
 
@@ -10,6 +11,7 @@ from fastapi.responses import JSONResponse
 
 from src.database.connection import get_db_connection_context
 from src.database.repositories.pedido_repository import PedidoRepository
+from src.database.pedido_estados import ESTADO_CONFIRMADO_ENVIADO
 from src.security.jwt_auth import verify_jwt_token, require_permission, require_any_permission
 from src.exceptions import BusinessException
 from src.logging_config import log_business_operation
@@ -27,6 +29,33 @@ logger = logging.getLogger(__name__)
 # Permisos (evita duplicación de literales)
 _PERM_MABEL = 'mabel.view'
 _PERM_ODCSAP = 'odcsap.view'
+_PERM_PRODUCCION_ELRAYO = 'produccion-elrayo.view'
+
+
+def _validar_puede_editar_fecha_facturacion(datos_cabecera: Dict, pedido_existente: Dict, user: Dict) -> None:
+    """Fecha Facturación (req. 1.8) es exclusiva de odcsap.view y solo editable mientras
+    el pedido está en CONFIRMADO_ENVIADO (estado_id = 12), donde habilita "Despachar y
+    Facturar"."""
+    if "fecha_facturacion" not in datos_cabecera:
+        return
+    permissions = user.get("permissions") or []
+    if _PERM_ODCSAP not in permissions:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "error": "permiso_denegado",
+                "message": "Fecha Facturación solo puede editarla el perfil ODC SAP."
+            }
+        )
+    estado_id = (pedido_existente.get("cabecera") or {}).get("estado_id")
+    if estado_id != ESTADO_CONFIRMADO_ENVIADO:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "error": "estado_no_permitido",
+                "message": "Fecha Facturación solo puede editarse mientras el pedido está en Confirmado y Enviado."
+            }
+        )
 
 
 def _mapear_codigo_a_filas(data):
@@ -70,6 +99,110 @@ def _recalcular_filas_validas(resultado):
 
     resultado["resumen"]["filasInvalidas"] = filas_invalidas_finales
     resultado["resumen"]["filasValidas"] = max(0, filas_leidas - filas_invalidas_finales)
+
+
+def _mapear_codigo_a_info_productos(data):
+    """Construye un dict {codigoProducto: [info_producto, ...]} para sincronizar/validar contra SAP."""
+    codigo_a_info_productos = {}
+    for item in data:
+        codigo = item.get("codigoProducto")
+        info_producto = item.get("info_producto")
+        if codigo and info_producto is not None:
+            codigo_a_info_productos.setdefault(codigo, []).append(info_producto)
+    return codigo_a_info_productos
+
+
+def _agregar_error_pack(resultado, codigo_a_filas, codigo, pack_excel, pack_sap):
+    """
+    Agrega un ERROR por fila cuando el Pack del Excel no coincide con el de SAP (RN-02).
+
+    Incluye `pack_excel`/`pack_sap` como campos estructurados (ademas del mensaje) para
+    que el frontend pueda ofrecer la correccion sugerida sin tener que parsear texto.
+    """
+    mensaje = (
+        f"El Pack '{pack_excel}' del Excel no coincide con el Pack registrado en SAP "
+        f"para '{codigo}' ('{pack_sap}'). Use '{pack_sap}'."
+    )
+    for fila in codigo_a_filas.get(codigo, []):
+        resultado["errores"].append({
+            "fila": fila,
+            "campo": "Pack",
+            "tipo": "ERROR",
+            "mensaje": mensaje,
+            "pack_excel": pack_excel,
+            "pack_sap": pack_sap
+        })
+
+
+def _valores_numericos_difieren(valor_excel, valor_sap, tolerancia=0.01):
+    """Compara dos valores monetarios redondeados a 2 decimales, con tolerancia por tipo/redondeo."""
+    try:
+        return abs(round(float(valor_excel), 2) - round(float(valor_sap), 2)) > tolerancia
+    except (TypeError, ValueError):
+        return False
+
+
+def _agregar_error_pvp(resultado, codigo_a_filas, codigo, pvp_excel, pvp_sap):
+    """
+    Agrega un ERROR por fila cuando el PVP del Excel no coincide con el de SAP (RN-02).
+
+    PVP de SAP viene de ITM1 con PriceList=1 ("Precio Minorista"). Incluye
+    `pvp_excel`/`pvp_sap` como campos estructurados (ademas del mensaje) para que
+    el frontend pueda ofrecer la correccion sugerida sin tener que parsear texto.
+    """
+    pvp_excel_fmt = f"{float(pvp_excel):.2f}"
+    pvp_sap_fmt = f"{float(pvp_sap):.2f}"
+    mensaje = (
+        f"El PVP '{pvp_excel_fmt}' del Excel no coincide con el PVP registrado en SAP "
+        f"(Precio Minorista) para '{codigo}' ('{pvp_sap_fmt}'). Use '{pvp_sap_fmt}'."
+    )
+    for fila in codigo_a_filas.get(codigo, []):
+        resultado["errores"].append({
+            "fila": fila,
+            "campo": "PVP",
+            "tipo": "ERROR",
+            "mensaje": mensaje,
+            "pvp_excel": float(pvp_excel),
+            "pvp_sap": float(pvp_sap)
+        })
+
+
+def _sincronizar_campos_sap_en_producto(info_producto, sap_info):
+    """Sincroniza codigo_barras/descripcion_sap desde SAP (fuente de verdad; el
+    Excel es solo referencia visual, no se valida contra SAP) en el info_producto
+    del parsing. Usado por `_sincronizar_maestro_sap_y_validar_pack_pvp`."""
+    if sap_info.get("codigo_barras"):
+        info_producto["codigo_barras"] = sap_info["codigo_barras"]
+    if sap_info.get("item_name"):
+        info_producto["descripcion_sap"] = sap_info["item_name"]
+
+
+def _sincronizar_maestro_sap_y_validar_pack_pvp(resultado, validacion_sap, codigo_a_filas):
+    """
+    Para cada código válido en SAP: toma código de barras y descripción desde SAP
+    (fuente de verdad; el Excel es solo referencia visual, no se valida contra SAP)
+    y valida Pack y PVP contra SAP (obligatorios por RN-02, bloquean si difieren).
+    """
+    codigo_a_info_productos = _mapear_codigo_a_info_productos(resultado.get("data", []))
+    detalle = validacion_sap.get("detalle", {})
+
+    for codigo, info_productos in codigo_a_info_productos.items():
+        sap_info = detalle.get(codigo, {}).get("info")
+        if not sap_info:
+            continue
+
+        for info_producto in info_productos:
+            _sincronizar_campos_sap_en_producto(info_producto, sap_info)
+
+        pack_excel = next((ip.get("pack") for ip in info_productos if ip.get("pack")), None)
+        pack_sap = sap_info.get("pack_sap")
+        if pack_excel and pack_sap and pack_excel.strip().upper() != pack_sap.strip().upper():
+            _agregar_error_pack(resultado, codigo_a_filas, codigo, pack_excel, pack_sap)
+
+        pvp_excel = next((ip.get("pvp") for ip in info_productos if ip.get("pvp")), None)
+        pvp_sap = sap_info.get("pvp_sap")
+        if pvp_excel and pvp_sap and _valores_numericos_difieren(pvp_excel, pvp_sap):
+            _agregar_error_pvp(resultado, codigo_a_filas, codigo, pvp_excel, pvp_sap)
 
 
 def _construir_resumen_validacion_sap(validacion_sap, codigos_productos, codigos_no_encontrados, codigos_errores, codigos_warnings):
@@ -139,6 +272,10 @@ def _aplicar_validacion_sap(resultado, sap_obligatorio):
         lambda c: f"No se pudo validar el codigo '{c}' en SAP"
     )
 
+    # Codigo de barras/descripcion: se toman de SAP (fuente de verdad) para los codigos validos.
+    # Pack y PVP: validacion obligatoria contra SAP (RN-02), bloquea si difieren.
+    _sincronizar_maestro_sap_y_validar_pack_pvp(resultado, validacion_sap, codigo_a_filas)
+
     # Recalcular filasValidas/filasInvalidas
     _recalcular_filas_validas(resultado)
 
@@ -193,8 +330,11 @@ async def _importar_excel_pedido_handler(file, hoja_cabecera, hoja_detalle, vali
         )
 
         # ✅ VALIDACION SAP POST-PARSING (si esta habilitada)
+        # _aplicar_validacion_sap() consulta SAP (HTTP) y MBA3 (DB) de forma
+        # sincrona/bloqueante -> se delega a un thread aparte para no bloquear
+        # el event loop.
         if validar_sap and resultado.get("data"):
-            _aplicar_validacion_sap(resultado, sap_obligatorio)
+            await asyncio.to_thread(_aplicar_validacion_sap, resultado, sap_obligatorio)
 
         return JSONResponse(status_code=200, content=resultado)
 
@@ -238,7 +378,10 @@ async def _crear_pedido_manual_handler(request, request_body, user):
         if datos_pedido.get("articulos"):
             logger.debug(f"📦 Primer articulo recibido: {datos_pedido['articulos'][0]}")
 
-        resultado = service.crear_pedido_manual(
+        # crear_pedido_manual() hace I/O sincrono/bloqueante (DB) -> se delega a un
+        # thread aparte para no bloquear el event loop.
+        resultado = await asyncio.to_thread(
+            service.crear_pedido_manual,
             datos_pedido=datos_pedido,
             usuario_id=usuario_id,
             validar_productos=datos_pedido.get("validar_productos", True),
@@ -283,38 +426,49 @@ async def _crear_pedido_manual_handler(request, request_body, user):
         )
 
 
+def _db_modificar_pedido_cabecera(request, pedido_id, request_body, user):
+    """Consulta bloqueante (pyodbc); se ejecuta vía asyncio.to_thread."""
+    # Crear contexto de auditoria (Buenas Practicas - Seccion 3)
+    audit = get_audit_context(request, user, origen=ORIGEN_WEB)
+
+    datos_cabecera = request_body.model_dump(exclude_unset=True)
+    campos_modificados = list(datos_cabecera.keys())
+
+    with get_db_connection_context() as conn:
+        repo = PedidoRepository(conn)
+
+        pedido_existente = repo.get_pedido_completo(pedido_id)
+        if not pedido_existente:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={
+                    "error": "pedido_not_found",
+                    "message": f"No se encontro el pedido con ID: {pedido_id}"
+                }
+            )
+
+        _validar_puede_editar_fecha_facturacion(datos_cabecera, pedido_existente, user)
+
+        resultado = repo.update_cabecera(pedido_id, datos_cabecera, audit_context=audit)
+
+        if not resultado:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={
+                    "error": "update_failed",
+                    "message": "No se pudo actualizar la cabecera del pedido"
+                }
+            )
+
+    return campos_modificados
+
+
 async def _modificar_pedido_cabecera_handler(request, pedido_id, request_body, user):
     """Lógica del endpoint de modificación de cabecera de pedido (HU-03)."""
     try:
-        # Crear contexto de auditoria (Buenas Practicas - Seccion 3)
-        audit = get_audit_context(request, user, origen=ORIGEN_WEB)
-
-        datos_cabecera = request_body.model_dump(exclude_unset=True)
-        campos_modificados = list(datos_cabecera.keys())
-
-        with get_db_connection_context() as conn:
-            repo = PedidoRepository(conn)
-
-            pedido_existente = repo.get_pedido_completo(pedido_id)
-            if not pedido_existente:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail={
-                        "error": "pedido_not_found",
-                        "message": f"No se encontro el pedido con ID: {pedido_id}"
-                    }
-                )
-
-            resultado = repo.update_cabecera(pedido_id, datos_cabecera, audit_context=audit)
-
-            if not resultado:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail={
-                        "error": "update_failed",
-                        "message": "No se pudo actualizar la cabecera del pedido"
-                    }
-                )
+        campos_modificados = await asyncio.to_thread(
+            _db_modificar_pedido_cabecera, request, pedido_id, request_body, user
+        )
 
         logger.info(f"✅ Cabecera del pedido {pedido_id} actualizada por usuario {user.get('username', 'UNKNOWN')}")
 
@@ -347,7 +501,9 @@ async def _enviar_pedido_handler(pedido_id, user):
         from src.database.services.pedido_service import PedidoService
         service = PedidoService()
         usuario_id = get_user_id(user)
-        resultado = service.enviar_pedido(pedido_id=pedido_id, usuario_id=usuario_id)
+        # enviar_pedido() hace I/O síncrono/bloqueante (DB + envío de correo SMTP) ->
+        # se delega a un thread aparte para no bloquear el event loop.
+        resultado = await asyncio.to_thread(service.enviar_pedido, pedido_id=pedido_id, usuario_id=usuario_id)
 
         # 📢 Notificacion: otros MABEL + EL RAYO (excl. autor)
         try:
@@ -364,6 +520,21 @@ async def _enviar_pedido_handler(pedido_id, user):
             )
         except Exception as notif_err:
             logger.warning(f"⚠️ Error al enviar notificacion en tiempo real: {notif_err}")
+
+        # 📢 Notificacion a Producción El Rayo (req. 1.8): notify_by_actor no lo cubre,
+        # ya que su mapeo de "permiso opuesto" solo conoce mabel.view<->odcsap.view.
+        try:
+            from src.utils.notification_manager import notification_manager, NotificationType
+            numero_pedido = resultado.get("numero_pedido", "")
+            await notification_manager.notify(
+                target_permission=_PERM_PRODUCCION_ELRAYO,
+                title="Nuevo pedido de MABEL TRADING",
+                message=f"El pedido {numero_pedido} fue enviado por MABEL TRADING y está disponible para gestión.",
+                notification_type=NotificationType.INFO,
+                metadata={"pedido_id": pedido_id, "numero_pedido": numero_pedido, "accion": "pedido_enviado"},
+            )
+        except Exception as notif_err:
+            logger.warning(f"⚠️ Error al enviar notificacion en tiempo real a Producción El Rayo: {notif_err}")
 
         return JSONResponse(
             status_code=status.HTTP_200_OK,
@@ -475,7 +646,7 @@ def register_pedidos_crear_editar_endpoints(app: FastAPI):
         pedido_id: str = Path(..., description="UUID del pedido"),
         request_body: ModificarPedidoCabeceraRequest = Body(..., description="Datos de la cabecera a modificar"),
         user: Dict = Depends(verify_jwt_token),
-        _: None = Depends(require_any_permission([_PERM_ODCSAP, _PERM_MABEL]))
+        _: None = Depends(require_any_permission([_PERM_ODCSAP, _PERM_MABEL, _PERM_PRODUCCION_ELRAYO]))
     ):
         """
         Modifica la cabecera de un pedido (HU-03 - Modificacion de pedidos).

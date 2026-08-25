@@ -38,7 +38,7 @@ class ProductoSAPRepository:
         try:
             cursor.execute(
                 """
-                SELECT 
+                SELECT
                     cache_id,
                     sku,
                     item_code,
@@ -50,14 +50,17 @@ class ProductoSAPRepository:
                     ultima_consulta,
                     activo,
                     created_at,
-                    updated_at
+                    updated_at,
+                    codigo_barras,
+                    pvp_sap,
+                    marca_sap
                 FROM producto_sap_cache
                 WHERE sku = ? AND activo = 1
                 """,
                 (sku,)
             )
             result = cursor.fetchone()
-            
+
             if result:
                 return {
                     "cache_id": str(result[0]),
@@ -72,6 +75,9 @@ class ProductoSAPRepository:
                     "activo": bool(result[9]),
                     "created_at": result[10],
                     "updated_at": result[11],
+                    "codigo_barras": result[12],
+                    "pvp_sap": float(result[13]) if result[13] is not None else None,
+                    "marca_sap": result[14] if len(result) > 14 else None,
                 }
             return None
         finally:
@@ -118,7 +124,10 @@ class ProductoSAPRepository:
                 - unidad_conversion: Unidad de conversión calculada
                 - pack_id: ID del pack en pack_conversion
                 - grupo_articulos: Grupo de artículos (ItmsGrpNam)
-                
+                - codigo_barras: Código de barras (CodeBars) de SAP
+                - pvp_sap: PVP de SAP (ITM1.Price, lista de precios "Precio Minorista")
+                - marca_sap: Marca (OITM.U_MARCA) de SAP
+
         Returns:
             True si se insertó/actualizó correctamente
         """
@@ -143,10 +152,13 @@ class ProductoSAPRepository:
                     pack_id = ?,
                     grupo_articulos = ?,
                     ultima_consulta = ?,
-                    updated_at = ?
+                    updated_at = ?,
+                    codigo_barras = ?,
+                    pvp_sap = ?,
+                    marca_sap = ?
                 WHERE sku = ? AND activo = 1
                 """
-                
+
                 values = (
                     producto_data.get("item_code", sku),
                     producto_data.get("item_name"),
@@ -156,6 +168,9 @@ class ProductoSAPRepository:
                     producto_data.get("grupo_articulos"),
                     ahora_naive(),
                     ahora_naive(),
+                    producto_data.get("codigo_barras"),
+                    producto_data.get("pvp_sap"),
+                    producto_data.get("marca_sap"),
                     sku,
                 )
                 
@@ -182,8 +197,11 @@ class ProductoSAPRepository:
                     ultima_consulta,
                     activo,
                     created_at,
-                    updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+                    updated_at,
+                    codigo_barras,
+                    pvp_sap,
+                    marca_sap
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?)
                 """
                 _ahora = ahora_naive()
                 values = (
@@ -197,6 +215,9 @@ class ProductoSAPRepository:
                     _ahora,
                     _ahora,
                     _ahora,
+                    producto_data.get("codigo_barras"),
+                    producto_data.get("pvp_sap"),
+                    producto_data.get("marca_sap"),
                 )
                 
                 cursor.execute(sql, values)

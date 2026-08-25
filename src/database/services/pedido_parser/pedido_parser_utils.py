@@ -80,7 +80,10 @@ class PedidoParserUtils:
         _CLAVE_CODIGO_BARRAS: ('codigo de barras', 'codigo_barras', 'código de barras', _CLAVE_CODIGO_BARRAS, 'ean'),
         'descripcion sap': ('descripcion sap', 'descripción sap', 'descripcion', 'descripción'),
         'pack': ('pack', 'unidad', 'unidad de empaque'),
-        'costo sin iva': ('costo sin iva', 'costo doc sin iva', 'costo', 'precio sin iva'),
+        'costo sin iva': ('costo sin iva', 'costo doc sin iva', 'precio sin iva'),
+        # Columna "Costo" (req. 1.4/1.5, SIS-PYTD-0002): informativa para el Margen de
+        # Rentabilidad, distinta de "Costo sin IVA" (costo_doc_sin_iva ya alimenta OC/ajustes).
+        'costo margen': ('costo',),
         'descuento': ('descuento', 'dscto', 'dscto 1', 'descuento 1'),
         'pvp': ('pvp', 'precio venta publico', 'precio de venta'),
         'total': ('total',),
@@ -100,13 +103,6 @@ class PedidoParserUtils:
         'RL-CD': 'RL-CD',
         'OUT-CD': 'OUT-CD'
     }
-    
-    # Constantes: Índices de columnas
-    # NOTA: Ajustados tras eliminar columna "marca" de la plantilla (2026-02-05)
-    INDICE_INICIO_TIENDAS = 12  # Columna M (antes N)
-    INDICES_BODEGAS = [9, 10, 11]  # Columnas J, K, L (antes K, L, M)
-    INDICES_PRODUCTO = list(range(9))  # Columnas A-I (0-8, antes A-J 0-9)
-    
     # Constantes: Prefijos y patrones
     PREFIJO_TIENDA_ANTIGUO = "roland "
     PATRON_CODIGO_TIENDA = r'^[A-Z]{3}\d{2}$'

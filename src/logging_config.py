@@ -25,6 +25,7 @@ Uso:
 """
 
 import os
+import sys
 import logging
 import json
 from src.utils.timezone import ahora, ahora_naive
@@ -59,6 +60,33 @@ BACKUP_COUNT = 5
 
 # Nivel de log según ambiente
 LOG_LEVEL = logging.DEBUG if ENVIRONMENT == "development" else logging.INFO
+
+
+def _detect_process_role() -> str:
+    """
+    Identifica qué proceso está corriendo (API, worker o beat de Celery) a partir
+    de sys.argv, para que cada uno escriba en su propio archivo de log.
+
+    En Windows, RotatingFileHandler/TimedRotatingFileHandler usan os.rename() para
+    rotar, y eso falla con PermissionError (WinError 32) si otro proceso tiene el
+    mismo archivo abierto. Como API, worker y beat corren como procesos separados
+    (en local, fuera de Docker) y antes compartían api.log/errors.log/business.log,
+    cualquiera de los tres podía romper la rotación de los otros y dejar su
+    RotatingFileHandler con self.stream = None (sin más logs hasta reiniciar).
+    """
+    argv_text = " ".join(sys.argv).lower()
+    if "celery" in argv_text:
+        if "worker" in argv_text:
+            return "celery-worker"
+        if "beat" in argv_text:
+            return "celery-beat"
+        if "flower" in argv_text:
+            return "celery-flower"
+        return "celery"
+    return "api"
+
+
+PROCESS_ROLE = _detect_process_role()
 
 
 class JsonFormatter(logging.Formatter):
@@ -138,8 +166,10 @@ def setup_logging() -> None:
     - Handler de consola (formato legible)
     - Handler de archivo con rotación por tamaño (formato JSON)
     - Handler de archivo con rotación diaria para errores
-    
-    Los logs se guardan en el directorio 'logs/' del proyecto.
+
+    Los logs se guardan en el directorio 'logs/' del proyecto, con un nombre de
+    archivo distinto por proceso (api / celery-worker / celery-beat, ver
+    _detect_process_role) para que la rotación de uno no choque con la de otro.
     """
     # Crear directorio de logs si no existe
     LOG_DIR.mkdir(parents=True, exist_ok=True)
@@ -162,7 +192,9 @@ def setup_logging() -> None:
     # ========================================
     # Handler 2: Archivo general con rotación por tamaño
     # ========================================
-    general_log_file = LOG_DIR / "api.log"
+    # Nombre de archivo por rol de proceso (ver _detect_process_role): evita que
+    # API/worker/beat compitan por rotar el mismo archivo en Windows.
+    general_log_file = LOG_DIR / f"{PROCESS_ROLE}.log"
     file_handler = RotatingFileHandler(
         filename=str(general_log_file),
         maxBytes=MAX_LOG_FILE_SIZE,
@@ -176,7 +208,7 @@ def setup_logging() -> None:
     # ========================================
     # Handler 3: Archivo de errores con rotación diaria
     # ========================================
-    error_log_file = LOG_DIR / "errors.log"
+    error_log_file = LOG_DIR / f"{PROCESS_ROLE}-errors.log"
     error_handler = TimedRotatingFileHandler(
         filename=str(error_log_file),
         when='midnight',
@@ -191,7 +223,7 @@ def setup_logging() -> None:
     # ========================================
     # Handler 4: Archivo de logs de negocio
     # ========================================
-    business_log_file = LOG_DIR / "business.log"
+    business_log_file = LOG_DIR / f"{PROCESS_ROLE}-business.log"
     business_handler = RotatingFileHandler(
         filename=str(business_log_file),
         maxBytes=MAX_LOG_FILE_SIZE,

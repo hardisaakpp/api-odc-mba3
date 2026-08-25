@@ -2,6 +2,7 @@
 Endpoints de confirmaciones de El Rayo.
 """
 
+import asyncio
 import logging
 from typing import Dict, Optional
 from fastapi import FastAPI, Depends, HTTPException, Path, Query
@@ -22,31 +23,36 @@ _DESC_PEDIDO_ID = "UUID del pedido"
 _PERM_ODCSAP_VIEW = 'odcsap.view'
 
 
+def _db_obtener_confirmaciones_rayo(pedido_id: str, limit: Optional[int]):
+    """Consulta bloqueante (pyodbc); se ejecuta vía asyncio.to_thread."""
+    with get_db_connection_context() as conn:
+        repo_pedido = PedidoRepository(conn)
+        pedido = repo_pedido.get_pedido_completo(pedido_id)
+
+        if not pedido:
+            raise HTTPException(status_code=404, detail=f"Pedido no encontrado: {pedido_id}")
+
+        repo_confirmacion = PedidoConfirmacionRayoRepository(conn)
+        confirmaciones_data = repo_confirmacion.obtener_confirmaciones_por_pedido(
+            pedido_id=pedido_id, limit=limit)
+
+        confirmaciones = []
+        for conf_data in confirmaciones_data:
+            confirmacion_completa = repo_confirmacion.obtener_confirmacion(conf_data["confirmacion_id"])
+            if confirmacion_completa:
+                confirmaciones.append(ConfirmacionRayoItem(**confirmacion_completa))
+
+        return ConfirmacionRayoListResponse(
+            pedido_id=pedido_id,
+            numero_pedido=pedido["cabecera"].get("numero_pedido"),
+            total_confirmaciones=len(confirmaciones),
+            confirmaciones=confirmaciones
+        )
+
+
 async def _handle_obtener_confirmaciones_rayo(pedido_id: str, limit: Optional[int]):
     try:
-        with get_db_connection_context() as conn:
-            repo_pedido = PedidoRepository(conn)
-            pedido = repo_pedido.get_pedido_completo(pedido_id)
-
-            if not pedido:
-                raise HTTPException(status_code=404, detail=f"Pedido no encontrado: {pedido_id}")
-
-            repo_confirmacion = PedidoConfirmacionRayoRepository(conn)
-            confirmaciones_data = repo_confirmacion.obtener_confirmaciones_por_pedido(
-                pedido_id=pedido_id, limit=limit)
-
-            confirmaciones = []
-            for conf_data in confirmaciones_data:
-                confirmacion_completa = repo_confirmacion.obtener_confirmacion(conf_data["confirmacion_id"])
-                if confirmacion_completa:
-                    confirmaciones.append(ConfirmacionRayoItem(**confirmacion_completa))
-
-            return ConfirmacionRayoListResponse(
-                pedido_id=pedido_id,
-                numero_pedido=pedido["cabecera"].get("numero_pedido"),
-                total_confirmaciones=len(confirmaciones),
-                confirmaciones=confirmaciones
-            )
+        return await asyncio.to_thread(_db_obtener_confirmaciones_rayo, pedido_id, limit)
     except HTTPException:
         raise
     except Exception as e:
@@ -54,28 +60,33 @@ async def _handle_obtener_confirmaciones_rayo(pedido_id: str, limit: Optional[in
         raise HTTPException(status_code=500, detail=f"Error interno al obtener confirmaciones: {str(e)}")
 
 
+def _db_obtener_detalle_confirmacion_rayo(pedido_id: str, confirmacion_id: str):
+    """Consulta bloqueante (pyodbc); se ejecuta vía asyncio.to_thread."""
+    with get_db_connection_context() as conn:
+        repo_pedido = PedidoRepository(conn)
+        pedido = repo_pedido.get_pedido_completo(pedido_id)
+
+        if not pedido:
+            raise HTTPException(status_code=404, detail=f"Pedido no encontrado: {pedido_id}")
+
+        repo_confirmacion = PedidoConfirmacionRayoRepository(conn)
+        confirmacion_data = repo_confirmacion.obtener_confirmacion(confirmacion_id)
+
+        if not confirmacion_data:
+            raise HTTPException(status_code=404, detail=f"Confirmación no encontrada: {confirmacion_id}")
+
+        if confirmacion_data["pedido_id"] != pedido_id:
+            raise HTTPException(
+                status_code=400,
+                detail=f"La confirmación {confirmacion_id} no pertenece al pedido {pedido_id}"
+            )
+
+        return ConfirmacionRayoDetailResponse(confirmacion=ConfirmacionRayoItem(**confirmacion_data))
+
+
 async def _handle_obtener_detalle_confirmacion_rayo(pedido_id: str, confirmacion_id: str):
     try:
-        with get_db_connection_context() as conn:
-            repo_pedido = PedidoRepository(conn)
-            pedido = repo_pedido.get_pedido_completo(pedido_id)
-
-            if not pedido:
-                raise HTTPException(status_code=404, detail=f"Pedido no encontrado: {pedido_id}")
-
-            repo_confirmacion = PedidoConfirmacionRayoRepository(conn)
-            confirmacion_data = repo_confirmacion.obtener_confirmacion(confirmacion_id)
-
-            if not confirmacion_data:
-                raise HTTPException(status_code=404, detail=f"Confirmación no encontrada: {confirmacion_id}")
-
-            if confirmacion_data["pedido_id"] != pedido_id:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"La confirmación {confirmacion_id} no pertenece al pedido {pedido_id}"
-                )
-
-            return ConfirmacionRayoDetailResponse(confirmacion=ConfirmacionRayoItem(**confirmacion_data))
+        return await asyncio.to_thread(_db_obtener_detalle_confirmacion_rayo, pedido_id, confirmacion_id)
     except HTTPException:
         raise
     except Exception as e:

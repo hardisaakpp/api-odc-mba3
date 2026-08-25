@@ -37,14 +37,14 @@ def _resolver_permisos_notificaciones(user: Dict, username: str) -> list:
     # Filtrar solo permisos relevantes para notificaciones
     relevant_permissions = [
         p for p in permissions
-        if p in ("odcsap.view", "mabel.view")
+        if p in ("odcsap.view", "mabel.view", "produccion-elrayo.view")
     ]
 
     if not relevant_permissions:
-        # Si el usuario es Admin, suscribir a ambos canales
+        # Si el usuario es Admin, suscribir a todos los canales
         roles = user.get("roles", [])
         if "Admin" in roles:
-            return ["odcsap.view", "mabel.view"]
+            return ["odcsap.view", "mabel.view", "produccion-elrayo.view"]
         logger.warning(
             f"📢 Usuario {username} sin permisos relevantes para notificaciones"
         )
@@ -64,8 +64,6 @@ async def _event_stream_notificaciones(request, queue, username, relevant_permis
         })
         yield f"event: connected\ndata: {connected_data}\n\n"
 
-        last_heartbeat = time.time()
-
         while True:
             # Verificar si el cliente se desconectó
             if await request.is_disconnected():
@@ -82,12 +80,12 @@ async def _event_stream_notificaciones(request, queue, username, relevant_permis
                 yield f"event: notification\ndata: {event_data}\n\n"
 
             except asyncio.TimeoutError:
-                # Sin notificaciones: enviar heartbeat
-                now = time.time()
-                if now - last_heartbeat >= HEARTBEAT_INTERVAL:
-                    heartbeat_data = json.dumps({"timestamp": now})
-                    yield f"event: heartbeat\ndata: {heartbeat_data}\n\n"
-                    last_heartbeat = now
+                # asyncio.wait_for ya garantiza que pasaron HEARTBEAT_INTERVAL segundos
+                # sin notificaciones: enviar heartbeat siempre, sin gate adicional por
+                # tiempo (comparar time.time() contra el timeout de wait_for podía caer
+                # una fracción por debajo de HEARTBEAT_INTERVAL y saltarse el heartbeat).
+                heartbeat_data = json.dumps({"timestamp": time.time()})
+                yield f"event: heartbeat\ndata: {heartbeat_data}\n\n"
 
     except asyncio.CancelledError:
         logger.info(f"📢 Stream SSE cancelado para '{username}'")

@@ -61,9 +61,14 @@ def _horas_desde_envio(oc_cabecera: Dict[str, Any]) -> float:
 
 
 def _tiene_error_no_transitorio(resultado_st: Dict[str, Any]) -> bool:
-    """True si alguna tienda aún fallida tiene un error que reintentar no resolvería."""
+    """True si alguna tienda aún fallida tiene un error que reintentar no resolvería.
+
+    Las tiendas 'queued' (HTTP 202, ITR encolada en el middleware) no cuentan como
+    error: por definición son transitorias, se resuelven consultando el job en el
+    próximo ciclo, no escalando a técnicos.
+    """
     for r in resultado_st.get("resultados") or []:
-        if r.get("success"):
+        if r.get("success") or r.get("queued"):
             continue
         if not mensaje_sugiere_reintento_transitorio(r.get("error") or ""):
             return True

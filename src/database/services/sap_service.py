@@ -59,6 +59,9 @@ class SAPService:
             "U_IXX_PACK": item.get("U_IXX_PACK"),
             "ItmsGrpNam": item.get("ItmsGrpNam"),
             "validFor": "Y" if item.get("Valid") == "tYES" else "N",
+            "CodeBars": item.get("CodeBars"),
+            "Price": item.get("Price"),
+            "U_MARCA": item.get("U_MARCA"),
         }
 
     def _consultar_producto_sap(self, sku: str) -> Optional[Dict[str, Any]]:
@@ -116,6 +119,9 @@ class SAPService:
             "unidad_conversion": producto["unidad_conversion"],
             "pack_id": producto["pack_id"],
             "grupo_articulos": producto.get("grupo_articulos"),
+            "codigo_barras": producto.get("codigo_barras"),
+            "pvp_sap": producto.get("pvp_sap"),
+            "marca_sap": producto.get("marca_sap"),
         }
 
     def _procesar_sap_info(
@@ -161,6 +167,7 @@ class SAPService:
         if pack_sap:
             unidad_conversion = repository.get_unidad_conversion_by_pack(pack_sap)
 
+        precio_sap = sap_info.get("Price")
         producto_data = {
             "sku": sku,
             "item_code": sap_info.get("ItemCode", sku),
@@ -169,6 +176,9 @@ class SAPService:
             "unidad_conversion": unidad_conversion,
             "pack_id": pack_sap,  # pack_id es igual a pack_sap
             "grupo_articulos": sap_info.get("ItmsGrpNam"),
+            "codigo_barras": sap_info.get("CodeBars"),
+            "pvp_sap": float(precio_sap) if precio_sap is not None else None,
+            "marca_sap": sap_info.get("U_MARCA"),
         }
 
         # Guardar/actualizar en cache
@@ -214,7 +224,9 @@ class SAPService:
                 "pack_sap": "X3",
                 "unidad_conversion": 4.0,
                 "pack_id": "X3",
-                "grupo_articulos": "R-MEDIAS"
+                "grupo_articulos": "R-MEDIAS",
+                "codigo_barras": "7861234567890",
+                "pvp_sap": 7.99
             }
             O None si:
             - No se encuentra en SAP
@@ -314,6 +326,9 @@ class SAPService:
             "U_IXX_PACK": item.get("U_IXX_PACK"),
             "ItmsGrpNam": item.get("ItmsGrpNam"),
             "validFor": "Y" if item.get("Valid") == "tYES" else "N",
+            "CodeBars": item.get("CodeBars"),
+            "Price": item.get("Price"),
+            "U_MARCA": item.get("U_MARCA"),
         }
 
     def _completar_pendientes_con_fallback_individual(

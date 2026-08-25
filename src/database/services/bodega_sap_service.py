@@ -31,10 +31,10 @@ class BodegaSAPService:
             whs_code: Código de bodega/tienda
             
         Returns:
-            True si es bodega central (RL-CD, OUT-CD, REG-CD), False si es tienda
+            True si es bodega central (RL-CD, OUT-CD, RG-CD), False si es tienda
         """
         whs_code_upper = whs_code.strip().upper()
-        bodegas_centrales = {'RL-CD', 'OUT-CD', 'REG-CD'}
+        bodegas_centrales = {'RL-CD', 'OUT-CD', 'RG-CD'}
         return whs_code_upper in bodegas_centrales
     
     def get_or_fetch_bodega_info(self, whs_code: str, force_refresh: bool = False) -> Optional[Dict[str, Any]]:

@@ -11,7 +11,7 @@ REFACTORIZADO (Fase 2): Separado en módulos especializados:
 
 import logging
 import pandas as pd
-from typing import Dict, Any, List, Optional, cast
+from typing import Dict, Any, List, Optional, cast, Callable
 from datetime import datetime, date
 import io
 
@@ -19,7 +19,8 @@ from src.config import ENABLE_SQL_SERVER_STORAGE
 from src.exceptions import BusinessException
 from ..connection import get_db_connection_context
 from ..repositories.pedido_repository import PedidoRepository
-from ..pedido_estados import ESTADO_BORRADOR, ESTADO_NUEVO_PEDIDO
+from ..repositories.producto_sap_repository import ProductoSAPRepository
+from ..pedido_estados import ESTADO_BORRADOR, ESTADO_NUEVO_PEDIDO, ESTADO_PRODUCCION_POSPUESTA
 from .pedido_validator import PedidoValidator
 from .pedido_parser import PedidoParser
 from .pedido_consolidator import PedidoConsolidator
@@ -576,7 +577,8 @@ class PedidoService:
         tiendas_permitidas: Optional[List[str]] = None,
         bloquea_con_errores: bool = True,
         validar_sap: bool = True,
-        correcciones_codigos: Optional[Dict[str, str]] = None
+        correcciones_codigos: Optional[Dict[str, str]] = None,
+        on_progress: Optional[Callable[[str, int, str], None]] = None
     ) -> Dict[str, Any]:
         """
         Valida y procesa un archivo Excel de pedido.
@@ -592,10 +594,22 @@ class PedidoService:
             bloquea_con_errores: Si True, no guarda si hay errores críticos
             validar_sap: Si True, valida que códigos de producto existan en SAP
             sap_obligatorio: Si True, errores de SAP bloquean la persistencia
+            on_progress: Callback opcional (step, progress 0-100, message) invocado tras
+                cada sub-etapa real (parseo, validación SAP de productos, tiendas/bodegas,
+                validación de negocio, persistencia). Permite reportar avance granular al
+                caller (ver celery_plantilla_upload.py) en vez de solo inicio/fin. No afecta
+                el resultado si no se provee (uploads síncronos existentes no lo usan).
 
         Returns:
             Dict con resultado incluyendo validación
         """
+        def _reportar(step: str, progress: int, message: str) -> None:
+            if on_progress is None:
+                return
+            try:
+                on_progress(step, progress, message)
+            except Exception as e:
+                logger.warning(f"⚠️ on_progress falló para step={step}: {e}")
         if not ENABLE_SQL_SERVER_STORAGE:
             return {
                 "status": "error",
@@ -619,10 +633,12 @@ class PedidoService:
         try:
             hoja_cabecera, hoja_detalle = self._detectar_y_validar_formato(file_content)
             resultado["formato_detectado"] = "dos_hojas_nuevo_v1_0"
+            _reportar("leyendo_archivo", 35, "Formato de archivo validado, leyendo datos...")
             cabecera, detalles_con_tiendas = self._procesar_formato_nuevo_v1_0(
                 file_content, hoja_cabecera, hoja_detalle,
                 filename, usuario_id, validar_sap, correcciones_codigos
             )
+            _reportar("validando_sap", 50, "Códigos de producto validados en SAP")
             if not detalles_con_tiendas:
                 raise BusinessException(
                     message="El archivo Excel está vacío o no contiene datos válidos",
@@ -639,14 +655,17 @@ class PedidoService:
                 )
             if validar_sap:
                 self._validar_tiendas_bodegas_sap(cabecera, detalles_con_tiendas, resultado)
+                _reportar("validando_sap", 62, "Tiendas y bodegas validadas en SAP")
             if validar_antes_de_guardar:
                 self._ejecutar_validacion_pedido(
                     cabecera, detalles_con_tiendas, resultado,
                     tiendas_permitidas, bloquea_con_errores, filename
                 )
+                _reportar("validando_estructura", 72, "Validación de datos completada")
             validacion_sap = None
             if validar_sap:
                 validacion_sap = self._preparar_validacion_sap_persistencia(detalles_con_tiendas, resultado)
+                _reportar("validando_sap", 85, "Validación SAP de persistencia completada")
             self._persistir_pedido(
                 cabecera=cabecera,
                 detalles_con_tiendas=detalles_con_tiendas,
@@ -654,6 +673,7 @@ class PedidoService:
                 validar_sap=validar_sap,
                 validacion_sap=validacion_sap
             )
+            _reportar("guardando", 95, "Pedido guardado en base de datos")
             pedido_id = resultado.get("pedido_id")
             logger.info(
                 f"✅ Pedido procesado: {filename} "
@@ -774,62 +794,19 @@ class PedidoService:
             codigos_productos_parsing = codigos_corregidos
         return codigos_productos_parsing
 
-    def _raise_productos_sap_invalidos(
-        self,
-        validacion_sap_productos: Optional[Dict[str, Any]],
-        codigos_productos_parsing: List[str]
-    ) -> None:
-        """Registra el log y lanza BusinessException cuando la validación temprana de productos SAP falla."""
-        no_encontrados = self._norm_list(validacion_sap_productos.get("no_encontrados", []) if validacion_sap_productos else [])
-        errores = self._norm_list(validacion_sap_productos.get("errores", []) if validacion_sap_productos else [])
-        validos = self._norm_list(validacion_sap_productos.get("validos", []) if validacion_sap_productos else [])
-        detalle_validacion = validacion_sap_productos.get("detalle", {}) if validacion_sap_productos else {}
-        no_encontrados_str = ', '.join(no_encontrados[:5])
-        if len(no_encontrados) > 5:
-            no_encontrados_str += f" (+{len(no_encontrados) - 5} más)"
-        logger.error(f"❌ Validación SAP falló: {len(validos)}✓, {len(no_encontrados)}✗ [{no_encontrados_str}]")
-        raise BusinessException(
-            message="Existen códigos de producto no válidos en SAP",
-            error_code="PRODUCTOS_NO_VALIDOS_SAP",
-            data={
-                "validacion": {
-                    "productos": {
-                        "no_encontrados": no_encontrados,
-                        "errores": errores,
-                        "validos": validos,
-                        "total_validos": len(validos),
-                        "total_invalidos": len(no_encontrados) + len(errores)
-                    }
-                },
-                "validacion_sap": {
-                    "total_codigos": len(codigos_productos_parsing),
-                    "validos": len(validos),
-                    "no_encontrados": len(no_encontrados),
-                    "errores": len(errores),
-                    "todos_validos": False,
-                    "detalle_validacion": {
-                        codigo: {
-                            "existe": info.get("existe"),
-                            "severity": info.get("severity"),
-                            "error": info.get("error"),
-                            "mensaje": info.get("mensaje"),
-                            "mba3": info.get("mba3"),
-                            "sugerencias_sap": info.get("sugerencias_sap", [])
-                        }
-                        for codigo, info in detalle_validacion.items()
-                    }
-                }
-            }
-        )
-
     def _validar_productos_sap_temprana(
         self,
         datos_parsing: List[Dict],
         correcciones_codigos: Optional[Dict[str, str]]
-    ) -> None:
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Consulta la validación de productos contra SAP y la retorna siempre (válida o no) sin
+        lanzar excepción — la decisión de bloquear es de _validar_sap_codigo_y_pack_pvp, que la
+        combina con el resultado de Pack/PVP en una sola BusinessException.
+        """
         codigos_productos_parsing = self._recolectar_codigos_producto_parsing(datos_parsing, correcciones_codigos)
         if not codigos_productos_parsing:
-            return
+            return None
         codigos_sample = sorted(codigos_productos_parsing)[:20]
         logger.info(
             f"🔍 Validando {len(codigos_productos_parsing)} productos contra SAP (con sugerencias). "
@@ -843,9 +820,308 @@ class PedidoService:
             incluir_sugerencias=True,
             limite_sugerencias=20
         )
-        if validacion_sap_productos is None or not validacion_sap_productos.get("todos_validos", False):
-            self._raise_productos_sap_invalidos(validacion_sap_productos, codigos_productos_parsing)
-        logger.debug(f"✅ Validación SAP: {len(validacion_sap_productos.get('validos', []))} productos válidos")
+        if validacion_sap_productos is not None and validacion_sap_productos.get("todos_validos", False):
+            logger.debug(f"✅ Validación SAP: {len(validacion_sap_productos.get('validos', []))} productos válidos")
+        return validacion_sap_productos
+
+    def _validar_sap_codigo_y_pack_pvp(
+        self,
+        datos_parsing: List[Dict],
+        correcciones_codigos: Optional[Dict[str, str]]
+    ) -> None:
+        """
+        Ejecuta en una sola pasada las 3 validaciones contra SAP (código, pack, pvp) y, si alguna
+        falla, lanza UNA sola BusinessException combinada — antes código bloqueaba de inmediato y
+        pack/pvp solo se evaluaba en un reintento posterior; ahora el usuario ve y corrige todo en
+        el mismo intento, sin importar cuál(es) de las 3 validaciones fallen.
+        """
+        validacion_sap_productos = self._validar_productos_sap_temprana(datos_parsing, correcciones_codigos)
+        codigos_productos_parsing = self._recolectar_codigos_producto_parsing(datos_parsing, correcciones_codigos)
+        codigo_invalido = bool(codigos_productos_parsing) and (
+            validacion_sap_productos is None or not validacion_sap_productos.get("todos_validos", False)
+        )
+
+        pack_pvp_exc: Optional[BusinessException] = None
+        try:
+            self._validar_pack_pvp_temprana(datos_parsing, correcciones_codigos, validacion_sap_productos)
+        except BusinessException as e:
+            pack_pvp_exc = e
+
+        if not codigo_invalido and pack_pvp_exc is None:
+            self._resolver_costo_unitario_temprana(datos_parsing, correcciones_codigos)
+            return
+        self._raise_validacion_sap_combinada(
+            codigo_invalido, validacion_sap_productos, codigos_productos_parsing, pack_pvp_exc,
+            datos_parsing, correcciones_codigos
+        )
+
+    def _resolver_costo_unitario_temprana(
+        self,
+        datos_parsing: List[Dict],
+        correcciones_codigos: Optional[Dict[str, str]],
+    ) -> None:
+        """
+        Calcula costo_unitario = costo_doc_sin_iva / unidad_conversion para cada
+        producto, usando el pack del Excel (ya validado contra SAP: solo se llega
+        aquí si coinciden, ver _validar_sap_codigo_y_pack_pvp). Reemplaza a
+        costo_margen (columna "Costo" del Excel, manual) como insumo del Margen
+        de Rentabilidad (req. 1.5).
+
+        Bloquea la carga si el pack final no tiene una unidad de conversión
+        configurada en pack_conversion (código inexistente, inactivo, o pack vacío).
+        """
+        codigo_a_info_productos = self._agrupar_info_productos_por_codigo(datos_parsing, correcciones_codigos)
+        if not codigo_a_info_productos:
+            return
+
+        packs_invalidos: List[Dict[str, Any]] = []
+        with get_db_connection_context() as conn:
+            repo = ProductoSAPRepository(conn)
+            for codigo, info_productos in codigo_a_info_productos.items():
+                pack_final = next((ip.get("pack") for ip in info_productos if ip.get("pack")), None)
+                unidad_conversion = repo.get_unidad_conversion_by_pack(pack_final) if pack_final else None
+                if unidad_conversion is None:
+                    packs_invalidos.append({"codigo": codigo, "pack": pack_final})
+                    continue
+                for info_producto in info_productos:
+                    costo_doc_sin_iva = info_producto.get("costo_doc_sin_iva")
+                    info_producto["costo_unitario"] = (
+                        costo_doc_sin_iva / unidad_conversion if costo_doc_sin_iva is not None else None
+                    )
+
+        if packs_invalidos:
+            self._raise_pack_sin_unidad_conversion(packs_invalidos)
+
+    @staticmethod
+    def _raise_pack_sin_unidad_conversion(packs_invalidos: List[Dict[str, Any]]) -> None:
+        logger.error(f"❌ {len(packs_invalidos)} producto(s) con Pack sin unidad de conversión configurada")
+        mensajes = [
+            (
+                f"El Pack '{m['pack']}' del producto '{m['codigo']}' no tiene una unidad de conversión "
+                f"configurada en pack_conversion. Verifique el código de pack."
+                if m["pack"]
+                else f"El producto '{m['codigo']}' no tiene un Pack válido. Ingrese un código de pack (ej. X1, X2, X3)."
+            )
+            for m in packs_invalidos
+        ]
+        raise BusinessException(
+            message=f"Existen {len(packs_invalidos)} producto(s) con Pack sin unidad de conversión válida",
+            error_code="PACK_SIN_UNIDAD_CONVERSION",
+            data={
+                "validacion_pack_conversion": {
+                    "packs_invalidos": packs_invalidos,
+                    "mensajes": mensajes,
+                }
+            }
+        )
+
+    def _raise_validacion_sap_combinada(
+        self,
+        codigo_invalido: bool,
+        validacion_sap_productos: Optional[Dict[str, Any]],
+        codigos_productos_parsing: List[str],
+        pack_pvp_exc: Optional[BusinessException],
+        datos_parsing: List[Dict],
+        correcciones_codigos: Optional[Dict[str, str]]
+    ) -> None:
+        """Combina el resultado de código inválido y/o de Pack/PVP en una sola BusinessException."""
+        data: Dict[str, Any] = {}
+        partes_mensaje: List[str] = []
+
+        if codigo_invalido:
+            no_encontrados = self._norm_list(validacion_sap_productos.get("no_encontrados", []) if validacion_sap_productos else [])
+            errores = self._norm_list(validacion_sap_productos.get("errores", []) if validacion_sap_productos else [])
+            validos = self._norm_list(validacion_sap_productos.get("validos", []) if validacion_sap_productos else [])
+            detalle_validacion = validacion_sap_productos.get("detalle", {}) if validacion_sap_productos else {}
+            no_encontrados_str = ', '.join(no_encontrados[:5])
+            if len(no_encontrados) > 5:
+                no_encontrados_str += f" (+{len(no_encontrados) - 5} más)"
+            logger.error(f"❌ Validación SAP falló: {len(validos)}✓, {len(no_encontrados)}✗ [{no_encontrados_str}]")
+            data["validacion"] = {
+                "productos": {
+                    "no_encontrados": no_encontrados,
+                    "errores": errores,
+                    "validos": validos,
+                    "total_validos": len(validos),
+                    "total_invalidos": len(no_encontrados) + len(errores)
+                }
+            }
+            # codigo_a_info_productos: mismo agrupamiento (y misma convención de
+            # "primer valor no nulo" ante filas duplicadas por código) que usa la
+            # validación de Pack/PVP para códigos ya válidos — ver
+            # _evaluar_pack_producto / _evaluar_pvp_producto. Se expone aquí el
+            # Pack/PVP tal como vino en el Excel para que el frontend pueda
+            # detectar el mismatch automáticamente apenas el usuario elige una
+            # sugerencia SAP, sin esperar al reintento siguiente.
+            codigo_a_info_productos = self._agrupar_info_productos_por_codigo(datos_parsing, correcciones_codigos)
+            data["validacion_sap"] = {
+                "total_codigos": len(codigos_productos_parsing),
+                "validos": len(validos),
+                "no_encontrados": len(no_encontrados),
+                "errores": len(errores),
+                "todos_validos": False,
+                "detalle_validacion": {
+                    codigo: {
+                        "existe": info.get("existe"),
+                        "severity": info.get("severity"),
+                        "error": info.get("error"),
+                        "mensaje": info.get("mensaje"),
+                        "mba3": info.get("mba3"),
+                        "sugerencias_sap": info.get("sugerencias_sap", []),
+                        "pack_excel": next(
+                            (ip.get("pack") for ip in codigo_a_info_productos.get(codigo, []) if ip.get("pack")),
+                            None
+                        ),
+                        "pvp_excel": next(
+                            (ip.get("pvp") for ip in codigo_a_info_productos.get(codigo, []) if ip.get("pvp")),
+                            None
+                        ),
+                    }
+                    for codigo, info in detalle_validacion.items()
+                }
+            }
+            partes_mensaje.append("códigos de producto no válidos en SAP")
+
+        if pack_pvp_exc is not None:
+            data.update(pack_pvp_exc.data)
+            validacion_pack_pvp = pack_pvp_exc.data["validacion_pack_pvp"]
+            total_pack_pvp = len(validacion_pack_pvp["pack_mismatches"]) + len(validacion_pack_pvp["pvp_mismatches"])
+            partes_mensaje.append(f"{total_pack_pvp} discrepancia(s) de Pack/PVP contra SAP")
+
+        message = "Existen " + " y ".join(partes_mensaje)
+        error_code = "PRODUCTOS_NO_VALIDOS_SAP" if codigo_invalido else "PACK_PVP_INVALIDOS_SAP"
+        raise BusinessException(message=message, error_code=error_code, data=data)
+
+    @staticmethod
+    def _valores_numericos_difieren(valor_excel: Any, valor_sap: Any, tolerancia: float = 0.01) -> bool:
+        """Compara dos valores monetarios redondeados a 2 decimales, con tolerancia por redondeo."""
+        try:
+            return abs(round(float(valor_excel), 2) - round(float(valor_sap), 2)) > tolerancia
+        except (TypeError, ValueError):
+            return False
+
+    @staticmethod
+    def _agrupar_info_productos_por_codigo(
+        datos_parsing: List[Dict],
+        correcciones_codigos: Optional[Dict[str, str]]
+    ) -> Dict[str, List[Dict]]:
+        """Agrupa los info_producto del parsing por código (aplicando correcciones de código si existen)."""
+        codigo_a_info_productos: Dict[str, List[Dict]] = {}
+        for item in datos_parsing:
+            codigo = item.get("codigoProducto")
+            if not codigo:
+                continue
+            if correcciones_codigos and codigo in correcciones_codigos:
+                codigo = correcciones_codigos[codigo]
+            info_producto = item.get("info_producto")
+            if info_producto is not None:
+                codigo_a_info_productos.setdefault(codigo, []).append(info_producto)
+        return codigo_a_info_productos
+
+    def _evaluar_pack_producto(
+        self,
+        codigo: str,
+        info_productos: List[Dict],
+        sap_info: Dict[str, Any],
+        mismatches_pack: List[Dict[str, Any]]
+    ) -> None:
+        pack_sap = sap_info.get("pack_sap")
+        pack_excel = next((ip.get("pack") for ip in info_productos if ip.get("pack")), None)
+        if pack_excel and pack_sap and pack_excel.strip().upper() != pack_sap.strip().upper():
+            mismatches_pack.append({"codigo": codigo, "pack_excel": pack_excel, "pack_sap": pack_sap})
+
+    def _evaluar_pvp_producto(
+        self,
+        codigo: str,
+        info_productos: List[Dict],
+        sap_info: Dict[str, Any],
+        mismatches_pvp: List[Dict[str, Any]]
+    ) -> None:
+        pvp_sap = sap_info.get("pvp_sap")
+        pvp_excel = next((ip.get("pvp") for ip in info_productos if ip.get("pvp")), None)
+        if pvp_excel and pvp_sap and self._valores_numericos_difieren(pvp_excel, pvp_sap):
+            mismatches_pvp.append({
+                "codigo": codigo,
+                "pvp_excel": float(pvp_excel),
+                "pvp_sap": float(pvp_sap)
+            })
+
+    @staticmethod
+    def _sincronizar_campos_sap_en_producto(info_producto: Dict, sap_info: Dict[str, Any]) -> None:
+        """Sincroniza codigo_barras/descripcion_sap/marca desde SAP (fuente de verdad;
+        el Excel es solo referencia visual) en el info_producto del parsing. Usado por
+        `_validar_pack_pvp_temprana`."""
+        if sap_info.get("codigo_barras"):
+            info_producto["codigo_barras"] = sap_info["codigo_barras"]
+        if sap_info.get("item_name"):
+            info_producto["descripcion_sap"] = sap_info["item_name"]
+        if sap_info.get("marca_sap"):
+            info_producto["marca"] = sap_info["marca_sap"]
+
+    def _validar_pack_pvp_temprana(
+        self,
+        datos_parsing: List[Dict],
+        correcciones_codigos: Optional[Dict[str, str]],
+        validacion_sap_productos: Optional[Dict[str, Any]]
+    ) -> None:
+        """
+        Valida Pack y PVP contra SAP (obligatorio por RN-02): bloquea la carga si difieren.
+        La corrección es siempre externa al sistema (en SAP o en el Excel, según corresponda) —
+        no hay forma de continuar la carga eligiendo una fuente en pantalla (req. 1.3).
+
+        También sincroniza codigo_barras/descripcion_sap/marca desde SAP (fuente de verdad;
+        el Excel es solo referencia visual para el usuario, esos campos no se validan). marca
+        viene de OITM.U_MARCA; si SAP no la tiene para el artículo, la línea queda sin marca
+        (reemplaza a la derivación anterior por bodega/origen_traslado, sin respaldo).
+        """
+        if not validacion_sap_productos:
+            return
+        detalle = validacion_sap_productos.get("detalle", {})
+        codigo_a_info_productos = self._agrupar_info_productos_por_codigo(datos_parsing, correcciones_codigos)
+
+        mismatches_pack: List[Dict[str, Any]] = []
+        mismatches_pvp: List[Dict[str, Any]] = []
+
+        for codigo, info_productos in codigo_a_info_productos.items():
+            sap_info = detalle.get(codigo, {}).get("info")
+            if not sap_info:
+                continue
+
+            for info_producto in info_productos:
+                self._sincronizar_campos_sap_en_producto(info_producto, sap_info)
+
+            self._evaluar_pack_producto(codigo, info_productos, sap_info, mismatches_pack)
+            self._evaluar_pvp_producto(codigo, info_productos, sap_info, mismatches_pvp)
+
+        if mismatches_pack or mismatches_pvp:
+            self._raise_pack_pvp_invalidos(mismatches_pack, mismatches_pvp)
+
+    @staticmethod
+    def _raise_pack_pvp_invalidos(mismatches_pack: List[Dict[str, Any]], mismatches_pvp: List[Dict[str, Any]]) -> None:
+        total = len(mismatches_pack) + len(mismatches_pvp)
+        logger.error(
+            f"❌ Validación Pack/PVP contra SAP falló: {len(mismatches_pack)} Pack, {len(mismatches_pvp)} PVP"
+        )
+        mensajes = [
+            f"El Pack '{m['pack_excel']}' del Excel no coincide con el Pack registrado en SAP "
+            f"para '{m['codigo']}' ('{m['pack_sap']}'). Use '{m['pack_sap']}'."
+            for m in mismatches_pack
+        ] + [
+            f"El PVP '{m['pvp_excel']:.2f}' del Excel no coincide con el PVP registrado en SAP "
+            f"(Precio Minorista) para '{m['codigo']}' ('{m['pvp_sap']:.2f}'). Use '{m['pvp_sap']:.2f}'."
+            for m in mismatches_pvp
+        ]
+        raise BusinessException(
+            message=f"Existen {total} discrepancia(s) de Pack/PVP contra SAP",
+            error_code="PACK_PVP_INVALIDOS_SAP",
+            data={
+                "validacion_pack_pvp": {
+                    "pack_mismatches": mismatches_pack,
+                    "pvp_mismatches": mismatches_pvp,
+                    "mensajes": mensajes,
+                }
+            }
+        )
 
     def _agrupar_datos_en_detalles(
         self,
@@ -870,6 +1146,8 @@ class PedidoService:
                         "descripcion_sap": info_producto.get("descripcion_sap"),
                         "pack": info_producto.get("pack"),
                         "costo_doc_sin_iva": info_producto.get("costo_doc_sin_iva"),
+                        "costo_margen": info_producto.get("costo_margen"),
+                        "costo_unitario": info_producto.get("costo_unitario"),
                         "descuento_1": info_producto.get("descuento_1"),
                         "pvp": info_producto.get("pvp"),
                         "subtotal": info_producto.get("subtotal"),
@@ -906,7 +1184,7 @@ class PedidoService:
         self._validar_numero_pedido_duplicado(cabecera_parseada)
         datos_parsing = resultado_parsing.get("data", [])
         if validar_sap and datos_parsing:
-            self._validar_productos_sap_temprana(datos_parsing, correcciones_codigos)
+            self._validar_sap_codigo_y_pack_pvp(datos_parsing, correcciones_codigos)
         cabecera = self._normalizar_cabecera_para_bd(
             resultado_parsing.get("cabecera", {}), filename, usuario_id
         )
@@ -1200,6 +1478,252 @@ class PedidoService:
             "creado_por": usuario_id,
             "estado_id": 1
         }
+
+    @staticmethod
+    def _escalar_distribucion_tiendas_hijo(
+        tiendas_padre: List[Dict[str, Any]],
+        diferencia: float,
+        original_padre: float,
+    ) -> List[Dict[str, Any]]:
+        """Escala la distribución por tienda del padre a la proporción de la diferencia
+        (misma proporción que subtotal_hijo, ver crear_pedido_hijo_diferencia).
+
+        pedido_detalle_tienda.cantidad es INT con CHECK (cantidad > 0), así que se
+        reparte en unidades enteras con el método del mayor residuo (se asigna el piso
+        de cada porción y el resto se reparte a las tiendas con mayor parte decimal,
+        para que la suma cuadre exacto con la diferencia); las tiendas cuya porción
+        quede en 0 no participan de esta porción del pedido.
+        """
+        total_hijo = round(diferencia)
+        if total_hijo <= 0 or not tiendas_padre:
+            return []
+
+        proporcion = diferencia / original_padre
+        crudos = [float(t.get("cantidad") or 0) * proporcion for t in tiendas_padre]
+        cantidades = [int(c) for c in crudos]  # piso de cada porción
+
+        restante = total_hijo - sum(cantidades)
+        orden_por_residuo = sorted(
+            range(len(crudos)), key=lambda i: crudos[i] - cantidades[i], reverse=True
+        )
+        for i in orden_por_residuo[:max(restante, 0)]:
+            cantidades[i] += 1
+
+        return [
+            {
+                "tienda_id": tienda.get("tienda_id"),
+                "cantidad": cantidades[idx],
+                "es_bodega": tienda.get("es_bodega", False),
+            }
+            for idx, tienda in enumerate(tiendas_padre)
+            if cantidades[idx] > 0
+        ]
+
+    @staticmethod
+    def _mods_columnas_por_detalle(repo: PedidoRepository, numero_pedido: str) -> Dict[str, Dict[str, Optional[str]]]:
+        """rol_modificador de cada columna (COSTO UNIT./TOTAL/COMENTARIO), agrupado por
+        pedido_detalle_id, para un pedido. Usado por crear_pedido_hijo_diferencia para
+        que el hijo herede el mismo resaltado de color que tenía el padre."""
+        resultado: Dict[str, Dict[str, Optional[str]]] = {}
+        mods_result = repo.obtener_modificaciones_columnas(numero_pedido)
+        if not mods_result.get("success"):
+            return resultado
+        for mod in mods_result["modificaciones"]:
+            resultado.setdefault(mod["pedido_detalle_id"], {})[mod["columna_key"]] = mod.get("rol_modificador")
+        return resultado
+
+    @staticmethod
+    def _heredar_modificaciones_columnas_hijo(
+        repo: PedidoRepository,
+        mods_linea_padre: Dict[str, Optional[str]],
+        numero_pedido_hijo: str,
+        pedido_detalle_id_hijo: str,
+        audit_context: Optional["AuditContext"],
+    ) -> None:
+        """Replica en la línea del hijo el rol_modificador (resaltado de color) que
+        tenía la línea del padre para cada columna. Sin efecto si el padre no tenía
+        ninguna columna marcada."""
+        if not mods_linea_padre:
+            return
+        columnas_por_rol: Dict[Optional[str], List[str]] = {}
+        for columna_key, rol in mods_linea_padre.items():
+            columnas_por_rol.setdefault(rol, []).append(columna_key)
+        for rol, columnas in columnas_por_rol.items():
+            repo.guardar_modificaciones_columnas(
+                numero_pedido=numero_pedido_hijo,
+                modificaciones=[
+                    {"pedido_detalle_id": pedido_detalle_id_hijo, "columna_key": ck}
+                    for ck in columnas
+                ],
+                rol_modificador=rol,
+                audit_context=audit_context,
+            )
+
+    def _heredar_distribucion_tiendas_hijo(
+        self,
+        repo: PedidoRepository,
+        detalle_padre: Dict[str, Any],
+        diferencia: float,
+        original_padre: Optional[float],
+        pedido_detalle_id_hijo: str,
+        audit_context: Optional["AuditContext"],
+    ) -> None:
+        """Escala la distribución por tienda del padre a la misma proporción que la
+        diferencia insertada en el hijo (ver _escalar_distribucion_tiendas_hijo). Sin
+        efecto si el padre no tenía distribución por tienda o no hay cantidad original
+        con la que escalar."""
+        tiendas_padre = detalle_padre.get("tiendas") or []
+        if not (tiendas_padre and original_padre):
+            return
+        distribuciones_hijo = self._escalar_distribucion_tiendas_hijo(
+            tiendas_padre, diferencia, original_padre
+        )
+        if distribuciones_hijo:
+            repo.insert_detalle_tiendas(
+                pedido_detalle_id_hijo, distribuciones_hijo, audit_context=audit_context
+            )
+
+    def crear_pedido_hijo_diferencia(
+        self,
+        pedido_padre: Dict[str, Any],
+        detalles_con_diferencia: List[Dict[str, Any]],
+        nueva_fecha_entrega: str,
+        usuario_id: Optional[str] = None,
+        audit_context: Optional["AuditContext"] = None,
+    ) -> Dict[str, Any]:
+        """
+        Req. 1.2 (Gestión de pedidos parciales): crea el pedido "hijo" con la diferencia
+        no producida, cuando Administración El Rayo elige "Confirmar pedido, generar
+        nuevo pedido con la diferencia" en el modal de diferencia de producción.
+
+        - numero_pedido = "<numero_pedido_padre>.NN", NN = pedidos hijo ya generados a
+          partir del mismo padre + 1 (soporta divisiones repetidas sin caso especial).
+        - pedido_padre_id enlaza al padre (trazabilidad, migración 643).
+        - fecha_entrega = nueva_fecha_entrega (la indica el usuario administrativo en el
+          momento); fecha_facturacion queda NULL (se define en su propio ciclo, igual
+          que cualquier pedido nuevo, ver _db_confirmar_produccion).
+        - estado_id = ESTADO_PRODUCCION_POSPUESTA (22): estado sembrado para esto en la
+          migración 620 pero nunca usado hasta ahora.
+        - Cada línea del hijo copia los atributos de producto/precio de la línea
+          correspondiente del padre; total = diferencia; subtotal se escala
+          proporcionalmente al subtotal original del padre (subtotal no lo toca ningún
+          PATCH de "Total", así que sigue reflejando cantidad_solicitada_original).
+          cantidad_solicitada_original del hijo = la del padre para esa línea (no la
+          diferencia): "Solicitado Mabel" debe seguir mostrando el original real de la
+          plantilla Excel, no la porción pospuesta.
+        - Cada línea también hereda el comentario del padre y el resaltado de color de
+          COSTO UNIT./TOTAL/COMENTARIO (rol_modificador de pedido_detalle_modificacion_columna):
+          para COSTO UNIT./COMENTARIO porque su valor se copia tal cual; para TOTAL porque,
+          aunque el valor del hijo es la porción en diferencia (no una copia), esa
+          diferencia surge de una línea que sí pudo haber sido editada por cualquiera de
+          los 2 roles (odcsap.view/produccion-elrayo.view).
+
+        Returns:
+            {"pedido_id", "numero_pedido", "pedido_padre_id", "detalles_insertados"}
+        """
+        cab_padre = pedido_padre["cabecera"]
+        pedido_padre_id = cab_padre["pedido_id"]
+        numero_pedido_padre = cab_padre["numero_pedido"]
+
+        with get_db_connection_context() as conn:
+            repo = PedidoRepository(conn)
+            siguiente_sufijo = repo.contar_hijos(pedido_padre_id) + 1
+            numero_pedido_hijo = f"{numero_pedido_padre}.{siguiente_sufijo:02d}"
+
+            cabecera_hijo = {
+                "numero_pedido": numero_pedido_hijo,
+                "fecha_pedido": datetime.now().date(),
+                "fecha_entrega": nueva_fecha_entrega,
+                "forma_pago": cab_padre.get("forma_pago"),
+                "proveedor_nombre": cab_padre.get("proveedor_nombre"),
+                "comprador_nombre": cab_padre.get("comprador_nombre"),
+                "comprador_codigo": cab_padre.get("comprador_codigo"),
+                "origen_traslado": cab_padre.get("origen_traslado"),
+                "serie": cab_padre.get("serie"),
+                "archivo_nombre": f"GENERADO_PARCIAL_{numero_pedido_padre}",
+                "creado_por": usuario_id,
+                "estado_id": ESTADO_PRODUCCION_POSPUESTA,
+                "pedido_padre_id": pedido_padre_id,
+            }
+            pedido_hijo_id = repo.insert_cabecera(cabecera_hijo, audit_context=audit_context)
+
+            detalles_padre_por_id = {
+                d["pedido_detalle_id"]: d for d in pedido_padre.get("detalles", [])
+            }
+
+            # Rol responsable (PRODUCCION_ELRAYO/ODCSAP) de la última modificación de
+            # COSTO UNIT./TOTAL/COMENTARIO en cada línea del padre, para que el hijo
+            # herede el mismo resaltado de color en el frontend. COSTO UNIT. y
+            # COMENTARIO se heredan porque su valor también se copia tal cual; TOTAL
+            # se hereda aunque su valor en el hijo es la porción de diferencia (no una
+            # copia), porque esa diferencia surgió de una línea que sí pudo haber sido
+            # editada por cualquiera de los 2 roles.
+            mods_padre_por_detalle = self._mods_columnas_por_detalle(repo, numero_pedido_padre)
+
+            detalles_insertados = 0
+            for orden_linea, dif in enumerate(detalles_con_diferencia):
+                detalle_padre = detalles_padre_por_id.get(dif["pedido_detalle_id"])
+                if not detalle_padre:
+                    continue
+                diferencia = dif["diferencia"]
+                subtotal_padre = detalle_padre.get("subtotal")
+                original_padre = dif["cantidad_solicitada_original"]
+                subtotal_hijo = (
+                    round(float(subtotal_padre) * (diferencia / original_padre), 4)
+                    if subtotal_padre is not None and original_padre else None
+                )
+                detalle_hijo = {
+                    "codigo_interno": detalle_padre.get("codigo_interno"),
+                    "descripcion_sap": detalle_padre.get("descripcion_sap"),
+                    "marca": detalle_padre.get("marca"),
+                    "codigo_barras": detalle_padre.get("codigo_barras"),
+                    "pack": detalle_padre.get("pack"),
+                    "costo_doc_sin_iva": detalle_padre.get("costo_doc_sin_iva"),
+                    "descuento_1": detalle_padre.get("descuento_1"),
+                    "pvp": detalle_padre.get("pvp"),
+                    "subtotal": subtotal_hijo,
+                    "total": diferencia,
+                    "costo_margen": detalle_padre.get("costo_margen"),
+                    "costo_unitario": detalle_padre.get("costo_unitario"),
+                    "comentario": detalle_padre.get("comentario"),
+                    "orden_linea": orden_linea,
+                    # El "total" del hijo es la porción en diferencia, no lo solicitado
+                    # originalmente -- "Solicitado Mabel" debe seguir mostrando el
+                    # original real del padre para esta línea, no la diferencia.
+                    "cantidad_solicitada_original": original_padre,
+                }
+                pedido_detalle_id_hijo = repo.insert_detalle(
+                    pedido_hijo_id, detalle_hijo, audit_context=audit_context
+                )
+                detalles_insertados += 1
+
+                self._heredar_modificaciones_columnas_hijo(
+                    repo,
+                    mods_padre_por_detalle.get(dif["pedido_detalle_id"], {}),
+                    numero_pedido_hijo,
+                    pedido_detalle_id_hijo,
+                    audit_context,
+                )
+
+                # Sin esto, el hijo no sabe hacia qué tiendas redistribuir su porción
+                # (RedistribucionTiendas.vue arma las columnas por tienda desde
+                # detalle.tiendas): se escala la distribución por tienda del padre a la
+                # misma proporción que subtotal_hijo, para no perder el rastro.
+                self._heredar_distribucion_tiendas_hijo(
+                    repo, detalle_padre, diferencia, original_padre, pedido_detalle_id_hijo, audit_context
+                )
+
+            logger.info(
+                f"✅ Pedido hijo {numero_pedido_hijo} ({pedido_hijo_id}) creado desde "
+                f"{numero_pedido_padre} con {detalles_insertados} línea(s) en diferencia"
+            )
+
+            return {
+                "pedido_id": pedido_hijo_id,
+                "numero_pedido": numero_pedido_hijo,
+                "pedido_padre_id": pedido_padre_id,
+                "detalles_insertados": detalles_insertados,
+            }
 
     def _construir_detalles_desde_articulos(self, articulos: List[Dict]) -> List[Dict]:
         detalles_con_tiendas = []

@@ -8,6 +8,9 @@
 		},
 		{
 			"path": "../middleware"
+		},
+		{
+			"path": "../scnexus-core"
 		}
 	],
 	"settings": {

@@ -82,6 +82,15 @@ class TestTieneErrorNoTransitorio:
         }
         assert _tiene_error_no_transitorio(resultado_st) is True
 
+    def test_itr_encolada_202_no_escala_como_error(self):
+        """HTTP 202 (job SAP en curso) no debe escalar a técnicos: se resuelve solo."""
+        resultado_st = {
+            "resultados": [
+                {"success": False, "queued": True, "job_id": "job-1", "error": "SAP saturado: encolada"},
+            ]
+        }
+        assert _tiene_error_no_transitorio(resultado_st) is False
+
 
 class TestReconciliarOc:
     def test_omite_si_ya_notificado(self):

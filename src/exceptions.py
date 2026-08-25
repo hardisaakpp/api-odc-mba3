@@ -38,6 +38,20 @@ class BusinessException(Exception):
         self.data = data or {}
 
 
+class SolicitudTransferenciaNoAplicaError(Exception):
+    """
+    No hay distribución válida hacia tiendas para crear Solicitudes de Transferencia (ITR).
+
+    No es un error de SAP ni de Service Layer: es un resultado esperado cuando toda la
+    distribución del pedido es hacia bodegas (no hacia tiendas), así que no corresponde
+    generar ITR. Se lanza solo después de validar las tiendas en SAP (stock_transfer_service.
+    _validar_tiendas_en_sap), por lo que nunca se confunde con una caída del Service Layer.
+    Se distingue de otras excepciones para que ni el correo a técnicos ni el modal de
+    integración SAP lo traten como una falla real.
+    """
+    pass
+
+
 class SAPDataMasterError(BusinessException):
     """
     Excepción para errores de datos maestros en SAP.

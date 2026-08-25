@@ -133,28 +133,24 @@ EMAIL_SMTP_PASSWORD=
 EMAIL_FROM=integrationsap@mabeltrading.com.ec
 EMAIL_FROM_NAME=INTEGRACIÓN SAP
 
-# Destinatarios segmentados por tipo de usuario
-# Usuario Principal: Operaciones/Despachos (recibe notificaciones de NUEVOS DESPACHOS)
-# ⚠️ PRUEBAS: Usar cortiz@mabeltrading.com.ec
-# 📝 PRODUCCIÓN: Cambiar a operaciones@mabeltrading.com.ec o el correo correspondiente de El Rayo
-EMAIL_TO_OPERACIONES=cortiz@mabeltrading.com.ec
-
-# Usuario Homologaciones: Productos no homologados (recibe notificaciones de SKUs faltantes)
-EMAIL_TO_HOMOLOGACIONES=homologaciones@mabeltrading.com.ec,supervisor@mabeltrading.com.ec
-
-# Usuario Técnico: Errores y advertencias del sistema (recibe notificaciones técnicas)
-EMAIL_TO_TECNICOS=soporte@mabeltrading.com.ec,ti@mabeltrading.com.ec
-
 # Configuración de advertencias técnicas
 EMAIL_WARNING_TIME_LIMIT_PERCENT=80
 EMAIL_WARNING_HIGH_VOLUME_THRESHOLD=500
 EMAIL_WARNING_FAILURES_THRESHOLD=3
+
+# Override en desarrollo: TODOS los correos de notificación van a este destinatario,
+# ignorando la BD. Solo aplica con ENVIRONMENT=development; no definir en producción.
+EMAIL_DEV_OVERRIDE=cortiz@mabeltrading.com.ec
 ```
 
-**Tipos de Notificaciones:**
-- **Operaciones**: Reciben emails cuando hay nuevos despachos disponibles (prioridad máxima)
-- **Homologaciones**: Reciben emails cuando se detectan productos no homologados en SAP (solo productos nuevos, no se reenvían)
-- **Técnicos**: Reciben emails de errores del sistema, advertencias de capacidad y problemas técnicos
+**Destinatarios por tipo de correo:** ya no se configuran por variable de entorno. Se administran en BD (`notificacion_persona_correo` / `notificacion_tipo_correo`) desde la interfaz "Personas y Correos" (`/mba3-consultas/admin/destinatarios`, solo Admin): cada persona se vincula a los correos específicos del catálogo que debe recibir. Si nadie está vinculado a un correo, ese correo no se envía (no hay fallback a `.env`).
+
+**Tipos de Notificaciones (`tipo_notificacion` en el catálogo):**
+- **OPERACIONES**: Administración El Rayo (nuevos despachos, confirmaciones, etc.)
+- **MABEL_TRADING**: Confirmaciones y cierres de pedido que le corresponden a MABEL TRADING
+- **HOMOLOGACIONES**: Productos no homologados detectados en SAP (solo productos nuevos, no se reenvían)
+- **TECNICOS**: Errores del sistema, advertencias de capacidad y problemas técnicos
+- **PRODUCCION_ELRAYO**: Notificaciones para el perfil Producción El Rayo (req. 1.8)
 
 ### Seguridad (Opcional)
 

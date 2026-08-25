@@ -14,15 +14,18 @@ from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
 
 from src.database.connection import get_db_connection_context
 from src.database.repositories.pedido_repository import PedidoRepository
-from src.database.pedido_estados import ESTADO_GESTIONAR_PEDIDO
+from src.database.pedido_estados import ESTADO_GESTIONAR_PEDIDO, ESTADO_CONFIRMADO_ENVIADO
 from src.security.jwt_auth import verify_jwt_token, require_permission, require_any_permission
+from .pedidos_crud_helpers import debe_ocultar_pvp
 
 logger = logging.getLogger(__name__)
 
 _PERM_ODCSAP_VIEW = 'odcsap.view'
 _PERM_MABEL_VIEW = 'mabel.view'
+_PERM_PRODUCCION_ELRAYO = 'produccion-elrayo.view'
 DESC_UUID_PEDIDO = "UUID del pedido"
 MEDIA_TYPE_EXCEL = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+MSG_PEDIDO_NO_ENCONTRADO = "Pedido no encontrado"
 
 
 def _agregar_logo_roland(ws) -> None:
@@ -87,13 +90,37 @@ def _aplicar_estilos_cabecera(ws, label_fill, label_font, thin_border) -> None:
         ws[f"E{row_num}"].border = thin_border
 
 
-def _escribir_encabezados_tabla(ws, bold_font, thin_border) -> None:
-    """Escribe y estiliza los encabezados de la tabla de detalle (fila 13)."""
+def _columnas_tabla(ocultar_pvp: bool) -> Dict[str, str]:
+    """Letra de columna para cada campo de la tabla de detalle (fila 13+). Si
+    ocultar_pvp, la columna PVP se omite por completo (no solo su valor) y TOTAL se
+    recorre una columna a la izquierda -- solo mabel.view debe ver PVP (ver
+    debe_ocultar_pvp)."""
+    claves = ["codigo_interno", "marca", "codigo_barras", "descripcion_sap", "pack",
+              "costo_doc_sin_iva", "descuento_1"]
+    if not ocultar_pvp:
+        claves.append("pvp")
+    claves.append("total")
+    letras = "BCDEFGHIJ"
+    return {clave: letras[i] for i, clave in enumerate(claves)}
+
+
+def _escribir_encabezados_tabla(ws, bold_font, thin_border, ocultar_pvp: bool = False) -> None:
+    """Escribe y estiliza los encabezados de la tabla de detalle (fila 13). Si
+    ocultar_pvp, la columna PVP se omite por completo: TOTAL se recorre una columna
+    a la izquierda (ver debe_ocultar_pvp: solo mabel.view debe ver PVP)."""
+    cols = _columnas_tabla(ocultar_pvp)
     headers = {
-        "B13": "CODIGO INTERNO", "C13": "MARCA", "D13": "CODIGO DE BARRAS",
-        "E13": "DESCRIPCION SAP", "F13": "PACK", "G13": "PRECIO DE LISTA",
-        "H13": "DSCTO", "I13": "PVP", "J13": "TOTAL",
+        f"{cols['codigo_interno']}13": "CODIGO INTERNO",
+        f"{cols['marca']}13": "MARCA",
+        f"{cols['codigo_barras']}13": "CODIGO DE BARRAS",
+        f"{cols['descripcion_sap']}13": "DESCRIPCION SAP",
+        f"{cols['pack']}13": "PACK",
+        f"{cols['costo_doc_sin_iva']}13": "PRECIO DE LISTA",
+        f"{cols['descuento_1']}13": "DSCTO",
+        f"{cols['total']}13": "TOTAL",
     }
+    if not ocultar_pvp:
+        headers[f"{cols['pvp']}13"] = "PVP"
     table_header_fill = PatternFill(start_color="F2F2F2", end_color="F2F2F2", fill_type="solid")
     for cell_ref, header_text in headers.items():
         cell = ws[cell_ref]
@@ -115,54 +142,62 @@ def _set_valor_numerico_celda(ws, col: str, row: int, val) -> None:
         ws[f"{col}{row}"] = val
 
 
-def _escribir_fila_detalle(ws, row: int, detalle: dict, marca_excel: str, thin_border) -> None:
+def _escribir_fila_detalle(ws, row: int, detalle: dict, thin_border, ocultar_pvp: bool = False) -> None:
     """Escribe una fila de detalle de producto en la tabla."""
-    ws[f"B{row}"] = detalle.get("codigo_interno", "")
-    ws[f"C{row}"] = marca_excel
-    ws[f"D{row}"] = detalle.get("codigo_barras", "")
-    ws[f"E{row}"] = detalle.get("descripcion_sap", "")
-    ws[f"F{row}"] = detalle.get("pack", "")
-    _set_valor_numerico_celda(ws, "G", row, detalle.get("costo_doc_sin_iva"))
-    _set_valor_numerico_celda(ws, "H", row, detalle.get("descuento_1"))
-    ws[f"H{row}"].number_format = '0.00%'
-    _set_valor_numerico_celda(ws, "I", row, detalle.get("pvp"))
-    _set_valor_numerico_celda(ws, "J", row, detalle.get("total"))
-    for col_letter in ("B", "C", "D", "E", "F", "G", "H", "I", "J"):
+    cols = _columnas_tabla(ocultar_pvp)
+    ws[f"{cols['codigo_interno']}{row}"] = detalle.get("codigo_interno", "")
+    ws[f"{cols['marca']}{row}"] = detalle.get("marca") or ""
+    ws[f"{cols['codigo_barras']}{row}"] = detalle.get("codigo_barras", "")
+    ws[f"{cols['descripcion_sap']}{row}"] = detalle.get("descripcion_sap", "")
+    ws[f"{cols['pack']}{row}"] = detalle.get("pack", "")
+    _set_valor_numerico_celda(ws, cols['costo_doc_sin_iva'], row, detalle.get("costo_doc_sin_iva"))
+    _set_valor_numerico_celda(ws, cols['descuento_1'], row, detalle.get("descuento_1"))
+    ws[f"{cols['descuento_1']}{row}"].number_format = '0.00%'
+    if not ocultar_pvp:
+        _set_valor_numerico_celda(ws, cols['pvp'], row, detalle.get("pvp"))
+    _set_valor_numerico_celda(ws, cols['total'], row, detalle.get("total"))
+    for col_letter in cols.values():
         ws[f"{col_letter}{row}"].border = thin_border
 
 
-def _escribir_detalles_productos(ws, detalles: list, cabecera: dict, thin_border) -> None:
+def _escribir_detalles_productos(ws, detalles: list, thin_border, ocultar_pvp: bool = False) -> None:
     """Escribe todas las filas de detalle de productos a partir de la fila 14."""
-    marca_por_origen = {"RL-CD": "ROLAND", "OUT-CD": "DESCUENTON", "RG-CD": "REGIONS"}
-    origen_traslado = (cabecera.get("origen_traslado") or "").strip().upper()
-    marca_excel = marca_por_origen.get(origen_traslado, "")
     for idx, detalle in enumerate(detalles):
-        _escribir_fila_detalle(ws, 14 + idx, detalle, marca_excel, thin_border)
+        _escribir_fila_detalle(ws, 14 + idx, detalle, thin_border, ocultar_pvp)
 
 
-def _escribir_fila_total(ws, detalles: list, bold_font, thin_border) -> None:
-    """Escribe la fila de totales al final de la tabla de detalle, si hay productos."""
+def _escribir_fila_total(ws, detalles: list, bold_font, thin_border, ocultar_pvp: bool = False) -> None:
+    """Escribe la fila de totales al final de la tabla de detalle, si hay productos.
+    La etiqueta "TOTAL" va en la columna inmediatamente anterior a la del total
+    sumado (PVP si está presente, DSCTO si se ocultó -- ver _columnas_tabla)."""
     if not detalles:
         return
+    cols = _columnas_tabla(ocultar_pvp)
+    claves_orden = list(cols.keys())
+    col_label = cols[claves_orden[-2]]
+    col_total = cols["total"]
     ultima_fila_datos = 14 + len(detalles) - 1
     fila_total = ultima_fila_datos + 1
-    ws[f"I{fila_total}"] = "TOTAL"
-    ws[f"I{fila_total}"].font = bold_font
-    ws[f"I{fila_total}"].alignment = Alignment(horizontal="right")
-    ws[f"I{fila_total}"].border = thin_border
-    ws[f"J{fila_total}"] = f"=SUM(J14:J{ultima_fila_datos})"
-    ws[f"J{fila_total}"].font = bold_font
-    ws[f"J{fila_total}"].border = thin_border
+    ws[f"{col_label}{fila_total}"] = "TOTAL"
+    ws[f"{col_label}{fila_total}"].font = bold_font
+    ws[f"{col_label}{fila_total}"].alignment = Alignment(horizontal="right")
+    ws[f"{col_label}{fila_total}"].border = thin_border
+    ws[f"{col_total}{fila_total}"] = f"=SUM({col_total}14:{col_total}{ultima_fila_datos})"
+    ws[f"{col_total}{fila_total}"].font = bold_font
+    ws[f"{col_total}{fila_total}"].border = thin_border
 
 
-def _ajustar_anchos_columnas(ws) -> None:
+def _ajustar_anchos_columnas(ws, ocultar_pvp: bool = False) -> None:
     """Ajusta el ancho de las columnas de la tabla de detalle."""
-    anchos = {"B": 18, "C": 12, "D": 18, "E": 50, "F": 8, "G": 16, "H": 10, "I": 10, "J": 10}
-    for col, ancho in anchos.items():
-        ws.column_dimensions[col].width = ancho
+    anchos_por_clave = {
+        "codigo_interno": 18, "marca": 12, "codigo_barras": 18, "descripcion_sap": 50,
+        "pack": 8, "costo_doc_sin_iva": 16, "descuento_1": 10, "pvp": 10, "total": 10,
+    }
+    for clave, letra in _columnas_tabla(ocultar_pvp).items():
+        ws.column_dimensions[letra].width = anchos_por_clave[clave]
 
 
-def _generar_excel_pedido(cabecera: dict, detalles: list) -> bytes:
+def _generar_excel_pedido(cabecera: dict, detalles: list, ocultar_pvp: bool = False) -> bytes:
     wb = Workbook()
     ws = wb.active
     assert ws is not None
@@ -181,10 +216,10 @@ def _generar_excel_pedido(cabecera: dict, detalles: list) -> bytes:
     _agregar_logo_roland(ws)
     _escribir_cabecera_pedido(ws, cabecera, bold_font)
     _aplicar_estilos_cabecera(ws, label_fill, label_font, thin_border)
-    _escribir_encabezados_tabla(ws, bold_font, thin_border)
-    _escribir_detalles_productos(ws, detalles, cabecera, thin_border)
-    _escribir_fila_total(ws, detalles, bold_font, thin_border)
-    _ajustar_anchos_columnas(ws)
+    _escribir_encabezados_tabla(ws, bold_font, thin_border, ocultar_pvp)
+    _escribir_detalles_productos(ws, detalles, thin_border, ocultar_pvp)
+    _escribir_fila_total(ws, detalles, bold_font, thin_border, ocultar_pvp)
+    _ajustar_anchos_columnas(ws, ocultar_pvp)
 
     output = io.BytesIO()
     wb.save(output)
@@ -210,7 +245,7 @@ def _logic_exportar_pedido_para_proveedor(pedido_id: str):
         logger.error(f"❌ Error al exportar pedido para proveedor: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Error interno al exportar pedido: {str(e)}")
 
-def _logic_exportar_pedido_plano_mba(pedido_id: str, codigo_cliente: str, codigo_subcliente: str, moneda: str, bodega: str, vendedor: str, numero_pedido_mba: int, consolidado: bool, incluir_encabezado: bool):
+def _logic_exportar_pedido_plano_mba(pedido_id: str, codigo_cliente: str, codigo_subcliente: str, moneda: str, vendedor: str, numero_pedido_mba: int, consolidado: bool, incluir_encabezado: bool):
     try:
         from src.database.services.mba_pedido_exporter import MBAPedidoExporter, MBAExportConfig
         with get_db_connection_context() as conn:
@@ -228,10 +263,21 @@ def _logic_exportar_pedido_plano_mba(pedido_id: str, codigo_cliente: str, codigo
                     raise ValueError(f"Pedido no encontrado: {pedido_id}")
                 pedido_id_real = pedido["cabecera"]["pedido_id"]
                 numero_pedido = pedido_id
-        
+
+        cabecera = pedido.get("cabecera", {})
+        estado_id = cabecera.get("estado_id")
+        if estado_id != ESTADO_CONFIRMADO_ENVIADO:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "error": "estado_no_permitido",
+                    "message": f"El pedido debe estar en estado CONFIRMADO Y ENVIADO para generar el TXT MBA3. Estado actual: {cabecera.get('estado_nombre', 'Desconocido')}"
+                }
+            )
+
         config = MBAExportConfig(
             codigo_cliente=codigo_cliente, codigo_subcliente=codigo_subcliente, moneda=moneda,
-            bodega=bodega, vendedor=vendedor, numero_pedido_temporal=numero_pedido_mba,
+            vendedor=vendedor, numero_pedido_temporal=numero_pedido_mba,
         )
         exporter = MBAPedidoExporter()
         if consolidado:
@@ -250,12 +296,14 @@ def _logic_exportar_pedido_plano_mba(pedido_id: str, codigo_cliente: str, codigo
             headers={"Content-Disposition": f'attachment; filename="{filename}"'})
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"❌ Error al exportar pedido plano para MBA: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Error interno al exportar pedido: {str(e)}")
 
 
-def _logic_descargar_pedido(pedido_id: str):
+def _logic_descargar_pedido(pedido_id: str, user: Dict):
     try:
         with get_db_connection_context() as conn:
             repo = PedidoRepository(conn)
@@ -264,7 +312,7 @@ def _logic_descargar_pedido(pedido_id: str):
             if not pedido_data:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
-                    detail={"error": "not_found", "message": "Pedido no encontrado"}
+                    detail={"error": "not_found", "message": MSG_PEDIDO_NO_ENCONTRADO}
                 )
 
             cabecera = pedido_data.get("cabecera", {})
@@ -281,7 +329,7 @@ def _logic_descargar_pedido(pedido_id: str):
                 )
 
             detalles = pedido_data.get("detalles", [])
-            excel_bytes = _generar_excel_pedido(cabecera, detalles)
+            excel_bytes = _generar_excel_pedido(cabecera, detalles, ocultar_pvp=debe_ocultar_pvp(user))
 
             logger.info(f"✅ Pedido {cabecera.get('numero_pedido', pedido_id)} descargado como Excel ({len(detalles)} productos)")
 
@@ -296,7 +344,7 @@ def _logic_descargar_pedido(pedido_id: str):
         logger.error(f"❌ Error al descargar pedido: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail={"error": "internal_error", "message": f"Error interno al generar Excel: {str(e)}"})
 
-def _logic_descargar_pedido_original(pedido_id: str):
+def _logic_descargar_pedido_original(pedido_id: str, user: Dict):
     try:
         from src.database.repositories.pedido_original_repository import PedidoOriginalRepository
         with get_db_connection_context() as conn:
@@ -309,7 +357,7 @@ def _logic_descargar_pedido_original(pedido_id: str):
                 if not pedido_vivo:
                     raise HTTPException(
                         status_code=status.HTTP_404_NOT_FOUND,
-                        detail={"error": "not_found", "message": "Pedido no encontrado"}
+                        detail={"error": "not_found", "message": MSG_PEDIDO_NO_ENCONTRADO}
                     )
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
@@ -325,7 +373,7 @@ def _logic_descargar_pedido_original(pedido_id: str):
 
             cabecera = pedido_original["cabecera"]
             detalles = pedido_original["detalles"]
-            excel_bytes = _generar_excel_pedido(cabecera, detalles)
+            excel_bytes = _generar_excel_pedido(cabecera, detalles, ocultar_pvp=debe_ocultar_pvp(user))
 
             logger.info(f"✅ Pedido ORIGINAL {cabecera.get('numero_pedido', pedido_id)} descargado como Excel ({len(detalles)} productos)")
 
@@ -339,6 +387,56 @@ def _logic_descargar_pedido_original(pedido_id: str):
     except Exception as e:
         logger.error(f"❌ Error al descargar pedido original: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail={"error": "internal_error", "message": f"Error interno al generar Excel original: {str(e)}"})
+
+
+def _logic_exportar_margen_excel(pedido_id: str, user: Dict):
+    """Análisis de Margen de Rentabilidad por producto, en Excel (req. 1.4/1.5).
+
+    Acepta UUID o número de pedido, igual que `_logic_exportar_pedido_plano_mba`.
+    """
+    from ._excel_margen import generar_excel_margen
+
+    try:
+        with get_db_connection_context() as conn:
+            repo = PedidoRepository(conn)
+            try:
+                uuid.UUID(pedido_id)
+                pedido_data = repo.get_pedido_completo(pedido_id)
+                pedido_id_real = pedido_id
+            except (ValueError, TypeError):
+                pedido_data = repo.get_pedido_completo_por_numero(pedido_id)
+                pedido_id_real = pedido_data["cabecera"]["pedido_id"] if pedido_data else pedido_id
+
+            if not pedido_data:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail={"error": "not_found", "message": MSG_PEDIDO_NO_ENCONTRADO}
+                )
+
+            excel_buffer = generar_excel_margen(pedido_id_real, pedido_data, user)
+
+            numero_pedido = pedido_data["cabecera"].get("numero_pedido", pedido_id)
+            numero_pedido_safe = numero_pedido.replace(" ", "_").replace("-", "_").replace("/", "_")
+            filename = f"analisis_margen_{numero_pedido_safe}_{ahora_naive().strftime('%Y%m%d_%H%M%S')}.xlsx"
+
+            logger.info(
+                f"✅ Análisis de Margen exportado para pedido {pedido_id_real} ({numero_pedido}) "
+                f"por usuario {user.get('username', 'UNKNOWN')}"
+            )
+
+            return Response(
+                content=excel_buffer.getvalue(),
+                media_type=MEDIA_TYPE_EXCEL,
+                headers={"Content-Disposition": f'attachment; filename="{filename}"'}
+            )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ Error al exportar Análisis de Margen para pedido {pedido_id}: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={"error": "internal_error", "message": f"Error interno al generar Excel de margen: {str(e)}"}
+        )
 
 
 def register_exportacion_endpoints(app: FastAPI):
@@ -374,10 +472,9 @@ def register_exportacion_endpoints(app: FastAPI):
         codigo_cliente: str = Query("CLI1795", description="Código de cliente MBA (por defecto CLI1795)"),
         codigo_subcliente: str = Query("", description="Código de subcliente MBA (dejar vacío si no aplica)"),
         moneda: str = Query("US", description="Moneda/divisa local (por defecto US dólar)"),
-        bodega: str = Query("", description="Código de bodega MBA (si vacío, usa origen_traslado del pedido)"),
         vendedor: str = Query("", description="Código de vendedor MBA"),
         numero_pedido_mba: int = Query(1, ge=1, description="Número de pedido temporal para agrupar líneas en MBA (col. B)"),
-        consolidado: bool = Query(False, description="Si True, consolida cantidades por producto; si False, una línea por tienda/sucursal"),
+        consolidado: bool = Query(True, description="Si True, consolida cantidades por producto; si False, una línea por tienda/sucursal"),
         incluir_encabezado: bool = Query(True, description="Incluir las 19 líneas de encabezado del formato MBA"),
         user: Dict = Depends(verify_jwt_token),
         _: None = Depends(require_permission(_PERM_ODCSAP_VIEW))
@@ -395,39 +492,54 @@ def register_exportacion_endpoints(app: FastAPI):
         
         - **35 columnas** separadas por TAB
         - **19 líneas de encabezado** (se eliminan automáticamente al importar en MBA)
-        - Una línea por cada combinación producto-tienda (o consolidado por producto)
+        - Una línea por producto, con la cantidad consolidada de todas sus tiendas
+          (o una línea por combinación producto-tienda si se pide `consolidado=false`)
         
         ## Parámetros de configuración (valores por defecto para "Descargar para MBA")
-        
-        Del sistema se toman: Fecha Pedido, Fecha Entrega, Orden Compra Cliente (mensaje),
-        Código Producto, Precio Final. Columnas fijas: A=secuencial, B=número pedido (agrupa),
+
+        Del sistema se toman: Pedido Manual, Orden Compra Cliente, Código Producto,
+        Precio Final. Columnas fijas: A=secuencial, B=número pedido (agrupa),
         C=CLI1795, G=moneda US, AI=secuencial.
-        
+
         | Parámetro | Default | Descripción |
         |-----------|---------|-------------|
         | codigo_cliente | CLI1795 | Código del cliente en MBA |
         | codigo_subcliente | (vacío) | Subcategoría del cliente (opcional) |
         | moneda | US | Divisa local (dólar) |
-        | bodega | (origen_traslado) | Código de bodega en MBA |
         | vendedor | (vacío) | Código del vendedor |
+
+        Requiere que el pedido esté en estado **CONFIRMADO Y ENVIADO** (la ODC ya fue
+        enviada y aceptada por SAP), ya que la columna 12 depende del DocNum de SAP.
+
+        Columna H (Bodega) es fija: siempre se exporta como `BPT`.
+        Columna 20 (Sucursal) es fija: siempre se exporta como `PRI`.
+        Columna 10 (Pedido Manual): número de pedido interno.
+        Columna 12 (Orden Compra Cliente): DocNum de la Orden de Compra ya enviada a SAP
+        (tabla orden_compra_cabecera.numero_oc_sap). Vacía si el pedido no tiene una OC
+        con DocNum registrado.
+        Columnas 5 y 6 (Fecha Pedido / Fecha Entrega): ambas usan la fecha en que el
+        pedido pasó a estado CONFIRMADO POR EL RAYO (clic en "Confirmar" en el detalle
+        del pedido), no la fecha capturada originalmente en el Excel. Si el pedido no
+        tiene ese registro en la bitácora de estados, se exportan vacías (00/00/0000).
         
         ## Modos de exportación
-        
-        - **consolidado=False** (predeterminado): Genera una línea por cada tienda/sucursal.
-          Útil cuando el pedido tiene distribución por tiendas.
-        - **consolidado=True**: Consolida las cantidades y genera una línea por producto.
-          Útil cuando no se necesita distinguir por tienda.
+
+        - **consolidado=True** (predeterminado): Consolida las cantidades y genera una
+          línea por producto. Como la columna Sucursal es fija (`PRI`), una línea por
+          tienda ya no aporta información distinguible entre tiendas.
+        - **consolidado=False**: Genera una línea por cada combinación producto-tienda
+          (sin agrupar), por si se necesita esa granularidad para otro fin.
         
         ## Ejemplo de línea generada
         
         ```
-        91	3	CLI0495	GO05	29/10/2025	31/10/2025	US	BPT	JPC			CQ287341						TRUE	FALSE	PRI	R469.911.CCL	6	FALSE	6.16	TRUE								0	FALSE	91
+        91	3	CLI0495	GO05	29/10/2025	31/10/2025	US	BPT	JPC	CQ287341		1524						TRUE	FALSE	PRI	R469.911.CCL	6	FALSE	6.16	TRUE								0	FALSE	91
         ```
         
         Returns:
             Archivo .txt descargable en formato MBA
         """
-        return _logic_exportar_pedido_plano_mba(pedido_id, codigo_cliente, codigo_subcliente, moneda, bodega, vendedor, numero_pedido_mba, consolidado, incluir_encabezado)
+        return _logic_exportar_pedido_plano_mba(pedido_id, codigo_cliente, codigo_subcliente, moneda, vendedor, numero_pedido_mba, consolidado, incluir_encabezado)
 
     @app.get("/api/pedidos/{pedido_id}/descargar-pedido", tags=["Pedidos - Exportación"])
     async def descargar_pedido(
@@ -457,7 +569,7 @@ def register_exportacion_endpoints(app: FastAPI):
         - **400**: Pedido no está en estado GESTIONAR PEDIDO o superior
         - **404**: Pedido no encontrado
         """
-        return _logic_descargar_pedido(pedido_id)
+        return _logic_descargar_pedido(pedido_id, user)
 
     # ========================================================================
     # Descargar Pedido Original (desde tablas pedido_original)
@@ -466,7 +578,7 @@ def register_exportacion_endpoints(app: FastAPI):
     async def descargar_pedido_original(
         pedido_id: str = Path(..., description=DESC_UUID_PEDIDO),
         user: Dict = Depends(verify_jwt_token),
-        _: None = Depends(require_any_permission([_PERM_MABEL_VIEW, _PERM_ODCSAP_VIEW]))
+        _: None = Depends(require_any_permission([_PERM_MABEL_VIEW, _PERM_ODCSAP_VIEW, _PERM_PRODUCCION_ELRAYO]))
     ):
         """
         Descarga el pedido **con los valores originales** (antes de ediciones).
@@ -491,4 +603,34 @@ def register_exportacion_endpoints(app: FastAPI):
         - **200**: Archivo Excel descargado correctamente
         - **404**: Pedido no encontrado o sin snapshot original
         """
-        return _logic_descargar_pedido_original(pedido_id)
+        return _logic_descargar_pedido_original(pedido_id, user)
+
+    # ========================================================================
+    # Análisis de Margen (req. 1.4/1.5, SIS-PYTD-0002)
+    # ========================================================================
+    @app.get("/api/pedidos/{pedido_id}/margen/exportar-excel", tags=["Pedidos - Exportación"])
+    async def exportar_margen_excel(
+        pedido_id: str = Path(..., description="UUID del pedido o número de pedido"),
+        user: Dict = Depends(verify_jwt_token),
+        _: None = Depends(require_any_permission([_PERM_MABEL_VIEW, _PERM_ODCSAP_VIEW]))
+    ):
+        """
+        Exporta el Análisis de Margen de Rentabilidad por producto (req. 1.4/1.5).
+
+        Una fila por producto del pedido con PVP, Costo (columna informativa de la
+        plantilla Excel, req. 1.4), Costo Unitario (insumo real del cálculo) y el
+        Margen de Rentabilidad (`1 - (Costo Unitario / (PVP / 1.15))`).
+
+        **Uso:**
+        - Interfaz: Cargar Plantilla / pantalla de carga por producto
+        - Botón: "Descargar Análisis de Margen"
+
+        Sin restricción de estado: disponible en cuanto el pedido tiene productos
+        cargados. **No** incluye el permiso `produccion-elrayo.view` (RN-03: ese
+        perfil no debe acceder a costos, precios ni márgenes).
+
+        **Respuestas:**
+        - **200**: Archivo Excel descargado correctamente
+        - **404**: Pedido no encontrado
+        """
+        return _logic_exportar_margen_excel(pedido_id, user)

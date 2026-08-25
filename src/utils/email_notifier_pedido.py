@@ -7,11 +7,11 @@ import os
 from datetime import datetime
 
 from src.utils.timezone import ahora_naive
-from typing import Optional, Dict, Any
+from typing import List, Optional
 from src.config import (
     ENABLE_EMAIL_NOTIFICATIONS,
 )
-from src.utils.notificacion_destinatarios import get_destinatarios_por_tipo
+from src.utils.notificacion_destinatarios import get_destinatarios_por_correo
 from src.utils.smtp_sender import send_smtp_message
 
 logger = logging.getLogger(__name__)
@@ -24,146 +24,81 @@ _INFO_PEDIDO_TITLE = "Informaci&oacute;n del Pedido"
 _LABEL_NUMERO_PEDIDO = "N&uacute;mero de Pedido"
 _LABEL_PEDIDO_ID = "Pedido ID"
 _LABEL_VER_PEDIDO = "Ver Pedido"
+_CORREO_PEDIDO_CONFIRMADO_RAYO = "Pedido Confirmado por El Rayo"
+_CORREO_PEDIDO_DESPACHAR_Y_FACTURAR = "Pedido Despachar y Facturar"
+_CORREO_PEDIDO_FINALIZADO = "Pedido Finalizado"
 
 
-def send_pedido_confirmacion_notification(
-    pedido_data: Dict[str, Any],
-    numero_pedido: str,
-    usuario_origen: str = "EL RAYO",
-    email_destino: Optional[str] = None,
-    url_confirmacion: Optional[str] = None,
-    fecha_ejecucion: Optional[datetime] = None
-) -> bool:
-    """
-    Envía correo a MABEL TRADING notificando que se requiere confirmación de un pedido.
+def _build_seccion_accion_requerida_diferencia(numeros_pedido_hijo, base_url, warning_section):
+    """Sección "Acción Requerida" que solo aparece cuando la confirmación generó
+    pedido(s) hijo con la diferencia (botón "Confirmar pedido y generar N pedidos
+    con la diferencia"): guía a MABEL TRADING a revisarlos en Cargar Plantilla y
+    decidir Aceptar/Rechazar cada uno (estado Producción Pospuesta)."""
+    plural = len(numeros_pedido_hijo) != 1
+    enlaces = "".join(
+        f'<p style="margin:0 0 8px;"><a href="{base_url}/mba3-consultas/cargar-plantilla/{numero.replace(" ", "%20")}" '
+        f'style="color:#1a5276;font-weight:700;text-decoration:none;">Revisar {numero} &rarr;</a></p>'
+        for numero in numeros_pedido_hijo
+    )
+    contenido = (
+        '<p style="margin:0 0 12px;color:#5d4037;font-size:14px;line-height:1.6;">'
+        f'Se gener&oacute;{"n" if plural else ""} {len(numeros_pedido_hijo)} pedido{"s" if plural else ""} '
+        'con la diferencia, en estado <strong>Producci&oacute;n Pospuesta</strong>. MABEL TRADING debe '
+        f'revisar{"los" if plural else "lo"} en Cargar Plantilla y decidir: <strong>Aceptar</strong> '
+        '(pasa directo a redistribuci&oacute;n) o <strong>Rechazar</strong> (gestionar la diferencia por '
+        'su cuenta).</p>' + enlaces
+    )
+    return warning_section("Acci&oacute;n Requerida", contenido)
 
-    DESTINATARIO: email_destino (si se proporciona) o EMAIL_MABEL_TRADING
 
-    Args:
-        pedido_data: Datos del pedido (cabecera y detalles)
-        numero_pedido: Número del pedido
-        usuario_origen: Usuario que solicita la confirmación (default: "EL RAYO")
-        email_destino: Email del destinatario (opcional, usa EMAIL_MABEL_TRADING si no se proporciona)
-        url_confirmacion: URL directa para confirmar el pedido
-        fecha_ejecucion: Fecha y hora de la ejecución (por defecto ahora)
+def _build_pedido_confirmado_por_el_rayo_email(
+    pedido_id, numero_pedido, usuario_rayo, detalles_modificados, fecha_ejecucion,
+    numeros_pedido_hijo: Optional[List[str]] = None,
+):
+    """Construye (subject, body_html) para 'Pedido Confirmado por El Rayo' (MABEL_TRADING).
 
-    Returns:
-        True si el email se envió correctamente, False en caso contrario
-    """
-    if not ENABLE_EMAIL_NOTIFICATIONS:
-        logger.debug(_MSG_NOTIF_DESHABILITADAS)
-        return False
+    numeros_pedido_hijo: si se proporciona (no vacío), agrega una sección "Acción
+    Requerida" -- solo aplica al caso "Confirmar pedido y generar N pedidos con la
+    diferencia" (POST confirmar-con-diferencia)."""
+    base_url = os.getenv("FRONTEND_URL", _DEFAULT_FRONTEND_URL)
+    numero_pedido_encoded = numero_pedido.replace(" ", "%20")
+    url_pedido = f"{base_url}/mba3-consultas/pedidos/{numero_pedido_encoded}"
 
-    if not fecha_ejecucion:
-        fecha_ejecucion = ahora_naive()
+    from src.utils.email_template import (
+        build_email, info_section, success_badge_section,
+        button_section, paragraph, badge_html, warning_section,
+    )
 
-    try:
-        # Determinar destinatario
-        recipients: list[str]
-        if email_destino:
-            recipients = [email_destino.strip()]
-        else:
-            recipients = get_destinatarios_por_tipo("MABEL_TRADING")
-            if not recipients:
-                logger.warning(_MSG_SIN_EMAIL_MABEL)
-                return False
+    info_items = [
+        (_LABEL_NUMERO_PEDIDO, numero_pedido),
+        (_LABEL_PEDIDO_ID, pedido_id),
+    ]
+    if usuario_rayo:
+        info_items.append(("Usuario El Rayo", usuario_rayo))
+    info_items.extend([
+        ("Detalles Modificados", str(detalles_modificados)),
+        ("Estado", badge_html("CONFIRMADO", "#e8f5e9", "#2e7d32")),
+    ])
 
-        if not recipients:
-            logger.warning(_MSG_SIN_DESTINATARIOS)
-            return False
+    sections = [
+        success_badge_section("EL RAYO ha confirmado el pedido exitosamente"),
+        paragraph("Se ha procesado la confirmaci&oacute;n del pedido y se ha creado la respuesta del proveedor correspondiente."),
+        info_section(_INFO_PEDIDO_TITLE, info_items, accent="green"),
+        button_section(_LABEL_VER_PEDIDO, url_pedido, accent="green"),
+        paragraph("El pedido est&aacute; ahora listo para que MABEL TRADING proceda con la redistribuci&oacute;n y ajustes necesarios.", italic=True),
+    ]
+    if numeros_pedido_hijo:
+        sections.append(_build_seccion_accion_requerida_diferencia(numeros_pedido_hijo, base_url, warning_section))
 
-        # Extraer información del pedido
-        cabecera = pedido_data.get("cabecera", {})
-        detalles = pedido_data.get("detalles", [])
-
-        fecha_pedido = cabecera.get("fecha_pedido", "N/A")
-        proveedor_nombre = cabecera.get("proveedor_nombre", "N/A")
-        estado = cabecera.get("estado", "PENDIENTE")
-        comprador_nombre = cabecera.get("comprador_nombre", "N/A")
-
-        # Calcular totales
-        total_productos = len(detalles)
-        total_cantidad = 0
-        total_valor = 0
-
-        for detalle in detalles:
-            # Sumar cantidades de todas las tiendas
-            tiendas = detalle.get("tiendas", [])
-            cantidad_detalle = sum(t.get("cantidad", 0) for t in tiendas)
-            total_cantidad += cantidad_detalle
-
-            # Sumar totales
-            total_detalle = detalle.get("total", 0) or 0
-            total_valor += total_detalle
-
-        # Construir URL de confirmación si no se proporciona
-        if not url_confirmacion:
-            # URL base - debería venir del frontend o config
-            base_url = os.getenv("FRONTEND_URL", "https://tu-dominio.com")
-            numero_pedido_encoded = numero_pedido.replace(" ", "%20")
-            url_confirmacion = f"{base_url}/mba3-consultas/pedidos/{numero_pedido_encoded}?modo=confirmacion&usuario=mabel-trading"
-
-        from src.utils.email_template import (
-            build_email, info_section, button_section,
-            paragraph, create_email_message,
-        )
-
-        body_html = build_email(
-            title="Confirmaci&oacute;n de Pedido Requerida",
-            subtitle=f"Pedido: {numero_pedido}",
-            sections=[
-                paragraph(f"El usuario <strong>{usuario_origen}</strong> ha solicitado la confirmaci&oacute;n del siguiente pedido:"),
-                info_section(_INFO_PEDIDO_TITLE, [
-                    (_LABEL_NUMERO_PEDIDO, numero_pedido),
-                    ("Fecha", fecha_pedido),
-                    ("Proveedor", proveedor_nombre),
-                    ("Comprador", comprador_nombre),
-                    ("Estado", estado),
-                    ("Total Productos", total_productos),
-                    ("Total Cantidad", total_cantidad),
-                    ("Total Valor", f"${total_valor:,.2f}"),
-                ], accent="purple"),
-                button_section("Confirmar Pedido", url_confirmacion, accent="purple"),
-            ],
-            accent="purple",
-            timestamp=fecha_ejecucion,
-        )
-
-        body_text = f"""Confirmacion de Pedido Requerida - {numero_pedido}
-{'=' * 40}
-
-El usuario {usuario_origen} solicita confirmacion:
-
-- Numero de Pedido: {numero_pedido}
-- Fecha: {fecha_pedido}
-- Proveedor: {proveedor_nombre}
-- Comprador: {comprador_nombre}
-- Estado: {estado}
-- Total Productos: {total_productos}
-- Total Cantidad: {total_cantidad}
-- Total Valor: ${total_valor:,.2f}
-
-Confirmar en: {url_confirmacion}
-
-Fecha y Hora: {fecha_ejecucion.strftime('%Y-%m-%d %H:%M:%S')}
-"""
-
-        msg = create_email_message(
-            subject=f"Confirmacion de Pedido Requerida - {numero_pedido}",
-            recipients=recipients,
-            body_html=body_html,
-            body_text=body_text,
-        )
-
-        # Enviar email
-        send_smtp_message(msg, recipients)
-
-        logger.info(f"✅ Email de confirmación de pedido enviado a {', '.join(recipients)} (Pedido: {numero_pedido})")
-        return True
-
-    except Exception as e:
-        logger.error(f"❌ Error al enviar email de confirmación de pedido: {e}", exc_info=True)
-        return False
+    body_html = build_email(
+        title="Pedido Confirmado por El Rayo",
+        subtitle=f"Pedido: {numero_pedido}",
+        sections=sections,
+        accent="green",
+        timestamp=fecha_ejecucion,
+    )
+    subject = f"Pedido Confirmado por El Rayo - {numero_pedido}"
+    return subject, body_html
 
 
 def send_rayo_confirmacion_notification(
@@ -172,7 +107,8 @@ def send_rayo_confirmacion_notification(
     usuario_rayo: Optional[str] = None,
     detalles_modificados: int = 0,
     email_destino: Optional[str] = None,
-    fecha_ejecucion: Optional[datetime] = None
+    fecha_ejecucion: Optional[datetime] = None,
+    numeros_pedido_hijo: Optional[List[str]] = None,
 ) -> bool:
     """
     Envía correo a MABEL TRADING notificando que El Rayo confirmó un pedido.
@@ -186,6 +122,10 @@ def send_rayo_confirmacion_notification(
         detalles_modificados: Cantidad de detalles modificados en la confirmación
         email_destino: Email del destinatario (opcional, usa EMAIL_MABEL_TRADING si no se proporciona)
         fecha_ejecucion: Fecha y hora de la ejecución (por defecto ahora)
+        numeros_pedido_hijo: Números de los pedidos "hijo" generados con la diferencia
+            (solo aplica al caso "Confirmar pedido y generar N pedidos con la
+            diferencia"); si se proporciona, agrega una sección "Acción Requerida"
+            guiando a MABEL TRADING a revisarlos en Cargar Plantilla
 
     Returns:
         True si el email se envió correctamente, False en caso contrario
@@ -203,7 +143,7 @@ def send_rayo_confirmacion_notification(
         if email_destino:
             recipients = [email_destino.strip()]
         else:
-            recipients = get_destinatarios_por_tipo("MABEL_TRADING")
+            recipients = get_destinatarios_por_correo("MABEL_TRADING", _CORREO_PEDIDO_CONFIRMADO_RAYO)
             if not recipients:
                 logger.warning(_MSG_SIN_EMAIL_MABEL)
                 return False
@@ -212,40 +152,31 @@ def send_rayo_confirmacion_notification(
             logger.warning(_MSG_SIN_DESTINATARIOS)
             return False
 
-        # Construir URL del pedido
+        from src.utils.email_template import create_email_message
+
+        subject, body_html = _build_pedido_confirmado_por_el_rayo_email(
+            pedido_id, numero_pedido, usuario_rayo, detalles_modificados, fecha_ejecucion,
+            numeros_pedido_hijo=numeros_pedido_hijo,
+        )
+
         base_url = os.getenv("FRONTEND_URL", _DEFAULT_FRONTEND_URL)
         numero_pedido_encoded = numero_pedido.replace(" ", "%20")
         url_pedido = f"{base_url}/mba3-consultas/pedidos/{numero_pedido_encoded}"
 
-        from src.utils.email_template import (
-            build_email, info_section, success_badge_section,
-            button_section, paragraph, badge_html, create_email_message,
-        )
+        accion_requerida_texto = ""
+        if numeros_pedido_hijo:
+            enlaces_texto = "\n".join(
+                f"- {numero}: {base_url}/mba3-consultas/cargar-plantilla/{numero.replace(' ', '%20')}"
+                for numero in numeros_pedido_hijo
+            )
+            accion_requerida_texto = f"""
 
-        info_items = [
-            (_LABEL_NUMERO_PEDIDO, numero_pedido),
-            (_LABEL_PEDIDO_ID, pedido_id),
-        ]
-        if usuario_rayo:
-            info_items.append(("Usuario El Rayo", usuario_rayo))
-        info_items.extend([
-            ("Detalles Modificados", str(detalles_modificados)),
-            ("Estado", badge_html("CONFIRMADO", "#e8f5e9", "#2e7d32")),
-        ])
-
-        body_html = build_email(
-            title="Pedido Confirmado por El Rayo",
-            subtitle=f"Pedido: {numero_pedido}",
-            sections=[
-                success_badge_section("EL RAYO ha confirmado el pedido exitosamente"),
-                paragraph("Se ha procesado la confirmaci&oacute;n del pedido y se ha creado la respuesta del proveedor correspondiente."),
-                info_section(_INFO_PEDIDO_TITLE, info_items, accent="green"),
-                button_section(_LABEL_VER_PEDIDO, url_pedido, accent="green"),
-                paragraph("El pedido est&aacute; ahora listo para que MABEL TRADING proceda con la redistribuci&oacute;n y ajustes necesarios.", italic=True),
-            ],
-            accent="green",
-            timestamp=fecha_ejecucion,
-        )
+Accion Requerida:
+Se genero(aron) {len(numeros_pedido_hijo)} pedido(s) con la diferencia, en estado
+Produccion Pospuesta. MABEL TRADING debe revisarlo(s) en Cargar Plantilla y decidir:
+Aceptar (pasa directo a redistribucion) o Rechazar (gestionar la diferencia por su cuenta).
+{enlaces_texto}
+"""
 
         body_text = f"""Pedido Confirmado por El Rayo - {numero_pedido}
 {'=' * 40}
@@ -258,22 +189,25 @@ Informacion del Pedido:
 - Estado: CONFIRMADO
 
 Ver Pedido: {url_pedido}
-
+{accion_requerida_texto}
 Fecha y Hora: {fecha_ejecucion.strftime('%Y-%m-%d %H:%M:%S')}
 """
 
         msg = create_email_message(
-            subject=f"Pedido Confirmado por El Rayo - {numero_pedido}",
+            subject=subject,
             recipients=recipients,
             body_html=body_html,
             body_text=body_text,
         )
 
         # Enviar email
-        send_smtp_message(msg, recipients)
+        enviado = send_smtp_message(msg, recipients)
 
-        logger.info(f"✅ Email de confirmación de El Rayo enviado a {', '.join(recipients)} (Pedido: {numero_pedido})")
-        return True
+        if enviado:
+            logger.info(f"✅ Email de confirmación de El Rayo enviado a {', '.join(recipients)} (Pedido: {numero_pedido})")
+        else:
+            logger.error(f"❌ Fallo el envío de email de confirmación de El Rayo a {', '.join(recipients)} (Pedido: {numero_pedido})")
+        return enviado
 
     except Exception as e:
         logger.error(f"❌ Error al enviar email de confirmación de El Rayo: {e}", exc_info=True)
@@ -317,7 +251,7 @@ def send_despachar_y_facturar_notification(
         if email_destino:
             recipients = [email_destino.strip()]
         else:
-            recipients = get_destinatarios_por_tipo("MABEL_TRADING")
+            recipients = get_destinatarios_por_correo("MABEL_TRADING", _CORREO_PEDIDO_DESPACHAR_Y_FACTURAR)
             if not recipients:
                 logger.warning(_MSG_SIN_EMAIL_MABEL)
                 return False
@@ -378,10 +312,13 @@ Fecha y Hora: {fecha_ejecucion.strftime('%Y-%m-%d %H:%M:%S')}
             body_text=body_text,
         )
 
-        send_smtp_message(msg, recipients)
+        enviado = send_smtp_message(msg, recipients)
 
-        logger.info(f"✅ Email Despachar y Facturar enviado a {', '.join(recipients)} (Pedido: {numero_pedido})")
-        return True
+        if enviado:
+            logger.info(f"✅ Email Despachar y Facturar enviado a {', '.join(recipients)} (Pedido: {numero_pedido})")
+        else:
+            logger.error(f"❌ Fallo el envío de email Despachar y Facturar a {', '.join(recipients)} (Pedido: {numero_pedido})")
+        return enviado
 
     except Exception as e:
         logger.error(f"❌ Error al enviar email Despachar y Facturar: {e}", exc_info=True)
@@ -425,7 +362,7 @@ def send_finalizar_pedido_notification(
         if email_destino:
             recipients = [email_destino.strip()]
         else:
-            recipients = get_destinatarios_por_tipo("OPERACIONES")
+            recipients = get_destinatarios_por_correo("OPERACIONES", _CORREO_PEDIDO_FINALIZADO)
             if not recipients:
                 logger.warning("⚠️ No hay email configurado para EL RAYO (OPERACIONES)")
                 return False
@@ -486,10 +423,13 @@ Fecha y Hora: {fecha_ejecucion.strftime('%Y-%m-%d %H:%M:%S')}
             body_text=body_text,
         )
 
-        send_smtp_message(msg, recipients)
+        enviado = send_smtp_message(msg, recipients)
 
-        logger.info(f"✅ Email Pedido finalizado enviado a EL RAYO {', '.join(recipients)} (Pedido: {numero_pedido})")
-        return True
+        if enviado:
+            logger.info(f"✅ Email Pedido finalizado enviado a EL RAYO {', '.join(recipients)} (Pedido: {numero_pedido})")
+        else:
+            logger.error(f"❌ Fallo el envío de email Pedido finalizado a EL RAYO {', '.join(recipients)} (Pedido: {numero_pedido})")
+        return enviado
 
     except Exception as e:
         logger.error(f"❌ Error al enviar email Pedido finalizado a EL RAYO: {e}", exc_info=True)

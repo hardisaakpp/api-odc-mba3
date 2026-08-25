@@ -3,9 +3,35 @@ Configuración compartida para tests (fixtures).
 """
 
 import pytest  # type: ignore[reportMissingImports]
-from unittest.mock import MagicMock
 from fastapi.testclient import TestClient
 from src.api_server import app
+
+
+@pytest.fixture(autouse=True)
+def _bloquear_smtp_real(monkeypatch):
+    """Red de seguridad: ningún test debe enviar un correo SMTP real.
+
+    Bug real (2026-08-25): test_dos_odcs_usa_thread_pool_y_preserva_orden mockeaba
+    _enviar_emails_exito_sap pero no _enviar_email_despacho_odc; el correo de
+    despacho de la 2da ODC de un pedido mixto llegaba hasta smtplib de verdad cada
+    vez que corría la suite. Todas las funciones send_*_notification de
+    email_notifier.py importan send_smtp_message a nivel de módulo, así que
+    parchearlo ahí (no en src.utils.smtp_sender, donde solo está definido)
+    intercepta cualquier envío real sin importar qué función de notificación
+    específica haya quedado sin mockear en un test. Si esto se dispara, el fix
+    correcto es mockear la función de notificación correspondiente en el test,
+    no debilitar esta red de seguridad.
+    """
+    def _raise_si_llega_smtp_real(*args, **kwargs):
+        raise AssertionError(
+            "Un test intentó enviar un correo SMTP real (llegó a "
+            "email_notifier.send_smtp_message sin mockear). Mockea la función "
+            "send_*_notification correspondiente (o send_smtp_message) en el test."
+        )
+    monkeypatch.setattr(
+        "src.utils.email_notifier.send_smtp_message",
+        _raise_si_llega_smtp_real,
+    )
 
 
 @pytest.fixture

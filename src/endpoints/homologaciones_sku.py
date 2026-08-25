@@ -6,18 +6,13 @@ import logging
 from typing import Dict, Optional
 from fastapi import FastAPI, Request, HTTPException, Depends, Query
 from fastapi.responses import JSONResponse
-from fastapi.exceptions import RequestValidationError
 
 from src.database.services.homologacion_service import HomologacionService
 from src.security.jwt_auth import verify_jwt_token
 from src.models import (
-    HomologacionesSkuListResponse,
-    HomologacionSkuResponse,
     HomologacionSkuCreateRequest,
     HomologacionSkuUpdateRequest,
     HomologacionSkuBulkUpdateRequest,
-    HomologacionSkuBulkUpdateResponse,
-    HomologacionSkuSincronizarResponse
 )
 
 logger = logging.getLogger(__name__)
@@ -268,37 +263,17 @@ def register_homologaciones_sku_endpoints(app: FastAPI):
     """
     Registra los endpoints de homologaciones SKU en la aplicación FastAPI.
 
+    Nota: los errores de validación (422) y HTTPException se manejan con los
+    handlers globales de src/middleware/exception_handlers.py, registrados una
+    sola vez para toda la app en api_server.py. Este módulo no debe registrar
+    sus propios @app.exception_handler: al ser globales por tipo de excepción,
+    pisarían esos handlers para TODOS los endpoints de la aplicación (no solo
+    los de homologaciones), devolviendo un mensaje genérico sin detalle real
+    del campo inválido y sin loguearlo.
+
     Args:
         app: Instancia de FastAPI
     """
-
-    # Handler global para errores de validación
-    @app.exception_handler(RequestValidationError)
-    async def validation_exception_handler(request: Request, exc: RequestValidationError):
-        """Maneja errores de validación de forma consistente"""
-        return JSONResponse(
-            status_code=400,
-            content={
-                "status": "error",
-                "detail": "Error de validación en la solicitud",
-                "message": "Error de validación en la solicitud",
-                "errors": exc.errors()
-            }
-        )
-
-    # Handler global para HTTPException
-    @app.exception_handler(HTTPException)
-    async def http_exception_handler(request: Request, exc: HTTPException):
-        """Maneja HTTPException de forma consistente"""
-        return JSONResponse(
-            status_code=exc.status_code,
-            content={
-                "status": "error",
-                "detail": exc.detail,
-                "message": exc.detail,  # Asegurar que el mensaje esté en ambos campos
-                "error_code": getattr(exc, 'error_code', None)
-            }
-        )
 
     @app.get("/api/homologaciones-sku",
              tags=["Homologaciones SKU"])

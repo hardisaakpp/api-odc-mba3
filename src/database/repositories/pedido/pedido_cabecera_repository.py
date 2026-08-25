@@ -9,8 +9,9 @@ CHANGELOG:
 
 import logging
 import pyodbc
+from dataclasses import dataclass
 from typing import Dict, Any, List, Optional, TYPE_CHECKING
-from datetime import date
+from datetime import date, datetime
 
 from src.utils.timezone import ahora_naive
 
@@ -25,6 +26,10 @@ from src.database.pedido_estados import (
     ESTADO_FINALIZADO,
     ESTADO_CANCELADO,
     ESTADO_CANCELADO_POR_EL_RAYO,
+    ESTADO_CONFIRMADO_POR_PRODUCCION,
+    ESTADO_PRODUCCION_POSPUESTA,
+    ESTADO_RECHAZADO,
+    ESTADO_LISTO_PARA_REDISTRIBUCION,
     estado_id_desde_legacy,
 )
 
@@ -39,6 +44,41 @@ logger = logging.getLogger(__name__)
 # Literales reutilizados (evita duplicación detectada por SonarQube)
 _SQL_NOMBRE_ESTADO_POR_ID = "SELECT nombre FROM pedido_estado WHERE id = ?"
 _SEP_AND = " AND "
+
+# Columnas de fecha filtrables por fecha_desde/fecha_hasta + tipo_fecha (whitelist:
+# tipo_fecha nunca se interpola directo en SQL, siempre pasa por este dict.get()).
+# fecha_entrega puede contener el literal 'INMEDIATO' en vez de una fecha, por eso
+# el filtro usa TRY_CAST (devuelve NULL en vez de fallar toda la query).
+_COLUMNAS_FECHA_FILTRO = {
+    "pedido": "p.fecha_pedido",
+    "entrega": "p.fecha_entrega",
+    "facturacion": "p.fecha_facturacion",
+}
+
+
+def _columna_fecha_filtro(tipo_fecha: Optional[str]) -> str:
+    return _COLUMNAS_FECHA_FILTRO.get(tipo_fecha or "pedido", _COLUMNAS_FECHA_FILTRO["pedido"])
+
+
+@dataclass
+class PedidosFiltros:
+    """Agrupa los filtros opcionales de get_pedidos_con_filtros en un solo
+    parámetro (evita exceder el límite de parámetros por función,
+    python:S107). Parte del contrato público de get_pedidos_con_filtros:
+    limit/offset (paginación) se mantienen como argumentos aparte."""
+    estado: Optional[str | int] = None
+    excluir_borrador: bool = False
+    solo_redistribucion: bool = False
+    solo_pendientes_accion: bool = False
+    restringir_produccion_el_rayo: bool = False
+    excluir_estados_produccion_el_rayo: bool = False
+    excluir_listo_para_redistribucion: bool = False
+    fecha_desde: Optional[str] = None
+    fecha_hasta: Optional[str] = None
+    tipo_fecha: Optional[str] = None
+    proveedor_nombre: Optional[str] = None
+    numero_pedido: Optional[str] = None
+    creado_por: Optional[str] = None
 
 
 class PedidoCabeceraRepository:
@@ -381,6 +421,22 @@ class PedidoCabeceraRepository:
 
             cursor.execute(sql, values)
 
+            # Req. 1.2: pedido_padre_id (pedido "hijo" generado con la diferencia no
+            # entregada) -- UPDATE aparte, misma transacción, en vez de sumar una 4ta
+            # variante a _construir_insert_sql_values (ya se ramifica por
+            # tiene_estado_id/tiene_estado).
+            if datos_cabecera_normalizado.get("pedido_padre_id"):
+                cursor.execute("""
+                    SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS
+                    WHERE TABLE_NAME = 'pedido' AND COLUMN_NAME = 'pedido_padre_id'
+                """)
+                row_padre = cursor.fetchone()
+                if row_padre and row_padre[0] > 0:
+                    cursor.execute(
+                        "UPDATE pedido SET pedido_padre_id = ? WHERE pedido_id = ?",
+                        (datos_cabecera_normalizado["pedido_padre_id"], pedido_id),
+                    )
+
             # Registrar creación inicial en pedido_estado_historial
             self._registrar_transicion_estado(
                 cursor, pedido_id,
@@ -431,35 +487,35 @@ class PedidoCabeceraRepository:
 
             if tiene_estado_id:
                 cursor.execute("""
-                    SELECT 
+                    SELECT
                         p.pedido_id, p.numero_pedido, p.fecha_pedido, p.fecha_entrega,
                         p.forma_pago, p.mensaje, p.proveedor_nombre, p.comprador_nombre,
                         p.comprador_codigo, p.origen_traslado, p.serie, p.archivo_nombre,
                         p.creado_por, p.estado_id, pe.nombre AS estado_nombre, p.creado_en,
-                        p.modificado_por
+                        p.modificado_por, p.fecha_facturacion
                     FROM pedido p
                     LEFT JOIN pedido_estado pe ON pe.id = p.estado_id
                     WHERE p.pedido_id = ?
                 """, (pedido_id,))
             elif tiene_estado:
                 cursor.execute("""
-                    SELECT 
+                    SELECT
                         pedido_id, numero_pedido, fecha_pedido, fecha_entrega,
                         forma_pago, mensaje, proveedor_nombre, comprador_nombre,
                         comprador_codigo, origen_traslado, serie, archivo_nombre,
                         creado_por, estado, creado_en,
-                        modificado_por
+                        modificado_por, fecha_facturacion
                     FROM pedido
                     WHERE pedido_id = ?
                 """, (pedido_id,))
             else:
                 cursor.execute("""
-                    SELECT 
+                    SELECT
                         pedido_id, numero_pedido, fecha_pedido, fecha_entrega,
                         forma_pago, mensaje, proveedor_nombre, comprador_nombre,
                         comprador_codigo, origen_traslado, serie, archivo_nombre,
                         creado_por, creado_en,
-                        modificado_por
+                        modificado_por, fecha_facturacion
                     FROM pedido
                     WHERE pedido_id = ?
                 """, (pedido_id,))
@@ -472,17 +528,19 @@ class PedidoCabeceraRepository:
                 row, tiene_estado or tiene_estado_id, tiene_estado_id
             )
             detalles = self.utils.obtener_detalles_pedido(cursor, pedido_id)
-            
+
             # Si el pedido está en estado CONFIRMADO_ENVIADO, obtener datos de SAP
             estado_id = cabecera.get("estado_id")
             if estado_id == ESTADO_CONFIRMADO_ENVIADO:
                 cabecera = self._agregar_datos_sap_a_cabecera(cursor, pedido_id, cabecera)
-            
+            cabecera = self._agregar_pedido_padre_id_a_cabecera(cursor, pedido_id, cabecera)
+            cabecera["origen_traslado_detectado"] = self._detectar_origenes_traslado(detalles)
+
             return {
                 "cabecera": cabecera,
                 "detalles": detalles
             }
-            
+
         except Exception as e:
             logger.error(f"❌ Error al obtener pedido completo: {e}", exc_info=True)
             raise
@@ -508,35 +566,35 @@ class PedidoCabeceraRepository:
 
             if tiene_estado_id:
                 cursor.execute("""
-                    SELECT 
+                    SELECT
                         p.pedido_id, p.numero_pedido, p.fecha_pedido, p.fecha_entrega,
                         p.forma_pago, p.mensaje, p.proveedor_nombre, p.comprador_nombre,
                         p.comprador_codigo, p.origen_traslado, p.serie, p.archivo_nombre,
                         p.creado_por, p.estado_id, pe.nombre AS estado_nombre, p.creado_en,
-                        p.modificado_por
+                        p.modificado_por, p.fecha_facturacion
                     FROM pedido p
                     LEFT JOIN pedido_estado pe ON pe.id = p.estado_id
                     WHERE p.numero_pedido = ?
                 """, (numero_pedido,))
             elif tiene_estado:
                 cursor.execute("""
-                    SELECT 
+                    SELECT
                         pedido_id, numero_pedido, fecha_pedido, fecha_entrega,
                         forma_pago, mensaje, proveedor_nombre, comprador_nombre,
                         comprador_codigo, origen_traslado, serie, archivo_nombre,
                         creado_por, estado, creado_en,
-                        modificado_por
+                        modificado_por, fecha_facturacion
                     FROM pedido
                     WHERE numero_pedido = ?
                 """, (numero_pedido,))
             else:
                 cursor.execute("""
-                    SELECT 
+                    SELECT
                         pedido_id, numero_pedido, fecha_pedido, fecha_entrega,
                         forma_pago, mensaje, proveedor_nombre, comprador_nombre,
                         comprador_codigo, origen_traslado, serie, archivo_nombre,
                         creado_por, creado_en,
-                        modificado_por
+                        modificado_por, fecha_facturacion
                     FROM pedido
                     WHERE numero_pedido = ?
                 """, (numero_pedido,))
@@ -550,17 +608,19 @@ class PedidoCabeceraRepository:
                 row, tiene_estado or tiene_estado_id, tiene_estado_id
             )
             detalles = self.utils.obtener_detalles_pedido(cursor, pedido_id)
-            
+
             # Si el pedido está en estado CONFIRMADO_ENVIADO, obtener datos de SAP
             estado_id = cabecera.get("estado_id")
             if estado_id == ESTADO_CONFIRMADO_ENVIADO:
                 cabecera = self._agregar_datos_sap_a_cabecera(cursor, pedido_id, cabecera)
-            
+            cabecera = self._agregar_pedido_padre_id_a_cabecera(cursor, pedido_id, cabecera)
+            cabecera["origen_traslado_detectado"] = self._detectar_origenes_traslado(detalles)
+
             return {
                 "cabecera": cabecera,
                 "detalles": detalles
             }
-            
+
         except Exception as e:
             logger.error(f"❌ Error al obtener pedido completo por número: {e}", exc_info=True)
             raise
@@ -641,6 +701,38 @@ class PedidoCabeceraRepository:
             logger.warning(
                 f"⚠️ No se pudo registrar historial de estado para pedido {pedido_id}: {e}"
             )
+
+    def get_fecha_confirmacion_estado(
+        self, pedido_id: str, estado_id: int = ESTADO_REDISTRIBUCION
+    ) -> Optional[datetime]:
+        """
+        Obtiene la fecha/hora en que el pedido transicionó a `estado_id` (por defecto
+        ESTADO_REDISTRIBUCION = "CONFIRMADO POR EL RAYO"), según pedido_estado_historial.
+
+        Si hay varias transiciones al mismo estado, se toma la más reciente.
+        `fecha_cambio` se guarda con SYSUTCDATETIME(); se convierte a hora Colombia
+        (UTC-5, sin horario de verano) para consistencia con el resto del sistema.
+
+        Returns:
+            datetime naive en hora Colombia, o None si no existe la tabla o el registro.
+        """
+        cursor = self.conn.cursor()
+        try:
+            if not self._tiene_tabla_historial(cursor):
+                return None
+            cursor.execute(
+                """
+                SELECT TOP 1 DATEADD(HOUR, -5, fecha_cambio)
+                FROM pedido_estado_historial
+                WHERE pedido_id = ? AND estado_nuevo_id = ?
+                ORDER BY fecha_cambio DESC
+                """,
+                (pedido_id, estado_id),
+            )
+            row = cursor.fetchone()
+            return row[0] if row and row[0] is not None else None
+        finally:
+            cursor.close()
 
     def update_estado(
         self, 
@@ -775,8 +867,53 @@ class PedidoCabeceraRepository:
             logger.warning(f"⚠️ No se pudieron obtener datos SAP para pedido {pedido_id}: {e}")
             cabecera["numero_oc_sap"] = None
             cabecera["doc_entry"] = None
-            
+
         return cabecera
+
+    # Cache: existencia de la columna pedido.pedido_padre_id (una vez por conexión;
+    # migración 643, puede no estar aplicada todavía en algunos ambientes)
+    _tiene_pedido_padre_id: Optional[bool] = None
+
+    def _tiene_columna_pedido_padre_id(self, cursor: pyodbc.Cursor) -> bool:
+        if PedidoCabeceraRepository._tiene_pedido_padre_id is None:
+            cursor.execute("""
+                SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS
+                WHERE TABLE_NAME = 'pedido' AND COLUMN_NAME = 'pedido_padre_id'
+            """)
+            row = cursor.fetchone()
+            PedidoCabeceraRepository._tiene_pedido_padre_id = bool(row and row[0] > 0)
+        return PedidoCabeceraRepository._tiene_pedido_padre_id
+
+    def _agregar_pedido_padre_id_a_cabecera(
+        self, cursor: pyodbc.Cursor, pedido_id: str, cabecera: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Agrega pedido_padre_id a la cabecera (req. 1.2): permite al frontend
+        distinguir un pedido "hijo" (generado con la diferencia no producida) de un
+        pedido "padre" -- p. ej. para deshabilitar "Descargar Pedido Original" en los
+        hijos, que no tienen un archivo Excel propio subido por el usuario."""
+        cabecera["pedido_padre_id"] = None
+        if not self._tiene_columna_pedido_padre_id(cursor):
+            return cabecera
+        try:
+            cursor.execute("SELECT pedido_padre_id FROM pedido WHERE pedido_id = ?", (pedido_id,))
+            row = cursor.fetchone()
+            if row and row[0]:
+                cabecera["pedido_padre_id"] = str(row[0])
+        except Exception as e:
+            logger.warning(f"⚠️ No se pudo obtener pedido_padre_id para pedido {pedido_id}: {e}")
+        return cabecera
+
+    @staticmethod
+    def _detectar_origenes_traslado(detalles: List[Dict[str, Any]]) -> List[str]:
+        """Campo calculado "Origen Traslado" (no persistido, no reemplaza a
+        pedido.origen_traslado): bodega(s)/CD detectadas a partir de las tiendas
+        de los detalles. Ver StockTransferService.detectar_origenes_traslado."""
+        try:
+            from ...services.stock_transfer_service import StockTransferService
+            return StockTransferService.detectar_origenes_traslado(detalles)
+        except Exception as e:
+            logger.warning(f"⚠️ No se pudo detectar origen(es) de traslado: {e}")
+            return []
 
     def delete(
         self,
@@ -856,7 +993,7 @@ class PedidoCabeceraRepository:
                     pedido_id, numero_pedido, fecha_pedido, fecha_entrega,
                     forma_pago, mensaje, proveedor_nombre, comprador_nombre,
                     comprador_codigo, origen_traslado, serie, archivo_nombre,
-                    creado_por, estado
+                    creado_por, estado, fecha_facturacion
                 FROM pedido
                 WHERE pedido_id = ?
             """, (pedido_id,))
@@ -866,7 +1003,7 @@ class PedidoCabeceraRepository:
                     pedido_id, numero_pedido, fecha_pedido, fecha_entrega,
                     forma_pago, mensaje, proveedor_nombre, comprador_nombre,
                     comprador_codigo, origen_traslado, serie, archivo_nombre,
-                    creado_por
+                    creado_por, fecha_facturacion
                 FROM pedido
                 WHERE pedido_id = ?
             """, (pedido_id,))
@@ -886,6 +1023,7 @@ class PedidoCabeceraRepository:
             "origen_traslado": row[9],
             "serie": row[10],
             "archivo_nombre": row[11],
+            "fecha_facturacion": row[-1].isoformat() if row[-1] else None,
         }
         if tiene_estado:
             existing["estado"] = row[13]
@@ -931,6 +1069,7 @@ class PedidoCabeceraRepository:
                 origen_traslado = ?,
                 serie = ?,
                 estado = ?,
+                fecha_facturacion = ?,
                 modificado_por = ?,
                 modificado_fecha = ?,
                 origen = COALESCE(?, origen),
@@ -948,6 +1087,7 @@ class PedidoCabeceraRepository:
                 merged.get("origen_traslado"),
                 merged.get("serie"),
                 merged.get("estado"),
+                merged.get("fecha_facturacion"),
                 modificado_por,
                 modificado_fecha,
                 audit.origen,
@@ -966,6 +1106,7 @@ class PedidoCabeceraRepository:
                 comprador_codigo = ?,
                 origen_traslado = ?,
                 serie = ?,
+                fecha_facturacion = ?,
                 modificado_por = ?,
                 modificado_fecha = ?
             WHERE pedido_id = ?
@@ -980,6 +1121,7 @@ class PedidoCabeceraRepository:
                 merged.get("comprador_codigo"),
                 merged.get("origen_traslado"),
                 merged.get("serie"),
+                merged.get("fecha_facturacion"),
                 modificado_por,
                 modificado_fecha,
                 pedido_id,
@@ -1167,16 +1309,49 @@ class PedidoCabeceraRepository:
         """Condición y parámetros para la vista de redistribución.
 
         Incluye solo pedidos con estado >= 4 (CONFIRMADO POR EL RAYO) y excluye
-        DESPACHAR_Y_FACTURAR (17), FINALIZADO (18), CANCELADO (19) y CANCELADO POR EL RAYO (20).
+        DESPACHAR_Y_FACTURAR (17), FINALIZADO (18), CANCELADO (19), CANCELADO POR
+        EL RAYO (20), CONFIRMADO POR PRODUCCION (23), PRODUCCION POSPUESTA (22) y
+        RECHAZADO (24). Estos últimos tienen id numérico > 4 pero ocurren ANTES en
+        el flujo real (entre GESTIONAR_PEDIDO y REDISTRIBUCION) o son terminales sin
+        nada que redistribuir; sin la exclusión explícita, el ">=" los deja pasar.
+        LISTO_PARA_REDISTRIBUCION (25) NO se excluye a propósito: es justamente el
+        estado que el botón "Aceptar" genera para que el pedido entre a esta cola
+        (ver excluir_listo_para_redistribucion, que lo oculta en los demás listados).
         """
         if tiene_estado_id:
             return (
-                ["p.estado_id >= ?", "p.estado_id NOT IN (?, ?, ?, ?)"],
-                [ESTADO_REDISTRIBUCION, ESTADO_DESPACHAR_Y_FACTURAR, ESTADO_FINALIZADO, ESTADO_CANCELADO, ESTADO_CANCELADO_POR_EL_RAYO],
+                ["p.estado_id >= ?", "p.estado_id NOT IN (?, ?, ?, ?, ?, ?, ?)"],
+                [
+                    ESTADO_REDISTRIBUCION,
+                    ESTADO_DESPACHAR_Y_FACTURAR,
+                    ESTADO_FINALIZADO,
+                    ESTADO_CANCELADO,
+                    ESTADO_CANCELADO_POR_EL_RAYO,
+                    ESTADO_CONFIRMADO_POR_PRODUCCION,
+                    ESTADO_PRODUCCION_POSPUESTA,
+                    ESTADO_RECHAZADO,
+                ],
             )
         # Fallback para bases de datos sin columna estado_id
         return (
-            ["p.estado NOT IN (N'BORRADOR', N'NUEVO_PEDIDO', N'GESTIONAR_PEDIDO', N'PENDIENTE_CONFIRMACION_PROVEEDOR', N'DESPACHAR_Y_FACTURAR', N'DESPACHAR Y FACTURAR', N'FINALIZADO', N'CANCELADO', N'CANCELADO POR EL RAYO')"],
+            ["p.estado NOT IN (N'BORRADOR', N'NUEVO_PEDIDO', N'GESTIONAR_PEDIDO', N'PENDIENTE_CONFIRMACION_PROVEEDOR', N'DESPACHAR_Y_FACTURAR', N'DESPACHAR Y FACTURAR', N'FINALIZADO', N'CANCELADO', N'CANCELADO POR EL RAYO', N'CONFIRMADO POR PRODUCCION', N'CONFIRMADO_POR_PRODUCCION', N'PRODUCCION POSPUESTA', N'PRODUCCION_POSPUESTA', N'RECHAZADO')"],
+            [],
+        )
+
+    def _filtro_exclusion_listo_para_redistribucion(self, tiene_estado_id: bool) -> tuple:
+        """Condición y parámetros para OCULTAR LISTO_PARA_REDISTRIBUCION (25) de los
+        listados que no son la vista de Redistribución (Pedidos, Cargar Plantilla).
+
+        A diferencia del resto de estados (visibles en todos lados), este solo debe
+        verse en /redistribucion tras el botón "Aceptar" sobre un pedido en
+        PRODUCCION_POSPUESTA (ver _filtro_redistribucion, que sí lo deja pasar)."""
+        if tiene_estado_id:
+            return (
+                ["(p.estado_id IS NULL OR p.estado_id <> ?)"],
+                [ESTADO_LISTO_PARA_REDISTRIBUCION],
+            )
+        return (
+            ["(p.estado IS NULL OR p.estado NOT IN (N'LISTO PARA REDISTRIBUCION', N'LISTO_PARA_REDISTRIBUCION'))"],
             [],
         )
 
@@ -1198,54 +1373,127 @@ class PedidoCabeceraRepository:
             list(ESTADOS_REQUIERE_ACCION_NOMBRES),
         )
 
+    def _filtro_estados_produccion_el_rayo(self, tiene_estado_id: bool) -> tuple:
+        """Condición y parámetros para restringir el listado al perfil Producción
+        El Rayo (req. 1.8, permiso produccion-elrayo.view): solo NUEVO_PEDIDO y
+        GESTIONAR_PEDIDO."""
+        from src.database.pedido_estados import (
+            ESTADOS_PRODUCCION_EL_RAYO_IDS,
+            ESTADOS_PRODUCCION_EL_RAYO_NOMBRES,
+        )
+        if tiene_estado_id:
+            placeholders = ",".join("?" * len(ESTADOS_PRODUCCION_EL_RAYO_IDS))
+            return (
+                [f"p.estado_id IN ({placeholders})"],
+                list(sorted(ESTADOS_PRODUCCION_EL_RAYO_IDS)),
+            )
+        legacy_placeholders = ",".join("?" * len(ESTADOS_PRODUCCION_EL_RAYO_NOMBRES))
+        return (
+            [f"p.estado IN ({legacy_placeholders})"],
+            list(ESTADOS_PRODUCCION_EL_RAYO_NOMBRES),
+        )
+
+    def _filtro_exclusion_estados_produccion_el_rayo(self, tiene_estado_id: bool) -> tuple:
+        """Condición y parámetros para EXCLUIR NUEVO_PEDIDO/GESTIONAR_PEDIDO del
+        listado (req. 1.8 segunda fase, permiso odcsap.view): esos 2 estados pasan
+        a ser exclusivos de Producción El Rayo."""
+        from src.database.pedido_estados import (
+            ESTADOS_PRODUCCION_EL_RAYO_IDS,
+            ESTADOS_PRODUCCION_EL_RAYO_NOMBRES,
+        )
+        if tiene_estado_id:
+            placeholders = ",".join("?" * len(ESTADOS_PRODUCCION_EL_RAYO_IDS))
+            return (
+                [f"(p.estado_id IS NULL OR p.estado_id NOT IN ({placeholders}))"],
+                list(sorted(ESTADOS_PRODUCCION_EL_RAYO_IDS)),
+            )
+        legacy_placeholders = ",".join("?" * len(ESTADOS_PRODUCCION_EL_RAYO_NOMBRES))
+        return (
+            [f"(p.estado IS NULL OR p.estado NOT IN ({legacy_placeholders}))"],
+            list(ESTADOS_PRODUCCION_EL_RAYO_NOMBRES),
+        )
+
+    def _agregar_filtro_condicional(
+        self,
+        activar: bool,
+        tiene_estado_id: bool,
+        tiene_estado: bool,
+        obtener_filtro,
+        where_conditions: List[str],
+        params: List[Any],
+    ) -> None:
+        """Aplica un filtro de estado opcional (los ``_filtro_*`` que dependen de
+        estado_id/estado) solo si está activado y la tabla tiene alguna de esas
+        columnas. Centraliza el patrón repetido en `_construir_filtros_pedidos`."""
+        if not (activar and (tiene_estado_id or tiene_estado)):
+            return
+        c, p = obtener_filtro(tiene_estado_id)
+        where_conditions.extend(c)
+        params.extend(p)
+
     def _construir_filtros_pedidos(
-        self, cursor, *,
-        estado, excluir_borrador, solo_redistribucion, solo_pendientes_accion,
-        fecha_desde, fecha_hasta, proveedor_nombre, numero_pedido, creado_por,
-        tiene_estado_id, tiene_estado,
+        self,
+        cursor,
+        filtros: PedidosFiltros,
+        *,
+        tiene_estado_id: bool,
+        tiene_estado: bool,
     ):
         """Construye (where_conditions, params) para get_pedidos_con_filtros."""
         where_conditions: List[str] = []
         params: List[Any] = []
 
-        c, p = self._filtro_estado(cursor, estado, tiene_estado_id, tiene_estado)
+        c, p = self._filtro_estado(cursor, filtros.estado, tiene_estado_id, tiene_estado)
         where_conditions.extend(c)
         params.extend(p)
 
-        if excluir_borrador and (tiene_estado_id or tiene_estado):
-            c, p = self._filtro_excluir_borrador(tiene_estado_id)
-            where_conditions.extend(c)
-            params.extend(p)
+        self._agregar_filtro_condicional(
+            filtros.excluir_borrador, tiene_estado_id, tiene_estado,
+            self._filtro_excluir_borrador, where_conditions, params,
+        )
+        self._agregar_filtro_condicional(
+            filtros.solo_redistribucion, tiene_estado_id, tiene_estado,
+            self._filtro_redistribucion, where_conditions, params,
+        )
 
-        if solo_redistribucion and (tiene_estado_id or tiene_estado):
-            c, p = self._filtro_redistribucion(tiene_estado_id)
-            where_conditions.extend(c)
-            params.extend(p)
+        columna_fecha = _columna_fecha_filtro(filtros.tipo_fecha)
 
-        if fecha_desde:
-            where_conditions.append("CAST(p.fecha_pedido AS DATE) >= CAST(? AS DATE)")
-            params.append(fecha_desde)
+        if filtros.fecha_desde:
+            where_conditions.append(f"TRY_CAST({columna_fecha} AS DATE) >= CAST(? AS DATE)")
+            params.append(filtros.fecha_desde)
 
-        if fecha_hasta:
-            where_conditions.append("CAST(p.fecha_pedido AS DATE) <= CAST(? AS DATE)")
-            params.append(fecha_hasta)
+        if filtros.fecha_hasta:
+            where_conditions.append(f"TRY_CAST({columna_fecha} AS DATE) <= CAST(? AS DATE)")
+            params.append(filtros.fecha_hasta)
 
-        if proveedor_nombre:
+        if filtros.proveedor_nombre:
             where_conditions.append("p.proveedor_nombre LIKE ?")
-            params.append(f"%{proveedor_nombre}%")
+            params.append(f"%{filtros.proveedor_nombre}%")
 
-        if numero_pedido:
+        if filtros.numero_pedido:
             where_conditions.append("p.numero_pedido LIKE ?")
-            params.append(f"%{numero_pedido}%")
+            params.append(f"%{filtros.numero_pedido}%")
 
-        if creado_por:
-            where_conditions.append("p.creado_por = ?")
-            params.append(creado_por)
+        if filtros.creado_por:
+            where_conditions.append("p.creado_por LIKE ?")
+            params.append(f"%{filtros.creado_por}%")
 
-        if solo_pendientes_accion and (tiene_estado_id or tiene_estado):
-            c, p = self._filtro_pendientes_accion(tiene_estado_id)
-            where_conditions.extend(c)
-            params.extend(p)
+        self._agregar_filtro_condicional(
+            filtros.solo_pendientes_accion, tiene_estado_id, tiene_estado,
+            self._filtro_pendientes_accion, where_conditions, params,
+        )
+        self._agregar_filtro_condicional(
+            filtros.restringir_produccion_el_rayo, tiene_estado_id, tiene_estado,
+            self._filtro_estados_produccion_el_rayo, where_conditions, params,
+        )
+        self._agregar_filtro_condicional(
+            filtros.excluir_estados_produccion_el_rayo, tiene_estado_id, tiene_estado,
+            self._filtro_exclusion_estados_produccion_el_rayo, where_conditions, params,
+        )
+        self._agregar_filtro_condicional(
+            filtros.excluir_listo_para_redistribucion, tiene_estado_id, tiene_estado,
+            self._filtro_exclusion_listo_para_redistribucion, where_conditions, params,
+        )
 
         return where_conditions, params
 
@@ -1285,29 +1533,40 @@ class PedidoCabeceraRepository:
 
     def get_pedidos_con_filtros(
         self,
-        estado: Optional[str | int] = None,
-        fecha_desde: Optional[str] = None,
-        fecha_hasta: Optional[str] = None,
-        proveedor_nombre: Optional[str] = None,
-        numero_pedido: Optional[str] = None,
-        creado_por: Optional[str] = None,
+        filtros: Optional[PedidosFiltros] = None,
+        *,
         limit: Optional[int] = None,
         offset: Optional[int] = None,
-        excluir_borrador: bool = False,
-        solo_redistribucion: bool = False,
-        solo_pendientes_accion: bool = False,
     ) -> Dict[str, Any]:
         """
         Obtiene pedidos con filtros y paginación.
 
         Args:
-            estado: estado_id (int) o nombre legacy (str) para filtrar
-            fecha_desde, fecha_hasta, proveedor_nombre, numero_pedido, creado_por, limit, offset
-            excluir_borrador: si True, excluye pedidos en estado BORRADOR (estado_id=1)
-            solo_redistribucion: si True, solo incluye pedidos aptos para redistribución
-                (estado_id >= 4 "CONFIRMADO POR EL RAYO" y excluye CANCELADO (19) y CANCELADO POR EL RAYO (20))
-            solo_pendientes_accion: si True, solo estados que requieren acción del proveedor
+            filtros: filtros opcionales agrupados (python:S107). Ver PedidosFiltros
+                para el detalle de cada campo:
+                - estado: estado_id (int) o nombre legacy (str) para filtrar
+                - fecha_desde, fecha_hasta: rango de fechas (YYYY-MM-DD)
+                - tipo_fecha: columna sobre la que aplica fecha_desde/fecha_hasta —
+                    "pedido" (default), "entrega" o "facturacion"
+                - proveedor_nombre, numero_pedido, creado_por
+                - excluir_borrador: si True, excluye pedidos en estado BORRADOR (estado_id=1)
+                - solo_redistribucion: si True, solo incluye pedidos aptos para redistribución
+                    (estado_id >= 4 "CONFIRMADO POR EL RAYO", excluyendo CANCELADO (19),
+                    CANCELADO POR EL RAYO (20), CONFIRMADO POR PRODUCCION (23) y
+                    PRODUCCION POSPUESTA (22) — ver `_filtro_redistribucion`)
+                - solo_pendientes_accion: si True, solo estados que requieren acción del proveedor
+                - restringir_produccion_el_rayo: si True, solo incluye NUEVO_PEDIDO y GESTIONAR_PEDIDO
+                    (req. 1.8, perfil Producción El Rayo); se combina (AND) con `estado` si también se indica
+                - excluir_estados_produccion_el_rayo: si True, excluye NUEVO_PEDIDO y GESTIONAR_PEDIDO
+                    (req. 1.8 segunda fase, perfil odcsap.view); mutuamente excluyente en la práctica
+                    con restringir_produccion_el_rayo (ver _debe_excluir_estados_el_rayo)
+                - excluir_listo_para_redistribucion: si True, excluye LISTO_PARA_REDISTRIBUCION (25).
+                    Debe ser True en todo listado que no sea la vista de Redistribución: ese estado
+                    (botón "Aceptar" sobre un pedido en PRODUCCION_POSPUESTA) solo debe verse ahí
+                    (ver `_filtro_exclusion_listo_para_redistribucion`)
+            limit, offset: paginación.
         """
+        filtros = filtros or PedidosFiltros()
         cursor = self.conn.cursor()
         try:
             tiene_estado = self.utils.tiene_columna_estado(cursor)
@@ -1315,15 +1574,7 @@ class PedidoCabeceraRepository:
 
             where_conditions, params = self._construir_filtros_pedidos(
                 cursor,
-                estado=estado,
-                excluir_borrador=excluir_borrador,
-                solo_redistribucion=solo_redistribucion,
-                solo_pendientes_accion=solo_pendientes_accion,
-                fecha_desde=fecha_desde,
-                fecha_hasta=fecha_hasta,
-                proveedor_nombre=proveedor_nombre,
-                numero_pedido=numero_pedido,
-                creado_por=creado_por,
+                filtros,
                 tiene_estado_id=tiene_estado_id,
                 tiene_estado=tiene_estado,
             )
@@ -1412,15 +1663,16 @@ class PedidoCabeceraRepository:
 
     @staticmethod
     def _aplicar_filtros_extra_confirmados(
-        where_clause, params, fecha_desde, fecha_hasta, proveedor_nombre, numero_pedido, creado_por
+        where_clause, params, fecha_desde, fecha_hasta, tipo_fecha, proveedor_nombre, numero_pedido, creado_por
     ):
         """Agrega filtros opcionales (fechas, proveedor, número, creador) a la consulta base."""
         extra_conditions: List[str] = []
+        columna_fecha = _columna_fecha_filtro(tipo_fecha)
         if fecha_desde:
-            extra_conditions.append("CAST(p.fecha_pedido AS DATE) >= CAST(? AS DATE)")
+            extra_conditions.append(f"TRY_CAST({columna_fecha} AS DATE) >= CAST(? AS DATE)")
             params.append(fecha_desde)
         if fecha_hasta:
-            extra_conditions.append("CAST(p.fecha_pedido AS DATE) <= CAST(? AS DATE)")
+            extra_conditions.append(f"TRY_CAST({columna_fecha} AS DATE) <= CAST(? AS DATE)")
             params.append(fecha_hasta)
         if proveedor_nombre:
             extra_conditions.append("p.proveedor_nombre LIKE ?")
@@ -1429,8 +1681,8 @@ class PedidoCabeceraRepository:
             extra_conditions.append("p.numero_pedido LIKE ?")
             params.append(f"%{numero_pedido}%")
         if creado_por:
-            extra_conditions.append("p.creado_por = ?")
-            params.append(creado_por)
+            extra_conditions.append("p.creado_por LIKE ?")
+            params.append(f"%{creado_por}%")
         if extra_conditions:
             where_clause = f"({where_clause}){_SEP_AND}" + _SEP_AND.join(extra_conditions)
         return where_clause, params
@@ -1459,6 +1711,7 @@ class PedidoCabeceraRepository:
         offset: Optional[int] = None,
         fecha_desde: Optional[str] = None,
         fecha_hasta: Optional[str] = None,
+        tipo_fecha: Optional[str] = None,
         proveedor_nombre: Optional[str] = None,
         numero_pedido: Optional[str] = None,
         creado_por: Optional[str] = None,
@@ -1482,7 +1735,7 @@ class PedidoCabeceraRepository:
 
             where_clause, params, select_fields = self._base_confirmados(tiene_estado_id)
             where_clause, params = self._aplicar_filtros_extra_confirmados(
-                where_clause, params, fecha_desde, fecha_hasta, proveedor_nombre, numero_pedido, creado_por
+                where_clause, params, fecha_desde, fecha_hasta, tipo_fecha, proveedor_nombre, numero_pedido, creado_por
             )
 
             count_query = f"SELECT COUNT(*) FROM pedido p WHERE {where_clause}"
@@ -1547,6 +1800,26 @@ class PedidoCabeceraRepository:
         except Exception as e:
             logger.error(f"❌ Error al verificar existencia de número de pedido '{numero_pedido}': {e}", exc_info=True)
             raise
+        finally:
+            cursor.close()
+
+    def contar_hijos(self, pedido_padre_id: str) -> int:
+        """Req. 1.2: cantidad de pedidos "hijo" ya generados a partir de este pedido
+        (pedido_padre_id), usado para calcular el siguiente sufijo de numero_pedido
+        (".01", ".02", ...). Devuelve 0 si la columna pedido_padre_id no existe todavía
+        en este ambiente (migración 643 sin aplicar)."""
+        cursor = self.conn.cursor()
+        try:
+            cursor.execute("""
+                SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS
+                WHERE TABLE_NAME = 'pedido' AND COLUMN_NAME = 'pedido_padre_id'
+            """)
+            row = cursor.fetchone()
+            if not (row and row[0] > 0):
+                return 0
+            cursor.execute("SELECT COUNT(*) FROM pedido WHERE pedido_padre_id = ?", (pedido_padre_id,))
+            row = cursor.fetchone()
+            return row[0] if row else 0
         finally:
             cursor.close()
 

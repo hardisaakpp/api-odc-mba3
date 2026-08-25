@@ -2,6 +2,9 @@
 
 import logging
 import smtplib
+import socket
+import ssl
+import time
 from email.message import Message
 from email.utils import formataddr
 from typing import Iterable, Optional
@@ -19,6 +22,20 @@ from src.config import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Errores de conexión/TLS transitorios (ej. un hipo de red justo tras reiniciar el
+# contenedor) que vale la pena reintentar antes de descartar el perfil. Errores de
+# autenticación/destinatarios rechazados no están aquí: reintentarlos no cambia el
+# resultado y solo retrasa el fallback al siguiente perfil.
+_SMTP_RETRYABLE_EXCEPTIONS = (
+    ssl.SSLError,
+    socket.timeout,
+    ConnectionError,
+    smtplib.SMTPConnectError,
+    smtplib.SMTPServerDisconnected,
+)
+_SMTP_MAX_INTENTOS_POR_PERFIL = 2
+_SMTP_RETRY_DELAY_SECONDS = 2
 
 
 def _replace_from_header(msg: Message, value: str) -> None:
@@ -88,6 +105,47 @@ def _enviar_via_perfil(
     logger.info("Email enviado via %s (%s:%s)", name, server_host, server_port)
 
 
+def _intentar_perfil_con_reintentos(
+    profile: dict,
+    msg: Message,
+    to_addrs: list[str],
+    original_from: Optional[str],
+    relay_from: Optional[str],
+) -> tuple[bool, Exception | None]:
+    """Intenta enviar por UN perfil SMTP, con hasta _SMTP_MAX_INTENTOS_POR_PERFIL
+    intentos y backoff fijo entre ellos solo para errores transitorios (ver
+    _SMTP_RETRYABLE_EXCEPTIONS). Devuelve (True, None) si tuvo éxito, o
+    (False, última excepción) si se agotaron los intentos de este perfil."""
+    name = str(profile["name"])
+    server_host = str(profile["server"])
+    server_port = int(profile["port"] or 25)
+    last_error: Exception | None = None
+
+    for intento in range(1, _SMTP_MAX_INTENTOS_POR_PERFIL + 1):
+        try:
+            _enviar_via_perfil(profile, msg, to_addrs, original_from, relay_from)
+            return True, None
+        except Exception as e:
+            last_error = e
+            logger.warning(
+                "Fallo envio email via %s (%s:%s) intento %s/%s: %s",
+                name,
+                server_host,
+                server_port,
+                intento,
+                _SMTP_MAX_INTENTOS_POR_PERFIL,
+                e,
+                exc_info=True,
+            )
+            es_reintentable = isinstance(e, _SMTP_RETRYABLE_EXCEPTIONS)
+            if es_reintentable and intento < _SMTP_MAX_INTENTOS_POR_PERFIL:
+                time.sleep(_SMTP_RETRY_DELAY_SECONDS)
+                continue
+            break
+
+    return False, last_error
+
+
 def send_smtp_message(msg: Message, recipients: Iterable[str]) -> bool:
     """Envia un correo usando primero SMTP autenticado y luego relay sin login."""
     to_addrs = [r for r in recipients if r]
@@ -98,23 +156,12 @@ def send_smtp_message(msg: Message, recipients: Iterable[str]) -> bool:
     original_from = msg.get("From")
     relay_from = formataddr((EMAIL_FROM_NAME, EMAIL_FROM)) if EMAIL_FROM else None
     last_error: Exception | None = None
+
     for profile in _smtp_profiles():
-        name = str(profile["name"])
-        server_host = str(profile["server"])
-        server_port = int(profile["port"] or 25)
-        try:
-            _enviar_via_perfil(profile, msg, to_addrs, original_from, relay_from)
+        exito, error = _intentar_perfil_con_reintentos(profile, msg, to_addrs, original_from, relay_from)
+        if exito:
             return True
-        except Exception as e:
-            last_error = e
-            logger.warning(
-                "Fallo envio email via %s (%s:%s): %s",
-                name,
-                server_host,
-                server_port,
-                e,
-                exc_info=True,
-            )
+        last_error = error
 
     if original_from:
         _replace_from_header(msg, original_from)

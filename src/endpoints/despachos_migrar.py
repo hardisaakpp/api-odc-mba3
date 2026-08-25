@@ -2,8 +2,9 @@
 Endpoint para migrar despachos desde MBA3 a SQL Server.
 """
 
+import asyncio
 import logging
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 from src.utils.timezone import ahora_naive
 from typing import List, Dict, Any, Union
@@ -242,7 +243,9 @@ async def _migrar_completo_handler(request: Request, user: dict):
 
     try:
         # Ejecutar consulta usando el servicio
-        result = MBA3Service.execute_query(query_predefinida)
+        # (HTTP síncrono bloqueante hacia MBA3 -> se delega a un thread para no
+        # bloquear el event loop)
+        result = await asyncio.to_thread(MBA3Service.execute_query, query_predefinida)
 
         # Normalizar resultado: asegurar que siempre sea una lista o dict válido
         result = _normalizar_result_mba3(result)
@@ -251,7 +254,9 @@ async def _migrar_completo_handler(request: Request, user: dict):
         _log_respuesta_mba3(result)
 
         # Guardar en SQL Server (despacho_cabecera/detalle)
-        save_status = _guardar_resultado_despachos(result)
+        # (pyodbc síncrono bloqueante -> se delega a un thread para no
+        # bloquear el event loop)
+        save_status = await asyncio.to_thread(_guardar_resultado_despachos, result)
 
         # Preparar headers de respuesta
         headers = {
@@ -300,7 +305,9 @@ async def _migrar_completo_handler(request: Request, user: dict):
 
         # NUEVO: Verificar productos no homologados y notificar EN TIEMPO REAL
         # Solo si hay facturas nuevas guardadas
-        _notificar_homologaciones_migracion(save_status)
+        # (incluye envío SMTP sync/bloqueante -> se delega a un thread para no
+        # bloquear el event loop mientras se envía el correo)
+        await asyncio.to_thread(_notificar_homologaciones_migracion, save_status)
 
         # Retornar respuesta con metadata
         return JSONResponse(
@@ -417,7 +424,9 @@ async def _consultar_mba3_handler(request: Request, use_date_filter: bool, days:
 
     try:
         # Ejecutar consulta usando el servicio
-        result = MBA3Service.execute_query(query_predefinida)
+        # (HTTP síncrono bloqueante hacia MBA3 -> se delega a un thread para no
+        # bloquear el event loop)
+        result = await asyncio.to_thread(MBA3Service.execute_query, query_predefinida)
 
         # Normalizar resultado
         result = _normalizar_result_mba3(result)
@@ -548,7 +557,9 @@ async def _guardar_datos_handler(request: Request, save_request: "SaveDataReques
 
     try:
         # Guardar en SQL Server
-        save_status = MBA3Service.save_to_database(data, upsert=upsert)
+        # (pyodbc síncrono bloqueante -> se delega a un thread para no
+        # bloquear el event loop)
+        save_status = await asyncio.to_thread(MBA3Service.save_to_database, data, upsert=upsert)
 
         if save_status:
             facturas_guardadas = save_status.get('facturas_guardadas', 0)

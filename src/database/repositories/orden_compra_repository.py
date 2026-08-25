@@ -25,6 +25,15 @@ _OC_CABECERA_SELECT = """
 """
 
 
+def _append_set_clause_if_not_none(
+    set_clauses: List[str], values: List[Any], column: str, value: Any
+) -> None:
+    """Agrega `columna = ?` y su valor a un UPDATE dinámico si value no es None."""
+    if value is not None:
+        set_clauses.append(f"{column} = ?")
+        values.append(value)
+
+
 def _map_oc_cabecera_row(row: Any) -> Dict[str, Any]:
     """Mapea una fila de orden_compra_cabecera al dict usado por la API."""
     return {
@@ -365,6 +374,75 @@ class OrdenCompraRepository:
         finally:
             cursor.close()
     
+    def get_oc_ids_encoladas(self) -> List[str]:
+        """
+        Lista los oc_id de ODC en estado ENCOLADA (HTTP 202 del middleware al crear
+        la Purchase Order, aún sin resolver). Usada por la reconciliación automática
+        periódica (ver src/tasks/celery_reconciliar_ordenes_compra.py), que consulta
+        el job pendiente de cada una antes de decidir si adoptarlo o reintentar.
+
+        Returns:
+            Lista de oc_id (str)
+        """
+        cursor = self.conn.cursor()
+        try:
+            cursor.execute("SELECT oc_id FROM orden_compra_cabecera WHERE estado = 'ENCOLADA'")
+            return [str(row[0]) for row in cursor.fetchall()]
+        finally:
+            cursor.close()
+
+    def find_by_pedido_id_y_bodega(self, pedido_id: str, codigo_bodega: str) -> Optional[str]:
+        """
+        Busca una orden de compra por pedido_id + codigo_bodega.
+
+        Necesario para pedidos que generan más de una ODC (uno por bodega/CD,
+        ver StockTransferService.detectar_origenes_traslado) — find_by_pedido_id
+        por sí solo no puede distinguir cuál de las ODC del pedido es cuál.
+
+        Args:
+            pedido_id: UUID del pedido
+            codigo_bodega: Código de bodega de la ODC (ej. "RL-CD", "RG-CD")
+
+        Returns:
+            oc_id si existe, None si no existe
+        """
+        cursor = self.conn.cursor()
+        try:
+            cursor.execute(
+                "SELECT oc_id FROM orden_compra_cabecera WHERE pedido_id = ? AND codigo_bodega = ?",
+                (pedido_id, codigo_bodega)
+            )
+            result = cursor.fetchone()
+            return str(result[0]) if result else None
+        finally:
+            cursor.close()
+
+    def get_doc_num_by_pedido_id(self, pedido_id: str) -> Optional[str]:
+        """
+        Obtiene el DocNum (numero_oc_sap) de la OC más reciente enviada a SAP para un pedido.
+
+        Args:
+            pedido_id: UUID del pedido
+
+        Returns:
+            DocNum como string si existe una OC con numero_oc_sap registrado, None si no.
+        """
+        cursor = self.conn.cursor()
+        try:
+            cursor.execute(
+                """
+                SELECT TOP 1 numero_oc_sap
+                FROM orden_compra_cabecera
+                WHERE pedido_id = ? AND numero_oc_sap IS NOT NULL
+                ORDER BY created_at DESC
+                """,
+                (pedido_id,)
+            )
+            result = cursor.fetchone()
+            return str(result[0]) if result and result[0] is not None else None
+        finally:
+            cursor.close()
+
     def find_by_referencia_despacho(self, referencia_despacho: str) -> Optional[Dict[str, Any]]:
         """
         Busca una orden de compra por referencia_despacho (número de factura).
@@ -613,7 +691,8 @@ class OrdenCompraRepository:
                 """
                 SELECT oc_id, despacho_id, pedido_id, proveedor, fecha_generacion,
                        estado, numero_oc_sap, doc_entry, referencia_despacho, codigo_bodega, created_at,
-                       respuesta_sap, fecha_procesado, error_message, error_code, error_source, updated_at
+                       respuesta_sap, fecha_procesado, error_message, error_code, error_source, updated_at,
+                       job_id
                 FROM orden_compra_cabecera
                 WHERE oc_id = ?
                 """,
@@ -622,7 +701,7 @@ class OrdenCompraRepository:
             result = cursor.fetchone()
             if not result:
                 return None
-            
+
             return {
                 "oc_id": str(result[0]),
                 "despacho_id": str(result[1]) if result[1] else None,
@@ -642,6 +721,7 @@ class OrdenCompraRepository:
                 "error_code": result[14],
                 "error_source": result[15],
                 "updated_at": serialize_date(result[16]),
+                "job_id": result[17],
             }
         finally:
             cursor.close()
@@ -747,25 +827,29 @@ class OrdenCompraRepository:
         error_message: Optional[str] = None,
         error_code: Optional[str] = None,
         error_source: Optional[str] = None,
+        job_id: Optional[str] = None,
         audit_context: Optional["AuditContext"] = None
     ) -> bool:
         """
         Actualiza el estado de una orden de compra y respuesta de SAP.
-        
+
         Método helper para cambiar el estado de una OC fácilmente.
         Útil para cuando se implemente la integración con SAP.
-        
+
         Args:
             oc_id: UUID de la orden de compra
-            estado: Nuevo estado (PENDIENTE, ENVIADA, CONFIRMADA, ERROR, etc.)
+            estado: Nuevo estado (PENDIENTE, ENVIADA, CONFIRMADA, ERROR, ENCOLADA, etc.)
             numero_oc_sap: Número de OC asignado por SAP (opcional)
             doc_entry: DocEntry de SAP (ID interno) (opcional)
             respuesta_sap: Mensaje o respuesta de SAP (opcional)
             error_message: Mensaje de error si falla (opcional)
             error_code: Código de error de SAP (opcional)
             error_source: Origen del error (SAP, BACKEND, SAP_CONNECTION) (opcional)
+            job_id: jobId del middleware para un envío encolado (HTTP 202) aún sin
+                resolver (opcional). Se limpia automáticamente al pasar a ENVIADA o
+                ERROR (ver más abajo) para no dejar un job_id obsoleto colgado.
             audit_context: Contexto de auditoría opcional (Buenas Prácticas - Sección 3)
-            
+
         Returns:
             True si se actualizó correctamente, False en caso contrario
         """
@@ -787,30 +871,14 @@ class OrdenCompraRepository:
                 set_clauses.append("modificado_fecha = ?")
                 values.append(ahora_naive())
             
-            if numero_oc_sap is not None:
-                set_clauses.append("numero_oc_sap = ?")
-                values.append(numero_oc_sap)
-            
-            if doc_entry is not None:
-                set_clauses.append("doc_entry = ?")
-                values.append(doc_entry)
-            
-            if respuesta_sap is not None:
-                set_clauses.append("respuesta_sap = ?")
-                values.append(respuesta_sap)
-            
-            if error_message is not None:
-                set_clauses.append("error_message = ?")
-                values.append(error_message)
-            
-            if error_code is not None:
-                set_clauses.append("error_code = ?")
-                values.append(error_code)
-            
-            if error_source is not None:
-                set_clauses.append("error_source = ?")
-                values.append(error_source)
-            
+            _append_set_clause_if_not_none(set_clauses, values, "numero_oc_sap", numero_oc_sap)
+            _append_set_clause_if_not_none(set_clauses, values, "doc_entry", doc_entry)
+            _append_set_clause_if_not_none(set_clauses, values, "respuesta_sap", respuesta_sap)
+            _append_set_clause_if_not_none(set_clauses, values, "error_message", error_message)
+            _append_set_clause_if_not_none(set_clauses, values, "error_code", error_code)
+            _append_set_clause_if_not_none(set_clauses, values, "error_source", error_source)
+            _append_set_clause_if_not_none(set_clauses, values, "job_id", job_id)
+
             # Si es estado ENVIADA, limpiar campos de error
             if estado == "ENVIADA":
                 set_clauses.extend([
@@ -818,6 +886,12 @@ class OrdenCompraRepository:
                     "error_code = NULL",
                     "error_source = NULL"
                 ])
+
+            # job_id solo debe existir mientras estado == ENCOLADA: cualquier otra
+            # transición sin un job_id explícito lo limpia, para que un reintento
+            # futuro no intente resolverlo contra un job ya obsoleto/cerrado.
+            if estado != "ENCOLADA" and job_id is None:
+                set_clauses.append("job_id = NULL")
             
             sql = f"""
             UPDATE orden_compra_cabecera SET

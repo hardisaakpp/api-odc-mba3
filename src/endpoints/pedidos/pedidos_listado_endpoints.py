@@ -2,6 +2,7 @@
 Endpoints de listados y maestros de pedidos.
 """
 
+import asyncio
 import logging
 from typing import Dict, List, Optional
 
@@ -9,7 +10,7 @@ from fastapi import FastAPI, Query, Depends, HTTPException
 from fastapi.responses import JSONResponse
 
 from src.database.connection import get_db_connection_context
-from src.database.repositories.pedido_repository import PedidoRepository
+from src.database.repositories.pedido_repository import PedidoRepository, PedidosFiltros
 from src.database.pedido_estados import (
     ESTADO_BORRADOR,
     ESTADO_REDISTRIBUCION,
@@ -20,6 +21,7 @@ from src.database.pedido_estados import (
     ESTADO_CONFIRMADO_ENVIADO,
     ESTADO_PENDIENTE_LOGISTICA,
     ESTADO_ERROR_DATOS_MAESTROS,
+    ESTADO_LISTO_PARA_REDISTRIBUCION,
 )
 from src.security.jwt_auth import verify_jwt_token, require_any_permission
 from src.schemas import READ_RESPONSES
@@ -29,7 +31,34 @@ logger = logging.getLogger(__name__)
 
 _PERM_MABEL = 'mabel.view'
 _PERM_ODCSAP = 'odcsap.view'
-_PERMS_LISTADO = [_PERM_MABEL, _PERM_ODCSAP]
+_PERM_PRODUCCION_ELRAYO = 'produccion-elrayo.view'
+_PERMS_LISTADO = [_PERM_MABEL, _PERM_ODCSAP, _PERM_PRODUCCION_ELRAYO]
+
+
+def _es_solo_produccion_elrayo(user: Dict) -> bool:
+    """True si el usuario solo tiene produccion-elrayo.view (sin mabel.view ni odcsap.view).
+
+    Req. 1.8: el perfil Producción El Rayo solo puede ver pedidos en
+    NUEVO_PEDIDO/GESTIONAR_PEDIDO; Administración El Rayo (odcsap.view) y
+    Mabel (mabel.view) siguen viendo el listado completo.
+    """
+    permissions = user.get("permissions") or []
+    return (
+        _PERM_PRODUCCION_ELRAYO in permissions
+        and _PERM_MABEL not in permissions
+        and _PERM_ODCSAP not in permissions
+    )
+
+
+def _debe_excluir_estados_el_rayo(user: Dict) -> bool:
+    """True si el usuario tiene odcsap.view pero NO produccion-elrayo.view:
+    NUEVO_PEDIDO/GESTIONAR_PEDIDO pasan a ser exclusivos de Producción El Rayo
+    (req. 1.8, segunda fase); Administración El Rayo deja de verlos y de poder
+    acceder a su detalle. Si además tiene produccion-elrayo.view (cuenta con
+    ambos permisos), no se restringe: ese permiso nunca pierde acceso a estos
+    2 estados."""
+    permissions = user.get("permissions") or []
+    return _PERM_ODCSAP in permissions and _PERM_PRODUCCION_ELRAYO not in permissions
 
 
 class _Paginacion:
@@ -49,6 +78,14 @@ class _Paginacion:
         self.page_size_camel = page_size_camel
 
 
+def _query_listar_pedidos(filtros: PedidosFiltros, limit: Optional[int], offset: Optional[int]):
+    """Ejecuta la consulta bloqueante de listado (pyodbc); se llama vía asyncio.to_thread
+    para no congelar el event loop si SQL Server tarda o no responde."""
+    with get_db_connection_context() as conn:
+        repo = PedidoRepository(conn)
+        return repo.get_pedidos_con_filtros(filtros, limit=limit, offset=offset)
+
+
 async def _listar_pedidos_handler(
     estado: Optional[str],
     fecha_desde: Optional[str],
@@ -56,13 +93,12 @@ async def _listar_pedidos_handler(
     proveedor_nombre: Optional[str],
     numero_pedido: Optional[str],
     creado_por: Optional[str],
-    limit: Optional[int],
-    offset: Optional[int],
-    page: Optional[int],
-    page_size: Optional[int],
-    page_size_camel: Optional[int],
+    paginacion: _Paginacion,
     solo_redistribucion: Optional[str],
     solo_pendientes_accion: Optional[str],
+    solo_produccion_elrayo: Optional[str],
+    user: Dict,
+    tipo_fecha: Optional[str] = None,
 ):
     try:
         filtrar_redistribucion = (
@@ -73,42 +109,58 @@ async def _listar_pedidos_handler(
             solo_pendientes_accion is not None
             and str(solo_pendientes_accion).lower() in ("true", "1")
         )
-        size = page_size_camel if page_size_camel is not None else page_size
-        if limit is not None:
-            use_limit, use_offset = limit, offset or 0
+        # Restringe a NUEVO_PEDIDO/GESTIONAR_PEDIDO (req. 1.8): ya sea porque la
+        # pantalla de Producción El Rayo lo pide explícitamente (solo_produccion_elrayo),
+        # o como defensa adicional cuando el llamador solo tiene ese permiso.
+        filtrar_produccion_elrayo = (
+            solo_produccion_elrayo is not None
+            and str(solo_produccion_elrayo).lower() in ("true", "1")
+        ) or _es_solo_produccion_elrayo(user)
+        # Req. 1.8 (segunda fase): odcsap.view ya no ve NUEVO_PEDIDO/GESTIONAR_PEDIDO,
+        # ahora exclusivos de Producción El Rayo.
+        excluir_estados_el_rayo = _debe_excluir_estados_el_rayo(user)
+        size = paginacion.page_size_camel if paginacion.page_size_camel is not None else paginacion.page_size
+        if paginacion.limit is not None:
+            use_limit, use_offset = paginacion.limit, paginacion.offset or 0
         else:
             use_limit = size if size is not None else 10
-            use_offset = ((page or 1) - 1) * use_limit
+            use_offset = ((paginacion.page or 1) - 1) * use_limit
 
-        with get_db_connection_context() as conn:
-            repo = PedidoRepository(conn)
-            resultado = repo.get_pedidos_con_filtros(
+        resultado = await asyncio.to_thread(
+            _query_listar_pedidos,
+            PedidosFiltros(
                 estado=estado,
                 fecha_desde=fecha_desde,
                 fecha_hasta=fecha_hasta,
+                tipo_fecha=tipo_fecha,
                 proveedor_nombre=proveedor_nombre,
                 numero_pedido=numero_pedido,
                 creado_por=creado_por,
-                limit=use_limit,
-                offset=use_offset,
                 excluir_borrador=True,
                 solo_redistribucion=filtrar_redistribucion,
                 solo_pendientes_accion=filtrar_pendientes,
-            )
+                restringir_produccion_el_rayo=filtrar_produccion_elrayo,
+                excluir_estados_produccion_el_rayo=excluir_estados_el_rayo,
+                # LISTO_PARA_REDISTRIBUCION (25, botón "Aceptar") solo debe verse en /redistribucion
+                excluir_listo_para_redistribucion=not filtrar_redistribucion,
+            ),
+            use_limit,
+            use_offset,
+        )
 
-            return JSONResponse(
-                status_code=200,
-                content={
-                    "status": "success",
-                    "data": resultado["data"],
-                    "metadata": {
-                        "total": resultado["total"],
-                        "limit": resultado["limit"],
-                        "offset": resultado["offset"],
-                        "has_more": resultado["has_more"]
-                    }
+        return JSONResponse(
+            status_code=200,
+            content={
+                "status": "success",
+                "data": resultado["data"],
+                "metadata": {
+                    "total": resultado["total"],
+                    "limit": resultado["limit"],
+                    "offset": resultado["offset"],
+                    "has_more": resultado["has_more"]
                 }
-            )
+            }
+        )
 
     except Exception as e:
         logger.error(f"❌ Error al listar pedidos: {e}", exc_info=True)
@@ -116,6 +168,13 @@ async def _listar_pedidos_handler(
             status_code=500,
             detail=f"Error interno al listar pedidos: {str(e)}"
         )
+
+
+def _query_listar_pedidos_confirmados(**kwargs):
+    """Consulta bloqueante (pyodbc); se ejecuta vía asyncio.to_thread."""
+    with get_db_connection_context() as conn:
+        repo = PedidoRepository(conn)
+        return repo.get_pedidos_confirmados(**kwargs)
 
 
 async def _listar_pedidos_confirmados_handler(
@@ -129,6 +188,7 @@ async def _listar_pedidos_confirmados_handler(
     proveedor_nombre: Optional[str],
     numero_pedido: Optional[str],
     creado_por: Optional[str],
+    tipo_fecha: Optional[str] = None,
 ):
     try:
         size = page_size_camel if page_size_camel is not None else page_size
@@ -139,17 +199,17 @@ async def _listar_pedidos_confirmados_handler(
             use_limit = use_size
             use_offset = ((page or 1) - 1) * use_size
 
-        with get_db_connection_context() as conn:
-            repo = PedidoRepository(conn)
-            resultado = repo.get_pedidos_confirmados(
-                limit=use_limit,
-                offset=use_offset,
-                fecha_desde=fecha_desde,
-                fecha_hasta=fecha_hasta,
-                proveedor_nombre=proveedor_nombre,
-                numero_pedido=numero_pedido,
-                creado_por=creado_por,
-            )
+        resultado = await asyncio.to_thread(
+            _query_listar_pedidos_confirmados,
+            limit=use_limit,
+            offset=use_offset,
+            fecha_desde=fecha_desde,
+            fecha_hasta=fecha_hasta,
+            tipo_fecha=tipo_fecha,
+            proveedor_nombre=proveedor_nombre,
+            numero_pedido=numero_pedido,
+            creado_por=creado_por,
+        )
 
         data = []
         for row in resultado["data"]:
@@ -194,6 +254,13 @@ async def _listar_pedidos_confirmados_handler(
         )
 
 
+def _query_ultimo_pedido_redistribucion(usuario_id):
+    """Consulta bloqueante (pyodbc); se ejecuta vía asyncio.to_thread."""
+    with get_db_connection_context() as conn:
+        repo = PedidoRepository(conn)
+        return repo.get_ultimo_pedido_respuesta_proveedor_cargada(usuario_id=usuario_id)
+
+
 async def _get_ultimo_pedido_redistribucion_handler(
     solo_usuario: Optional[bool],
     user: Dict,
@@ -206,9 +273,7 @@ async def _get_ultimo_pedido_redistribucion_handler(
             user_id = None
         else:
             user_id = get_user_id(user) if solo_usuario else None
-        with get_db_connection_context() as conn:
-            repo = PedidoRepository(conn)
-            ultimo = repo.get_ultimo_pedido_respuesta_proveedor_cargada(usuario_id=user_id)
+        ultimo = await asyncio.to_thread(_query_ultimo_pedido_redistribucion, user_id)
         if not ultimo:
             return JSONResponse(status_code=200, content=None)
         return JSONResponse(status_code=200, content=ultimo)
@@ -222,13 +287,31 @@ async def _get_ultimo_pedido_redistribucion_handler(
         )
 
 
-async def _listar_estados_pedido_handler(contexto: Optional[str]):
+def _query_estados_pedido(excluir_ids, solo_ids):
+    """Consulta bloqueante (pyodbc); se ejecuta vía asyncio.to_thread."""
+    with get_db_connection_context() as conn:
+        repo = PedidoRepository(conn)
+        return repo.get_estados(
+            solo_activos=True,
+            excluir_ids=excluir_ids,
+            solo_ids=solo_ids,
+        )
+
+
+async def _listar_estados_pedido_handler(contexto: Optional[str], user: Dict):
     try:
         excluir_ids: Optional[List[int]] = None
         solo_ids: Optional[List[int]] = None
 
-        if contexto == "pedidos":
-            excluir_ids = [ESTADO_BORRADOR]
+        if contexto == "produccion" or _es_solo_produccion_elrayo(user):
+            from src.database.pedido_estados import ESTADOS_PRODUCCION_EL_RAYO_IDS
+            solo_ids = list(sorted(ESTADOS_PRODUCCION_EL_RAYO_IDS))
+        elif contexto == "pedidos":
+            # LISTO_PARA_REDISTRIBUCION (25, botón "Aceptar") solo se ve en /redistribucion
+            excluir_ids = [ESTADO_BORRADOR, ESTADO_LISTO_PARA_REDISTRIBUCION]
+        elif contexto == "cargar-plantilla":
+            # LISTO_PARA_REDISTRIBUCION (25, botón "Aceptar") solo se ve en /redistribucion
+            excluir_ids = [ESTADO_LISTO_PARA_REDISTRIBUCION]
         elif contexto == "redistribucion":
             solo_ids = [
                 ESTADO_REDISTRIBUCION,
@@ -239,15 +322,18 @@ async def _listar_estados_pedido_handler(contexto: Optional[str]):
                 ESTADO_CONFIRMADO_ENVIADO,
                 ESTADO_PENDIENTE_LOGISTICA,
                 ESTADO_ERROR_DATOS_MAESTROS,
+                ESTADO_LISTO_PARA_REDISTRIBUCION,
             ]
 
-        with get_db_connection_context() as conn:
-            repo = PedidoRepository(conn)
-            estados = repo.get_estados(
-                solo_activos=True,
-                excluir_ids=excluir_ids,
-                solo_ids=solo_ids,
-            )
+        # Req. 1.8 (segunda fase): odcsap.view ya no ve NUEVO_PEDIDO/GESTIONAR_PEDIDO
+        # (exclusivos de Producción El Rayo). No aplica si solo_ids ya restringe a otra
+        # lista (ej. contexto "produccion" o "redistribucion", que no los incluyen o
+        # son mutuamente excluyentes con tener odcsap.view).
+        if solo_ids is None and _debe_excluir_estados_el_rayo(user):
+            from src.database.pedido_estados import ESTADOS_PRODUCCION_EL_RAYO_IDS
+            excluir_ids = list(excluir_ids or []) + list(sorted(ESTADOS_PRODUCCION_EL_RAYO_IDS))
+
+        estados = await asyncio.to_thread(_query_estados_pedido, excluir_ids, solo_ids)
 
         return JSONResponse(
             status_code=200,
@@ -265,20 +351,25 @@ async def _listar_estados_pedido_handler(contexto: Optional[str]):
         )
 
 
+def _query_tiene_pedidos():
+    """Consulta bloqueante (pyodbc); se ejecuta vía asyncio.to_thread."""
+    with get_db_connection_context() as conn:
+        repo = PedidoRepository(conn)
+        return repo.tiene_pedidos()
+
+
 async def _verificar_pedidos_existen_handler():
     try:
-        with get_db_connection_context() as conn:
-            repo = PedidoRepository(conn)
-            tiene_pedidos = repo.tiene_pedidos()
+        tiene_pedidos = await asyncio.to_thread(_query_tiene_pedidos)
 
-            return JSONResponse(
-                status_code=200,
-                content={
-                    "status": "success",
-                    "tiene_pedidos": tiene_pedidos,
-                    "message": "Existen pedidos en el sistema" if tiene_pedidos else "No hay pedidos en el sistema"
-                }
-            )
+        return JSONResponse(
+            status_code=200,
+            content={
+                "status": "success",
+                "tiene_pedidos": tiene_pedidos,
+                "message": "Existen pedidos en el sistema" if tiene_pedidos else "No hay pedidos en el sistema"
+            }
+        )
 
     except Exception as e:
         logger.error(f"❌ Error al verificar existencia de pedidos: {e}", exc_info=True)
@@ -296,9 +387,13 @@ def register_pedidos_listado_endpoints(app: FastAPI):
         estado: Optional[str] = Query(None, description="Filtrar por estado del pedido"),
         fecha_desde: Optional[str] = Query(None, description="Filtrar desde fecha (YYYY-MM-DD)"),
         fecha_hasta: Optional[str] = Query(None, description="Filtrar hasta fecha (YYYY-MM-DD)"),
+        tipo_fecha: Optional[str] = Query(
+            None,
+            description="Columna sobre la que aplica fecha_desde/fecha_hasta: 'pedido' (default), 'entrega' o 'facturacion'",
+        ),
         proveedor_nombre: Optional[str] = Query(None, description="Buscar por nombre de proveedor (parcial)"),
         numero_pedido: Optional[str] = Query(None, description="Buscar por número de pedido (parcial)"),
-        creado_por: Optional[str] = Query(None, description="Filtrar por usuario que creó el pedido"),
+        creado_por: Optional[str] = Query(None, description="Filtrar por usuario que creó el pedido (parcial)"),
         paginacion: _Paginacion = Depends(_Paginacion),
         solo_redistribucion: Optional[str] = Query(
             None,
@@ -307,6 +402,10 @@ def register_pedidos_listado_endpoints(app: FastAPI):
         solo_pendientes_accion: Optional[str] = Query(
             None,
             description="Si 'true', solo pedidos que requieren acción (pendiente confirmación / respuesta proveedor / confirmado proveedor)"
+        ),
+        solo_produccion_elrayo: Optional[str] = Query(
+            None,
+            description="Si 'true', restringe a NUEVO_PEDIDO/GESTIONAR_PEDIDO (pantalla Producción El Rayo, req. 1.8)"
         ),
         user: Dict = Depends(verify_jwt_token),
         _: None = Depends(require_any_permission(_PERMS_LISTADO))
@@ -324,13 +423,16 @@ def register_pedidos_listado_endpoints(app: FastAPI):
         - `estado` (string, opcional) - Filtrar por estado (ej: "PENDIENTE_CONFIRMACION_PROVEEDOR", "CONFIRMADO_PROVEEDOR")
         - `fecha_desde` (string, opcional) - Filtrar desde fecha (YYYY-MM-DD)
         - `fecha_hasta` (string, opcional) - Filtrar hasta fecha (YYYY-MM-DD)
+        - `tipo_fecha` (string, opcional) - Columna de fecha a filtrar: "pedido" (default), "entrega" o "facturacion"
         - `proveedor_nombre` (string, opcional) - Búsqueda parcial por nombre de proveedor
         - `numero_pedido` (string, opcional) - Búsqueda parcial por número de pedido
-        - `creado_por` (string, opcional) - Filtrar por usuario que creó el pedido
+        - `creado_por` (string, opcional) - Búsqueda parcial por usuario que creó el pedido
         - `limit` (int, default: 50) - Límite de registros por página
         - `offset` (int, default: 0) - Offset para paginación
         - `solo_redistribucion` (string, opcional) - Si "true", solo pedidos aptos para redistribución
           (estado >= "CONFIRMADO POR EL RAYO" y != "CANCELADO"). Para la vista /redistribucion.
+        - `solo_produccion_elrayo` (string, opcional) - Si "true", restringe a NUEVO_PEDIDO/GESTIONAR_PEDIDO.
+          Para la pantalla /mba3-consultas/produccion/pedidos (req. 1.8).
 
         **Ejemplo:**
         ```
@@ -369,30 +471,29 @@ def register_pedidos_listado_endpoints(app: FastAPI):
             estado=estado,
             fecha_desde=fecha_desde,
             fecha_hasta=fecha_hasta,
+            tipo_fecha=tipo_fecha,
             proveedor_nombre=proveedor_nombre,
             numero_pedido=numero_pedido,
             creado_por=creado_por,
-            limit=paginacion.limit,
-            offset=paginacion.offset,
-            page=paginacion.page,
-            page_size=paginacion.page_size,
-            page_size_camel=paginacion.page_size_camel,
+            paginacion=paginacion,
             solo_redistribucion=solo_redistribucion,
             solo_pendientes_accion=solo_pendientes_accion,
+            solo_produccion_elrayo=solo_produccion_elrayo,
+            user=user,
         )
 
     @app.get("/api/pedidos/confirmados", tags=["Pedidos"])
     async def listar_pedidos_confirmados(
-        page: Optional[int] = Query(1, ge=1, description="Número de página (1-based)"),
-        page_size: Optional[int] = Query(10, ge=1, le=100, description="Tamaño de página (snake_case)"),
-        page_size_camel: Optional[int] = Query(None, alias="pageSize", ge=1, le=100, description="Tamaño de página (camelCase, alias de page_size)"),
-        limit: Optional[int] = Query(None, description="Límite de registros (alternativa a page_size)"),
-        offset: Optional[int] = Query(None, description="Offset (alternativa a page)"),
+        paginacion: _Paginacion = Depends(_Paginacion),
         fecha_desde: Optional[str] = Query(None, description="Filtrar desde fecha (YYYY-MM-DD)"),
         fecha_hasta: Optional[str] = Query(None, description="Filtrar hasta fecha (YYYY-MM-DD)"),
+        tipo_fecha: Optional[str] = Query(
+            None,
+            description="Columna sobre la que aplica fecha_desde/fecha_hasta: 'pedido' (default), 'entrega' o 'facturacion'",
+        ),
         proveedor_nombre: Optional[str] = Query(None, description="Búsqueda parcial por proveedor"),
         numero_pedido: Optional[str] = Query(None, description="Búsqueda parcial por número de pedido"),
-        creado_por: Optional[str] = Query(None, description="Filtrar por usuario creador"),
+        creado_por: Optional[str] = Query(None, description="Búsqueda parcial por usuario creador"),
         redistribucion_confirmada: Optional[str] = Query(
             None,
             description="Si 'true', solo pedidos con redistribución ya confirmada (estado CONFIRMADO REDISTRIBUCION)"
@@ -419,13 +520,14 @@ def register_pedidos_listado_endpoints(app: FastAPI):
         - `total`, `page`, `pageSize`, `totalPages`
         """
         return await _listar_pedidos_confirmados_handler(
-            page=page,
-            page_size=page_size,
-            page_size_camel=page_size_camel,
-            limit=limit,
-            offset=offset,
+            page=paginacion.page,
+            page_size=paginacion.page_size,
+            page_size_camel=paginacion.page_size_camel,
+            limit=paginacion.limit,
+            offset=paginacion.offset,
             fecha_desde=fecha_desde,
             fecha_hasta=fecha_hasta,
+            tipo_fecha=tipo_fecha,
             proveedor_nombre=proveedor_nombre,
             numero_pedido=numero_pedido,
             creado_por=creado_por,
@@ -476,7 +578,8 @@ def register_pedidos_listado_endpoints(app: FastAPI):
                 "Contexto de la vista para filtrar estados relevantes. "
                 "Valores posibles: 'pedidos' (excluye BORRADOR), "
                 "'cargar-plantilla' (incluye BORRADOR, solo del flujo de carga), "
-                "'redistribucion' (solo estados aptos para redistribucion). "
+                "'redistribucion' (solo estados aptos para redistribucion), "
+                "'produccion' (solo NUEVO_PEDIDO/GESTIONAR_PEDIDO, pantalla Producción El Rayo, req. 1.8). "
                 "Si no se indica, devuelve todos los estados activos."
             ),
         ),
@@ -522,7 +625,7 @@ def register_pedidos_listado_endpoints(app: FastAPI):
         Returns:
             JSON con lista de estados disponibles para el filtro
         """
-        return await _listar_estados_pedido_handler(contexto=contexto)
+        return await _listar_estados_pedido_handler(contexto=contexto, user=user)
 
     @app.get("/api/pedidos/existe", tags=["Pedidos"])
     async def verificar_pedidos_existen(

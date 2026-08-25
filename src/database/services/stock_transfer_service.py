@@ -30,7 +30,8 @@ from ..repositories.solicitud_transferencia_repository import SolicitudTransfere
 from ..clients.sap_service_layer_client import SAPServiceLayerClient
 from ..mappers.sap_stock_transfer_mapper import SAPStockTransferMapper
 from ..services.bodega_sap_service import BodegaSAPService
-from src.exceptions import SAPDataMasterError
+from ..services.marca_tienda_service import MARCA_A_BODEGA
+from src.exceptions import SAPDataMasterError, SolicitudTransferenciaNoAplicaError
 
 logger = logging.getLogger(__name__)
 
@@ -276,7 +277,7 @@ class StockTransferService:
         )
 
     @staticmethod
-    def obtener_bodega_de_tienda(tienda_codigo: str) -> Optional[str]:
+    def _obtener_bodega_por_prefijo(codigo_upper: str) -> Optional[str]:
         """
         Determina a qué bodega pertenece una tienda basándose en el prefijo de su código.
 
@@ -284,18 +285,7 @@ class StockTransferService:
         - TRL-* (excepto TRL-RG*) → RL-CD (ROLAND)
         - TOUT-* → OUT-CD (DESCUENTON)
         - RG-* o TRL-RG* → RG-CD (REGIONS)
-
-        Args:
-            tienda_codigo: Código de la tienda (ej: "TRL-QSN", "TOUT-BMB", "RG-INT")
-
-        Returns:
-            Código de bodega (OUT-CD, RG-CD, RL-CD) o None si no se puede determinar
         """
-        if not tienda_codigo:
-            return None
-
-        codigo_upper = tienda_codigo.strip().upper()
-
         # REGIONS: RG-* o TRL-RG*
         if codigo_upper.startswith("RG-") or codigo_upper.startswith("TRL-RG"):
             return "RG-CD"
@@ -308,8 +298,81 @@ class StockTransferService:
         if codigo_upper.startswith("TRL-"):
             return "RL-CD"
 
-        # Si no coincide con ningún patrón, retornar None
         return None
+
+    @staticmethod
+    def _obtener_marca_local(codigo_upper: str) -> Optional[str]:
+        """Lee tienda.marca (local, ya sincronizada desde sc_maestros) para un código. No bloqueante."""
+        try:
+            with get_db_connection_context() as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT marca FROM tienda WHERE codigo = ?", (codigo_upper,))
+                row = cursor.fetchone()
+                cursor.close()
+                return row[0].strip().upper() if row and row[0] else None
+        except Exception as e:
+            logger.warning(f"⚠️ No se pudo leer marca local de tienda {codigo_upper}: {e}")
+            return None
+
+    @staticmethod
+    def obtener_bodega_de_tienda(tienda_codigo: str) -> Optional[str]:
+        """
+        Determina a qué bodega pertenece una tienda.
+
+        Prioridad:
+        1. tienda.marca (sincronizada desde sc_maestros.almacenes_local) → MARCA_A_BODEGA
+        2. Heurístico de prefijo del código (fallback si la tienda no existe localmente
+           o su marca aún no fue sincronizada)
+
+        Args:
+            tienda_codigo: Código de la tienda (ej: "TRL-QSN", "TOUT-BMB", "RG-INT")
+
+        Returns:
+            Código de bodega (OUT-CD, RG-CD, RL-CD) o None si no se puede determinar
+        """
+        if not tienda_codigo:
+            return None
+
+        codigo_upper = tienda_codigo.strip().upper()
+
+        marca = StockTransferService._obtener_marca_local(codigo_upper)
+        if marca and marca in MARCA_A_BODEGA:
+            return MARCA_A_BODEGA[marca]
+
+        return StockTransferService._obtener_bodega_por_prefijo(codigo_upper)
+
+    @staticmethod
+    def detectar_origenes_traslado(detalles: List[Dict[str, Any]]) -> List[str]:
+        """
+        Detecta la(s) bodega(s)/CD de un pedido a partir de las tiendas (no bodegas)
+        presentes en sus detalles — no persiste nada, es un valor calculado para
+        mostrar en pantalla (campo "Origen Traslado"). No reemplaza al campo
+        legado `pedido.origen_traslado` (valor único, escrito a mano en el Excel,
+        usado sin cambios por el resto del sistema).
+
+        Args:
+            detalles: Lista de detalles del pedido, cada uno con "tiendas": [{"codigo", "es_bodega", ...}]
+                      (formato de PedidoUtilsRepository.obtener_detalles_pedido).
+
+        Returns:
+            Códigos de bodega distintos, ordenados (ej. ["RG-CD", "RL-CD"]; un solo
+            elemento en el caso normal de una sola marca).
+        """
+        codigos_tiendas: set = set()
+        for detalle in detalles:
+            for tienda in detalle.get("tiendas", []):
+                if tienda.get("es_bodega", False):
+                    continue
+                codigo = tienda.get("codigo")
+                if codigo:
+                    codigos_tiendas.add(codigo.strip().upper())
+
+        bodegas: set = set()
+        for codigo in codigos_tiendas:
+            bodega = StockTransferService.obtener_bodega_de_tienda(codigo)
+            if bodega:
+                bodegas.add(bodega)
+        return sorted(bodegas)
 
     @staticmethod
     def _agrupar_cantidades_requeridas(
@@ -557,7 +620,11 @@ class StockTransferService:
         try:
             output_dir = PROJECT_ROOT / "output"
             output_dir.mkdir(parents=True, exist_ok=True)
-            out_file = output_dir / f"str_{pedido_id}.json"
+            # Sufijo por oc_id: un pedido con más de una ODC (una por bodega/marca, ver
+            # PedidoOCService.crear_ocs_desde_pedido_confirmado) genera una llamada a este
+            # método por ODC: sin el sufijo, la segunda pisaba el archivo de la primera.
+            nombre_archivo = f"str_{pedido_id}_{oc_id}.json" if oc_id else f"str_{pedido_id}.json"
+            out_file = output_dir / nombre_archivo
             json_data = {
                 "pedido_id": pedido_id,
                 "oc_id": oc_id,
@@ -921,6 +988,50 @@ class StockTransferService:
             )
         return distribucion_filtrada
 
+    def _resolver_jobs_encolados_pendientes(
+        self, conn, oc_id: str, tiendas_destino_filtro: List[str]
+    ) -> Tuple[Dict[str, Dict[str, Any]], set]:
+        """
+        Antes de reintentar, resuelve tiendas cuyo último intento quedó 'Encolada'
+        (HTTP 202 del middleware): consulta GET /api/v1/jobs/{job_id} en vez de
+        reenviar la creación a ciegas — el job original todavía puede completarse
+        en segundo plano, y reenviar crearía una ITR duplicada en SAP.
+
+        Returns:
+            (itrs_adoptadas, tiendas_en_cola)
+            itrs_adoptadas: {tienda_norm: {"doc_num", "doc_entry"}} — jobs
+                COMPLETADO, se adoptan (mismo shape que _buscar_itrs_existentes_en_sap).
+            tiendas_en_cola: tiendas (normalizadas) cuyo job sigue ENCOLADO/PROCESANDO;
+                no se reintentan este ciclo.
+            Tiendas cuyo job resultó ERROR (o ya no se pudo consultar) no aparecen en
+            ninguno de los dos: quedan libres para un intento de creación normal.
+        """
+        st_repo = SolicitudTransferenciaRepository(conn)
+        pendientes = st_repo.get_tiendas_encoladas_con_job_id(oc_id, tiendas_destino_filtro)
+        adoptadas: Dict[str, Dict[str, Any]] = {}
+        en_cola: set = set()
+        for tienda_norm, job_id in pendientes.items():
+            job = self.sap_client.get_job_status(job_id)
+            if not job:
+                continue
+            status = str(job.get("status") or "").upper()
+            if status == "COMPLETADO":
+                resultado_job = job.get("result") or {}
+                doc_entry = resultado_job.get("docEntry")
+                doc_num = resultado_job.get("docNum")
+                if doc_entry:
+                    adoptadas[tienda_norm] = {"doc_num": doc_num, "doc_entry": doc_entry}
+                    logger.info(
+                        f"♻️ Job SAP encolado COMPLETADO para {tienda_norm}: "
+                        f"ITR adoptada (DocEntry={doc_entry}, DocNum={doc_num})"
+                    )
+            elif status in ("ENCOLADO", "PROCESANDO"):
+                en_cola.add(tienda_norm)
+                logger.info(f"⏳ Job SAP aún {status} para {tienda_norm}: se omite este ciclo")
+            # status == "ERROR" (o desconocido/no consultable): no hacer nada especial,
+            # la tienda queda libre para un intento de creación normal.
+        return adoptadas, en_cola
+
     def _buscar_itrs_existentes_en_sap(
         self, comentario_exacto: str, bodega_origen: str
     ) -> Dict[str, Dict[str, Any]]:
@@ -1052,6 +1163,19 @@ class StockTransferService:
                     f"✅ Inventory Transfer Request CREADO en SAP: {bodega_origen} → {tienda_codigo} "
                     f"(DocEntry={resultado_tienda['doc_entry']}, DocNum={resultado_tienda['doc_num']})"
                 )
+            elif isinstance(sap_response, dict) and sap_response.get("queued"):
+                # ⏳ SAP saturado: el middleware encoló la petición (HTTP 202). No es un
+                # error definitivo — se guarda el job_id para consultar su estado real
+                # antes de reintentar (evita crear una ITR duplicada).
+                resultado_tienda["queued"] = True
+                resultado_tienda["job_id"] = sap_response.get("job_id")
+                resultado_tienda["error"] = envio_result.get("error") or sap_response.get("error")
+                resultado_tienda["attempts"] = envio_result.get("attempts")
+                result["transferencias_encoladas"] += 1
+                logger.info(
+                    f"⏳ Inventory Transfer Request ENCOLADA en SAP (no es error definitivo): "
+                    f"{bodega_origen} → {tienda_codigo} (jobId={resultado_tienda['job_id']})"
+                )
             else:
                 error_msg = envio_result.get("error") or "No se recibió respuesta de SAP"
                 resultado_tienda["error"] = error_msg
@@ -1146,7 +1270,8 @@ class StockTransferService:
           - Si ninguno está disponible, se usa "01" como default
         - Destino: TIENDAS (es_bodega=False), NO bodegas
         - Las bodegas (OUT-CD, RG-CD, RL-CD) se excluyen como destino para evitar transferencias de bodega a bodega
-        - Cada bodega tiene sus propias tiendas
+        - Cada bodega solo transfiere hacia sus propias tiendas (según marca); no se permite
+          cruce entre bodegas de distinta marca (ver req. "Generación de 2 ODC" en SEGUIMIENTO.md)
 
         Proceso:
         1. Obtiene la distribución confirmada del pedido
@@ -1156,7 +1281,8 @@ class StockTransferService:
         5. Convierte cantidades por tienda: cantidad_sap = cantidad_asignada × unidad_conversion (trazable, sin usar totales ni bodega)
         6. Excluye bodegas como destino (evita ST de bodega a bodega)
         7. Valida que destino no sea la misma bodega origen
-        8. Valida que cada tienda pertenezca a la bodega origen (basado en prefijos: TRL-→RL-CD, TOUT-→OUT-CD, RG-→RG-CD)
+        8. Valida que cada tienda pertenezca a la bodega origen (marca de la tienda, con fallback
+           a prefijos: TRL-→RL-CD, TOUT-→OUT-CD, RG-→RG-CD); si no coincide, se omite la línea
         9. Agrupa por tienda y crea un Inventory Transfer Request por tienda en SAP (POST /InventoryTransferRequests)
         10. Registra los resultados
 
@@ -1199,6 +1325,7 @@ class StockTransferService:
             "total_tiendas": 0,
             "transferencias_creadas": 0,
             "transferencias_errores": 0,
+            "transferencias_encoladas": 0,
             "resultados": []
         }
 
@@ -1230,10 +1357,37 @@ class StockTransferService:
                     )
 
                 if not distribucion_por_tienda:
-                    raise ValueError(
+                    raise SolicitudTransferenciaNoAplicaError(
                         "No hay distribución válida por tienda para crear transferencias. "
                         "Las Solicitudes de Transferencia se crean desde bodega origen hacia tiendas, no hacia bodegas."
                     )
+
+                # Antes de reintentar, resolver tiendas cuyo último intento quedó
+                # 'Encolada' (HTTP 202): consultar el job real en vez de reenviar a
+                # ciegas (evita ITR duplicada si el job original sigue en curso).
+                itrs_adoptadas_por_job: Dict[str, Dict[str, Any]] = {}
+                if verificar_ya_existente_en_sap and oc_id and tiendas_destino_filtro:
+                    itrs_adoptadas_por_job, tiendas_en_cola = self._resolver_jobs_encolados_pendientes(
+                        conn, oc_id, tiendas_destino_filtro
+                    )
+                    if tiendas_en_cola:
+                        tiendas_destino_filtro = [
+                            t for t in tiendas_destino_filtro
+                            if t.strip().upper() not in tiendas_en_cola
+                        ]
+                        logger.info(
+                            f"⏳ {len(tiendas_en_cola)} tienda(s) con job SAP aún en cola, "
+                            f"se omiten este ciclo (no se reenvían): {sorted(tiendas_en_cola)}"
+                        )
+                        if not tiendas_destino_filtro:
+                            result["success"] = True
+                            result["total_tiendas"] = 0
+                            result["tiendas_en_cola"] = sorted(tiendas_en_cola)
+                            logger.info(
+                                "⏳ Todas las tiendas objetivo del reintento siguen con job SAP "
+                                "en cola; nada que hacer este ciclo."
+                            )
+                            return result
 
                 # Reintento parcial opcional: procesar solo tiendas destino indicadas.
                 if tiendas_destino_filtro:
@@ -1290,6 +1444,8 @@ class StockTransferService:
                     itrs_existentes = self._buscar_itrs_existentes_en_sap(
                         comentario_esperado, bodega_origen
                     )
+                    if itrs_adoptadas_por_job:
+                        itrs_existentes.update(itrs_adoptadas_por_job)
 
                 # 7. Crear cada Inventory Transfer Request en SAP (POST /InventoryTransferRequests)
                 logger.info(
@@ -1351,17 +1507,23 @@ class StockTransferService:
     def _notificar_st_creadas_en_reintento(
         oc_id: str,
         oc_cabecera: Dict[str, Any],
-        resultado_st: Dict[str, Any],
+        resumen_completo: Dict[str, Any],
         pedido_numero: Optional[str],
         origen: str,
     ) -> None:
         """
-        Notifica a El Rayo (+ MABEL TRADING) los códigos de ST recién creados en un reintento.
+        Notifica a El Rayo (+ MABEL TRADING) el estado de TODAS las Solicitudes de
+        Transferencia de la OC (envío original + todos los reintentos), no solo las
+        de este reintento puntual.
 
         Mismo correo que el envío original (send_oc_ready_for_dispatch_notification):
         el flujo inicial solo lo dispara una vez al crear la ODC, así que sin esto,
         las ITR que se crean recién en un reintento (manual o automático) nunca
-        llegaban a El Rayo con sus códigos.
+        llegaban a El Rayo con sus códigos. Usa el resumen agregado (todos los
+        batches) en vez del resultado de este reintento en particular -- si no, el
+        correo del reintento solo mostraba las tiendas recién reprocesadas y las que
+        ya habían tenido éxito en el envío original desaparecían del correo más
+        reciente que ve El Rayo.
         """
         from src.utils.email_notifier import send_oc_ready_for_dispatch_notification
 
@@ -1370,7 +1532,7 @@ class StockTransferService:
                 oc_cabecera=oc_cabecera,
                 doc_num=oc_cabecera.get("numero_oc_sap"),
                 doc_entry=oc_cabecera.get("doc_entry"),
-                solicitudes_transferencia=resultado_st,
+                solicitudes_transferencia=resumen_completo,
                 pedido_numero=pedido_numero,
             )
             if enviado:
@@ -1404,7 +1566,9 @@ class StockTransferService:
 
         Returns:
             {"status": ..., "message": ..., "oc_id": ..., ...} — ver cada rama para el detalle.
-            status: "no_encontrada" | "estado_invalido" | "sin_pedido" | "no_pendientes" | "success" | "partial"
+            status: "no_encontrada" | "estado_invalido" | "sin_pedido" | "no_pendientes" | "success" | "partial" | "en_cola"
+            ("en_cola": todas las tiendas objetivo siguen con un job SAP en curso — HTTP 202 —,
+            no se reenvió nada este ciclo para evitar ITR duplicadas.)
         """
         with get_db_connection_context() as conn:
             oc_repo = OrdenCompraRepository(conn)
@@ -1458,14 +1622,79 @@ class StockTransferService:
         )
 
         if resultado_st.get("transferencias_creadas", 0) > 0:
-            self._notificar_st_creadas_en_reintento(oc_id, oc_cabecera, resultado_st, pedido_numero, origen)
+            with get_db_connection_context() as conn_resumen:
+                resumen_completo = SolicitudTransferenciaRepository(conn_resumen).get_resumen_agregado_por_oc_id(oc_id)
+            self._notificar_st_creadas_en_reintento(oc_id, oc_cabecera, resumen_completo, pedido_numero, origen)
+
+        if resultado_st.get("tiendas_en_cola"):
+            status = "en_cola"
+            message = (
+                "Las tiendas objetivo siguen con una Solicitud de Transferencia en "
+                "cola en SAP (saturación temporal); no se reenvió nada para evitar "
+                "duplicados. Intenta de nuevo en unos minutos."
+            )
+        else:
+            status = "success" if resultado_st.get("success") else "partial"
+            message = "Reintento ST ejecutado."
+            self._reevaluar_cierre_pedido_tras_reintento(pedido_id, oc_id)
 
         return {
-            "status": "success" if resultado_st.get("success") else "partial",
-            "message": "Reintento ST ejecutado.",
+            "status": status,
+            "message": message,
             "oc_id": oc_id,
             "origen_lista_tiendas": origen_lista,
             "tiendas_objetivo": tiendas_objetivo,
             "tiendas_count": len(tiendas_objetivo),
             "resultado_st": resultado_st,
         }
+
+    @staticmethod
+    def _reevaluar_cierre_pedido_tras_reintento(pedido_id: str, oc_id: str) -> None:
+        """
+        Tras un reintento de ST (manual o automático), vuelve a evaluar si el pedido ya
+        puede cerrarse (ver PedidoCierreService.cerrar_pedido_si_corresponde).
+
+        cerrar_pedido_si_corresponde solo se invocaba desde el envío original de la ODC
+        (oc_sap_service.enviar_oc_a_sap); un reintento posterior de ST nunca lo volvía a
+        llamar, así que un pedido cuyo primer intento de ST fallara pero un reintento
+        posterior tuviera éxito quedaba congelado en PENDIENTE_LOGISTICA/
+        ERROR_DATOS_MAESTROS para siempre, aunque en SAP la OC y la ST ya estuvieran
+        correctamente enviadas (bug real, pedido PDES-08.26.2026.XM, 21/08/2026).
+
+        Usa el resumen agregado de TODOS los batches de ST de la OC (no solo este
+        reintento), para que el cierre vea el estado acumulado real.
+
+        No crítico: si falla, solo se registra el warning -- no debe romper la
+        respuesta del reintento de ST, que ya reporta su propio resultado.
+        """
+        from .pedido_cierre_service import PedidoCierreService
+
+        try:
+            with get_db_connection_context() as conn:
+                st_repo = SolicitudTransferenciaRepository(conn)
+                resumen = st_repo.get_resumen_agregado_por_oc_id(oc_id)
+                total_tiendas = resumen.get("total_tiendas", 0)
+                transferencias_errores = resumen.get("transferencias_errores", 0)
+                resultado_st_para_cierre = {
+                    "success": total_tiendas > 0 and transferencias_errores == 0,
+                    "transferencias_creadas": resumen.get("transferencias_creadas", 0),
+                    "transferencias_errores": transferencias_errores,
+                    "total_tiendas": total_tiendas,
+                    "resultados": resumen.get("resultados", []),
+                }
+                resultado_cierre = PedidoCierreService().cerrar_pedido_si_corresponde(
+                    pedido_id=str(pedido_id),
+                    oc_repo=OrdenCompraRepository(conn),
+                    pedido_repo=PedidoRepository(conn),
+                    resultado_st=resultado_st_para_cierre,
+                )
+                if resultado_cierre.get("estado_nuevo"):
+                    logger.info(
+                        f"📋 Pedido {pedido_id} reevaluado tras reintento ST de OC {oc_id[:8]}...: "
+                        f"{resultado_cierre.get('estado_anterior')} → {resultado_cierre.get('estado_nuevo')}"
+                    )
+        except Exception as e:
+            logger.warning(
+                f"⚠️ No se pudo reevaluar cierre del pedido {pedido_id} tras reintento "
+                f"ST de OC {oc_id}: {e}"
+            )

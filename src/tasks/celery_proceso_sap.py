@@ -122,11 +122,15 @@ def ejecutar_proceso_completo_sap(
             ip_origen=None,
         )
 
+        def _reportar_progreso(step: str, progress: int, message: str) -> None:
+            estado_service.actualizar_progreso(process_id, step, progress, message)
+
         resultado = _ejecutar_proceso_completo_sync(
             numero_pedido=numero_pedido,
             ajustes_detalle=ajustes_objs,
             user_id=user_id,
             audit=audit,
+            on_progress=_reportar_progreso,
         )
 
         # Siempre hay "response" en el dict devuelto (éxito o parcial)

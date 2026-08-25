@@ -6,7 +6,10 @@ Implementa las reglas de negocio estrictas para la redistribución.
 import logging
 from typing import Dict, Any, List, Tuple
 
-from src.database.pedido_estados import ESTADO_REDISTRIBUCION, estado_id_desde_legacy
+from src.database.pedido_estados import (
+    ESTADOS_PUEDE_CONFIRMAR_REDISTRIBUCION,
+    estado_id_desde_legacy,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -108,8 +111,15 @@ class RedistribucionValidator:
         pedido_data: Dict[str, Any],
         productos_redistribucion: List[Dict[str, Any]]
     ) -> List[str]:
-        """Validación 3: todos los productos existen en el pedido y sus tiendas pertenecen a él."""
+        """Validación 3: todos los productos existen en el pedido y sus tiendas pertenecen a él.
+
+        Excepción: en pedidos hijo (pedido_padre_id no nulo) se permite redistribuir hacia
+        tiendas que no venían en el Excel original del pedido, siempre que existan en el
+        catálogo maestro de tiendas — eso ya lo garantiza convertir_ajustes_a_redistribucion
+        antes de llegar aquí (rechaza con 400 si el tienda_codigo no existe en el catálogo).
+        """
         errores: List[str] = []
+        es_pedido_hijo = pedido_data.get("cabecera", {}).get("pedido_padre_id") is not None
         tiendas_validas: set = set()
         for detalle in pedido_data.get("detalles", []):
             for tienda in detalle.get("tiendas", []):
@@ -123,6 +133,8 @@ class RedistribucionValidator:
             )
             if not producto_existe:
                 errores.append(f"Producto {pedido_detalle_id}: No existe en el pedido")
+                continue
+            if es_pedido_hijo:
                 continue
             for distribucion in producto["distribuciones"]:
                 tienda_id = distribucion["tienda_id"]
@@ -157,16 +169,19 @@ class RedistribucionValidator:
 
     @staticmethod
     def _validar_estado_pedido(pedido_data: Dict[str, Any]) -> List[str]:
-        """Validación 5: el pedido debe estar en estado REDISTRIBUCION (CONFIRMADO POR EL RAYO)."""
+        """Validación 5: el pedido debe estar en un estado habilitado para confirmar
+        redistribución (ver ESTADOS_PUEDE_CONFIRMAR_REDISTRIBUCION) -- incluye tanto
+        CONFIRMADO POR EL RAYO (4) como LISTO PARA REDISTRIBUCION (25, pedido "hijo"
+        aceptado directo a la cola sin pasar por El Rayo)."""
         cabecera = pedido_data.get("cabecera", {})
         estado_id = cabecera.get("estado_id")
         if estado_id is None:
             estado_id = estado_id_desde_legacy(cabecera.get("estado"))
         estado_nombre = cabecera.get("estado_nombre") or cabecera.get("estado") or "N/A"
-        if estado_id != ESTADO_REDISTRIBUCION:
+        if estado_id not in ESTADOS_PUEDE_CONFIRMAR_REDISTRIBUCION:
             return [
                 f"El estado del pedido ({estado_nombre}) no permite confirmar redistribución. "
-                "Solo se permite en estado CONFIRMADO POR EL RAYO."
+                "Solo se permite en estado CONFIRMADO POR EL RAYO o LISTO PARA REDISTRIBUCION."
             ]
         return []
 

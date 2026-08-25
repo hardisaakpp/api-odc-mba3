@@ -871,6 +871,15 @@ class DirectSAPServiceLayerClient:
             "comments": item.get("Comments"),
         }
 
+    def get_job_status(self, job_id: str) -> Optional[Dict[str, Any]]:
+        """
+        La conexión directa a SAP Service Layer es siempre síncrona: no existe
+        cola de jobs (eso es exclusivo del middleware .NET). Se define aquí solo
+        por paridad de interfaz con _MiddlewareSAPServiceLayerClient; no debería
+        haber job_id que consultar en este modo.
+        """
+        return None
+
     def get_stock_by_warehouse(
         self, 
         item_code: str, 

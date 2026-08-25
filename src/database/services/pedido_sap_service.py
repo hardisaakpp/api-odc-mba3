@@ -252,6 +252,7 @@ def procesar_pedido_con_sap(
                     productos_distribucion, sap_service, sap_proc_repo,
                     homologacion_service, continue_on_error, stats,
                 )
+                conn.commit()
             if stats["productos_error"] == 0:
                 stats["status"] = "success"
             elif stats["productos_procesados"] > 0:

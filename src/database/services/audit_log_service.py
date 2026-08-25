@@ -213,6 +213,62 @@ class AuditLogService:
                     cursor=cursor,
                 )
 
+    # ------------------------------------------------------------------
+    # Lectura
+    # ------------------------------------------------------------------
+    def obtener_por_pedido(
+        self,
+        pedido_id: str,
+        limit: int = 500,
+    ) -> List[Dict[str, Any]]:
+        """
+        Devuelve el historial de pedido_audit_log de un pedido, más reciente
+        primero.
+
+        Args:
+            pedido_id: UUID del pedido
+            limit: Tope de filas a devolver
+
+        Returns:
+            Lista de dicts con entidad, entidad_id, accion, campo_modificado,
+            valor_anterior, valor_nuevo, usuario, fecha (ISO 8601), origen,
+            ip_origen, comentario. Lista vacía si la tabla no existe todavía.
+        """
+        cursor = self.conn.cursor()
+        try:
+            if not self._tabla_audit_log_existe(cursor):
+                return []
+
+            cursor.execute("""
+                SELECT TOP (?)
+                    entidad, entidad_id, accion, campo_modificado,
+                    valor_anterior, valor_nuevo, usuario, fecha, origen,
+                    ip_origen, comentario
+                FROM pedido_audit_log
+                WHERE pedido_id = ?
+                ORDER BY fecha DESC
+            """, (limit, pedido_id))
+
+            registros = []
+            for row in cursor.fetchall():
+                fecha = row[7]
+                registros.append({
+                    "entidad": row[0],
+                    "entidad_id": row[1],
+                    "accion": row[2],
+                    "campo_modificado": row[3],
+                    "valor_anterior": row[4],
+                    "valor_nuevo": row[5],
+                    "usuario": row[6],
+                    "fecha": fecha.isoformat() if fecha else None,
+                    "origen": row[8],
+                    "ip_origen": row[9],
+                    "comentario": row[10],
+                })
+            return registros
+        finally:
+            cursor.close()
+
     def registrar_delete_masivo(
         self,
         pedido_id: str,

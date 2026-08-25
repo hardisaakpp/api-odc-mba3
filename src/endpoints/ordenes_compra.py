@@ -38,6 +38,7 @@ _RETRY_ST_STATUS_EXTERNO = {
     "estado_invalido": "error",
     "sin_pedido": "error",
     "no_pendientes": "success",
+    "en_cola": "en_cola",
 }
 
 # Permisos (evita duplicación de literales)
@@ -323,7 +324,10 @@ def _query_ordenes_compra(estado_param, limit_param, offset_param,
             st_repo = SolicitudTransferenciaRepository(conn)
             oc_ids_list = [o["oc_id"] for o in oc_list]
             itr_doc = st_repo.get_doc_num_itr_por_oc_ids(oc_ids_list)
-            st_resumen_by_oc = st_repo.get_latest_resumen_by_oc_ids(oc_ids_list)
+            # Agregado por tienda sobre TODOS los batches (no solo el último reintento),
+            # para que "total_tiendas"/"errores" del badge "Reintentar ST" coincida con
+            # lo que muestra el modal "Integración con SAP Completada" (mismo criterio).
+            st_resumen_by_oc = st_repo.get_resumen_agregado_por_oc_ids(oc_ids_list)
             st_pendientes_by_oc = st_repo.count_st_pendientes_reintento_por_oc_ids(oc_ids_list)
             for o in oc_list:
                 if o["oc_id"] in itr_doc:
@@ -367,38 +371,18 @@ def _fetch_integracion_sap(oc_id):
         numero_oc_sap = envio.get("numero_oc_sap")
         doc_entry = envio.get("doc_entry")
         proveedor = envio.get("proveedor")
-        total_tiendas = envio.get("total_transferencias", 0)
-        transferencias_creadas = envio.get("transferencias_creadas", 0)
-        st_id = envio.get("solicitud_transferencia_id")
 
-        resultados = []
-        itrs_por_tienda = []
-        doc_num_first = None
-
-        if st_id:
-            detalle_rows = st_repo.get_detalle_by_solicitud_id(st_id)
-            for r in detalle_rows:
-                resultados.append({
-                    "tienda_codigo": r.get("tienda_codigo", ""),
-                    "tienda_nombre": r.get("tienda_nombre"),
-                    "doc_num": r.get("doc_num"),
-                    "doc_entry": r.get("doc_entry"),
-                    "success": r.get("success", False),
-                    "error": r.get("error"),
-                })
-                if r.get("doc_num") is not None:
-                    itrs_por_tienda.append({
-                        "doc_num": r["doc_num"],
-                        "tienda_codigo": r.get("tienda_codigo", ""),
-                    })
-                    if doc_num_first is None:
-                        doc_num_first = r["doc_num"]
+        # Agregado en vivo sobre TODOS los batches de ST (envío original + reintentos),
+        # no el snapshot congelado en envio_odc_sap del primer intento.
+        resumen = st_repo.get_resumen_agregado_por_oc_id(oc_id)
+        doc_num_first = resumen["itrs_por_tienda"][0]["doc_num"] if resumen["itrs_por_tienda"] else None
 
         solicitudes_transferencia = {
-            "total_tiendas": total_tiendas,
-            "transferencias_creadas": transferencias_creadas,
-            "resultados": resultados,
-            "itrs_por_tienda": itrs_por_tienda,
+            "total_tiendas": resumen["total_tiendas"],
+            "transferencias_creadas": resumen["transferencias_creadas"],
+            "transferencias_errores": resumen["transferencias_errores"],
+            "resultados": resumen["resultados"],
+            "itrs_por_tienda": resumen["itrs_por_tienda"],
         }
 
         envio_sap = {

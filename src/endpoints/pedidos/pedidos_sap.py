@@ -2,6 +2,7 @@
 Endpoint de procesamiento SAP.
 """
 
+import asyncio
 import logging
 import re
 from typing import Dict, List, Optional
@@ -194,23 +195,28 @@ def _procesar_procesamientos(
     return productos, estadisticas, fecha_max
 
 
+def _db_obtener_procesamiento_sap(pedido_id: str) -> ProcesamientoSAPResponse:
+    """Consulta bloqueante (pyodbc); se ejecuta vía asyncio.to_thread."""
+    with get_db_connection_context() as conn:
+        pedido_repo = PedidoRepository(conn)
+        sap_proc_repo = PedidoSAPProcesamientoRepository(conn)
+        pedido_id_real, numero_pedido = _resolver_pedido(pedido_id, pedido_repo)
+        procesamientos = sap_proc_repo.get_procesamientos_por_pedido(pedido_id_real)
+        distribucion = _cargar_distribucion_conversion(conn, pedido_id_real, procesamientos)
+        productos, estadisticas, fecha_max = _procesar_procesamientos(procesamientos, distribucion)
+        return ProcesamientoSAPResponse(
+            status="success",
+            pedido_id=pedido_id_real,
+            numero_pedido=numero_pedido,
+            productos=productos,
+            estadisticas=estadisticas,
+            fecha_procesamiento=fecha_max,
+        )
+
+
 async def _obtener_procesamiento_sap_handler(pedido_id: str) -> ProcesamientoSAPResponse:
     try:
-        with get_db_connection_context() as conn:
-            pedido_repo = PedidoRepository(conn)
-            sap_proc_repo = PedidoSAPProcesamientoRepository(conn)
-            pedido_id_real, numero_pedido = _resolver_pedido(pedido_id, pedido_repo)
-            procesamientos = sap_proc_repo.get_procesamientos_por_pedido(pedido_id_real)
-            distribucion = _cargar_distribucion_conversion(conn, pedido_id_real, procesamientos)
-            productos, estadisticas, fecha_max = _procesar_procesamientos(procesamientos, distribucion)
-            return ProcesamientoSAPResponse(
-                status="success",
-                pedido_id=pedido_id_real,
-                numero_pedido=numero_pedido,
-                productos=productos,
-                estadisticas=estadisticas,
-                fecha_procesamiento=fecha_max,
-            )
+        return await asyncio.to_thread(_db_obtener_procesamiento_sap, pedido_id)
     except HTTPException:
         raise
     except Exception as e:

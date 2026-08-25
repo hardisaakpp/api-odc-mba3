@@ -4,7 +4,7 @@ Gestión de conexiones a SQL Server.
 
 import logging
 import pyodbc
-from typing import Optional, Iterator
+from typing import Iterator
 from contextlib import contextmanager
 
 from src.config import (
@@ -17,7 +17,12 @@ from src.config import (
     SQL_SERVER_SAP_SERVER,
     SQL_SERVER_SAP_DATABASE,
     SQL_SERVER_SAP_UID,
-    SQL_SERVER_SAP_PWD
+    SQL_SERVER_SAP_PWD,
+    SQL_SERVER_MAESTROS_DRIVER,
+    SQL_SERVER_MAESTROS_SERVER,
+    SQL_SERVER_MAESTROS_DATABASE,
+    SQL_SERVER_MAESTROS_UID,
+    SQL_SERVER_MAESTROS_PWD
 )
 
 logger = logging.getLogger(__name__)
@@ -205,6 +210,33 @@ def _build_sap_connection_string() -> str:
     )
 
 
+def _build_maestros_connection_string() -> str:
+    if SQL_SERVER_MAESTROS_UID and SQL_SERVER_MAESTROS_PWD:
+        return (
+            f"DRIVER={SQL_SERVER_MAESTROS_DRIVER};"
+            f"SERVER={SQL_SERVER_MAESTROS_SERVER};"
+            f"DATABASE={SQL_SERVER_MAESTROS_DATABASE};"
+            f"UID={SQL_SERVER_MAESTROS_UID};"
+            f"PWD={SQL_SERVER_MAESTROS_PWD};"
+            f"MARS_Connection=yes;"
+            f"Connection Timeout=10;"
+            f"Command Timeout=30;"
+            f"Encrypt=yes;"
+            f"TrustServerCertificate=yes;"
+        )
+    return (
+        f"DRIVER={SQL_SERVER_MAESTROS_DRIVER};"
+        f"SERVER={SQL_SERVER_MAESTROS_SERVER};"
+        f"DATABASE={SQL_SERVER_MAESTROS_DATABASE};"
+        f"Trusted_Connection=yes;"
+        f"MARS_Connection=yes;"
+        f"Connection Timeout=10;"
+        f"Command Timeout=30;"
+        f"Encrypt=yes;"
+        f"TrustServerCertificate=yes;"
+    )
+
+
 @contextmanager
 def get_db_connection_context() -> Iterator[pyodbc.Connection]:
     """
@@ -313,5 +345,48 @@ def get_sap_db_connection_context() -> Iterator[pyodbc.Connection]:
                 logger.debug("[Context Manager SAP] ✅ Conexión cerrada correctamente")
             except Exception as close_error:
                 logger.error(f"[Context Manager SAP] ❌ Error al cerrar conexión: {close_error}")
+
+
+@contextmanager
+def get_maestros_db_connection_context() -> Iterator[pyodbc.Connection]:
+    """
+    Context manager para conexiones a sc_maestros (datos maestros legados).
+
+    ⚠️ Servidor de PRODUCCIÓN (192.168.2.211). Usar EXCLUSIVAMENTE con
+    sentencias SELECT — nunca ejecutar INSERT/UPDATE/DELETE con esta conexión.
+
+    Returns:
+        Generator que yield una conexión pyodbc al servidor sc_maestros
+    """
+    conn = None
+    try:
+        connection_string = _build_maestros_connection_string()
+        logger.debug(f"[Context Manager Maestros] Creando conexión a {SQL_SERVER_MAESTROS_SERVER}/{SQL_SERVER_MAESTROS_DATABASE}")
+        conn = pyodbc.connect(connection_string, timeout=10)
+        conn.autocommit = False
+
+        logger.debug("[Context Manager Maestros] Conexión creada exitosamente")
+        yield conn
+
+        if conn and not conn.closed:
+            conn.commit()
+            logger.debug("[Context Manager Maestros] Transacción confirmada")
+
+    except Exception:
+        if conn and not conn.closed:
+            try:
+                conn.rollback()
+                logger.debug("[Context Manager Maestros] Transacción revertida por error")
+            except Exception as rollback_error:
+                logger.error(f"[Context Manager Maestros] Error al hacer rollback: {rollback_error}")
+        raise
+
+    finally:
+        if conn and not conn.closed:
+            try:
+                conn.close()
+                logger.debug("[Context Manager Maestros] ✅ Conexión cerrada correctamente")
+            except Exception as close_error:
+                logger.error(f"[Context Manager Maestros] ❌ Error al cerrar conexión: {close_error}")
 
 

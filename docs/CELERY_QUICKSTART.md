@@ -19,7 +19,7 @@ Todo se conecta a **`redis://localhost:6379/0`** (o la URL que pongas en `REDIS_
 En Windows no viene Redis instalado. **Recomendación para desarrollo: stack Docker con perfil `app`** — levanta Redis, MinIO, API, worker y beat de una vez. Ver [DOCKER_COMPOSE.md](DOCKER_COMPOSE.md) y:
 
 ```powershell
-.\scripts\docker-app-up.ps1 -Build
+.\scripts\docker-app-up.ps1
 .\scripts\docker-verify.ps1
 ```
 
@@ -90,6 +90,10 @@ REDIS_URL=redis://localhost:6379/0
 # Reconciliación automática de ST pendientes (por defecto deshabilitada; en prod va en true)
 # ENABLE_RECONCILIACION_ST_AUTOMATICA=true
 # RECONCILIAR_ST_INTERVALO_MINUTOS=5
+
+# Reconciliación automática de ODC ENCOLADAS (HTTP 202 del middleware): SIEMPRE
+# activa, sin flag de encendido/apagado. Solo el intervalo es configurable.
+# RECONCILIAR_OC_INTERVALO_MINUTOS=5
 ```
 
 ### Tareas programadas (Celery Beat) y sus flags
@@ -106,6 +110,7 @@ declaradas en `task_queues` en `src/celery_app.py`, así que aplica aunque se la
 | Tarea | Flag | Default | Frecuencia |
 |---|---|---|---|
 | `reconciliar_transferencias_pendientes` | `ENABLE_RECONCILIACION_ST_AUTOMATICA` | `false` (prod: `true`) | cada `RECONCILIAR_ST_INTERVALO_MINUTOS` (5 min) |
+| `reconciliar_ordenes_compra_pendientes` | *(ninguno, siempre activa)* | — | cada `RECONCILIAR_OC_INTERVALO_MINUTOS` (5 min) |
 | `sync_productos_maestro` | `ENABLE_SYNC_PRODUCTOS_AUTOMATICA` | `false` | diaria, `SYNC_PRODUCTOS_HOUR:MINUTE` (3:00 AM) |
 | `execute_auto_migration` (legacy) | `ENABLE_AUTO_MIGRATE` | `false` | cada `AUTO_MIGRATE_INTERVAL_MINUTES` |
 

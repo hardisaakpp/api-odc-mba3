@@ -799,6 +799,107 @@ class PedidoProveedorWebService:
             hay_cambios = False
         return hay_cambios, confirmaciones_previas
 
+    def _generar_respuesta_automatica(
+        self,
+        conn: Any,
+        pedido_id: str,
+        usuario_id: Optional[str] = None,
+        observaciones_generales: Optional[str] = None,
+    ) -> Tuple[Dict[str, Any], str, Dict[str, int], Dict[str, Any], bool]:
+        """
+        Genera (o regenera) la respuesta_proveedor de un pedido a partir de sus propios
+        detalles (total y costo_doc_sin_iva), sin transicionar su estado_id ni registrar
+        confirmación de EL RAYO -- eso lo decide el llamador (ver crear_respuesta_desde_pedido
+        y generar_respuesta_proveedor_automatica).
+
+        Returns:
+            (pedido, respuesta_id, resultado_guardado, validacion, ya_existia_respuesta)
+        """
+        repo = PedidoRepository(conn)
+        pedido = repo.get_pedido_completo(pedido_id)
+
+        if not pedido:
+            logger.error(f"Pedido {pedido_id} no encontrado")
+            raise ValueError(f"Pedido no encontrado: {pedido_id}")
+
+        logger.debug(f"Pedido {pedido_id} encontrado con {len(pedido.get('detalles', []))} detalles")
+        self._validar_fecha_entrega(pedido, pedido_id)
+
+        respuesta_repo = PedidoRespuestaRepository(conn)
+        respuesta_existente = respuesta_repo.obtener_respuesta_activa(pedido_id)
+
+        respuesta_id = None
+        ya_existia_respuesta = False
+        if respuesta_existente:
+            respuesta_id = respuesta_existente["cabecera"]["respuesta_id"]
+            ya_existia_respuesta = True
+            logger.info(
+                f"Ya existe respuesta {respuesta_id} para pedido {pedido_id}, "
+                f"se usará para la confirmación"
+            )
+
+        detalles = pedido.get("detalles", [])
+        if not detalles:
+            logger.error(f"Pedido {pedido_id} no tiene detalles")
+            raise ValueError(f"El pedido {pedido_id} no tiene detalles")
+
+        logger.debug(f"Procesando {len(detalles)} detalles del pedido {pedido_id}")
+        respuestas_cantidades, respuestas_precios = self._convertir_detalles_a_respuestas(
+            conn, detalles
+        )
+
+        if not respuestas_cantidades:
+            logger.error(
+                f"No se pudo crear ninguna respuesta para pedido {pedido_id}: "
+                f"el pedido no tiene detalles válidos"
+            )
+            raise ValueError("No se pudo crear ninguna respuesta: el pedido no tiene detalles válidos")
+
+        logger.debug(
+            f"Se crearon {len(respuestas_cantidades)} respuestas de cantidades "
+            f"y {len(respuestas_precios)} respuestas de precios"
+        )
+
+        try:
+            validacion = self.proveedor_service.validar_respuesta_proveedor(
+                pedido=pedido,
+                respuestas_cantidades=respuestas_cantidades,
+                respuestas_precios=respuestas_precios,
+            )
+        except Exception as e:
+            logger.error(f"Error en validación de respuesta: {e}", exc_info=True)
+            raise ValueError(f"Error al validar respuesta: {str(e)}")
+
+        respuesta_id, resultado_guardado = self._persistir_respuesta(
+            conn, respuesta_repo, pedido_id, respuesta_id, ya_existia_respuesta,
+            usuario_id, observaciones_generales, respuestas_cantidades, respuestas_precios,
+        )
+
+        return pedido, respuesta_id, resultado_guardado, validacion, ya_existia_respuesta
+
+    def generar_respuesta_proveedor_automatica(
+        self,
+        pedido_id: str,
+        usuario_id: Optional[str] = None,
+    ) -> str:
+        """
+        Genera la respuesta_proveedor de un pedido sin transicionar su estado_id ni
+        registrar confirmación de EL RAYO.
+
+        Usada por el botón "Aceptar" sobre un pedido hijo en PRODUCCION_POSPUESTA (22):
+        ese pedido pasa a LISTO_PARA_REDISTRIBUCION (25) directo, sin pasar por
+        "Confirmado por El Rayo" (4) -- el único otro punto que genera respuesta_proveedor
+        hasta ahora (ver crear_respuesta_desde_pedido). Sin ella, la vista de Redistribución
+        se queda mostrando "Preparando datos para redistribución" indefinidamente (gate en
+        RedistribucionTiendas.vue).
+
+        Returns:
+            respuesta_id generado
+        """
+        with get_db_connection_context() as conn:
+            _, respuesta_id, _, _, _ = self._generar_respuesta_automatica(conn, pedido_id, usuario_id)
+            return respuesta_id
+
     def crear_respuesta_desde_pedido(
         self,
         pedido_id: str,
@@ -821,63 +922,10 @@ class PedidoProveedorWebService:
         """
         with get_db_connection_context() as conn:
             repo = PedidoRepository(conn)
-            pedido = repo.get_pedido_completo(pedido_id)
-
-            if not pedido:
-                logger.error(f"Pedido {pedido_id} no encontrado")
-                raise ValueError(f"Pedido no encontrado: {pedido_id}")
-
-            logger.debug(f"Pedido {pedido_id} encontrado con {len(pedido.get('detalles', []))} detalles")
-            self._validar_fecha_entrega(pedido, pedido_id)
-
-            respuesta_repo = PedidoRespuestaRepository(conn)
-            respuesta_existente = respuesta_repo.obtener_respuesta_activa(pedido_id)
-
-            respuesta_id = None
-            ya_existia_respuesta = False
-            if respuesta_existente:
-                respuesta_id = respuesta_existente["cabecera"]["respuesta_id"]
-                ya_existia_respuesta = True
-                logger.info(
-                    f"Ya existe respuesta {respuesta_id} para pedido {pedido_id}, "
-                    f"se usará para la confirmación"
+            pedido, respuesta_id, resultado_guardado, validacion, ya_existia_respuesta = (
+                self._generar_respuesta_automatica(
+                    conn, pedido_id, usuario_id, observaciones_generales
                 )
-
-            detalles = pedido.get("detalles", [])
-            if not detalles:
-                logger.error(f"Pedido {pedido_id} no tiene detalles")
-                raise ValueError(f"El pedido {pedido_id} no tiene detalles")
-
-            logger.debug(f"Procesando {len(detalles)} detalles del pedido {pedido_id}")
-            respuestas_cantidades, respuestas_precios = self._convertir_detalles_a_respuestas(
-                conn, detalles
-            )
-
-            if not respuestas_cantidades:
-                logger.error(
-                    f"No se pudo crear ninguna respuesta para pedido {pedido_id}: "
-                    f"el pedido no tiene detalles válidos"
-                )
-                raise ValueError("No se pudo crear ninguna respuesta: el pedido no tiene detalles válidos")
-
-            logger.debug(
-                f"Se crearon {len(respuestas_cantidades)} respuestas de cantidades "
-                f"y {len(respuestas_precios)} respuestas de precios"
-            )
-
-            try:
-                validacion = self.proveedor_service.validar_respuesta_proveedor(
-                    pedido=pedido,
-                    respuestas_cantidades=respuestas_cantidades,
-                    respuestas_precios=respuestas_precios,
-                )
-            except Exception as e:
-                logger.error(f"Error en validación de respuesta: {e}", exc_info=True)
-                raise ValueError(f"Error al validar respuesta: {str(e)}")
-
-            respuesta_id, resultado_guardado = self._persistir_respuesta(
-                conn, respuesta_repo, pedido_id, respuesta_id, ya_existia_respuesta,
-                usuario_id, observaciones_generales, respuestas_cantidades, respuestas_precios,
             )
 
             estado_id_actual = pedido["cabecera"].get("estado_id")

@@ -979,7 +979,10 @@ class PedidoSAPValidator:
                         "item_name": producto_info.get("item_name"),
                         "pack_sap": producto_info.get("pack_sap"),
                         "grupo_articulos": producto_info.get("grupo_articulos"),
-                        "unidad_conversion": producto_info.get("unidad_conversion")
+                        "unidad_conversion": producto_info.get("unidad_conversion"),
+                        "codigo_barras": producto_info.get("codigo_barras"),
+                        "pvp_sap": producto_info.get("pvp_sap"),
+                        "marca_sap": producto_info.get("marca_sap")
                     },
                     "severity": None
                 }

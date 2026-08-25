@@ -26,6 +26,8 @@ _DESC_NUMERO_PEDIDO = "Número del pedido"
 _DESC_UUID_PEDIDO = "UUID del pedido"
 _DESC_UUID_TIENDA = "UUID de la tienda"
 _DESC_MENSAJE_CONFIRMACION = "Mensaje de confirmación"
+_DESC_CODIGO_TIENDA = "Código de la tienda"
+_DESC_NOMBRE_TIENDA = "Nombre de la tienda"
 _EX_CODIGO_BCO = "R225.1012.BCO"
 _EX_DESCRIPCION = "Producto ejemplo"
 _EX_TIENDA_1 = "Tienda 1"
@@ -736,32 +738,38 @@ class ModificacionColumnaItem(BaseModel):
     columna_key: str = Field(..., description="Clave de la columna modificada")
     modificado_por: Optional[str] = Field(None, description="Usuario que realizó la modificación")
     fecha_modificacion: str = Field(..., description="Fecha de modificación (ISO 8601)")
+    rol_modificador: Optional[str] = Field(None, description="Rol responsable de la última modificación: PRODUCCION_ELRAYO u ODCSAP")
 
 
 class ObtenerModificacionesColumnasResponse(BaseModel):
     """Modelo para la respuesta de obtener modificaciones de columnas."""
-    
+
     status: str = Field(default="success", description=_DESC_ESTADO_OPERACION)
     numero_pedido: str = Field(..., description=_DESC_NUMERO_PEDIDO)
     modificaciones: List[ModificacionColumnaItem] = Field(default_factory=list, description="Lista de modificaciones")
 
 
-class NotificarConfirmacionRequest(BaseModel):
-    """Modelo para el request de notificar confirmación de pedido."""
-    
-    usuario_origen: str = Field(default="EL RAYO", description="Usuario que solicita la confirmación")
-    usuario_destino: str = Field(default="MABEL TRADING", description="Usuario que debe confirmar")
-    email_destino: Optional[str] = Field(None, description="Email del destinatario (opcional, usa EMAIL_MABEL_TRADING si no se proporciona)")
-    url_confirmacion: Optional[str] = Field(None, description="URL directa para confirmar el pedido (opcional, se genera automáticamente si no se proporciona)")
-    
-    class Config:
-        json_schema_extra = {
-            "example": {
-                "usuario_origen": "EL RAYO",
-                "usuario_destino": "MABEL TRADING",
-                "url_confirmacion": "https://tu-dominio.com/mba3-consultas/pedidos/P-12.48%20-%2012%20-%202025?modo=confirmacion&usuario=mabel-trading"
-            }
-        }
+class AuditLogEntryItem(BaseModel):
+    """Modelo para una entrada del historial de auditoría (pedido_audit_log) de un pedido."""
+
+    entidad: str = Field(..., description="Tabla/entidad afectada (pedido, pedido_detalle, ...)")
+    entidad_id: Optional[str] = Field(None, description="PK del registro afectado dentro de esa entidad")
+    accion: str = Field(..., description="INSERT, UPDATE o DELETE")
+    campo_modificado: Optional[str] = Field(None, description="Columna modificada (solo para UPDATE)")
+    valor_anterior: Optional[str] = Field(None, description="Valor previo")
+    valor_nuevo: Optional[str] = Field(None, description="Valor nuevo")
+    usuario: str = Field(..., description="Usuario que realizó el cambio (email o username)")
+    fecha: str = Field(..., description="Fecha/hora del cambio (ISO 8601, UTC)")
+    origen: Optional[str] = Field(None, description="Origen de la operación (WEB, API, EXCEL, CELERY, ...)")
+    comentario: Optional[str] = Field(None, description="Observación opcional")
+
+
+class ObtenerAuditLogResponse(BaseModel):
+    """Modelo para la respuesta del historial de auditoría de un pedido."""
+
+    status: str = Field(default="success", description=_DESC_ESTADO_OPERACION)
+    numero_pedido: str = Field(..., description=_DESC_NUMERO_PEDIDO)
+    registros: List[AuditLogEntryItem] = Field(default_factory=list, description="Historial de cambios, más reciente primero")
 
 
 # ============================================================================
@@ -830,8 +838,8 @@ class DistribucionConfirmadaItem(BaseModel):
     id: str = Field(..., description="UUID de la distribución confirmada")
     pedido_detalle_id: str = Field(..., description=_DESC_UUID_DETALLE_PEDIDO)
     tienda_id: str = Field(..., description=_DESC_UUID_TIENDA)
-    tienda_codigo: Optional[str] = Field(None, description="Código de la tienda")
-    tienda_nombre: Optional[str] = Field(None, description="Nombre de la tienda")
+    tienda_codigo: Optional[str] = Field(None, description=_DESC_CODIGO_TIENDA)
+    tienda_nombre: Optional[str] = Field(None, description=_DESC_NOMBRE_TIENDA)
     cantidad_solicitada: float = Field(..., ge=0, description="Cantidad (p. ej. docenas, puede ser fraccionaria)")
     cantidad_confirmada: float = Field(..., ge=0)
     cantidad_asignada: float = Field(..., ge=0)
@@ -960,13 +968,30 @@ class ConfirmarRedistribucionResponse(BaseModel):
 # Modelos compatibles con Frontend (AjusteDetalle)
 # ============================================================================
 
+class TiendaCatalogoItem(BaseModel):
+    """Item del catálogo maestro de tiendas (usado por el buscador de 'agregar tienda' en redistribución)."""
+
+    tienda_id: str = Field(..., description="UUID de la tienda")
+    codigo: str = Field(..., description=_DESC_CODIGO_TIENDA)
+    nombre: Optional[str] = Field(None, description=_DESC_NOMBRE_TIENDA)
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "tienda_id": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+                "codigo": "T001",
+                "nombre": "Tienda Principal"
+            }
+        }
+
+
 class DistribucionTiendaFrontend(BaseModel):
     """Modelo para distribución por tienda (compatible con frontend). Acepta decimales (ej. 0.5)."""
     
-    tienda_codigo: str = Field(..., description="Código de la tienda")
-    tienda_nombre: Optional[str] = Field(None, description="Nombre de la tienda")
+    tienda_codigo: str = Field(..., description=_DESC_CODIGO_TIENDA)
+    tienda_nombre: Optional[str] = Field(None, description=_DESC_NOMBRE_TIENDA)
     cantidad: float = Field(..., ge=0, description="Cantidad asignada a esta tienda (acepta decimales)")
-    es_bodega: Optional[bool] = Field(default=False, description="Indica si es una bodega central (RL-CD, OUT-CD, REG-CD)")
+    es_bodega: Optional[bool] = Field(default=False, description="Indica si es una bodega central (RL-CD, OUT-CD, RG-CD)")
     
     class Config:
         json_schema_extra = {
@@ -1377,7 +1402,8 @@ class ModificarPedidoCabeceraRequest(BaseModel):
     origen_traslado: Optional[str] = Field(None, description="Origen de traslado (bodega)")
     serie: Optional[str] = Field(None, description="Serie del documento")
     estado: Optional[str] = Field(None, description="Estado del pedido")
-    
+    fecha_facturacion: Optional[str] = Field(None, description="Fecha de facturación (YYYY-MM-DD), req. 1.8")
+
     class Config:
         json_schema_extra = {
             "example": {
@@ -1388,7 +1414,8 @@ class ModificarPedidoCabeceraRequest(BaseModel):
                 "comprador_nombre": "VACA ANDREA",
                 "comprador_codigo": "801",
                 "origen_traslado": "RL-CD",
-                "serie": "A"
+                "serie": "A",
+                "fecha_facturacion": "2025-01-25"
             }
         }
 
@@ -1427,6 +1454,14 @@ class ProcesoCompletoSAPDetalleODC(BaseModel):
         None,
         description="True si el fallo fue probablemente transitorio (conexión/SL); el usuario puede reintentar envío.",
     )
+    queued: Optional[bool] = Field(
+        None,
+        description=(
+            "True si el middleware encoló la creación de la ODC (HTTP 202, SAP saturado): no es un "
+            "error, SAP la sigue procesando en segundo plano y se confirmará sola. No mostrar como "
+            "error ni ofrecer reintento mientras esto sea True."
+        ),
+    )
     # ITR en envio_sap para que el frontend encuentre las solicitudes en response.envio_sap.solicitudes_transferencia
     solicitudes_transferencia: Optional[dict] = Field(
         None,
@@ -1458,7 +1493,18 @@ class ProcesoCompletoSAPResponse(BaseModel):
     odc_generada: Optional[dict] = Field(None, description="Resultado de la generación de ODC")
     
     # Paso 3: Enviar a SAP
-    envio_sap: Optional[ProcesoCompletoSAPDetalleODC] = Field(None, description="Resultado del envío a SAP")
+    envio_sap: Optional[ProcesoCompletoSAPDetalleODC] = Field(
+        None,
+        description="Resultado del envío a SAP de la primera ODC (compatibilidad; ver envios_sap para el pedido completo)"
+    )
+    envios_sap: Optional[List[ProcesoCompletoSAPDetalleODC]] = Field(
+        None,
+        description=(
+            "Resultado del envío a SAP de TODAS las ODC del pedido. La mayoría de los "
+            "pedidos generan 1 sola (mismo contenido que envio_sap); un pedido que mezcla "
+            "tiendas de más de una marca (origen_traslado_detectado) genera 2."
+        )
+    )
     
     # Solicitudes de Transferencia (por tienda): para mostrar en modal todas las ITR con doc_num y tienda
     solicitudes_transferencia: Optional[dict] = Field(
