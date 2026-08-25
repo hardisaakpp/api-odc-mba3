@@ -93,11 +93,7 @@ async def _listar_pedidos_handler(
     proveedor_nombre: Optional[str],
     numero_pedido: Optional[str],
     creado_por: Optional[str],
-    limit: Optional[int],
-    offset: Optional[int],
-    page: Optional[int],
-    page_size: Optional[int],
-    page_size_camel: Optional[int],
+    paginacion: _Paginacion,
     solo_redistribucion: Optional[str],
     solo_pendientes_accion: Optional[str],
     solo_produccion_elrayo: Optional[str],
@@ -123,12 +119,12 @@ async def _listar_pedidos_handler(
         # Req. 1.8 (segunda fase): odcsap.view ya no ve NUEVO_PEDIDO/GESTIONAR_PEDIDO,
         # ahora exclusivos de Producción El Rayo.
         excluir_estados_el_rayo = _debe_excluir_estados_el_rayo(user)
-        size = page_size_camel if page_size_camel is not None else page_size
-        if limit is not None:
-            use_limit, use_offset = limit, offset or 0
+        size = paginacion.page_size_camel if paginacion.page_size_camel is not None else paginacion.page_size
+        if paginacion.limit is not None:
+            use_limit, use_offset = paginacion.limit, paginacion.offset or 0
         else:
             use_limit = size if size is not None else 10
-            use_offset = ((page or 1) - 1) * use_limit
+            use_offset = ((paginacion.page or 1) - 1) * use_limit
 
         resultado = await asyncio.to_thread(
             _query_listar_pedidos,
@@ -477,11 +473,7 @@ def register_pedidos_listado_endpoints(app: FastAPI):
             proveedor_nombre=proveedor_nombre,
             numero_pedido=numero_pedido,
             creado_por=creado_por,
-            limit=paginacion.limit,
-            offset=paginacion.offset,
-            page=paginacion.page,
-            page_size=paginacion.page_size,
-            page_size_camel=paginacion.page_size_camel,
+            paginacion=paginacion,
             solo_redistribucion=solo_redistribucion,
             solo_pendientes_accion=solo_pendientes_accion,
             solo_produccion_elrayo=solo_produccion_elrayo,
@@ -490,11 +482,7 @@ def register_pedidos_listado_endpoints(app: FastAPI):
 
     @app.get("/api/pedidos/confirmados", tags=["Pedidos"])
     async def listar_pedidos_confirmados(
-        page: Optional[int] = Query(1, ge=1, description="Número de página (1-based)"),
-        page_size: Optional[int] = Query(10, ge=1, le=100, description="Tamaño de página (snake_case)"),
-        page_size_camel: Optional[int] = Query(None, alias="pageSize", ge=1, le=100, description="Tamaño de página (camelCase, alias de page_size)"),
-        limit: Optional[int] = Query(None, description="Límite de registros (alternativa a page_size)"),
-        offset: Optional[int] = Query(None, description="Offset (alternativa a page)"),
+        paginacion: _Paginacion = Depends(_Paginacion),
         fecha_desde: Optional[str] = Query(None, description="Filtrar desde fecha (YYYY-MM-DD)"),
         fecha_hasta: Optional[str] = Query(None, description="Filtrar hasta fecha (YYYY-MM-DD)"),
         tipo_fecha: Optional[str] = Query(
@@ -530,11 +518,11 @@ def register_pedidos_listado_endpoints(app: FastAPI):
         - `total`, `page`, `pageSize`, `totalPages`
         """
         return await _listar_pedidos_confirmados_handler(
-            page=page,
-            page_size=page_size,
-            page_size_camel=page_size_camel,
-            limit=limit,
-            offset=offset,
+            page=paginacion.page,
+            page_size=paginacion.page_size,
+            page_size_camel=paginacion.page_size_camel,
+            limit=paginacion.limit,
+            offset=paginacion.offset,
             fecha_desde=fecha_desde,
             fecha_hasta=fecha_hasta,
             tipo_fecha=tipo_fecha,
