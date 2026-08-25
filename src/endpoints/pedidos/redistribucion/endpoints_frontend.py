@@ -38,6 +38,7 @@ logger = logging.getLogger(__name__)
 
 _PERM_MABEL = 'mabel.view'
 _PERM_ODCSAP = 'odcsap.view'
+MEDIA_TYPE_EXCEL = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
 
 def _db_confirmar_redistribucion(
@@ -323,10 +324,10 @@ def _db_descargar_excel(
 
         return StreamingResponse(
             excel_buffer,
-            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            media_type=MEDIA_TYPE_EXCEL,
             headers={
                 "Content-Disposition": f"attachment; filename={filename}",
-                "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                "Content-Type": MEDIA_TYPE_EXCEL
             }
         )
 
@@ -405,10 +406,10 @@ def _db_exportar_traslados_excel(
 
         return StreamingResponse(
             excel_buffer,
-            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            media_type=MEDIA_TYPE_EXCEL,
             headers={
                 "Content-Disposition": f"attachment; filename={filename}",
-                "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                "Content-Type": MEDIA_TYPE_EXCEL
             }
         )
 
