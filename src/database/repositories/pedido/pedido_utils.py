@@ -307,6 +307,45 @@ class PedidoUtils:
         
         return tiendas_distribucion
     
+    @staticmethod
+    def _comentario_desde_row(row: Any, tiene_comentario: bool) -> Optional[str]:
+        """Valor de "comentario" si la consulta trae esa columna."""
+        if tiene_comentario and len(row) > 11:
+            return row[11] if row[11] else None
+        return None
+
+    @staticmethod
+    def _campos_modificados_desde_row(row: Any, tiene_campos_modificados: bool) -> Dict[str, bool]:
+        """Flags de modificación manual si la consulta trae esas columnas
+        (en BD antigua sin estas columnas, devuelve False por defecto)."""
+        if tiene_campos_modificados and len(row) > 14:
+            return {
+                "costo_modificado_manual": bool(row[12]),
+                "total_modificado_manual": bool(row[13]),
+                "comentario_modificado_manual": bool(row[14]),
+            }
+        return {
+            "costo_modificado_manual": False,
+            "total_modificado_manual": False,
+            "comentario_modificado_manual": False,
+        }
+
+    @staticmethod
+    def _costo_margen_desde_row(row: Any, tiene_costo_margen: bool) -> Optional[float]:
+        """Valor de "costo_margen" (columna "Costo" del Excel, informativa,
+        ya no alimenta el Margen de Rentabilidad) si la consulta trae esa columna."""
+        if tiene_costo_margen and len(row) > 15:
+            return float(row[15]) if row[15] else None
+        return None
+
+    @staticmethod
+    def _costo_unitario_desde_row(row: Any, tiene_costo_unitario: bool) -> Optional[float]:
+        """Valor de "costo_unitario" (costo_doc_sin_iva / unidad_conversion),
+        insumo del Margen de Rentabilidad, si la consulta trae esa columna."""
+        if tiene_costo_unitario and len(row) > 16:
+            return float(row[16]) if row[16] else None
+        return None
+
     def construir_detalle_desde_row(
         self,
         row: Any,
@@ -353,34 +392,17 @@ class PedidoUtils:
         }
 
         # Agregar comentario si existe en la consulta
-        if tiene_comentario and len(row) > 11:
-            detalle_dict["comentario"] = row[11] if row[11] else None
-        else:
-            detalle_dict["comentario"] = None
+        detalle_dict["comentario"] = self._comentario_desde_row(row, tiene_comentario)
 
         # Agregar campos de modificación manual si existen en la consulta
-        if tiene_campos_modificados and len(row) > 14:
-            detalle_dict["costo_modificado_manual"] = bool(row[12])
-            detalle_dict["total_modificado_manual"] = bool(row[13])
-            detalle_dict["comentario_modificado_manual"] = bool(row[14])
-        else:
-            # Si los campos no existen en BD antigua, devolver False por defecto
-            detalle_dict["costo_modificado_manual"] = False
-            detalle_dict["total_modificado_manual"] = False
-            detalle_dict["comentario_modificado_manual"] = False
+        detalle_dict.update(self._campos_modificados_desde_row(row, tiene_campos_modificados))
 
         # Agregar costo_margen si existe en la consulta (columna "Costo" del Excel, informativa,
         # ya no alimenta el Margen de Rentabilidad; ver costo_unitario)
-        if tiene_costo_margen and len(row) > 15:
-            detalle_dict["costo_margen"] = float(row[15]) if row[15] else None
-        else:
-            detalle_dict["costo_margen"] = None
+        detalle_dict["costo_margen"] = self._costo_margen_desde_row(row, tiene_costo_margen)
 
         # Agregar costo_unitario si existe en la consulta (costo_doc_sin_iva / unidad_conversion)
-        if tiene_costo_unitario and len(row) > 16:
-            detalle_dict["costo_unitario"] = float(row[16]) if row[16] else None
-        else:
-            detalle_dict["costo_unitario"] = None
+        detalle_dict["costo_unitario"] = self._costo_unitario_desde_row(row, tiene_costo_unitario)
 
         # Margen de Rentabilidad (req. 1.5): calculado en backend, no en el frontend.
         detalle_dict["margen"] = calcular_margen_rentabilidad(detalle_dict["costo_unitario"], detalle_dict["pvp"])
