@@ -25,6 +25,15 @@ _OC_CABECERA_SELECT = """
 """
 
 
+def _append_set_clause_if_not_none(
+    set_clauses: List[str], values: List[Any], column: str, value: Any
+) -> None:
+    """Agrega `columna = ?` y su valor a un UPDATE dinámico si value no es None."""
+    if value is not None:
+        set_clauses.append(f"{column} = ?")
+        values.append(value)
+
+
 def _map_oc_cabecera_row(row: Any) -> Dict[str, Any]:
     """Mapea una fila de orden_compra_cabecera al dict usado por la API."""
     return {
@@ -862,33 +871,13 @@ class OrdenCompraRepository:
                 set_clauses.append("modificado_fecha = ?")
                 values.append(ahora_naive())
             
-            if numero_oc_sap is not None:
-                set_clauses.append("numero_oc_sap = ?")
-                values.append(numero_oc_sap)
-            
-            if doc_entry is not None:
-                set_clauses.append("doc_entry = ?")
-                values.append(doc_entry)
-            
-            if respuesta_sap is not None:
-                set_clauses.append("respuesta_sap = ?")
-                values.append(respuesta_sap)
-            
-            if error_message is not None:
-                set_clauses.append("error_message = ?")
-                values.append(error_message)
-            
-            if error_code is not None:
-                set_clauses.append("error_code = ?")
-                values.append(error_code)
-            
-            if error_source is not None:
-                set_clauses.append("error_source = ?")
-                values.append(error_source)
-
-            if job_id is not None:
-                set_clauses.append("job_id = ?")
-                values.append(job_id)
+            _append_set_clause_if_not_none(set_clauses, values, "numero_oc_sap", numero_oc_sap)
+            _append_set_clause_if_not_none(set_clauses, values, "doc_entry", doc_entry)
+            _append_set_clause_if_not_none(set_clauses, values, "respuesta_sap", respuesta_sap)
+            _append_set_clause_if_not_none(set_clauses, values, "error_message", error_message)
+            _append_set_clause_if_not_none(set_clauses, values, "error_code", error_code)
+            _append_set_clause_if_not_none(set_clauses, values, "error_source", error_source)
+            _append_set_clause_if_not_none(set_clauses, values, "job_id", job_id)
 
             # Si es estado ENVIADA, limpiar campos de error
             if estado == "ENVIADA":
