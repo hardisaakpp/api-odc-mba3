@@ -57,6 +57,66 @@ def _doc_num_de(itr_por_tienda: Dict[str, int], tienda_codigo: str) -> Optional[
     return itr_por_tienda.get(_norm(tienda_codigo))
 
 
+def _agregar_filas_producto(
+    producto: Dict[str, Any],
+    itr_por_tienda: Dict[str, int],
+    tiendas_por_codigo: Dict[str, Dict[str, Any]],
+    totales_por_tienda: Dict[str, Dict[str, float]],
+    filas: List[Dict[str, Any]],
+) -> None:
+    """Agrega, para un producto, una fila por cada tienda de su distribución
+    (mutando tiendas_por_codigo/totales_por_tienda/filas in-place). Usado por
+    `construir_matriz_traslados`."""
+    codigo_articulo = producto.get("codigo_interno") or ""
+    descripcion = producto.get("descripcion_sap") or ""
+    codigo_barras = producto.get("codigo_barras") or ""
+    # Confirmado real del proveedor, que solo existe a nivel producto.
+    confirmado_producto = _a_float(producto.get("cantidad_confirmada_total"))
+
+    for dist in producto.get("distribuciones") or []:
+        tienda_codigo = dist.get("tienda_codigo") or ""
+        if not tienda_codigo:
+            continue
+
+        es_bodega = bool(dist.get("es_bodega"))
+        if tienda_codigo not in tiendas_por_codigo:
+            tiendas_por_codigo[tienda_codigo] = {
+                "codigo": tienda_codigo,
+                "nombre": dist.get("tienda_nombre") or "",
+                "es_bodega": es_bodega,
+                "doc_num": _doc_num_de(itr_por_tienda, tienda_codigo),
+            }
+            totales_por_tienda[tienda_codigo] = {
+                "solicitada": 0.0,
+                "confirmada": 0.0,
+                "asignada": 0.0,
+            }
+
+        solicitada = _a_float(dist.get("cantidad_solicitada"))
+        confirmada = _a_float(dist.get("cantidad_confirmada"))
+        asignada = _a_float(dist.get("cantidad_asignada"))
+
+        filas.append(
+            {
+                "doc_num": tiendas_por_codigo[tienda_codigo]["doc_num"],
+                "tienda_codigo": tienda_codigo,
+                "tienda_nombre": tiendas_por_codigo[tienda_codigo]["nombre"],
+                "es_bodega": es_bodega,
+                "codigo_articulo": codigo_articulo,
+                "descripcion": descripcion,
+                "codigo_barras": codigo_barras,
+                "cantidad_solicitada": solicitada,
+                "cantidad_confirmada": confirmada,
+                "cantidad_asignada": asignada,
+                "confirmado_total_producto": confirmado_producto,
+            }
+        )
+
+        totales_por_tienda[tienda_codigo]["solicitada"] += solicitada
+        totales_por_tienda[tienda_codigo]["confirmada"] += confirmada
+        totales_por_tienda[tienda_codigo]["asignada"] += asignada
+
+
 def construir_matriz_traslados(
     productos_enriquecidos: List[Dict[str, Any]],
     itr_por_tienda: Optional[Dict[str, int]] = None,
@@ -81,54 +141,7 @@ def construir_matriz_traslados(
     totales_por_tienda: Dict[str, Dict[str, float]] = {}
 
     for producto in productos_enriquecidos:
-        codigo_articulo = producto.get("codigo_interno") or ""
-        descripcion = producto.get("descripcion_sap") or ""
-        codigo_barras = producto.get("codigo_barras") or ""
-        # Confirmado real del proveedor, que solo existe a nivel producto.
-        confirmado_producto = _a_float(producto.get("cantidad_confirmada_total"))
-
-        for dist in producto.get("distribuciones") or []:
-            tienda_codigo = dist.get("tienda_codigo") or ""
-            if not tienda_codigo:
-                continue
-
-            es_bodega = bool(dist.get("es_bodega"))
-            if tienda_codigo not in tiendas_por_codigo:
-                tiendas_por_codigo[tienda_codigo] = {
-                    "codigo": tienda_codigo,
-                    "nombre": dist.get("tienda_nombre") or "",
-                    "es_bodega": es_bodega,
-                    "doc_num": _doc_num_de(itr_por_tienda, tienda_codigo),
-                }
-                totales_por_tienda[tienda_codigo] = {
-                    "solicitada": 0.0,
-                    "confirmada": 0.0,
-                    "asignada": 0.0,
-                }
-
-            solicitada = _a_float(dist.get("cantidad_solicitada"))
-            confirmada = _a_float(dist.get("cantidad_confirmada"))
-            asignada = _a_float(dist.get("cantidad_asignada"))
-
-            filas.append(
-                {
-                    "doc_num": tiendas_por_codigo[tienda_codigo]["doc_num"],
-                    "tienda_codigo": tienda_codigo,
-                    "tienda_nombre": tiendas_por_codigo[tienda_codigo]["nombre"],
-                    "es_bodega": es_bodega,
-                    "codigo_articulo": codigo_articulo,
-                    "descripcion": descripcion,
-                    "codigo_barras": codigo_barras,
-                    "cantidad_solicitada": solicitada,
-                    "cantidad_confirmada": confirmada,
-                    "cantidad_asignada": asignada,
-                    "confirmado_total_producto": confirmado_producto,
-                }
-            )
-
-            totales_por_tienda[tienda_codigo]["solicitada"] += solicitada
-            totales_por_tienda[tienda_codigo]["confirmada"] += confirmada
-            totales_por_tienda[tienda_codigo]["asignada"] += asignada
+        _agregar_filas_producto(producto, itr_por_tienda, tiendas_por_codigo, totales_por_tienda, filas)
 
     # Tiendas primero (ordenadas por código), bodegas al final.
     tiendas = sorted(
