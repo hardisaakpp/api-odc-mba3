@@ -1519,6 +1519,70 @@ class PedidoService:
             if cantidades[idx] > 0
         ]
 
+    @staticmethod
+    def _mods_columnas_por_detalle(repo: PedidoRepository, numero_pedido: str) -> Dict[str, Dict[str, Optional[str]]]:
+        """rol_modificador de cada columna (COSTO UNIT./TOTAL/COMENTARIO), agrupado por
+        pedido_detalle_id, para un pedido. Usado por crear_pedido_hijo_diferencia para
+        que el hijo herede el mismo resaltado de color que tenía el padre."""
+        resultado: Dict[str, Dict[str, Optional[str]]] = {}
+        mods_result = repo.obtener_modificaciones_columnas(numero_pedido)
+        if not mods_result.get("success"):
+            return resultado
+        for mod in mods_result["modificaciones"]:
+            resultado.setdefault(mod["pedido_detalle_id"], {})[mod["columna_key"]] = mod.get("rol_modificador")
+        return resultado
+
+    @staticmethod
+    def _heredar_modificaciones_columnas_hijo(
+        repo: PedidoRepository,
+        mods_linea_padre: Dict[str, Optional[str]],
+        numero_pedido_hijo: str,
+        pedido_detalle_id_hijo: str,
+        audit_context: Optional["AuditContext"],
+    ) -> None:
+        """Replica en la línea del hijo el rol_modificador (resaltado de color) que
+        tenía la línea del padre para cada columna. Sin efecto si el padre no tenía
+        ninguna columna marcada."""
+        if not mods_linea_padre:
+            return
+        columnas_por_rol: Dict[Optional[str], List[str]] = {}
+        for columna_key, rol in mods_linea_padre.items():
+            columnas_por_rol.setdefault(rol, []).append(columna_key)
+        for rol, columnas in columnas_por_rol.items():
+            repo.guardar_modificaciones_columnas(
+                numero_pedido=numero_pedido_hijo,
+                modificaciones=[
+                    {"pedido_detalle_id": pedido_detalle_id_hijo, "columna_key": ck}
+                    for ck in columnas
+                ],
+                rol_modificador=rol,
+                audit_context=audit_context,
+            )
+
+    def _heredar_distribucion_tiendas_hijo(
+        self,
+        repo: PedidoRepository,
+        detalle_padre: Dict[str, Any],
+        diferencia: float,
+        original_padre: Optional[float],
+        pedido_detalle_id_hijo: str,
+        audit_context: Optional["AuditContext"],
+    ) -> None:
+        """Escala la distribución por tienda del padre a la misma proporción que la
+        diferencia insertada en el hijo (ver _escalar_distribucion_tiendas_hijo). Sin
+        efecto si el padre no tenía distribución por tienda o no hay cantidad original
+        con la que escalar."""
+        tiendas_padre = detalle_padre.get("tiendas") or []
+        if not (tiendas_padre and original_padre):
+            return
+        distribuciones_hijo = self._escalar_distribucion_tiendas_hijo(
+            tiendas_padre, diferencia, original_padre
+        )
+        if distribuciones_hijo:
+            repo.insert_detalle_tiendas(
+                pedido_detalle_id_hijo, distribuciones_hijo, audit_context=audit_context
+            )
+
     def crear_pedido_hijo_diferencia(
         self,
         pedido_padre: Dict[str, Any],
@@ -1594,11 +1658,7 @@ class PedidoService:
             # se hereda aunque su valor en el hijo es la porción de diferencia (no una
             # copia), porque esa diferencia surgió de una línea que sí pudo haber sido
             # editada por cualquiera de los 2 roles.
-            mods_padre_por_detalle: Dict[str, Dict[str, Optional[str]]] = {}
-            mods_padre_result = repo.obtener_modificaciones_columnas(numero_pedido_padre)
-            if mods_padre_result.get("success"):
-                for mod in mods_padre_result["modificaciones"]:
-                    mods_padre_por_detalle.setdefault(mod["pedido_detalle_id"], {})[mod["columna_key"]] = mod.get("rol_modificador")
+            mods_padre_por_detalle = self._mods_columnas_por_detalle(repo, numero_pedido_padre)
 
             detalles_insertados = 0
             for orden_linea, dif in enumerate(detalles_con_diferencia):
@@ -1637,35 +1697,21 @@ class PedidoService:
                 )
                 detalles_insertados += 1
 
-                mods_linea_padre = mods_padre_por_detalle.get(dif["pedido_detalle_id"], {})
-                if mods_linea_padre:
-                    columnas_por_rol: Dict[Optional[str], List[str]] = {}
-                    for columna_key, rol in mods_linea_padre.items():
-                        columnas_por_rol.setdefault(rol, []).append(columna_key)
-                    for rol, columnas in columnas_por_rol.items():
-                        repo.guardar_modificaciones_columnas(
-                            numero_pedido=numero_pedido_hijo,
-                            modificaciones=[
-                                {"pedido_detalle_id": pedido_detalle_id_hijo, "columna_key": ck}
-                                for ck in columnas
-                            ],
-                            rol_modificador=rol,
-                            audit_context=audit_context,
-                        )
+                self._heredar_modificaciones_columnas_hijo(
+                    repo,
+                    mods_padre_por_detalle.get(dif["pedido_detalle_id"], {}),
+                    numero_pedido_hijo,
+                    pedido_detalle_id_hijo,
+                    audit_context,
+                )
 
                 # Sin esto, el hijo no sabe hacia qué tiendas redistribuir su porción
                 # (RedistribucionTiendas.vue arma las columnas por tienda desde
                 # detalle.tiendas): se escala la distribución por tienda del padre a la
                 # misma proporción que subtotal_hijo, para no perder el rastro.
-                tiendas_padre = detalle_padre.get("tiendas") or []
-                if tiendas_padre and original_padre:
-                    distribuciones_hijo = self._escalar_distribucion_tiendas_hijo(
-                        tiendas_padre, diferencia, original_padre
-                    )
-                    if distribuciones_hijo:
-                        repo.insert_detalle_tiendas(
-                            pedido_detalle_id_hijo, distribuciones_hijo, audit_context=audit_context
-                        )
+                self._heredar_distribucion_tiendas_hijo(
+                    repo, detalle_padre, diferencia, original_padre, pedido_detalle_id_hijo, audit_context
+                )
 
             logger.info(
                 f"✅ Pedido hijo {numero_pedido_hijo} ({pedido_hijo_id}) creado desde "
