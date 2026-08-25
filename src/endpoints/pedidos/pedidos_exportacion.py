@@ -25,6 +25,7 @@ _PERM_MABEL_VIEW = 'mabel.view'
 _PERM_PRODUCCION_ELRAYO = 'produccion-elrayo.view'
 DESC_UUID_PEDIDO = "UUID del pedido"
 MEDIA_TYPE_EXCEL = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+MSG_PEDIDO_NO_ENCONTRADO = "Pedido no encontrado"
 
 
 def _agregar_logo_roland(ws) -> None:
@@ -311,7 +312,7 @@ def _logic_descargar_pedido(pedido_id: str, user: Dict):
             if not pedido_data:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
-                    detail={"error": "not_found", "message": "Pedido no encontrado"}
+                    detail={"error": "not_found", "message": MSG_PEDIDO_NO_ENCONTRADO}
                 )
 
             cabecera = pedido_data.get("cabecera", {})
@@ -356,7 +357,7 @@ def _logic_descargar_pedido_original(pedido_id: str, user: Dict):
                 if not pedido_vivo:
                     raise HTTPException(
                         status_code=status.HTTP_404_NOT_FOUND,
-                        detail={"error": "not_found", "message": "Pedido no encontrado"}
+                        detail={"error": "not_found", "message": MSG_PEDIDO_NO_ENCONTRADO}
                     )
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
@@ -409,7 +410,7 @@ def _logic_exportar_margen_excel(pedido_id: str, user: Dict):
             if not pedido_data:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
-                    detail={"error": "not_found", "message": "Pedido no encontrado"}
+                    detail={"error": "not_found", "message": MSG_PEDIDO_NO_ENCONTRADO}
                 )
 
             excel_buffer = generar_excel_margen(pedido_id_real, pedido_data, user)
