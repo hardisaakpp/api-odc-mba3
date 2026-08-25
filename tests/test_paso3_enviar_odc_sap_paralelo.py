@@ -84,11 +84,18 @@ def test_dos_odcs_usa_thread_pool_y_preserva_orden():
         side_effect=fake_en_thread,
     ) as mock_paralelo, patch(
         "src.endpoints.pedidos.redistribucion.endpoints_proceso._enviar_emails_exito_sap"
-    ):
+    ), patch(
+        # Sin este mock, el correo de despacho de la 2da ODC (envios[1:], ver
+        # _notificar_exito_sap) no queda cubierto por el mock de
+        # _enviar_emails_exito_sap (que solo cubre la "primera") y dispara un
+        # envío SMTP real cada vez que corre este test.
+        "src.endpoints.pedidos.redistribucion.endpoints_proceso._enviar_email_despacho_odc"
+    ) as mock_despacho_adicional:
         resultado = _paso3_enviar_odc_sap(oc_repo, oc_sap_service, odcs, **_args_comunes())
 
     mock_secuencial.assert_not_called()
     assert mock_paralelo.call_count == 2
+    mock_despacho_adicional.assert_called_once()
     assert resultado["response"].status == "success"
     envios_sap = resultado["response"].envios_sap
     assert [d.numero_oc_sap for d in envios_sap] == ["OC-oc-RL", "OC-oc-RG"]
