@@ -53,22 +53,18 @@ stages:
     displayName: 'Revisión y Pruebas Unitarias'
     steps:
     
-    # 1. Configurar SDK de Python
-    - task: UsePythonVersion@0
-      displayName: 'Setup Python $(pythonVersion)'
-      inputs:
-        versionSpec: '$(pythonVersion)'
+    # 1. (Omitido) El agente Self-Hosted usa python3 nativo de Ubuntu
 
     # 2. Restaurar dependencias
     - script: |
-        python -m pip install --upgrade pip
-        pip install -r requirements-dev.txt || pip install -r requirements.txt
+        python3 -m pip install --upgrade pip
+        python3 -m pip install -r requirements-dev.txt || python3 -m pip install -r requirements.txt
       displayName: 'Restore dependencies'
 
     # 3. Validación de sintaxis
     - script: |
         echo "Validando sintaxis de Python..."
-        find src -name "*.py" -exec python -m py_compile {} +
+        find src -name "*.py" -exec python3 -m py_compile {} +
       displayName: 'Validación de sintaxis'
 
     # 4. Pruebas Unitarias (DESACTIVADAS TEMPORALMENTE)
