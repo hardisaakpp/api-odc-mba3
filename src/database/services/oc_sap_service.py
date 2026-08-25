@@ -35,6 +35,7 @@ from src.exceptions import SolicitudTransferenciaNoAplicaError
 logger = logging.getLogger(__name__)
 
 _SIN_RESPUESTA_SAP = "Sin respuesta de SAP"
+_ERROR_DESCONOCIDO = "Error desconocido"
 
 # Empareja errores de prevalidación por línea, ej. "Línea 1 (SKU): motivo" o
 # "Línea 1: motivo", para poder agruparlos por motivo (ver _resumir_errores_prevalidacion).
@@ -110,7 +111,7 @@ class OCSAPService:
                 response and response.get("success") and response.get("doc_entry")
             ),
             extract_error=lambda response: (
-                response.get("error", "Error desconocido")
+                response.get("error", _ERROR_DESCONOCIDO)
                 if response else "No se recibió respuesta de SAP Service Layer"
             ),
             max_attempts=self.ODC_RETRY_MAX_ATTEMPTS,
@@ -356,7 +357,7 @@ class OCSAPService:
             execute=lambda: self._precheck_against_service_layer(oc_cabecera, oc_detalles),
             is_success=lambda response: bool(response and response.get("valid")),
             extract_error=lambda response: (
-                '; '.join(response.get("errors", [])) if response else "Error desconocido"
+                '; '.join(response.get("errors", [])) if response else _ERROR_DESCONOCIDO
             ),
             max_attempts=self.PREVALIDACION_RETRY_MAX_ATTEMPTS,
             should_retry=lambda response: mensaje_sugiere_reintento_transitorio(
@@ -557,7 +558,7 @@ class OCSAPService:
             except Exception:
                 pass
             return
-        error_msg = sap_response.get("error", "Error desconocido")
+        error_msg = sap_response.get("error", _ERROR_DESCONOCIDO)
         error_code = sap_response.get("error_code")
         sap_error_details = sap_response.get("sap_error_details")
         if error_code:
