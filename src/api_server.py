@@ -154,27 +154,15 @@ setup_request_logging(app)
 create_endpoints(app)
 
 
-@app.on_event("startup")
-async def startup_event():
-    """
-    Evento de inicio que inicializa recursos críticos antes de aceptar peticiones.
-    
-    Esto resuelve el problema del error 500 en la primera llamada al hacer warm-up de:
-    - Cliente MBA3 (inicialización y login)
-    - Conexión a SQL Server (si está habilitada)
-    """
-    logger.info("=" * 70)
-    logger.info("🚀 Inicializando recursos críticos...")
-    logger.info("=" * 70)
-
-    # 0. Configurar un ThreadPoolExecutor dedicado como executor por defecto
-    #    del event loop. Sin esto, asyncio usa su pool por defecto
-    #    (min(32, os.cpu_count()+4)), compartido por TODAS las llamadas
-    #    asyncio.to_thread(...) de la app (SQL Server vía pyodbc, HTTP a
-    #    SAP/middleware, storage de archivos). Bajo carga ese pool por
-    #    defecto se agota y peticiones quedan encoladas esperando un hilo
-    #    libre. Tamaño configurable con API_THREAD_POOL_MAX_WORKERS (ver
-    #    src/config.py).
+def _configurar_executor_thread_pool() -> None:
+    # Configurar un ThreadPoolExecutor dedicado como executor por defecto
+    # del event loop. Sin esto, asyncio usa su pool por defecto
+    # (min(32, os.cpu_count()+4)), compartido por TODAS las llamadas
+    # asyncio.to_thread(...) de la app (SQL Server vía pyodbc, HTTP a
+    # SAP/middleware, storage de archivos). Bajo carga ese pool por
+    # defecto se agota y peticiones quedan encoladas esperando un hilo
+    # libre. Tamaño configurable con API_THREAD_POOL_MAX_WORKERS (ver
+    # src/config.py).
     loop = asyncio.get_running_loop()
     loop.set_default_executor(
         ThreadPoolExecutor(
@@ -187,28 +175,28 @@ async def startup_event():
         f"max_workers={API_THREAD_POOL_MAX_WORKERS})"
     )
 
-    # 0.1 Precalentar la conexión de control de Celery en un hilo daemon, best-effort
-    #     y sin bloquear el arranque: el primer inspect().ping() en un proceso nuevo
-    #     paga ~10s+ de setup de la conexión de control Redis/Kombu, y así ese costo
-    #     se absorbe aquí en vez de durante la primera petición real de un usuario.
-    def _warm_up_celery_connection():
-        try:
-            import src.celery_app as celery_app_module
-            celery_app_module.celery_app.control.inspect(timeout=5.0).ping()
-            logger.debug("🔥 Conexión de control Celery precalentada")
-        except Exception as e:
-            logger.debug(f"Precalentamiento de conexión Celery no disponible (no crítico): {e}")
 
-    threading.Thread(target=_warm_up_celery_connection, daemon=True, name="celery-warmup").start()
+def _warm_up_celery_connection() -> None:
+    # Precalentar la conexión de control de Celery en un hilo daemon, best-effort
+    # y sin bloquear el arranque: el primer inspect().ping() en un proceso nuevo
+    # paga ~10s+ de setup de la conexión de control Redis/Kombu, y así ese costo
+    # se absorbe aquí en vez de durante la primera petición real de un usuario.
+    try:
+        import src.celery_app as celery_app_module
+        celery_app_module.celery_app.control.inspect(timeout=5.0).ping()
+        logger.debug("🔥 Conexión de control Celery precalentada")
+    except Exception as e:
+        logger.debug(f"Precalentamiento de conexión Celery no disponible (no crítico): {e}")
 
-    # 1. Inicializar cliente MBA3 (warm-up)
+
+def _inicializar_cliente_mba3() -> None:
     try:
         logger.info("📡 Inicializando cliente MBA3...")
         from query_handler import get_mba3_client
-        
+
         client = get_mba3_client()
         logger.info("✅ Cliente MBA3 inicializado")
-        
+
         # Intentar hacer login para verificar que funciona
         if client.login():
             logger.info("✅ Login MBA3 exitoso - JWT obtenido")
@@ -219,100 +207,114 @@ async def startup_event():
         logger.error(f"❌ Error al inicializar cliente MBA3: {e}")
         logger.error("   El sistema intentará inicializarlo en la primera consulta")
         logger.error("   Esto puede causar un error 500 en la primera llamada")
-    
-    # 2. Verificar conexión a SQL Server (si está habilitada)
-    if ENABLE_SQL_SERVER_STORAGE:
-        try:
-            logger.info("💾 Verificando conexión a SQL Server...")
-            from database.connection import get_db_connection
-            
-            conn = get_db_connection()
-            if conn:
-                # Verificar que la conexión funciona
-                cursor = conn.cursor()
-                cursor.execute("SELECT 1")
-                cursor.fetchone()
-                cursor.close()
-                conn.close()
-                logger.info("✅ Conexión a SQL Server verificada")
-            else:
-                logger.warning("⚠️ No se pudo establecer conexión a SQL Server")
-        except Exception as e:
-            logger.error(f"❌ Error al verificar conexión a SQL Server: {e}")
-            logger.error("   El sistema intentará conectarse en la primera operación")
-            logger.error("   Esto puede causar un error 500 en la primera llamada")
-    else:
+
+
+def _verificar_conexion_sql_server() -> None:
+    if not ENABLE_SQL_SERVER_STORAGE:
         logger.info("⏭️ SQL Server storage deshabilitado (ENABLE_SQL_SERVER_STORAGE=false)")
+        return
 
-    # 2.5 Auto-aplicar migraciones de ESQUEMA (ALTER TABLE / catálogo, ver
-    #     scripts/migration_runner.py) pendientes -- SOLO en development. Evita el
-    #     patrón que causó el bug de req. 1.2 (2026-08-17): una migración quedaba
-    #     escrita en scripts/migrations/ y en el manifest, pero nadie la ejecutaba
-    #     contra la BD local, y el código degradaba en silencio (columna ausente ->
-    #     valor NULL) en vez de fallar. NO se activa en staging/production: ahí las
-    #     migraciones se aplican a mano antes del deploy (memoria del equipo: solo
-    #     si son aditivas), un paso deliberado -- staging/producción no deben
-    #     mutar su propio esquema en cada arranque, y con >1 instancia arrancando
-    #     a la vez, correr el mismo ALTER TABLE en paralelo puede bloquearse.
-    #     No confundir con ENABLE_AUTO_MIGRATE de arriba: aquella es la migración
-    #     de datos de despachos vía Celery Beat (legacy), un concepto distinto.
-    #     Se excluyen migraciones category="rollback" (ej. DROP TABLE) del
-    #     auto-apply: igual que las marcadas manual=true en el manifest, son
-    #     cambios destructivos que requieren revisión humana antes de ejecutarse.
-    if ENVIRONMENT == "development":
-        try:
-            scripts_dir = Path(__file__).parent.parent / "scripts"
-            if str(scripts_dir) not in sys.path:
-                sys.path.insert(0, str(scripts_dir))
-            from migration_runner import MigrationRunner
+    try:
+        logger.info("💾 Verificando conexión a SQL Server...")
+        from database.connection import get_db_connection
 
-            logger.info("🔧 Auto-aplicando migraciones de esquema pendientes (solo development)...")
-            runner = MigrationRunner(
-                manifest_path=scripts_dir / "migrations_manifest.yaml",
-                scripts_dir=scripts_dir,
+        conn = get_db_connection()
+        if conn:
+            # Verificar que la conexión funciona
+            cursor = conn.cursor()
+            cursor.execute("SELECT 1")
+            cursor.fetchone()
+            cursor.close()
+            conn.close()
+            logger.info("✅ Conexión a SQL Server verificada")
+        else:
+            logger.warning("⚠️ No se pudo establecer conexión a SQL Server")
+    except Exception as e:
+        logger.error(f"❌ Error al verificar conexión a SQL Server: {e}")
+        logger.error("   El sistema intentará conectarse en la primera operación")
+        logger.error("   Esto puede causar un error 500 en la primera llamada")
+
+
+def _ejecutar_migraciones_pendientes(runner, a_aplicar: list) -> None:
+    logger.info(f"   📋 Migraciones a aplicar: {', '.join(m['version'] for m in a_aplicar)}")
+    for migration in a_aplicar:
+        if not runner.execute_migration(migration, dry_run=False):
+            logger.error(
+                f"   ❌ Migración {migration['version']} ({migration['name']}) falló; "
+                "se detiene el auto-apply. Aplícala manualmente con scripts/migration_runner.py."
             )
-            runner.load_manifest()
-            runner.connect_db()
-            runner.ensure_migration_table()
-            runner.load_applied_migrations()
+            break
 
-            pending = runner.get_pending_migrations(skip_manual=True)
-            excluidas_rollback = [m for m in pending if m.get("category") == "rollback"]
-            a_aplicar = [m for m in pending if m.get("category") != "rollback"]
 
-            if excluidas_rollback:
-                logger.warning(
-                    "   ⚠️ Migraciones 'rollback' pendientes, NO auto-aplicadas (requieren revisión manual): "
-                    + ", ".join(f"{m['version']} ({m['name']})" for m in excluidas_rollback)
-                )
+def _auto_aplicar_migraciones_schema() -> None:
+    # Auto-aplicar migraciones de ESQUEMA (ALTER TABLE / catálogo, ver
+    # scripts/migration_runner.py) pendientes -- SOLO en development. Evita el
+    # patrón que causó el bug de req. 1.2 (2026-08-17): una migración quedaba
+    # escrita en scripts/migrations/ y en el manifest, pero nadie la ejecutaba
+    # contra la BD local, y el código degradaba en silencio (columna ausente ->
+    # valor NULL) en vez de fallar. NO se activa en staging/production: ahí las
+    # migraciones se aplican a mano antes del deploy (memoria del equipo: solo
+    # si son aditivas), un paso deliberado -- staging/producción no deben
+    # mutar su propio esquema en cada arranque, y con >1 instancia arrancando
+    # a la vez, correr el mismo ALTER TABLE en paralelo puede bloquearse.
+    # No confundir con ENABLE_AUTO_MIGRATE de abajo: aquella es la migración
+    # de datos de despachos vía Celery Beat (legacy), un concepto distinto.
+    # Se excluyen migraciones category="rollback" (ej. DROP TABLE) del
+    # auto-apply: igual que las marcadas manual=true en el manifest, son
+    # cambios destructivos que requieren revisión humana antes de ejecutarse.
+    if ENVIRONMENT != "development":
+        logger.info(
+            f"⏭️ Auto-apply de migraciones de esquema deshabilitado (ENVIRONMENT={ENVIRONMENT}); "
+            "en este ambiente se aplican a mano con scripts/migration_runner.py antes del deploy"
+        )
+        return
 
-            if not a_aplicar:
-                logger.info("   ✅ No hay migraciones de esquema pendientes por aplicar")
-            else:
-                logger.info(f"   📋 Migraciones a aplicar: {', '.join(m['version'] for m in a_aplicar)}")
-                for migration in a_aplicar:
-                    if not runner.execute_migration(migration, dry_run=False):
-                        logger.error(
-                            f"   ❌ Migración {migration['version']} ({migration['name']}) falló; "
-                            "se detiene el auto-apply. Aplícala manualmente con scripts/migration_runner.py."
-                        )
-                        break
-            runner.conn.close()
-        except Exception as e:
-            logger.error(f"❌ Error al auto-aplicar migraciones de esquema: {e}")
-            logger.error("   El servidor sigue arrancando; aplica manualmente con scripts/migration_runner.py")
-    else:
-        logger.info(f"⏭️ Auto-apply de migraciones de esquema deshabilitado (ENVIRONMENT={ENVIRONMENT}); en este ambiente se aplican a mano con scripts/migration_runner.py antes del deploy")
+    try:
+        scripts_dir = Path(__file__).parent.parent / "scripts"
+        if str(scripts_dir) not in sys.path:
+            sys.path.insert(0, str(scripts_dir))
+        from migration_runner import MigrationRunner
 
-    # 3. IMPORTANTE: NO iniciar asyncio auto_migrate
-    # La migración automática ahora se ejecuta con Celery Beat en un proceso separado
-    # Esto previene el cuello de botella entre el proceso manual y automático
+        logger.info("🔧 Auto-aplicando migraciones de esquema pendientes (solo development)...")
+        runner = MigrationRunner(
+            manifest_path=scripts_dir / "migrations_manifest.yaml",
+            scripts_dir=scripts_dir,
+        )
+        runner.load_manifest()
+        runner.connect_db()
+        runner.ensure_migration_table()
+        runner.load_applied_migrations()
+
+        pending = runner.get_pending_migrations(skip_manual=True)
+        excluidas_rollback = [m for m in pending if m.get("category") == "rollback"]
+        a_aplicar = [m for m in pending if m.get("category") != "rollback"]
+
+        if excluidas_rollback:
+            logger.warning(
+                "   ⚠️ Migraciones 'rollback' pendientes, NO auto-aplicadas (requieren revisión manual): "
+                + ", ".join(f"{m['version']} ({m['name']})" for m in excluidas_rollback)
+            )
+
+        if not a_aplicar:
+            logger.info("   ✅ No hay migraciones de esquema pendientes por aplicar")
+        else:
+            _ejecutar_migraciones_pendientes(runner, a_aplicar)
+        runner.conn.close()
+    except Exception as e:
+        logger.error(f"❌ Error al auto-aplicar migraciones de esquema: {e}")
+        logger.error("   El servidor sigue arrancando; aplica manualmente con scripts/migration_runner.py")
+
+
+def _log_configuracion_migracion_automatica() -> None:
+    # IMPORTANTE: NO iniciar asyncio auto_migrate.
+    # La migración automática ahora se ejecuta con Celery Beat en un proceso separado.
+    # Esto previene el cuello de botella entre el proceso manual y automático.
     try:
         from config import ENABLE_AUTO_MIGRATE, AUTO_MIGRATE_INTERVAL_MINUTES, MIGRATE_DATE_FILTER_DAYS
-        
+
         logger.info("=" * 70)
         logger.info("📢 CONFIGURACIÓN DE MIGRACIÓN AUTOMÁTICA:")
-        
+
         if ENABLE_AUTO_MIGRATE:
             logger.info("   ⚠️ Migración automática configurada con CELERY BEAT")
             logger.info("   ⚠️ La migración automática corre en un PROCESO SEPARADO")
@@ -335,12 +337,44 @@ async def startup_event():
         else:
             logger.info("   ⏭️ Migración automática DESHABILITADA (ENABLE_AUTO_MIGRATE=false)")
             logger.info("   ℹ️ Solo está disponible el proceso manual: GET /migrar/completo")
-        
+
         logger.info("=" * 70)
     except Exception as e:
         logger.error(f"❌ Error al verificar configuración de migración: {e}")
         logger.error("   La migración manual seguirá funcionando")
-    
+
+
+@app.on_event("startup")
+async def startup_event():
+    """
+    Evento de inicio que inicializa recursos críticos antes de aceptar peticiones.
+
+    Esto resuelve el problema del error 500 en la primera llamada al hacer warm-up de:
+    - Cliente MBA3 (inicialización y login)
+    - Conexión a SQL Server (si está habilitada)
+    """
+    logger.info("=" * 70)
+    logger.info("🚀 Inicializando recursos críticos...")
+    logger.info("=" * 70)
+
+    # 0. Executor dedicado del event loop (ver detalle en _configurar_executor_thread_pool)
+    _configurar_executor_thread_pool()
+
+    # 0.1 Precalentar conexión de control de Celery en background (ver detalle en _warm_up_celery_connection)
+    threading.Thread(target=_warm_up_celery_connection, daemon=True, name="celery-warmup").start()
+
+    # 1. Inicializar cliente MBA3 (warm-up)
+    _inicializar_cliente_mba3()
+
+    # 2. Verificar conexión a SQL Server (si está habilitada)
+    _verificar_conexion_sql_server()
+
+    # 2.5 Auto-aplicar migraciones de esquema pendientes (ver detalle en _auto_aplicar_migraciones_schema)
+    _auto_aplicar_migraciones_schema()
+
+    # 3. Log de configuración de migración automática (Celery Beat)
+    _log_configuracion_migracion_automatica()
+
     logger.info("=" * 70)
     logger.info("✅ Inicialización completada - Servidor listo para recibir peticiones")
     logger.info("=" * 70)
