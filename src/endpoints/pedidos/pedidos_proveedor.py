@@ -383,6 +383,25 @@ def _validar_reparto_diferencia(diferencia_detalles: List[Dict], hijos: List["Hi
             })
 
 
+def _construir_detalles_para_hijo(hijo_req, diferencia_por_detalle_id: Dict) -> List[Dict]:
+    """Arma la lista de detalles (pedido_detalle_id, cantidad_solicitada_original,
+    diferencia) para un pedido hijo, ignorando asignaciones con cantidad <= 0 o sin
+    diferencia registrada para esa línea. Usado por `_handle_confirmar_con_diferencia`."""
+    detalles_para_hijo = []
+    for asignado in hijo_req.detalles:
+        if asignado.cantidad <= 0:
+            continue
+        detalle_diferencia = diferencia_por_detalle_id.get(asignado.pedido_detalle_id)
+        if not detalle_diferencia:
+            continue
+        detalles_para_hijo.append({
+            "pedido_detalle_id": asignado.pedido_detalle_id,
+            "cantidad_solicitada_original": detalle_diferencia["cantidad_solicitada_original"],
+            "diferencia": asignado.cantidad,
+        })
+    return detalles_para_hijo
+
+
 async def _handle_confirmar_con_diferencia(pedido_id: str, body: ConfirmarConDiferenciaRequest, request, user: Dict):
     """Req. 1.2 (+ N hijos): opción 'Confirmar pedido, generar nuevo pedido con la
     diferencia' del modal de diferencia de producción. El pedido padre sigue el flujo
@@ -433,18 +452,7 @@ async def _handle_confirmar_con_diferencia(pedido_id: str, body: ConfirmarConDif
     resultados_hijos: List[Dict] = []
 
     for hijo_req in body.hijos:
-        detalles_para_hijo = []
-        for asignado in hijo_req.detalles:
-            if asignado.cantidad <= 0:
-                continue
-            detalle_diferencia = diferencia_por_detalle_id.get(asignado.pedido_detalle_id)
-            if not detalle_diferencia:
-                continue
-            detalles_para_hijo.append({
-                "pedido_detalle_id": asignado.pedido_detalle_id,
-                "cantidad_solicitada_original": detalle_diferencia["cantidad_solicitada_original"],
-                "diferencia": asignado.cantidad,
-            })
+        detalles_para_hijo = _construir_detalles_para_hijo(hijo_req, diferencia_por_detalle_id)
 
         if not detalles_para_hijo:
             logger.warning(f"⚠️ Pedido hijo sin líneas asignadas al confirmar diferencia de {pedido_id}; se omite")
