@@ -32,6 +32,8 @@ _HEADERS_MARGEN = [
 
 _ANCHOS_MARGEN = [16, 45, 20, 10, 14, 14, 14, 20, 12]
 
+_FORMATO_MONEDA = "#,##0.00"
+
 
 def _hoja_cabecera_margen(
     wb,
@@ -117,13 +119,13 @@ def _hoja_margen_detalle(wb, detalles: List[Dict[str, Any]], estilos: Dict[str, 
         ws.cell(row=row, column=4, value=detalle.get("pack"))
 
         pvp_cell = ws.cell(row=row, column=5, value=detalle.get("pvp"))
-        pvp_cell.number_format = "#,##0.00"
+        pvp_cell.number_format = _FORMATO_MONEDA
 
         costo_excel_cell = ws.cell(row=row, column=6, value=detalle.get("costo_margen"))
-        costo_excel_cell.number_format = "#,##0.00"
+        costo_excel_cell.number_format = _FORMATO_MONEDA
 
         costo_unitario_cell = ws.cell(row=row, column=7, value=detalle.get("costo_unitario"))
-        costo_unitario_cell.number_format = "#,##0.00"
+        costo_unitario_cell.number_format = _FORMATO_MONEDA
 
         margen = detalle.get("margen")
         margen_cell = ws.cell(row=row, column=8, value=margen)
