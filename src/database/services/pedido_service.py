@@ -1547,6 +1547,12 @@ class PedidoService:
           cantidad_solicitada_original del hijo = la del padre para esa línea (no la
           diferencia): "Solicitado Mabel" debe seguir mostrando el original real de la
           plantilla Excel, no la porción pospuesta.
+        - Cada línea también hereda el comentario del padre y el resaltado de color de
+          COSTO UNIT./TOTAL/COMENTARIO (rol_modificador de pedido_detalle_modificacion_columna):
+          para COSTO UNIT./COMENTARIO porque su valor se copia tal cual; para TOTAL porque,
+          aunque el valor del hijo es la porción en diferencia (no una copia), esa
+          diferencia surge de una línea que sí pudo haber sido editada por cualquiera de
+          los 2 roles (odcsap.view/produccion-elrayo.view).
 
         Returns:
             {"pedido_id", "numero_pedido", "pedido_padre_id", "detalles_insertados"}
@@ -1580,6 +1586,20 @@ class PedidoService:
             detalles_padre_por_id = {
                 d["pedido_detalle_id"]: d for d in pedido_padre.get("detalles", [])
             }
+
+            # Rol responsable (PRODUCCION_ELRAYO/ODCSAP) de la última modificación de
+            # COSTO UNIT./TOTAL/COMENTARIO en cada línea del padre, para que el hijo
+            # herede el mismo resaltado de color en el frontend. COSTO UNIT. y
+            # COMENTARIO se heredan porque su valor también se copia tal cual; TOTAL
+            # se hereda aunque su valor en el hijo es la porción de diferencia (no una
+            # copia), porque esa diferencia surgió de una línea que sí pudo haber sido
+            # editada por cualquiera de los 2 roles.
+            mods_padre_por_detalle: Dict[str, Dict[str, Optional[str]]] = {}
+            mods_padre_result = repo.obtener_modificaciones_columnas(numero_pedido_padre)
+            if mods_padre_result.get("success"):
+                for mod in mods_padre_result["modificaciones"]:
+                    mods_padre_por_detalle.setdefault(mod["pedido_detalle_id"], {})[mod["columna_key"]] = mod.get("rol_modificador")
+
             detalles_insertados = 0
             for orden_linea, dif in enumerate(detalles_con_diferencia):
                 detalle_padre = detalles_padre_por_id.get(dif["pedido_detalle_id"])
@@ -1605,6 +1625,7 @@ class PedidoService:
                     "total": diferencia,
                     "costo_margen": detalle_padre.get("costo_margen"),
                     "costo_unitario": detalle_padre.get("costo_unitario"),
+                    "comentario": detalle_padre.get("comentario"),
                     "orden_linea": orden_linea,
                     # El "total" del hijo es la porción en diferencia, no lo solicitado
                     # originalmente -- "Solicitado Mabel" debe seguir mostrando el
@@ -1615,6 +1636,22 @@ class PedidoService:
                     pedido_hijo_id, detalle_hijo, audit_context=audit_context
                 )
                 detalles_insertados += 1
+
+                mods_linea_padre = mods_padre_por_detalle.get(dif["pedido_detalle_id"], {})
+                if mods_linea_padre:
+                    columnas_por_rol: Dict[Optional[str], List[str]] = {}
+                    for columna_key, rol in mods_linea_padre.items():
+                        columnas_por_rol.setdefault(rol, []).append(columna_key)
+                    for rol, columnas in columnas_por_rol.items():
+                        repo.guardar_modificaciones_columnas(
+                            numero_pedido=numero_pedido_hijo,
+                            modificaciones=[
+                                {"pedido_detalle_id": pedido_detalle_id_hijo, "columna_key": ck}
+                                for ck in columnas
+                            ],
+                            rol_modificador=rol,
+                            audit_context=audit_context,
+                        )
 
                 # Sin esto, el hijo no sabe hacia qué tiendas redistribuir su porción
                 # (RedistribucionTiendas.vue arma las columnas por tienda desde
