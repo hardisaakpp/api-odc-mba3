@@ -9,6 +9,7 @@ CHANGELOG:
 
 import logging
 import pyodbc
+from dataclasses import dataclass
 from typing import Dict, Any, List, Optional, TYPE_CHECKING
 from datetime import date, datetime
 
@@ -57,6 +58,27 @@ _COLUMNAS_FECHA_FILTRO = {
 
 def _columna_fecha_filtro(tipo_fecha: Optional[str]) -> str:
     return _COLUMNAS_FECHA_FILTRO.get(tipo_fecha or "pedido", _COLUMNAS_FECHA_FILTRO["pedido"])
+
+
+@dataclass
+class _FiltrosPedidosOpcionales:
+    """Agrupa los filtros opcionales de get_pedidos_con_filtros en un solo
+    parámetro para _construir_filtros_pedidos (evita exceder el límite de
+    parámetros por función, python:S107). Uso interno del repositorio: no es
+    parte del contrato público de get_pedidos_con_filtros."""
+    estado: Optional[str | int] = None
+    excluir_borrador: bool = False
+    solo_redistribucion: bool = False
+    solo_pendientes_accion: bool = False
+    restringir_produccion_el_rayo: bool = False
+    excluir_estados_produccion_el_rayo: bool = False
+    excluir_listo_para_redistribucion: bool = False
+    fecha_desde: Optional[str] = None
+    fecha_hasta: Optional[str] = None
+    tipo_fecha: Optional[str] = None
+    proveedor_nombre: Optional[str] = None
+    numero_pedido: Optional[str] = None
+    creado_por: Optional[str] = None
 
 
 class PedidoCabeceraRepository:
@@ -1391,73 +1413,87 @@ class PedidoCabeceraRepository:
             list(ESTADOS_PRODUCCION_EL_RAYO_NOMBRES),
         )
 
+    def _agregar_filtro_condicional(
+        self,
+        activar: bool,
+        tiene_estado_id: bool,
+        tiene_estado: bool,
+        obtener_filtro,
+        where_conditions: List[str],
+        params: List[Any],
+    ) -> None:
+        """Aplica un filtro de estado opcional (los ``_filtro_*`` que dependen de
+        estado_id/estado) solo si está activado y la tabla tiene alguna de esas
+        columnas. Centraliza el patrón repetido en `_construir_filtros_pedidos`."""
+        if not (activar and (tiene_estado_id or tiene_estado)):
+            return
+        c, p = obtener_filtro(tiene_estado_id)
+        where_conditions.extend(c)
+        params.extend(p)
+
     def _construir_filtros_pedidos(
-        self, cursor, *,
-        estado, excluir_borrador, solo_redistribucion, solo_pendientes_accion,
-        restringir_produccion_el_rayo, excluir_estados_produccion_el_rayo,
-        excluir_listo_para_redistribucion,
-        fecha_desde, fecha_hasta, tipo_fecha, proveedor_nombre, numero_pedido, creado_por,
-        tiene_estado_id, tiene_estado,
+        self,
+        cursor,
+        filtros: _FiltrosPedidosOpcionales,
+        *,
+        tiene_estado_id: bool,
+        tiene_estado: bool,
     ):
         """Construye (where_conditions, params) para get_pedidos_con_filtros."""
         where_conditions: List[str] = []
         params: List[Any] = []
 
-        c, p = self._filtro_estado(cursor, estado, tiene_estado_id, tiene_estado)
+        c, p = self._filtro_estado(cursor, filtros.estado, tiene_estado_id, tiene_estado)
         where_conditions.extend(c)
         params.extend(p)
 
-        if excluir_borrador and (tiene_estado_id or tiene_estado):
-            c, p = self._filtro_excluir_borrador(tiene_estado_id)
-            where_conditions.extend(c)
-            params.extend(p)
+        self._agregar_filtro_condicional(
+            filtros.excluir_borrador, tiene_estado_id, tiene_estado,
+            self._filtro_excluir_borrador, where_conditions, params,
+        )
+        self._agregar_filtro_condicional(
+            filtros.solo_redistribucion, tiene_estado_id, tiene_estado,
+            self._filtro_redistribucion, where_conditions, params,
+        )
 
-        if solo_redistribucion and (tiene_estado_id or tiene_estado):
-            c, p = self._filtro_redistribucion(tiene_estado_id)
-            where_conditions.extend(c)
-            params.extend(p)
+        columna_fecha = _columna_fecha_filtro(filtros.tipo_fecha)
 
-        columna_fecha = _columna_fecha_filtro(tipo_fecha)
-
-        if fecha_desde:
+        if filtros.fecha_desde:
             where_conditions.append(f"TRY_CAST({columna_fecha} AS DATE) >= CAST(? AS DATE)")
-            params.append(fecha_desde)
+            params.append(filtros.fecha_desde)
 
-        if fecha_hasta:
+        if filtros.fecha_hasta:
             where_conditions.append(f"TRY_CAST({columna_fecha} AS DATE) <= CAST(? AS DATE)")
-            params.append(fecha_hasta)
+            params.append(filtros.fecha_hasta)
 
-        if proveedor_nombre:
+        if filtros.proveedor_nombre:
             where_conditions.append("p.proveedor_nombre LIKE ?")
-            params.append(f"%{proveedor_nombre}%")
+            params.append(f"%{filtros.proveedor_nombre}%")
 
-        if numero_pedido:
+        if filtros.numero_pedido:
             where_conditions.append("p.numero_pedido LIKE ?")
-            params.append(f"%{numero_pedido}%")
+            params.append(f"%{filtros.numero_pedido}%")
 
-        if creado_por:
+        if filtros.creado_por:
             where_conditions.append("p.creado_por LIKE ?")
-            params.append(f"%{creado_por}%")
+            params.append(f"%{filtros.creado_por}%")
 
-        if solo_pendientes_accion and (tiene_estado_id or tiene_estado):
-            c, p = self._filtro_pendientes_accion(tiene_estado_id)
-            where_conditions.extend(c)
-            params.extend(p)
-
-        if restringir_produccion_el_rayo and (tiene_estado_id or tiene_estado):
-            c, p = self._filtro_estados_produccion_el_rayo(tiene_estado_id)
-            where_conditions.extend(c)
-            params.extend(p)
-
-        if excluir_estados_produccion_el_rayo and (tiene_estado_id or tiene_estado):
-            c, p = self._filtro_exclusion_estados_produccion_el_rayo(tiene_estado_id)
-            where_conditions.extend(c)
-            params.extend(p)
-
-        if excluir_listo_para_redistribucion and (tiene_estado_id or tiene_estado):
-            c, p = self._filtro_exclusion_listo_para_redistribucion(tiene_estado_id)
-            where_conditions.extend(c)
-            params.extend(p)
+        self._agregar_filtro_condicional(
+            filtros.solo_pendientes_accion, tiene_estado_id, tiene_estado,
+            self._filtro_pendientes_accion, where_conditions, params,
+        )
+        self._agregar_filtro_condicional(
+            filtros.restringir_produccion_el_rayo, tiene_estado_id, tiene_estado,
+            self._filtro_estados_produccion_el_rayo, where_conditions, params,
+        )
+        self._agregar_filtro_condicional(
+            filtros.excluir_estados_produccion_el_rayo, tiene_estado_id, tiene_estado,
+            self._filtro_exclusion_estados_produccion_el_rayo, where_conditions, params,
+        )
+        self._agregar_filtro_condicional(
+            filtros.excluir_listo_para_redistribucion, tiene_estado_id, tiene_estado,
+            self._filtro_exclusion_listo_para_redistribucion, where_conditions, params,
+        )
 
         return where_conditions, params
 
@@ -1545,19 +1581,21 @@ class PedidoCabeceraRepository:
 
             where_conditions, params = self._construir_filtros_pedidos(
                 cursor,
-                estado=estado,
-                excluir_borrador=excluir_borrador,
-                solo_redistribucion=solo_redistribucion,
-                solo_pendientes_accion=solo_pendientes_accion,
-                restringir_produccion_el_rayo=restringir_produccion_el_rayo,
-                excluir_estados_produccion_el_rayo=excluir_estados_produccion_el_rayo,
-                excluir_listo_para_redistribucion=excluir_listo_para_redistribucion,
-                fecha_desde=fecha_desde,
-                fecha_hasta=fecha_hasta,
-                tipo_fecha=tipo_fecha,
-                proveedor_nombre=proveedor_nombre,
-                numero_pedido=numero_pedido,
-                creado_por=creado_por,
+                _FiltrosPedidosOpcionales(
+                    estado=estado,
+                    excluir_borrador=excluir_borrador,
+                    solo_redistribucion=solo_redistribucion,
+                    solo_pendientes_accion=solo_pendientes_accion,
+                    restringir_produccion_el_rayo=restringir_produccion_el_rayo,
+                    excluir_estados_produccion_el_rayo=excluir_estados_produccion_el_rayo,
+                    excluir_listo_para_redistribucion=excluir_listo_para_redistribucion,
+                    fecha_desde=fecha_desde,
+                    fecha_hasta=fecha_hasta,
+                    tipo_fecha=tipo_fecha,
+                    proveedor_nombre=proveedor_nombre,
+                    numero_pedido=numero_pedido,
+                    creado_por=creado_por,
+                ),
                 tiene_estado_id=tiene_estado_id,
                 tiene_estado=tiene_estado,
             )
