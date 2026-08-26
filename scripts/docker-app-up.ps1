@@ -32,14 +32,14 @@ if (-not (Test-Path -LiteralPath $envFile)) {
     Write-Error "No existe .env.develop en: $envFile`nCrea el archivo según docs/CONFIGURACION.md antes de usar el stack Docker."
 }
 
-$args = @("compose", "--profile", "app", "--profile", "bundled-minio", "up", "-d")
+$dockerArgs = @("compose", "--profile", "app", "--profile", "bundled-minio", "up", "-d")
 if (-not $NoBuild) {
-    $args += "--build"
+    $dockerArgs += "--build"
 }
 
 Write-Host "Directorio: $Root" -ForegroundColor Gray
-Write-Host "docker $($args -join ' ')" -ForegroundColor Cyan
-& docker @args
+Write-Host "docker $($dockerArgs -join ' ')" -ForegroundColor Cyan
+& docker @dockerArgs
 if ($LASTEXITCODE -ne 0) {
     exit $LASTEXITCODE
 }
