@@ -150,6 +150,35 @@ Número secuencial de registro\tValor temporal de pedido, marca el bloque que co
             return "0"
 
     @staticmethod
+    def _mapear_tiendas_a_bodega(detalles: list) -> dict:
+        """Resuelve la bodega de cada código de tienda distinto del pedido, UNA sola vez.
+
+        StockTransferService.obtener_bodega_de_tienda hace una consulta a BD (remota)
+        por llamada -- sin este cache, un pedido de N líneas con las mismas pocas
+        tiendas repetidas dispara N consultas redundantes (medido: pedido de 12 líneas
+        -> 36 conexiones nuevas -> ~31s de respuesta). Se calcula solo cuando se va a
+        filtrar por bodega (ver exportar_pedido_formato_mba*)."""
+        from .stock_transfer_service import StockTransferService
+
+        codigos = {
+            tienda.get("codigo")
+            for detalle in detalles
+            for tienda in detalle.get("tiendas", [])
+            if tienda.get("codigo")
+        }
+        return {codigo: StockTransferService.obtener_bodega_de_tienda(codigo) for codigo in codigos}
+
+    @staticmethod
+    def _filtrar_tiendas_por_bodega(tiendas: list, codigo_bodega: Optional[str], bodega_por_codigo: dict) -> list:
+        """Filtra las tiendas de un detalle a las que pertenecen a `codigo_bodega`
+        (mismo criterio de StockTransferService.obtener_bodega_de_tienda usado para
+        crear las ODCs por bodega, ver PedidoOCService.crear_ocs_desde_pedido_confirmado).
+        Sin filtro (codigo_bodega=None) devuelve todas las tiendas, igual que antes."""
+        if not codigo_bodega:
+            return tiendas
+        return [t for t in tiendas if bodega_por_codigo.get(t.get("codigo")) == codigo_bodega]
+
+    @staticmethod
     def _resolver_vendedor(cabecera: dict, config: "MBAExportConfig") -> str:
         """Resuelve el código de vendedor: valor manual de config si existe,
         sino se deriva de la bodega/marca de origen del traslado (RL-CD/RG-CD -> mrz,
@@ -172,14 +201,27 @@ Número secuencial de registro\tValor temporal de pedido, marca el bloque que co
         transicionó a CONFIRMADO POR EL RAYO (clic en "Confirmar"), no las fechas
         capturadas originalmente en el Excel/creación del pedido.
 
+        Excepción -- pedido "hijo" (cabecera.pedido_padre_id no nulo, ver
+        PedidoService.crear_pedido_hijo_diferencia): el hijo nunca transiciona por
+        ESTADO_REDISTRIBUCION (pasa de PRODUCCION_POSPUESTA a LISTO_PARA_REDISTRIBUCION
+        directo, ver pedido_estados.py), así que `fecha_confirmacion` siempre sería None
+        para él. El hijo ya guarda sus propias fecha_pedido (instante del clic en
+        "Confirmar pedido y generar nuevo pedido con la diferencia") y fecha_entrega
+        (la que el admin elige para esa porción) como columnas propias de su cabecera
+        -- se usan directo, sin ir a la bitácora.
+
         pedido_manual (col. 10) es el número de pedido interno; orden_compra_cliente
         (col. 12) es el DocNum de la Orden de Compra ya enviada a SAP.
         """
         fd = MBAPedidoExporter._format_date
-        fecha_confirmacion_fmt = fd(fecha_confirmacion)
+        if cabecera.get("pedido_padre_id"):
+            fecha_pedido_fmt = fd(cabecera.get("fecha_pedido"))
+            fecha_entrega_fmt = fd(cabecera.get("fecha_entrega"))
+        else:
+            fecha_pedido_fmt = fecha_entrega_fmt = fd(fecha_confirmacion)
         return {
-            "fecha_pedido": fecha_confirmacion_fmt,
-            "fecha_entrega": fecha_confirmacion_fmt,
+            "fecha_pedido": fecha_pedido_fmt,
+            "fecha_entrega": fecha_entrega_fmt,
             "pedido_manual": (cabecera.get("numero_pedido") or "").strip(),
             "orden_compra_cliente": (doc_num or "").strip(),
             "bodega": _BODEGA_FIJA,
@@ -210,44 +252,54 @@ Número secuencial de registro\tValor temporal de pedido, marca el bloque que co
         self,
         pedido_id: str,
         config: Optional[MBAExportConfig] = None,
-        incluir_encabezado: bool = True
+        incluir_encabezado: bool = True,
+        codigo_bodega: Optional[str] = None,
     ) -> bytes:
         """
         Exporta un pedido en formato MBA para importación de Pedidos de Clientes.
-        
+
         Genera un archivo .txt con:
         - 19 líneas de encabezado (opcional, se eliminan al importar en MBA)
         - Líneas de detalle: una por cada combinación producto-tienda
         - 35 columnas separadas por TAB
-        
+
         Args:
             pedido_id: UUID del pedido a exportar
             config: Configuración de exportación (valores por defecto si None)
             incluir_encabezado: Si True, incluye las 19 líneas de encabezado
-            
+            codigo_bodega: Si se indica (pedido con más de una ODC, una por bodega -- ver
+                StockTransferService.detectar_origenes_traslado), limita la exportación a
+                las tiendas de esa bodega y usa el DocNum de la ODC de esa bodega en vez
+                de una ODC arbitraria del pedido. None exporta todas las tiendas con el
+                DocNum de la ODC más reciente (comportamiento histórico, pedido con 1 ODC).
+
         Returns:
             Bytes del archivo .txt en formato MBA
-            
+
         Raises:
             ValueError: Si el pedido no existe
         """
         if config is None:
             config = MBAExportConfig()
-        
+
         with get_db_connection_context() as conn:
             repo = PedidoRepository(conn)
             pedido = repo.get_pedido_completo(pedido_id)
-            
+
             if not pedido:
                 raise ValueError(f"Pedido no encontrado: {pedido_id}")
-            
+
             cabecera = pedido["cabecera"]
             detalles = pedido["detalles"]
 
             logger.info(f"📄 Exportando pedido {pedido_id} a formato MBA ({len(detalles)} productos)")
 
             fecha_confirmacion = repo.get_fecha_confirmacion_estado(pedido_id, ESTADO_REDISTRIBUCION)
-            doc_num = OrdenCompraRepository(conn).get_doc_num_by_pedido_id(pedido_id)
+            oc_repo = OrdenCompraRepository(conn)
+            doc_num = (
+                oc_repo.get_doc_num_by_pedido_id_y_bodega(pedido_id, codigo_bodega)
+                if codigo_bodega else oc_repo.get_doc_num_by_pedido_id(pedido_id)
+            )
             datos = self._extraer_datos_exportacion(cabecera, config, fecha_confirmacion, doc_num)
             fecha_pedido = datos["fecha_pedido"]
             fecha_entrega = datos["fecha_entrega"]
@@ -257,17 +309,18 @@ Número secuencial de registro\tValor temporal de pedido, marca el bloque que co
             vendedor = datos["vendedor"]
             codigo_cliente = datos["codigo_cliente"]
             moneda = datos["moneda"]
+            bodega_por_codigo = self._mapear_tiendas_a_bodega(detalles) if codigo_bodega else {}
 
             # Construir líneas del archivo
             lines = []
-            
+
             # Agregar encabezado si se requiere
             if incluir_encabezado:
                 lines.append(self.MBA_HEADER)
-            
+
             # Contador secuencial de registros
             numero_secuencial = 1
-            
+
             # Generar una línea por cada combinación producto-tienda
             for detalle in detalles:
                 # Producto excluido: Total editado manualmente a 0 en el Detalle del Pedido
@@ -277,9 +330,10 @@ Número secuencial de registro\tValor temporal de pedido, marca el bloque que co
                 codigo_producto = (detalle.get("codigo_interno") or "").strip()  # Col 21 Código Producto
                 precio_unitario = self._resolver_precio_unitario(detalle)
 
-                for tienda in detalle.get("tiendas", []):
+                tiendas = self._filtrar_tiendas_por_bodega(detalle.get("tiendas", []), codigo_bodega, bodega_por_codigo)
+                for tienda in tiendas:
                     cantidad = tienda.get("cantidad", 0)
-                    
+
                     # Omitir solo si la cantidad es negativa (0 y decimales como 0.5 se exportan)
                     if cantidad < 0:
                         continue
@@ -341,41 +395,48 @@ Número secuencial de registro\tValor temporal de pedido, marca el bloque que co
         self,
         pedido_id: str,
         config: Optional[MBAExportConfig] = None,
-        incluir_encabezado: bool = True
+        incluir_encabezado: bool = True,
+        codigo_bodega: Optional[str] = None,
     ) -> bytes:
         """
         Exporta un pedido en formato MBA consolidando cantidades por producto.
-        
+
         A diferencia de exportar_pedido_formato_mba que genera una línea por tienda,
         este método consolida las cantidades y genera UNA línea por producto.
-        
+
         Útil cuando el pedido no necesita distinguir por tienda/sucursal.
-        
+
         Args:
             pedido_id: UUID del pedido a exportar
             config: Configuración de exportación
             incluir_encabezado: Si True, incluye las 19 líneas de encabezado
-            
+            codigo_bodega: Ver exportar_pedido_formato_mba -- limita la exportación y el
+                DocNum a la ODC de esa bodega cuando el pedido tiene más de una.
+
         Returns:
             Bytes del archivo .txt en formato MBA
         """
         if config is None:
             config = MBAExportConfig()
-        
+
         with get_db_connection_context() as conn:
             repo = PedidoRepository(conn)
             pedido = repo.get_pedido_completo(pedido_id)
-            
+
             if not pedido:
                 raise ValueError(f"Pedido no encontrado: {pedido_id}")
-            
+
             cabecera = pedido["cabecera"]
             detalles = pedido["detalles"]
 
             logger.info(f"📄 Exportando pedido {pedido_id} a formato MBA consolidado ({len(detalles)} productos)")
 
             fecha_confirmacion = repo.get_fecha_confirmacion_estado(pedido_id, ESTADO_REDISTRIBUCION)
-            doc_num = OrdenCompraRepository(conn).get_doc_num_by_pedido_id(pedido_id)
+            oc_repo = OrdenCompraRepository(conn)
+            doc_num = (
+                oc_repo.get_doc_num_by_pedido_id_y_bodega(pedido_id, codigo_bodega)
+                if codigo_bodega else oc_repo.get_doc_num_by_pedido_id(pedido_id)
+            )
             datos = self._extraer_datos_exportacion(cabecera, config, fecha_confirmacion, doc_num)
             fecha_pedido = datos["fecha_pedido"]
             fecha_entrega = datos["fecha_entrega"]
@@ -385,9 +446,10 @@ Número secuencial de registro\tValor temporal de pedido, marca el bloque que co
             vendedor = datos["vendedor"]
             codigo_cliente = datos["codigo_cliente"]
             moneda = datos["moneda"]
+            bodega_por_codigo = self._mapear_tiendas_a_bodega(detalles) if codigo_bodega else {}
 
             lines = []
-            
+
             if incluir_encabezado:
                 lines.append(self.MBA_HEADER)
             
@@ -401,9 +463,16 @@ Número secuencial de registro\tValor temporal de pedido, marca el bloque que co
                 codigo_producto = (detalle.get("codigo_interno") or "").strip()
                 precio_unitario = self._resolver_precio_unitario(detalle)
 
-                # Consolidar cantidad total de todas las tiendas
-                cantidad_total = sum(t.get("cantidad", 0) for t in detalle.get("tiendas", []))
-                
+                tiendas = self._filtrar_tiendas_por_bodega(detalle.get("tiendas", []), codigo_bodega, bodega_por_codigo)
+                # Producto sin tiendas en esta bodega: no pertenece a esta ODC, se omite
+                # por completo (distinto de cantidad_total == 0 con tiendas sí asignadas,
+                # que sí se exporta, ver comentario más abajo).
+                if codigo_bodega and not tiendas:
+                    continue
+
+                # Consolidar cantidad total de las tiendas (de esta bodega, si aplica)
+                cantidad_total = sum(t.get("cantidad", 0) for t in tiendas)
+
                 if cantidad_total < 0:
                     continue
                 

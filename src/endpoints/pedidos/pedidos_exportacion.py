@@ -5,7 +5,7 @@ Endpoints de exportación de pedidos.
 import io
 import logging
 import uuid
-from typing import Dict
+from typing import Dict, Optional
 from src.utils.timezone import ahora_naive
 from fastapi import FastAPI, Depends, HTTPException, Path, Query, status
 from fastapi.responses import Response
@@ -245,7 +245,7 @@ def _logic_exportar_pedido_para_proveedor(pedido_id: str):
         logger.error(f"❌ Error al exportar pedido para proveedor: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Error interno al exportar pedido: {str(e)}")
 
-def _logic_exportar_pedido_plano_mba(pedido_id: str, codigo_cliente: str, codigo_subcliente: str, moneda: str, vendedor: str, numero_pedido_mba: int, consolidado: bool, incluir_encabezado: bool):
+def _logic_exportar_pedido_plano_mba(pedido_id: str, codigo_cliente: str, codigo_subcliente: str, moneda: str, vendedor: str, numero_pedido_mba: int, consolidado: bool, incluir_encabezado: bool, codigo_bodega: Optional[str] = None):
     try:
         from src.database.services.mba_pedido_exporter import MBAPedidoExporter, MBAExportConfig
         with get_db_connection_context() as conn:
@@ -282,13 +282,16 @@ def _logic_exportar_pedido_plano_mba(pedido_id: str, codigo_cliente: str, codigo
         exporter = MBAPedidoExporter()
         if consolidado:
             file_bytes = exporter.exportar_pedido_formato_mba_consolidado(
-                pedido_id=pedido_id_real, config=config, incluir_encabezado=incluir_encabezado)
+                pedido_id=pedido_id_real, config=config, incluir_encabezado=incluir_encabezado,
+                codigo_bodega=codigo_bodega)
         else:
             file_bytes = exporter.exportar_pedido_formato_mba(
-                pedido_id=pedido_id_real, config=config, incluir_encabezado=incluir_encabezado)
-        
+                pedido_id=pedido_id_real, config=config, incluir_encabezado=incluir_encabezado,
+                codigo_bodega=codigo_bodega)
+
         numero_pedido_limpio = numero_pedido.replace(" ", "_").replace("-", "_").replace("/", "_")
-        filename = f"pedido_mba_{numero_pedido_limpio}_{ahora_naive().strftime('%Y%m%d')}.txt"
+        sufijo_bodega = f"_{codigo_bodega}" if codigo_bodega else ""
+        filename = f"pedido_mba_{numero_pedido_limpio}{sufijo_bodega}_{ahora_naive().strftime('%Y%m%d')}.txt"
         logger.info(f"✅ Pedido {numero_pedido} exportado a formato MBA: {filename}")
         
         return Response(
@@ -476,6 +479,7 @@ def register_exportacion_endpoints(app: FastAPI):
         numero_pedido_mba: int = Query(1, ge=1, description="Número de pedido temporal para agrupar líneas en MBA (col. B)"),
         consolidado: bool = Query(True, description="Si True, consolida cantidades por producto; si False, una línea por tienda/sucursal"),
         incluir_encabezado: bool = Query(True, description="Incluir las 19 líneas de encabezado del formato MBA"),
+        codigo_bodega: Optional[str] = Query(None, description="Código de bodega (ej. RL-CD, RG-CD) para pedidos con más de una ODC -- limita la exportación a esa bodega y usa el DocNum de su propia ODC. Omitir en pedidos con una sola ODC."),
         user: Dict = Depends(verify_jwt_token),
         _: None = Depends(require_permission(_PERM_ODCSAP_VIEW))
     ):
@@ -539,7 +543,7 @@ def register_exportacion_endpoints(app: FastAPI):
         Returns:
             Archivo .txt descargable en formato MBA
         """
-        return _logic_exportar_pedido_plano_mba(pedido_id, codigo_cliente, codigo_subcliente, moneda, vendedor, numero_pedido_mba, consolidado, incluir_encabezado)
+        return _logic_exportar_pedido_plano_mba(pedido_id, codigo_cliente, codigo_subcliente, moneda, vendedor, numero_pedido_mba, consolidado, incluir_encabezado, codigo_bodega)
 
     @app.get("/api/pedidos/{pedido_id}/descargar-pedido", tags=["Pedidos - Exportación"])
     async def descargar_pedido(

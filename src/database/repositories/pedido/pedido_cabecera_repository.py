@@ -533,6 +533,7 @@ class PedidoCabeceraRepository:
             estado_id = cabecera.get("estado_id")
             if estado_id == ESTADO_CONFIRMADO_ENVIADO:
                 cabecera = self._agregar_datos_sap_a_cabecera(cursor, pedido_id, cabecera)
+                cabecera = self._agregar_ordenes_compra_a_cabecera(cursor, pedido_id, cabecera)
             cabecera = self._agregar_pedido_padre_id_a_cabecera(cursor, pedido_id, cabecera)
             cabecera["origen_traslado_detectado"] = self._detectar_origenes_traslado(detalles)
 
@@ -613,6 +614,7 @@ class PedidoCabeceraRepository:
             estado_id = cabecera.get("estado_id")
             if estado_id == ESTADO_CONFIRMADO_ENVIADO:
                 cabecera = self._agregar_datos_sap_a_cabecera(cursor, pedido_id, cabecera)
+                cabecera = self._agregar_ordenes_compra_a_cabecera(cursor, pedido_id, cabecera)
             cabecera = self._agregar_pedido_padre_id_a_cabecera(cursor, pedido_id, cabecera)
             cabecera["origen_traslado_detectado"] = self._detectar_origenes_traslado(detalles)
 
@@ -867,6 +869,34 @@ class PedidoCabeceraRepository:
             logger.warning(f"⚠️ No se pudieron obtener datos SAP para pedido {pedido_id}: {e}")
             cabecera["numero_oc_sap"] = None
             cabecera["doc_entry"] = None
+
+        return cabecera
+
+    def _agregar_ordenes_compra_a_cabecera(
+        self, cursor: pyodbc.Cursor, pedido_id: str, cabecera: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """
+        Agrega cabecera["ordenes_compra"]: lista de las ODC del pedido (una por bodega
+        cuando el pedido mezcla tiendas de más de una bodega/CD, ver
+        StockTransferService.detectar_origenes_traslado). El frontend la usa para
+        mostrar un botón "Generar TXT MBA3" por ODC cuando hay más de una.
+
+        Cada elemento: {"codigo_bodega", "numero_oc_sap", "estado"}.
+        """
+        cabecera["ordenes_compra"] = []
+        try:
+            cursor.execute("""
+                SELECT codigo_bodega, numero_oc_sap, estado
+                FROM orden_compra_cabecera
+                WHERE pedido_id = ?
+                ORDER BY created_at ASC
+            """, (pedido_id,))
+            cabecera["ordenes_compra"] = [
+                {"codigo_bodega": row[0], "numero_oc_sap": row[1], "estado": row[2]}
+                for row in cursor.fetchall()
+            ]
+        except Exception as e:
+            logger.warning(f"⚠️ No se pudieron obtener las ODC del pedido {pedido_id}: {e}")
 
         return cabecera
 
