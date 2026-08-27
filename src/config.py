@@ -233,6 +233,15 @@ RECONCILIAR_ST_ESCALAMIENTO_HORAS = float(os.getenv("RECONCILIAR_ST_ESCALAMIENTO
 # ODC 24711/24712 e IntegracionSAPModal.vue).
 RECONCILIAR_OC_INTERVALO_MINUTOS = int(os.getenv("RECONCILIAR_OC_INTERVALO_MINUTOS", "5"))
 
+# Heartbeat de disponibilidad de workers Celery (ver src/services/celery_availability.py).
+# Reemplaza el chequeo anterior por inspect().ping() (broadcast al canal de control de
+# Celery), que resultó flaky en producción: un worker sano podía dar falso negativo por
+# contención de hilos, tirando cargas de plantilla/proceso SAP al fallback síncrono sin
+# necesidad (incidente 2026-08-27). Una tarea Celery Beat escribe esta clave cada
+# CELERY_HEARTBEAT_INTERVALO_SEGUNDOS; el chequeo es un GET simple a Redis, sin ping.
+CELERY_HEARTBEAT_INTERVALO_SEGUNDOS = int(os.getenv("CELERY_HEARTBEAT_INTERVALO_SEGUNDOS", "15"))
+CELERY_HEARTBEAT_TTL_SEGUNDOS = int(os.getenv("CELERY_HEARTBEAT_TTL_SEGUNDOS", "45"))
+
 # URL base (sin /Login). Prioridad: SAP_SL_BASE_URL > SAP_SERVICE_LAYER_URL
 _sl_url = os.getenv("SAP_SL_BASE_URL") or os.getenv("SAP_SERVICE_LAYER_URL", "http://localhost:50001/b1s/v1")
 SAP_SERVICE_LAYER_URL = _sl_url.rstrip("/").replace("/Login", "").replace("/login", "")

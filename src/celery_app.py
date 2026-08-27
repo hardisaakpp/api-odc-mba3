@@ -34,6 +34,8 @@ from src.config import (
     ENABLE_RECONCILIACION_ST_AUTOMATICA,
     RECONCILIAR_ST_INTERVALO_MINUTOS,
     RECONCILIAR_OC_INTERVALO_MINUTOS,
+    CELERY_HEARTBEAT_INTERVALO_SEGUNDOS,
+    CELERY_HEARTBEAT_TTL_SEGUNDOS,
 )
 
 logger = logging.getLogger(__name__)
@@ -51,6 +53,7 @@ celery_app = Celery(
         'src.tasks.celery_proceso_sap',
         'src.tasks.celery_reconciliar_transferencias',
         'src.tasks.celery_reconciliar_ordenes_compra',
+        'src.tasks.celery_worker_heartbeat',
     ]
 )
 
@@ -142,6 +145,15 @@ celery_app.conf.update(
             'schedule': float(RECONCILIAR_OC_INTERVALO_MINUTOS * 60),
             'options': {'queue': 'maintenance', 'expires': 240.0},
         },
+        # Heartbeat de disponibilidad de workers (ver src/services/celery_availability.py).
+        # SIEMPRE activo, en la cola 'celery' (la misma que usan las cargas de plantilla y
+        # el proceso completo SAP): si ningún worker la consume, el heartbeat expira y
+        # celery_worker_available() lo detecta como "no disponible".
+        'celery-worker-heartbeat': {
+            'task': 'src.tasks.celery_worker_heartbeat.emitir_heartbeat',
+            'schedule': float(CELERY_HEARTBEAT_INTERVALO_SEGUNDOS),
+            'options': {'queue': 'celery', 'expires': CELERY_HEARTBEAT_TTL_SEGUNDOS},
+        },
     },
 
     # Mantener cargas interactivas en la cola por defecto y mover tareas
@@ -195,6 +207,24 @@ celery_app.conf.update(
     worker_disable_rate_limits=False,
     task_ignore_result=False,  # Guardar resultados para poder consultarlos
 )
+
+
+class _SilenciarHeartbeatFilter(logging.Filter):
+    """Silencia el ruido de ciclo de vida ('received'/'succeeded'/'Sending due
+    task') de la tarea de heartbeat de disponibilidad de workers (ver
+    src/tasks/celery_worker_heartbeat.py): se ejecuta cada
+    CELERY_HEARTBEAT_INTERVALO_SEGUNDOS para siempre y, a diferencia de las
+    demás tareas, nunca falla ni aporta señal una vez confirmado que el
+    mecanismo funciona -- serían miles de líneas idénticas por día tapando el
+    log real. No afecta logs de ninguna otra tarea.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        return "celery_worker_heartbeat.emitir_heartbeat" not in record.getMessage()
+
+
+for _logger_name in ("celery.worker.strategy", "celery.app.trace", "celery.beat"):
+    logging.getLogger(_logger_name).addFilter(_SilenciarHeartbeatFilter())
 
 
 @worker_process_init.connect

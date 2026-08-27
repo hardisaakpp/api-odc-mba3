@@ -21,7 +21,6 @@ Endpoints principales:
 
 import asyncio
 import logging
-import threading
 import uvicorn
 import sys
 from concurrent.futures import ThreadPoolExecutor
@@ -174,19 +173,6 @@ def _configurar_executor_thread_pool() -> None:
         f"🧵 Executor por defecto del event loop: ThreadPoolExecutor("
         f"max_workers={API_THREAD_POOL_MAX_WORKERS})"
     )
-
-
-def _warm_up_celery_connection() -> None:
-    # Precalentar la conexión de control de Celery en un hilo daemon, best-effort
-    # y sin bloquear el arranque: el primer inspect().ping() en un proceso nuevo
-    # paga ~10s+ de setup de la conexión de control Redis/Kombu, y así ese costo
-    # se absorbe aquí en vez de durante la primera petición real de un usuario.
-    try:
-        import src.celery_app as celery_app_module
-        celery_app_module.celery_app.control.inspect(timeout=5.0).ping()
-        logger.debug("🔥 Conexión de control Celery precalentada")
-    except Exception as e:
-        logger.debug(f"Precalentamiento de conexión Celery no disponible (no crítico): {e}")
 
 
 def _inicializar_cliente_mba3() -> None:
@@ -359,9 +345,6 @@ async def startup_event():
 
     # 0. Executor dedicado del event loop (ver detalle en _configurar_executor_thread_pool)
     _configurar_executor_thread_pool()
-
-    # 0.1 Precalentar conexión de control de Celery en background (ver detalle en _warm_up_celery_connection)
-    threading.Thread(target=_warm_up_celery_connection, daemon=True, name="celery-warmup").start()
 
     # 1. Inicializar cliente MBA3 (warm-up)
     _inicializar_cliente_mba3()

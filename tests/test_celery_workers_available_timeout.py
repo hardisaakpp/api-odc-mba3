@@ -1,377 +1,125 @@
 """
-Regresión: _celery_workers_available() debe respetar un límite de tiempo real,
-incluso si celery_app.control.inspect().ping() no respeta su propio `timeout`.
+celery_worker_available() (src/services/celery_availability.py) reemplaza el
+chequeo anterior basado en celery_app.control.inspect().ping() -- un broadcast
+al canal de control de Celery que resultó flaky en producción: el ping no
+siempre respetaba su propio timeout y, bajo contención de hilos, devolvía
+falsos negativos con workers sanos.
 
-Incidente 2026-08-12: en el entorno real, inspect(timeout=2.5).ping() se quedaba
-colgado 15-30+ segundos en vez de cortar a los 2.5s configurados. Como esta
-función se usa para decidir si una subida de plantilla (u otro proceso) se
-encola en Celery o se procesa en primer plano, ese cuelgue se arrastraba
-directo a la petición HTTP de subida, agotando el timeout del cliente
-(60s en el frontend) y mostrando "El servidor tardó demasiado en responder".
+Incidente 2026-08-27: ese falso negativo tiró una carga de plantilla al
+fallback síncrono (Celery estaba sano y procesando otras tareas en paralelo);
+el procesamiento síncrono tardó 117s por saturación de SAP y el frontend ya
+había cortado por su timeout de 60s ("tiempo de espera agotado"), mientras el
+backend seguía trabajando sin que nadie escuchara la respuesta.
 
-La corrección ejecuta el ping en un hilo daemon y usa join(timeout=...) como
-límite externo real, sin depender de que Celery honre su propio timeout.
+El nuevo mecanismo es un GET simple a una clave de heartbeat en Redis (la
+escribe una tarea periódica de Celery Beat, ver
+src/tasks/celery_worker_heartbeat.py) -- sin hilos, sin ping de broadcast, sin
+condiciones de carrera posibles.
+
+`plantillas._celery_workers_available` y `endpoints_proceso._celery_workers_available`
+son alias de import de `celery_worker_available`, conservados porque
+tests/test_encolado_no_bloquea_event_loop.py los monkeypatchea por nombre.
 """
 
-import threading
-import time
+import logging
 
-import pytest
-
-
-@pytest.fixture(autouse=True)
-def _reset_celery_availability_cache():
-    """Resetea el cache single-flight de disponibilidad de workers Celery antes
-    de cada test. Sin esto, un resultado True/False cacheado por un test se
-    filtraría al siguiente (mismo proceso de pytest, estado a nivel de módulo),
-    haciendo que las aserciones dependan del orden de ejecución de los tests.
-
-    Con timestamp=0.0 la edad del cache siempre supera el TTL por defecto
-    (CELERY_WORKER_AVAILABILITY_CACHE_TTL), así que cada test dispara una
-    comprobación real la primera vez que llama a _celery_workers_available().
-    """
-    from src.endpoints import plantillas
-    from src.endpoints.pedidos.redistribucion import endpoints_proceso as ep
-
-    for mod in (plantillas, ep):
-        mod._disponibilidad_cache["resultado"] = False
-        mod._disponibilidad_cache["timestamp"] = 0.0
-        mod._disponibilidad_cache["verificando"] = False
-    yield
+from src.services import celery_availability
 
 
-class _InspectQueSeCuelga:
-    def __init__(self, segundos):
-        self._segundos = segundos
+class _RedisFalso:
+    def __init__(self, existe: bool = True, error: Exception | None = None):
+        self._existe = existe
+        self._error = error
 
-    def ping(self):
-        threading.Event().wait(self._segundos)
-        return None
-
-
-class _ControlQueSeCuelga:
-    def __init__(self, segundos):
-        self._segundos = segundos
-
-    def inspect(self, timeout=None):
-        return _InspectQueSeCuelga(self._segundos)
+    def exists(self, _key):
+        if self._error is not None:
+            raise self._error
+        return self._existe
 
 
-class _InspectConWorker:
-    def ping(self):
-        return {"celery@host": {"ok": "pong"}}
+def test_disponible_si_la_clave_de_heartbeat_existe(monkeypatch):
+    monkeypatch.setattr(celery_availability, "get_redis_client", lambda: _RedisFalso(existe=True))
+    assert celery_availability.celery_worker_available() is True
 
 
-class _ControlConWorker:
-    def inspect(self, timeout=None):
-        return _InspectConWorker()
+def test_no_disponible_si_la_clave_de_heartbeat_no_existe(monkeypatch):
+    """Sin heartbeat vigente (TTL vencido o worker nunca lo escribió) => no disponible."""
+    monkeypatch.setattr(celery_availability, "get_redis_client", lambda: _RedisFalso(existe=False))
+    assert celery_availability.celery_worker_available() is False
 
 
-class _InspectLento:
-    """Simula el comportamiento real confirmado en vivo: ping() excede levemente
-    el `timeout` que se le pasó a inspect(), pero igual responde con éxito."""
-
-    def __init__(self, segundos, respuesta):
-        self._segundos = segundos
-        self._respuesta = respuesta
-
-    def ping(self):
-        threading.Event().wait(self._segundos)
-        return self._respuesta
-
-
-class _ControlLento:
-    def __init__(self, segundos, respuesta):
-        self._segundos = segundos
-        self._respuesta = respuesta
-
-    def inspect(self, timeout=None):
-        return _InspectLento(self._segundos, self._respuesta)
-
-
-class _CeleryAppFalso:
-    def __init__(self, control):
-        self.control = control
-
-
-class _InspectContador:
-    """Responde siempre con pong exitoso y cuenta cuántas veces se llamó a
-    ping(), para probar que el cache evita pings duplicados."""
-
-    def __init__(self):
-        self.llamadas = 0
-
-    def ping(self):
-        self.llamadas += 1
-        return {"celery@host": {"ok": "pong"}}
-
-
-class _ControlContador:
-    def __init__(self):
-        self.inspector = _InspectContador()
-
-    def inspect(self, timeout=None):
-        return self.inspector
-
-
-class _InspectBloqueante:
-    """Simula un ping en curso: marca `evento_entrada` en cuanto arranca
-    (para que el test sepa determinísticamente que ya está "en vuelo") y se
-    queda esperando a que el test libere `evento_liberar` antes de responder
-    con éxito. Sin sleeps: la sincronización es 100% por Event."""
-
-    def __init__(self, evento_entrada, evento_liberar):
-        self._evento_entrada = evento_entrada
-        self._evento_liberar = evento_liberar
-
-    def ping(self):
-        self._evento_entrada.set()
-        self._evento_liberar.wait(timeout=5.0)
-        return {"celery@host": {"ok": "pong"}}
-
-
-class _ControlBloqueante:
-    def __init__(self, evento_entrada, evento_liberar):
-        self._evento_entrada = evento_entrada
-        self._evento_liberar = evento_liberar
-
-    def inspect(self, timeout=None):
-        return _InspectBloqueante(self._evento_entrada, self._evento_liberar)
-
-
-def test_plantillas_no_espera_mas_alla_del_timeout_aunque_ping_se_cuelgue(monkeypatch):
-    import src.celery_app as celery_app_module
-    from src.endpoints import plantillas
-
-    monkeypatch.setattr(plantillas, "CELERY_WORKER_PING_TIMEOUT", 0.3)
-    monkeypatch.setattr(plantillas, "CELERY_WORKER_PING_JOIN_BUFFER", 0.0)
-    monkeypatch.setattr(celery_app_module, "celery_app", _CeleryAppFalso(_ControlQueSeCuelga(5)))
-
-    t0 = time.time()
-    resultado = plantillas._celery_workers_available()
-    transcurrido = time.time() - t0
-
-    assert resultado is False
-    assert transcurrido < 1.0, (
-        f"_celery_workers_available() tardó {transcurrido:.2f}s; debía cortar cerca de "
-        "CELERY_WORKER_PING_TIMEOUT (0.3s) en vez de esperar a que ping() termine (5s)."
-    )
-
-
-def test_plantillas_retorna_true_si_hay_worker_respondiendo(monkeypatch):
-    import src.celery_app as celery_app_module
-    from src.endpoints import plantillas
-
-    monkeypatch.setattr(plantillas, "CELERY_WORKER_PING_TIMEOUT", 2.5)
-    monkeypatch.setattr(celery_app_module, "celery_app", _CeleryAppFalso(_ControlConWorker()))
-
-    assert plantillas._celery_workers_available() is True
-
-
-def test_plantillas_no_da_falso_negativo_si_ping_excede_levemente_su_propio_timeout(monkeypatch):
-    """Regresión del bug real: inspect(timeout=0.3).ping() tarda 0.5s (excede su
-    propio timeout) pero responde con éxito; el buffer del join externo debe
-    absorber ese overshoot y no descartar un worker sano."""
-    import src.celery_app as celery_app_module
-    from src.endpoints import plantillas
-
-    monkeypatch.setattr(plantillas, "CELERY_WORKER_PING_TIMEOUT", 0.3)
+def test_no_disponible_si_redis_lanza_una_excepcion(monkeypatch):
+    """Ante cualquier error consultando Redis, prioriza el flujo síncrono (False), sin propagar."""
     monkeypatch.setattr(
-        celery_app_module,
-        "celery_app",
-        _CeleryAppFalso(_ControlLento(0.5, {"celery@host": {"ok": "pong"}})),
+        celery_availability,
+        "get_redis_client",
+        lambda: _RedisFalso(error=ConnectionError("Redis no responde")),
     )
-
-    assert plantillas._celery_workers_available() is True
-
-
-def test_endpoints_proceso_no_espera_mas_alla_del_timeout_aunque_ping_se_cuelgue(monkeypatch):
-    import src.celery_app as celery_app_module
-    from src.endpoints.pedidos.redistribucion import endpoints_proceso as ep
-
-    monkeypatch.setattr(ep, "CELERY_WORKER_PING_TIMEOUT", 0.3)
-    monkeypatch.setattr(ep, "CELERY_WORKER_PING_JOIN_BUFFER", 0.0)
-    monkeypatch.setattr(celery_app_module, "celery_app", _CeleryAppFalso(_ControlQueSeCuelga(5)))
-
-    t0 = time.time()
-    resultado = ep._celery_workers_available()
-    transcurrido = time.time() - t0
-
-    assert resultado is False
-    assert transcurrido < 1.0, (
-        f"_celery_workers_available() tardó {transcurrido:.2f}s; debía cortar cerca de "
-        "CELERY_WORKER_PING_TIMEOUT (0.3s) en vez de esperar a que ping() termine (5s)."
-    )
+    assert celery_availability.celery_worker_available() is False
 
 
-def test_endpoints_proceso_retorna_true_si_hay_worker_respondiendo(monkeypatch):
-    import src.celery_app as celery_app_module
-    from src.endpoints.pedidos.redistribucion import endpoints_proceso as ep
-
-    monkeypatch.setattr(ep, "CELERY_WORKER_PING_TIMEOUT", 2.5)
-    monkeypatch.setattr(celery_app_module, "celery_app", _CeleryAppFalso(_ControlConWorker()))
-
-    assert ep._celery_workers_available() is True
-
-
-def test_endpoints_proceso_no_da_falso_negativo_si_ping_excede_levemente_su_propio_timeout(monkeypatch):
-    """Regresión del bug real: inspect(timeout=0.3).ping() tarda 0.5s (excede su
-    propio timeout) pero responde con éxito; el buffer del join externo debe
-    absorber ese overshoot y no descartar un worker sano."""
-    import src.celery_app as celery_app_module
-    from src.endpoints.pedidos.redistribucion import endpoints_proceso as ep
-
-    monkeypatch.setattr(ep, "CELERY_WORKER_PING_TIMEOUT", 0.3)
-    monkeypatch.setattr(
-        celery_app_module,
-        "celery_app",
-        _CeleryAppFalso(_ControlLento(0.5, {"celery@host": {"ok": "pong"}})),
-    )
-
-    assert ep._celery_workers_available() is True
-
-
-# ---------------------------------------------------------------------------
-# Regresión (ronda 3): cache single-flight con TTL corto.
-#
-# Verificado en vivo que el hilo daemon abandonado por un join() que se
-# rinde sigue corriendo y CONTIENDE con el hilo de ping de la siguiente
-# llamada (aparentemente por un pool de conexiones Kombu/Celery compartido):
-# pings aislados ~5.4s, pings contra un hilo abandonado 9.6-14s. Esto seguía
-# produciendo falsos negativos en llamadas repetidas/rápidas incluso después
-# del fix del buffer de join(). El cache de abajo evita relanzar un hilo de
-# ping por cada llamada (TTL) y evita lanzar un hilo COMPETIDOR mientras ya
-# hay uno en curso (single-flight).
-# ---------------------------------------------------------------------------
-
-
-def test_plantillas_cache_evita_ping_duplicado_en_llamadas_repetidas(monkeypatch):
-    """Dos llamadas seguidas (dentro del TTL) deben devolver True, pero el
-    ping subyacente debe haberse invocado una sola vez (la segunda se sirve
-    desde cache, no dispara un nuevo hilo de ping)."""
-    import src.celery_app as celery_app_module
+def test_plantillas_expone_el_mismo_chequeo_por_el_nombre_historico():
+    """monkeypatch.setattr(plantillas, "_celery_workers_available", ...) debe seguir
+    funcionando (test_encolado_no_bloquea_event_loop.py depende de este atributo)."""
     from src.endpoints import plantillas
 
-    monkeypatch.setattr(plantillas, "CELERY_WORKER_PING_TIMEOUT", 2.5)
-    control = _ControlContador()
-    monkeypatch.setattr(celery_app_module, "celery_app", _CeleryAppFalso(control))
-
-    primero = plantillas._celery_workers_available()
-    segundo = plantillas._celery_workers_available()
-
-    assert primero is True
-    assert segundo is True
-    assert control.inspector.llamadas == 1, (
-        "La segunda llamada debía servirse desde cache; se detectaron "
-        f"{control.inspector.llamadas} invocaciones reales de ping()."
-    )
+    assert plantillas._celery_workers_available is celery_availability.celery_worker_available
 
 
-def test_endpoints_proceso_cache_evita_ping_duplicado_en_llamadas_repetidas(monkeypatch):
-    """Mismo caso que la versión de plantillas, para endpoints_proceso."""
-    import src.celery_app as celery_app_module
+def test_endpoints_proceso_expone_el_mismo_chequeo_por_el_nombre_historico():
     from src.endpoints.pedidos.redistribucion import endpoints_proceso as ep
 
-    monkeypatch.setattr(ep, "CELERY_WORKER_PING_TIMEOUT", 2.5)
-    control = _ControlContador()
-    monkeypatch.setattr(celery_app_module, "celery_app", _CeleryAppFalso(control))
+    assert ep._celery_workers_available is celery_availability.celery_worker_available
 
-    primero = ep._celery_workers_available()
-    segundo = ep._celery_workers_available()
 
-    assert primero is True
-    assert segundo is True
-    assert control.inspector.llamadas == 1, (
-        "La segunda llamada debía servirse desde cache; se detectaron "
-        f"{control.inspector.llamadas} invocaciones reales de ping()."
+def test_emitir_heartbeat_escribe_la_clave_esperada_con_ttl(monkeypatch):
+    from src.tasks import celery_worker_heartbeat
+
+    llamadas = {}
+
+    class _RedisSetex:
+        def setex(self, key, ttl, value):
+            llamadas["key"] = key
+            llamadas["ttl"] = ttl
+            llamadas["value"] = value
+
+    monkeypatch.setattr(celery_worker_heartbeat, "get_redis_client", lambda: _RedisSetex())
+
+    celery_worker_heartbeat.emitir_heartbeat()
+
+    assert llamadas["key"] == celery_availability.HEARTBEAT_REDIS_KEY
+    assert llamadas["ttl"] > 0
+
+
+def _record(msg: str) -> logging.LogRecord:
+    return logging.LogRecord(
+        name="celery.worker.strategy", level=logging.INFO, pathname=__file__,
+        lineno=1, msg=msg, args=(), exc_info=None,
     )
 
 
-def test_plantillas_no_lanza_ping_competidor_si_ya_hay_uno_en_curso(monkeypatch):
-    """Mientras un ping ya está en curso (verificando=True), una segunda
-    llamada debe devolver de inmediato el último valor cacheado, sin lanzar
-    un hilo de ping competidor ni bloquear esperando al primero."""
+def test_filtro_de_heartbeat_silencia_solo_sus_propios_logs():
+    """No debe tapar logs de otras tareas: solo los que mencionan la tarea de
+    heartbeat (received/succeeded/Sending due task), miles de líneas idénticas
+    por día que no aportan señal una vez confirmado que el mecanismo funciona."""
+    from src.celery_app import _SilenciarHeartbeatFilter
+
+    filtro = _SilenciarHeartbeatFilter()
+
+    ruidoso = _record("Task src.tasks.celery_worker_heartbeat.emitir_heartbeat[abc] received")
+    assert filtro.filter(ruidoso) is False
+
+    otra_tarea = _record(
+        "Task src.tasks.celery_reconciliar_ordenes_compra.reconciliar_ordenes_compra_pendientes[xyz] received"
+    )
+    assert filtro.filter(otra_tarea) is True
+
+
+def test_filtro_de_heartbeat_esta_registrado_en_los_loggers_de_celery():
     import src.celery_app as celery_app_module
-    from src.endpoints import plantillas
 
-    monkeypatch.setattr(plantillas, "CELERY_WORKER_PING_TIMEOUT", 5.0)
-    monkeypatch.setattr(plantillas, "CELERY_WORKER_PING_JOIN_BUFFER", 5.0)
-    evento_entrada = threading.Event()
-    evento_liberar = threading.Event()
-    monkeypatch.setattr(
-        celery_app_module,
-        "celery_app",
-        _CeleryAppFalso(_ControlBloqueante(evento_entrada, evento_liberar)),
-    )
-
-    resultados = {}
-
-    def _llamar_primero():
-        resultados["primero"] = plantillas._celery_workers_available()
-
-    hilo_primero = threading.Thread(target=_llamar_primero)
-    hilo_primero.start()
-
-    # Sincronización determinista: espera a que el primer ping haya arrancado
-    # de verdad (nada de sleeps como única señal de corrección).
-    assert evento_entrada.wait(timeout=2.0), "El primer ping no arrancó a tiempo"
-    assert plantillas._disponibilidad_cache["verificando"] is True
-
-    t0 = time.time()
-    segundo = plantillas._celery_workers_available()
-    transcurrido = time.time() - t0
-
-    assert segundo is False, "Debía devolver el último valor cacheado (nada exitoso todavía)"
-    assert transcurrido < 1.0, (
-        f"La segunda llamada tardó {transcurrido:.2f}s; debía retornar de inmediato "
-        "el valor cacheado en vez de lanzar/esperar un ping competidor."
-    )
-
-    evento_liberar.set()
-    hilo_primero.join(timeout=5.0)
-
-    assert resultados["primero"] is True
-    assert plantillas._disponibilidad_cache["resultado"] is True
-
-
-def test_endpoints_proceso_no_lanza_ping_competidor_si_ya_hay_uno_en_curso(monkeypatch):
-    """Mismo caso que la versión de plantillas, para endpoints_proceso."""
-    import src.celery_app as celery_app_module
-    from src.endpoints.pedidos.redistribucion import endpoints_proceso as ep
-
-    monkeypatch.setattr(ep, "CELERY_WORKER_PING_TIMEOUT", 5.0)
-    monkeypatch.setattr(ep, "CELERY_WORKER_PING_JOIN_BUFFER", 5.0)
-    evento_entrada = threading.Event()
-    evento_liberar = threading.Event()
-    monkeypatch.setattr(
-        celery_app_module,
-        "celery_app",
-        _CeleryAppFalso(_ControlBloqueante(evento_entrada, evento_liberar)),
-    )
-
-    resultados = {}
-
-    def _llamar_primero():
-        resultados["primero"] = ep._celery_workers_available()
-
-    hilo_primero = threading.Thread(target=_llamar_primero)
-    hilo_primero.start()
-
-    assert evento_entrada.wait(timeout=2.0), "El primer ping no arrancó a tiempo"
-    assert ep._disponibilidad_cache["verificando"] is True
-
-    t0 = time.time()
-    segundo = ep._celery_workers_available()
-    transcurrido = time.time() - t0
-
-    assert segundo is False, "Debía devolver el último valor cacheado (nada exitoso todavía)"
-    assert transcurrido < 1.0, (
-        f"La segunda llamada tardó {transcurrido:.2f}s; debía retornar de inmediato "
-        "el valor cacheado en vez de lanzar/esperar un ping competidor."
-    )
-
-    evento_liberar.set()
-    hilo_primero.join(timeout=5.0)
-
-    assert resultados["primero"] is True
-    assert ep._disponibilidad_cache["resultado"] is True
+    for nombre in ("celery.worker.strategy", "celery.app.trace", "celery.beat"):
+        filtros = logging.getLogger(nombre).filters
+        assert any(
+            isinstance(f, celery_app_module._SilenciarHeartbeatFilter) for f in filtros
+        ), f"Falta el filtro anti-ruido de heartbeat en el logger '{nombre}'"
