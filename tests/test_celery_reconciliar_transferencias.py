@@ -5,9 +5,9 @@ Cubre: notificación única vía Redis, clasificación transitorio vs. no-transi
 el enrutamiento de resultados en _reconciliar_oc (éxito / sin pendientes /
 escalamiento inmediato / escalamiento por recurrencia), el escalamiento por 2
 corridas consecutivas, el colchón de seguridad (marca de última corrida exitosa,
-verificado solo en la corrida del domingo), y el paso de dias_ventana/
-verificar_salud_diaria hacia la consulta de candidatas (barrido corto entre
-semana vs. barrido semanal ampliado del domingo).
+verificado en CADA corrida -- no solo la del domingo), y el paso de dias_ventana
+hacia la consulta de candidatas (barrido corto entre semana vs. barrido semanal
+ampliado del domingo).
 """
 
 from unittest.mock import MagicMock, patch
@@ -274,8 +274,8 @@ class TestEvaluarEscalamientoPorRecurrencia:
 
 
 class TestVerificarSaludDiaria:
-    """Colchón de seguridad: se llama solo el domingo (verificar_salud_diaria=True),
-    dentro de la misma corrida semanal -- no en una tarea aparte cada hora."""
+    """Colchón de seguridad: se llama en cada corrida (diaria y semanal), dentro
+    de la tarea misma -- no en una tarea aparte cada hora."""
 
     def test_al_dia_no_envia_correo(self):
         with patch(
@@ -306,9 +306,11 @@ class TestVerificarSaludDiaria:
 
 
 class TestReconciliarTransferenciasPendientesTask:
-    """Wiring del task: dias_ventana viaja a la consulta de candidatas, y
-    verificar_salud_diaria solo dispara el chequeo de salud cuando es True
-    (la corrida del domingo)."""
+    """Wiring del task: dias_ventana viaja a la consulta de candidatas, y el
+    chequeo de salud se dispara en TODA corrida (diaria y semanal), no solo la
+    del domingo -- ver conversación 2026-08-28 (el watchdog dejó de vivir en una
+    tarea aparte cada hora; en vez de eso corre inline en cada corrida diaria
+    para acotar la latencia de detección sin sumar infraestructura)."""
 
     def _mocks_base(self, stack, oc_ids=None):
         redis_client = MagicMock()
@@ -328,16 +330,17 @@ class TestReconciliarTransferenciasPendientesTask:
         mock_repo_cls.return_value.get_oc_ids_con_tiendas_faltantes.return_value = []
         return redis_client, mock_repo_cls
 
-    def test_corrida_diaria_pasa_dias_ventana_y_no_verifica_salud(self):
+    def test_corrida_diaria_pasa_dias_ventana_margen_y_verifica_salud(self):
         from contextlib import ExitStack
         with ExitStack() as stack:
             _, mock_repo_cls = self._mocks_base(stack)
             mock_salud = stack.enter_context(patch(
                 "src.tasks.celery_reconciliar_transferencias._verificar_salud_diaria"
             ))
-            reconciliar_transferencias_pendientes(dias_ventana=2)
-        mock_repo_cls.return_value.get_oc_ids_con_tiendas_pendientes.assert_called_once_with(2)
-        mock_salud.assert_not_called()
+            reconciliar_transferencias_pendientes(dias_ventana=2, margen_antiguedad_minutos=30)
+        mock_repo_cls.return_value.get_oc_ids_con_tiendas_pendientes.assert_called_once_with(2, 30)
+        mock_repo_cls.return_value.get_oc_ids_con_tiendas_faltantes.assert_called_once_with(2, 30)
+        mock_salud.assert_called_once()
 
     def test_corrida_semanal_pasa_ventana_amplia_y_verifica_salud(self):
         from contextlib import ExitStack
@@ -346,8 +349,8 @@ class TestReconciliarTransferenciasPendientesTask:
             mock_salud = stack.enter_context(patch(
                 "src.tasks.celery_reconciliar_transferencias._verificar_salud_diaria"
             ))
-            reconciliar_transferencias_pendientes(dias_ventana=7, verificar_salud_diaria=True)
-        mock_repo_cls.return_value.get_oc_ids_con_tiendas_pendientes.assert_called_once_with(7)
+            reconciliar_transferencias_pendientes(dias_ventana=7, margen_antiguedad_minutos=30)
+        mock_repo_cls.return_value.get_oc_ids_con_tiendas_pendientes.assert_called_once_with(7, 30)
         mock_salud.assert_called_once()
 
     def test_une_pendientes_y_faltantes_sin_duplicar_oc_ids(self):
@@ -362,7 +365,7 @@ class TestReconciliarTransferenciasPendientesTask:
                 "src.tasks.celery_reconciliar_transferencias._reconciliar_oc",
                 return_value={"status": "success"},
             ))
-            resultado = reconciliar_transferencias_pendientes(dias_ventana=2)
+            resultado = reconciliar_transferencias_pendientes(dias_ventana=2, margen_antiguedad_minutos=30)
 
         oc_ids_procesadas = [call.args[0] for call in mock_reconciliar.call_args_list]
         assert oc_ids_procesadas == ["oc-1", "oc-2", "oc-3"]

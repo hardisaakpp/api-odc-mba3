@@ -225,8 +225,8 @@ USE_BATCH_VALIDATION = os.getenv("USE_BATCH_VALIDATION", "false").lower() == "tr
 #     escaló a técnicos, ver abajo).
 #   - Domingo: barrido más amplio, RECONCILIAR_ST_VENTANA_DIAS_DOMINGO días, para
 #     alcanzar cualquier OC que se le haya escapado a los barridos cortos de la
-#     semana. También hace de colchón de seguridad ese día (ver
-#     verificar_salud_diaria en celery_reconciliar_transferencias.py).
+#     semana.
+# El colchón de seguridad (ver abajo) corre en TODA corrida, no solo la del domingo.
 # Si una OC sigue pendiente en 2 corridas consecutivas (le da una noche de margen a
 # un problema transitorio antes de escalar), notifica a técnicos por correo y deja
 # de reintentar automáticamente esa OC (el botón manual sigue disponible). Diseño y
@@ -238,11 +238,25 @@ RECONCILIAR_ST_MINUTO = int(os.getenv("RECONCILIAR_ST_MINUTO", "0"))
 RECONCILIAR_ST_VENTANA_DIAS = int(os.getenv("RECONCILIAR_ST_VENTANA_DIAS", "2"))
 RECONCILIAR_ST_VENTANA_DIAS_DOMINGO = int(os.getenv("RECONCILIAR_ST_VENTANA_DIAS_DOMINGO", "7"))
 
-# Colchón de seguridad: si para el domingo (cuando se revisa) la reconciliación no
-# completó exitosamente dentro de este margen, se asume que algo la interrumpió
-# (Celery Beat caído, excepción no manejada) y se avisa por correo. Se revisa dentro
-# de la MISMA corrida semanal del domingo (verificar_salud_diaria), no en una tarea
-# aparte -- evita sumar un chequeo cada hora para un problema que no es urgente.
+# Margen mínimo de antigüedad (minutos) para que una tienda 'Encolada' (HTTP 202,
+# job de middleware en curso) o "faltante" (nunca intentada) se considere candidata
+# a la reconciliación automática. Evita que la corrida choque con un envío original
+# que todavía puede estar en curso para la misma OC (el envío original no toma
+# ningún lock). Calculado con margen sobre el techo real del middleware: 5
+# reintentos con backoff fijo [15,30,60,120,240]s (465s) + hasta 4 llamadas HTTP a
+# SAP por intento (timeout ~40s c/u) ⇒ máximo teórico ~11-19 min (ver
+# investigación 2026-08-28 sobre api-middleware-sap/JobRunner.cs). Solo aplica a la
+# reconciliación automática -- el botón manual "Reintentar ST" no tiene este
+# margen, es una acción explícita del usuario.
+RECONCILIAR_ST_MARGEN_ANTIGUEDAD_MINUTOS = int(os.getenv("RECONCILIAR_ST_MARGEN_ANTIGUEDAD_MINUTOS", "30"))
+
+# Colchón de seguridad: si al iniciar CUALQUIER corrida (diaria o semanal) la última
+# corrida exitosa registrada es más vieja que este margen, se asume que algo
+# interrumpió la reconciliación (Celery Beat caído, excepción no manejada) y se
+# avisa por correo. Se revisa dentro de la tarea misma en cada corrida
+# (_verificar_salud_diaria), no en una tarea aparte cada hora -- el problema que
+# vigila no es urgente, y corriendo todos los días la latencia de detección queda
+# acotada de todas formas (~24-48h en vez de hasta una semana).
 RECONCILIAR_ST_MARGEN_COLCHON_HORAS = int(os.getenv("RECONCILIAR_ST_MARGEN_COLCHON_HORAS", "48"))
 
 # Reconciliación automática de ODC ENCOLADAS (HTTP 202 del middleware al crear la

@@ -27,10 +27,10 @@ HEARTBEAT_REDIS_KEY = "mba3:celery:worker-heartbeat"
 
 # Escrita por celery_reconciliar_transferencias.reconciliar_transferencias_pendientes
 # al completar exitosamente, con TTL = RECONCILIAR_ST_MARGEN_COLCHON_HORAS. Leída por
-# el chequeo de abajo (reconciliacion_st_al_dia), invocado solo en la corrida
-# semanal del domingo (verificar_salud_diaria=True, ver
-# celery_reconciliar_transferencias._verificar_salud_diaria) -- dentro de la MISMA
-# tarea, no en una separada: el problema que vigila no es urgente.
+# el chequeo de abajo (reconciliacion_st_al_dia), invocado en CADA corrida (diaria y
+# semanal, ver celery_reconciliar_transferencias._verificar_salud_diaria) -- dentro
+# de la MISMA tarea, no en una separada: el problema que vigila no es urgente, y
+# corriendo todos los días la latencia de detección queda acotada de todas formas.
 RECONCILIAR_ST_LAST_RUN_REDIS_KEY = "mba3:reconciliar-st:last-run"
 
 

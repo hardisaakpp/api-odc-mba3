@@ -96,6 +96,7 @@ REDIS_URL=redis://localhost:6379/0
 # RECONCILIAR_ST_VENTANA_DIAS=2          # lunes a sábado: solo OCs enviadas en estos días
 # RECONCILIAR_ST_VENTANA_DIAS_DOMINGO=7  # domingo: barrido semanal más amplio
 # RECONCILIAR_ST_MARGEN_COLCHON_HORAS=48   # colchón de seguridad, ver abajo
+# RECONCILIAR_ST_MARGEN_ANTIGUEDAD_MINUTOS=30   # margen anti-carrera con envío en curso, ver abajo
 
 # Reconciliación automática de ODC ENCOLADAS (HTTP 202 del middleware): SIEMPRE
 # activa, sin flag de encendido/apagado. Solo el intervalo es configurable.
@@ -115,7 +116,7 @@ declaradas en `task_queues` en `src/celery_app.py`, así que aplica aunque se la
 
 | Tarea | Flag | Default | Frecuencia |
 |---|---|---|---|
-| `reconciliar_transferencias_pendientes` (diaria) | `ENABLE_RECONCILIACION_ST_AUTOMATICA` | `false` (prod: `true`) | lunes-sábado, `RECONCILIAR_ST_HORA:MINUTO` (11:00 PM), ventana de `RECONCILIAR_ST_VENTANA_DIAS` (2) días |
+| `reconciliar_transferencias_pendientes` (diaria) | `ENABLE_RECONCILIACION_ST_AUTOMATICA` | `false` (prod: `true`) | lunes-sábado, `RECONCILIAR_ST_HORA:MINUTO` (11:00 PM), ventana de `RECONCILIAR_ST_VENTANA_DIAS` (2) días + colchón de seguridad |
 | `reconciliar_transferencias_pendientes` (semanal) | `ENABLE_RECONCILIACION_ST_AUTOMATICA` | `false` | domingo, misma hora, ventana de `RECONCILIAR_ST_VENTANA_DIAS_DOMINGO` (7) días + colchón de seguridad |
 | `reconciliar_ordenes_compra_pendientes` | *(ninguno, siempre activa)* | — | cada `RECONCILIAR_OC_INTERVALO_MINUTOS` (5 min) |
 | `sync_productos_maestro` | `ENABLE_SYNC_PRODUCTOS_AUTOMATICA` | `false` | diaria, `SYNC_PRODUCTOS_HOUR:MINUTE` (3:00 AM) |
@@ -129,17 +130,31 @@ raro (~1 cada 4-5 días). El diseño final usa la MISMA tarea con dos configurac
   primer intento de ST fue en los últimos 2 días. A propósito no alcanza nada más viejo: no
   se quiere que la automatización reintente a ciegas órdenes de hace meses sin supervisión.
 - **Domingo**: `dias_ventana=RECONCILIAR_ST_VENTANA_DIAS_DOMINGO` (7) -- barrido más amplio,
-  alcanza cualquier OC que se le haya "escapado" a los barridos cortos entre semana. Además
-  `verificar_salud_diaria=True` ese día: revisa si la reconciliación viene completando
-  exitosamente (colchón de seguridad) dentro de la MISMA corrida semanal, en vez de una tarea
-  aparte corriendo cada hora -- el problema que vigila no es urgente.
+  alcanza cualquier OC que se le haya "escapado" a los barridos cortos entre semana.
+
+El colchón de seguridad (¿la corrida anterior completó?) corre en **cada** ejecución (lunes a
+domingo), no solo la del domingo -- dentro de la MISMA tarea, en vez de una aparte corriendo
+cada hora: el problema que vigila no es urgente, pero corriendo todos los días la latencia de
+detección queda acotada a ~24-48h en vez de hasta una semana.
+
+**Candidatas: Error, Encolada y faltantes (2026-08-28).** Las dos consultas que alimentan la
+reconciliación (`get_oc_ids_con_tiendas_pendientes`, `get_oc_ids_con_tiendas_faltantes`) ahora
+también recogen tiendas `'Encolada'` (HTTP 202 del middleware, job sin resolver) -- antes solo
+se reconciliaba `'Error'`, así que una OC 100% encolada nunca se auto-reparaba. Ambas exigen
+además `margen_antiguedad_minutos=RECONCILIAR_ST_MARGEN_ANTIGUEDAD_MINUTOS` (30 min por
+defecto) de antigüedad en el último envío, para no chocar con un envío original todavía en
+curso para la misma OC (el envío original no toma ningún lock). El valor por defecto tiene
+margen sobre el techo real medido en el middleware .NET (`api-middleware-sap`): 5 reintentos
+con backoff fijo `[15,30,60,120,240]s` (465s) más hasta 4 llamadas HTTP a SAP por intento
+(~40s c/u) ⇒ máximo teórico ~11-19 minutos para que un job encolado llegue a un estado
+terminal (COMPLETADO o ERROR).
 
 El escalamiento a técnicos ya no se mide en horas transcurridas (con una corrida diaria,
 cualquier OC pendiente ya lleva "más horas" que cualquier umbral razonable en el primer
 chequeo) sino en **corridas consecutivas**: la primera vez solo se marca, la segunda seguida
 sin resolverse escala por correo (`_evaluar_escalamiento_por_recurrencia`). El colchón de
-seguridad (`RECONCILIAR_ST_MARGEN_COLCHON_HORAS`, 48h por defecto) avisa por correo si, para
-cuando corre el domingo, la última corrida exitosa registrada es más vieja que ese margen --
+seguridad (`RECONCILIAR_ST_MARGEN_COLCHON_HORAS`, 48h por defecto) avisa por correo si, al
+iniciar cualquier corrida, la última corrida exitosa registrada es más vieja que ese margen --
 señal de que Celery Beat estuvo caído o la tarea viene fallando.
 
 Algo que se queda sin resolver más allá del barrido semanal del domingo deja de reintentarse

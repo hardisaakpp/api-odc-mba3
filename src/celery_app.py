@@ -36,6 +36,7 @@ from src.config import (
     RECONCILIAR_ST_MINUTO,
     RECONCILIAR_ST_VENTANA_DIAS,
     RECONCILIAR_ST_VENTANA_DIAS_DOMINGO,
+    RECONCILIAR_ST_MARGEN_ANTIGUEDAD_MINUTOS,
     RECONCILIAR_OC_INTERVALO_MINUTOS,
     CELERY_HEARTBEAT_INTERVALO_SEGUNDOS,
     CELERY_HEARTBEAT_TTL_SEGUNDOS,
@@ -143,21 +144,26 @@ celery_app.conf.update(
                 'schedule': crontab(  # type: ignore[arg-type]
                     hour=RECONCILIAR_ST_HORA, minute=RECONCILIAR_ST_MINUTO, day_of_week='mon-sat'
                 ),
-                'kwargs': {'dias_ventana': RECONCILIAR_ST_VENTANA_DIAS},
+                'kwargs': {
+                    'dias_ventana': RECONCILIAR_ST_VENTANA_DIAS,
+                    'margen_antiguedad_minutos': RECONCILIAR_ST_MARGEN_ANTIGUEDAD_MINUTOS,
+                },
                 'options': {'queue': 'maintenance', 'expires': 3600.0},
             },
             # Domingo: barrido semanal más amplio (RECONCILIAR_ST_VENTANA_DIAS_DOMINGO,
             # default 7 días) -- alcanza cualquier OC que se le haya "escapado" a los
-            # barridos cortos de la semana. También hace de colchón de seguridad: en
-            # vez de una tarea aparte corriendo cada hora, esta misma corrida revisa si
-            # la reconciliación diaria completó al menos una vez recientemente y avisa
-            # por correo si no (ver verificar_salud_diaria en la tarea).
+            # barridos cortos de la semana. El colchón de seguridad (¿la corrida
+            # anterior completó?) corre en AMBAS entradas, dentro de la tarea misma
+            # (ver _verificar_salud_diaria) -- no depende de que sea domingo.
             'reconciliar-transferencias-pendientes-semanal': {
                 'task': 'src.tasks.celery_reconciliar_transferencias.reconciliar_transferencias_pendientes',
                 'schedule': crontab(  # type: ignore[arg-type]
                     hour=RECONCILIAR_ST_HORA, minute=RECONCILIAR_ST_MINUTO, day_of_week='sun'
                 ),
-                'kwargs': {'dias_ventana': RECONCILIAR_ST_VENTANA_DIAS_DOMINGO, 'verificar_salud_diaria': True},
+                'kwargs': {
+                    'dias_ventana': RECONCILIAR_ST_VENTANA_DIAS_DOMINGO,
+                    'margen_antiguedad_minutos': RECONCILIAR_ST_MARGEN_ANTIGUEDAD_MINUTOS,
+                },
                 'options': {'queue': 'maintenance', 'expires': 3600.0},
             },
         } if ENABLE_RECONCILIACION_ST_AUTOMATICA else {}),

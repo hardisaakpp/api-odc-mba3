@@ -2,19 +2,27 @@
 Tarea Celery periódica: reconciliación automática de Solicitudes de Transferencia (ITR) pendientes.
 
 Automatiza lo que antes requería que un usuario presionara "Reintentar ST" manualmente:
-busca OCs ENVIADAS con tiendas pendientes de ITR (por una caída transitoria de Service
-Layer) y reintenta solo esas, reutilizando StockTransferService.reintentar_pendientes
-(misma idempotencia que el botón manual). La MISMA tarea corre con dos configuraciones
-distintas según el día (ver beat_schedule en src/celery_app.py):
+busca OCs ENVIADAS con tiendas pendientes de ITR -- en Error (caída transitoria de
+Service Layer), en Encolada (HTTP 202, job de middleware sin resolver) o nunca
+intentadas (F4.5) -- y reintenta solo esas, reutilizando
+StockTransferService.reintentar_pendientes (misma idempotencia que el botón manual).
+Las candidatas 'Encolada'/faltantes exigen además un margen mínimo de antigüedad
+(RECONCILIAR_ST_MARGEN_ANTIGUEDAD_MINUTOS, ver config.py) para no chocar con un
+envío original todavía en curso para la misma OC -- el envío original no toma
+ningún lock. La MISMA tarea corre con dos configuraciones distintas según el día
+(ver beat_schedule en src/celery_app.py):
 - Lunes a sábado: dias_ventana corto (RECONCILIAR_ST_VENTANA_DIAS) -- solo OCs
   enviadas recientemente. No mira nada más viejo A PROPÓSITO: alcanzar OCs de meses
   atrás sin supervisión no es el objetivo (ver conversación 2026-08-28); lo que no se
   resuelve solo ya escaló a técnicos (ver abajo).
 - Domingo: dias_ventana más amplio (RECONCILIAR_ST_VENTANA_DIAS_DOMINGO) para alcanzar
-  cualquier OC que se le haya escapado a los barridos cortos de la semana, y además
-  verificar_salud_diaria=True -- ese día también revisa si la reconciliación viene
-  corriendo con éxito (colchón de seguridad, ver _verificar_salud_diaria más abajo)
-  en vez de una tarea aparte corriendo cada hora.
+  cualquier OC que se le haya escapado a los barridos cortos de la semana.
+
+Colchón de seguridad (ver _verificar_salud_diaria): en CADA corrida (lunes a domingo),
+antes de procesar nada, revisa si la corrida ANTERIOR completó con éxito -- si no, avisa
+por correo. Deliberadamente dentro de la misma tarea diaria, no en una tarea aparte
+corriendo cada hora: mantiene la latencia de detección acotada (~24-48h) sin sumar
+infraestructura para un problema que no es urgente (ver conversación 2026-08-28).
 
 Escalamiento a técnicos (correo + pausa de autoreintentos hasta que expire la marca en Redis):
 - Inmediato si el error no parece transitorio (mensaje_sugiere_reintento_transitorio):
@@ -90,12 +98,13 @@ def _marcar_ultima_corrida_exitosa(redis_client) -> None:
 
 def _verificar_salud_diaria() -> None:
     """
-    Colchón de seguridad: se llama solo el domingo (verificar_salud_diaria=True),
-    ANTES de que esta misma corrida marque su propio éxito -- así refleja si las
-    corridas ANTERIORES (lunes a sábado, u otros domingos) vinieron completando
-    exitosamente, no un falso "todo bien" por la marca que esta corrida está a
-    punto de escribir. Deliberadamente en la MISMA tarea semanal en vez de una
-    tarea aparte corriendo cada hora -- el problema que vigila no es urgente.
+    Colchón de seguridad: se llama en CADA corrida (lunes a domingo), ANTES de que
+    esta misma corrida marque su propio éxito -- así refleja si la corrida ANTERIOR
+    vino completando exitosamente, no un falso "todo bien" por la marca que esta
+    corrida está a punto de escribir. Deliberadamente dentro de la misma tarea
+    diaria en vez de una tarea aparte corriendo cada hora -- corriendo todos los
+    días, la latencia de detección queda acotada (~24-48h) sin sumar
+    infraestructura para un problema que no es urgente.
     """
     if reconciliacion_st_al_dia():
         return
@@ -226,25 +235,33 @@ def _reconciliar_oc(oc_id: str, redis_client) -> Optional[Dict[str, Any]]:
     soft_time_limit=1700,
 )
 def reconciliar_transferencias_pendientes(
-    self: Task, dias_ventana: int, verificar_salud_diaria: bool = False
+    self: Task, dias_ventana: int, margen_antiguedad_minutos: int
 ) -> Dict[str, Any]:
     """
     Busca OCs ENVIADAS (con su primer intento de ST dentro de los últimos
-    `dias_ventana` días) con ST pendientes, y reintenta automáticamente las que no
-    han sido escaladas.
+    `dias_ventana` días) con ST pendientes -- Error, Encolada, o nunca intentadas --
+    y reintenta automáticamente las que no han sido escaladas.
 
-    `verificar_salud_diaria`: True solo en la corrida del domingo (ver
-    beat_schedule) -- revisa si la reconciliación viene completando exitosamente,
-    sin necesidad de una tarea aparte corriendo cada hora.
+    `margen_antiguedad_minutos`: se pasa a ambas consultas de candidatas para
+    excluir cualquier tienda/OC cuyo último envío sea más reciente que este
+    margen -- protege contra un envío original todavía en curso (ver
+    RECONCILIAR_ST_MARGEN_ANTIGUEDAD_MINUTOS en config.py).
+
+    Antes de procesar candidatas, revisa si la corrida anterior completó con éxito
+    (colchón de seguridad, ver _verificar_salud_diaria) -- en cada corrida, no solo
+    la del domingo, para acotar la latencia de detección.
     """
-    if verificar_salud_diaria:
-        _verificar_salud_diaria()
+    _verificar_salud_diaria()
 
     redis_client = get_redis_client()
     with get_db_connection_context() as conn:
         st_repo = SolicitudTransferenciaRepository(conn)
-        oc_ids_pendientes = st_repo.get_oc_ids_con_tiendas_pendientes(dias_ventana)
-        oc_ids_faltantes = st_repo.get_oc_ids_con_tiendas_faltantes(dias_ventana)
+        oc_ids_pendientes = st_repo.get_oc_ids_con_tiendas_pendientes(
+            dias_ventana, margen_antiguedad_minutos
+        )
+        oc_ids_faltantes = st_repo.get_oc_ids_con_tiendas_faltantes(
+            dias_ventana, margen_antiguedad_minutos
+        )
 
     # Unión sin duplicados: tiendas con intento fallido (pendientes) + tiendas que
     # nunca se intentaron según la distribución confirmada (faltantes, F4.5).

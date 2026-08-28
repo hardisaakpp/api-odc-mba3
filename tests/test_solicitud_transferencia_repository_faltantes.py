@@ -83,22 +83,28 @@ class TestGetOcIdsConTiendasFaltantes:
         conn.cursor.return_value = cursor
 
         repo = SolicitudTransferenciaRepository(conn)
-        result = repo.get_oc_ids_con_tiendas_faltantes(dias_ventana=2)
+        result = repo.get_oc_ids_con_tiendas_faltantes(dias_ventana=2, margen_antiguedad_minutos=30)
 
         assert result == ["oc-1", "oc-2"]
         cursor.execute.assert_called_once()
 
-    def test_pasa_dias_ventana_como_parametro_de_la_query(self):
+    def test_pasa_dias_ventana_y_margen_antiguedad_como_parametros_de_la_query(self):
+        """Mismo margen de antigüedad que get_oc_ids_con_tiendas_pendientes: una
+        tienda "nunca intentada" mientras el envío original sigue en curso se ve
+        idéntica a una realmente faltante (ver conversación 2026-08-28)."""
         conn = MagicMock()
         cursor = MagicMock()
         cursor.fetchall.return_value = []
         conn.cursor.return_value = cursor
         repo = SolicitudTransferenciaRepository(conn)
 
-        repo.get_oc_ids_con_tiendas_faltantes(dias_ventana=7)
+        repo.get_oc_ids_con_tiendas_faltantes(dias_ventana=7, margen_antiguedad_minutos=30)
 
         params = cursor.execute.call_args.args[1]
-        assert params == (7,)
+        assert params == (7, 30)
+        sql = cursor.execute.call_args.args[0]
+        assert "ultimo_envio" in sql
+        assert "DATEADD(minute, -?, GETDATE())" in sql
 
     def test_error_de_sql_retorna_lista_vacia(self):
         conn = MagicMock()
@@ -107,6 +113,6 @@ class TestGetOcIdsConTiendasFaltantes:
         conn.cursor.return_value = cursor
 
         repo = SolicitudTransferenciaRepository(conn)
-        result = repo.get_oc_ids_con_tiendas_faltantes(dias_ventana=2)
+        result = repo.get_oc_ids_con_tiendas_faltantes(dias_ventana=2, margen_antiguedad_minutos=30)
 
         assert result == []

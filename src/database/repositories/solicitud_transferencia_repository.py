@@ -865,12 +865,24 @@ class SolicitudTransferenciaRepository:
             return {}
         return {str(oid): self.get_st_pendiente_reintento_count(str(oid)) for oid in oc_ids}
 
-    def get_oc_ids_con_tiendas_pendientes(self, dias_ventana: int) -> List[str]:
+    def get_oc_ids_con_tiendas_pendientes(
+        self, dias_ventana: int, margen_antiguedad_minutos: int
+    ) -> List[str]:
         """
         OCs en estado ENVIADA, con su primer intento de ST dentro de los últimos
-        `dias_ventana` días, cuyo último batch ST tiene al menos una tienda en Error
-        sin ITR ya creado en ningún intento previo (misma idempotencia que
+        `dias_ventana` días, cuyo último batch ST tiene al menos una tienda en
+        Error o Encolada (HTTP 202, job de middleware en curso) sin ITR ya creado
+        en ningún intento previo (misma idempotencia que
         get_tiendas_pendientes_reintento_st, pero calculada para todas las OCs a la vez).
+
+        `margen_antiguedad_minutos`: solo considera una fila 'Encolada' si su
+        detalle tiene al menos esta antigüedad -- evita chocar con un envío
+        original todavía en curso para la misma OC (no toma ningún lock). Ver
+        RECONCILIAR_ST_MARGEN_ANTIGUEDAD_MINUTOS en config.py para el cálculo
+        detrás del valor por defecto (30 min, con margen sobre el techo real de
+        ~11-19 min del middleware). Se aplica también a 'Error' por simplicidad
+        de la query, aunque ese estado ya es definitivo (no hay job en curso que
+        esperar).
 
         `dias_ventana` es obligatorio a propósito (sin default): la reconciliación
         automática NO debe alcanzar OCs viejas sin que quien la llama lo decida
@@ -902,12 +914,14 @@ class SolicitudTransferenciaRepository:
                     INNER JOIN primer_envio pe ON pe.oc_id = st.oc_id
                     WHERE oc.estado = 'ENVIADA' AND pe.fecha >= DATEADD(day, -?, GETDATE())
                 ),
-                latest_error_tiendas AS (
+                latest_pendientes_tiendas AS (
                     SELECT DISTINCT l.oc_id, d.tienda_codigo
                     FROM latest l
                     INNER JOIN solicitud_transferencia_detalle d
                         ON d.solicitud_transferencia_id = l.solicitud_transferencia_id
-                    WHERE l.rn = 1 AND d.estado = 'Error'
+                    WHERE l.rn = 1
+                      AND d.estado IN ('Error', 'Encolada')
+                      AND d.creado_fecha <= DATEADD(minute, -?, GETDATE())
                 ),
                 ok_tiendas AS (
                     SELECT DISTINCT st.oc_id, d.tienda_codigo
@@ -917,13 +931,13 @@ class SolicitudTransferenciaRepository:
                     WHERE d.estado = 'Creada' AND d.doc_entry IS NOT NULL
                 )
                 SELECT DISTINCT e.oc_id
-                FROM latest_error_tiendas e
+                FROM latest_pendientes_tiendas e
                 LEFT JOIN ok_tiendas o
                     ON o.oc_id = e.oc_id
                     AND UPPER(LTRIM(RTRIM(o.tienda_codigo))) = UPPER(LTRIM(RTRIM(e.tienda_codigo)))
                 WHERE o.tienda_codigo IS NULL
                 """,
-                (dias_ventana,),
+                (dias_ventana, margen_antiguedad_minutos),
             )
             oc_ids = [str(row[0]) for row in cursor.fetchall() if row[0]]
             cursor.close()
@@ -932,7 +946,9 @@ class SolicitudTransferenciaRepository:
             logger.warning(f"No se pudo obtener OCs con ST pendientes: {e}")
             return []
 
-    def get_oc_ids_con_tiendas_faltantes(self, dias_ventana: int) -> List[str]:
+    def get_oc_ids_con_tiendas_faltantes(
+        self, dias_ventana: int, margen_antiguedad_minutos: int
+    ) -> List[str]:
         """
         OCs en estado ENVIADA, con su primer intento de ST dentro de los últimos
         `dias_ventana` días, donde la distribución confirmada del pedido espera al
@@ -940,6 +956,12 @@ class SolicitudTransferenciaRepository:
         intentó -- ningún registro en solicitud_transferencia_detalle, en ningún
         batch. Complementa get_oc_ids_con_tiendas_pendientes, que solo detecta
         tiendas que SÍ se intentaron y quedaron en Error/Encolada (F4.5).
+
+        `margen_antiguedad_minutos`: solo considera una OC si su envío MÁS
+        RECIENTE tiene al menos esta antigüedad -- mismo motivo que en
+        get_oc_ids_con_tiendas_pendientes: una tienda "nunca intentada" mientras
+        el envío original todavía está en curso se ve idéntica a una realmente
+        faltante (ver RECONCILIAR_ST_MARGEN_ANTIGUEDAD_MINUTOS en config.py).
 
         `dias_ventana` es obligatorio a propósito, mismo criterio que
         get_oc_ids_con_tiendas_pendientes.
@@ -954,13 +976,21 @@ class SolicitudTransferenciaRepository:
                     WHERE oc_id IS NOT NULL
                     GROUP BY oc_id
                 ),
+                ultimo_envio AS (
+                    SELECT oc_id, MAX(creado_fecha) AS fecha
+                    FROM solicitud_transferencia
+                    WHERE oc_id IS NOT NULL
+                    GROUP BY oc_id
+                ),
                 oc_candidatas AS (
                     SELECT DISTINCT st.oc_id, st.pedido_id
                     FROM solicitud_transferencia st
                     INNER JOIN orden_compra_cabecera oc ON oc.oc_id = st.oc_id
                     INNER JOIN primer_envio pe ON pe.oc_id = st.oc_id
+                    INNER JOIN ultimo_envio ue ON ue.oc_id = st.oc_id
                     WHERE oc.estado = 'ENVIADA'
                       AND pe.fecha >= DATEADD(day, -?, GETDATE())
+                      AND ue.fecha <= DATEADD(minute, -?, GETDATE())
                       AND st.pedido_id IS NOT NULL
                 ),
                 ultima_version AS (
@@ -996,7 +1026,7 @@ class SolicitudTransferenciaRepository:
                     AND UPPER(LTRIM(RTRIM(i.tienda_codigo))) = UPPER(LTRIM(RTRIM(e.tienda_codigo)))
                 WHERE i.tienda_codigo IS NULL
                 """,
-                (dias_ventana,),
+                (dias_ventana, margen_antiguedad_minutos),
             )
             oc_ids = [str(row[0]) for row in cursor.fetchall() if row[0]]
             cursor.close()
