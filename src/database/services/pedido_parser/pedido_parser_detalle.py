@@ -211,17 +211,26 @@ class PedidoParserDetalle:
     def identificar_columnas_producto(self, df_detalle: pd.DataFrame) -> Dict[str, str]:
         """Identifica las columnas de producto en el DataFrame."""
         columnas_producto = {}
-        
+        clave_costo_unitario = self.utils._CLAVE_COSTO_UNITARIO
+
         for col_idx, col_name in enumerate(df_detalle.columns):
             col_lower = normalize_column_name(col_name)
-            
+
             for campo_bd, posibles_nombres in self.utils.MAPEO_COLUMNAS_PRODUCTO.items():
+                if campo_bd == clave_costo_unitario:
+                    # Se resuelve aparte, más abajo: puede coexistir con 'costo margen'
+                    # en la misma columna física (ej. "Costo Unitario" mapea a ambas).
+                    continue
                 if any(nombre in col_lower for nombre in posibles_nombres):
                     if campo_bd not in columnas_producto:
                         columnas_producto[campo_bd] = col_name
                         logger.debug(f"   Columna producto '{campo_bd}' encontrada: '{col_name}' (índice {col_idx})")
                         break
-        
+
+            if clave_costo_unitario not in columnas_producto and clave_costo_unitario in col_lower:
+                columnas_producto[clave_costo_unitario] = col_name
+                logger.debug(f"   Columna producto '{clave_costo_unitario}' encontrada: '{col_name}' (índice {col_idx})")
+
         return columnas_producto
 
     def _buscar_bodega_por_codigo(
@@ -303,6 +312,7 @@ class PedidoParserDetalle:
     ) -> None:
         mapeo_campos = {
             'costo sin iva': 'costo_doc_sin_iva',
+            'costo unitario': 'costo_unitario_excel',
             'costo margen': 'costo_margen',
             'descuento': 'descuento_1',
             'pvp': 'pvp',

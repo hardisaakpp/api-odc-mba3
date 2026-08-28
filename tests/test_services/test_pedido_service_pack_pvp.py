@@ -420,27 +420,37 @@ class TestValidarSapCodigoYPackPvpCombinado:
         ]
 
 
-def _datos_con_costo(codigo="5-0012.9", pack="X3", costo_doc_sin_iva=13.38):
-    return [{
-        "codigoProducto": codigo,
-        "idTienda": "T001",
-        "cantidad": 10,
-        "filaOrigen": 2,
-        "es_bodega": False,
-        "info_producto": {
-            "codigo_interno": codigo,
-            "pack": pack,
-            "pvp": 7.99,
-            "costo_doc_sin_iva": costo_doc_sin_iva,
-        },
-    }]
+def _datos_con_costo(codigo="5-0012.9", pack="X3", costo_doc_sin_iva=13.38, costo_unitario_excel=None, num_tiendas=1):
+    """num_tiendas simula una misma fila del Excel con cantidad en varias columnas de
+    tienda/bodega: el parser genera un item de datos_parsing por cada una, todos
+    compartiendo la MISMA instancia de info_producto (ver _procesar_tiendas_fila/
+    _procesar_bodegas_fila en pedido_parser_detalle.py)."""
+    info_producto = {
+        "codigo_interno": codigo,
+        "pack": pack,
+        "pvp": 7.99,
+        "costo_doc_sin_iva": costo_doc_sin_iva,
+    }
+    if costo_unitario_excel is not None:
+        info_producto["costo_unitario_excel"] = costo_unitario_excel
+    return [
+        {
+            "codigoProducto": codigo,
+            "idTienda": f"T{i:03d}",
+            "cantidad": 10,
+            "filaOrigen": 2,
+            "es_bodega": False,
+            "info_producto": info_producto,
+        }
+        for i in range(1, num_tiendas + 1)
+    ]
 
 
 class TestResolverCostoUnitarioTemprana:
     """
     costo_unitario = costo_doc_sin_iva / unidad_conversion (pack_conversion, según el pack
-    ya resuelto SAP/Excel) reemplaza a costo_margen como insumo del Margen de Rentabilidad.
-    Bloquea la carga si el pack final no tiene conversión configurada.
+    tal como viene en el Excel) reemplaza a costo_margen como insumo del Margen de
+    Rentabilidad. Bloquea la carga si el pack final no tiene conversión configurada.
     """
 
     def test_calcula_costo_unitario_con_pack_valido(self):
@@ -477,10 +487,138 @@ class TestResolverCostoUnitarioTemprana:
         assert datos[0]["info_producto"]["costo_unitario"] is None
 
     def test_usa_el_pack_del_producto_para_buscar_la_conversion(self):
-        """El pack que llega a este método ya fue validado contra SAP por _evaluar_pack_producto
-        (coincidente, o el método previo habría bloqueado); aquí solo se busca su unidad_conversion."""
+        """Este método corre ANTES de validar el pack contra SAP (ver
+        TestOrdenCostoUnitarioAntesDeSap): usa el pack tal como viene en el Excel, sin
+        esperar a que _validar_pack_pvp_temprana confirme que coincide con SAP."""
         service = PedidoService()
         datos = _datos_con_costo(pack="X6", costo_doc_sin_iva=12.0)
         with _mock_conexion_pack_conversion({"X6": 2.0}):
             service._resolver_costo_unitario_temprana(datos, None)
         assert datos[0]["info_producto"]["costo_unitario"] == 6.0
+
+
+class TestValidarCostoUnitarioExcel:
+    """
+    La columna "Costo Unitario" del Excel (fórmula =SI.ERROR(COSTO_SIN_IVA/(12/pack);""))
+    usa la misma convención 12/pack que pack_conversion.unidad_conversion. Se contrasta contra
+    el costo_unitario calculado por el backend para detectar una fórmula mal aplicada en esa
+    celda (ej. referencia a la fila incorrecta), igual que ya se hace con TOTAL/SUBTOTAL.
+    """
+
+    def test_costo_unitario_excel_coincide_no_lanza_excepcion(self):
+        service = PedidoService()
+        datos = _datos_con_costo(pack="X3", costo_doc_sin_iva=13.38, costo_unitario_excel=13.38 / 4.0)
+        with _mock_conexion_pack_conversion({"X3": 4.0}):
+            service._resolver_costo_unitario_temprana(datos, None)
+
+    def test_costo_unitario_excel_no_coincide_lanza_business_exception(self):
+        service = PedidoService()
+        datos = _datos_con_costo(codigo="5-0012.9", pack="X3", costo_doc_sin_iva=13.38, costo_unitario_excel=99.0)
+        with _mock_conexion_pack_conversion({"X3": 4.0}):
+            with pytest.raises(BusinessException) as exc_info:
+                service._resolver_costo_unitario_temprana(datos, None)
+        exc = exc_info.value
+        assert exc.error_code == "COSTO_UNITARIO_EXCEL_INCONSISTENTE"
+        mismatches = exc.data["validacion_costo_unitario"]["mismatches"]
+        assert mismatches == [{
+            "codigo": "5-0012.9",
+            "pack": "X3",
+            "costo_unitario_excel": 99.0,
+            "costo_unitario_calculado": 13.38 / 4.0,
+        }]
+        # El mensaje debe ser accionable por sí solo: el frontend, al no reconocer este
+        # error_code, muestra `message` tal cual (ver useFileUpload.ts::processUploadError,
+        # rama `(e as any).isBusinessException`) — no basta con el conteo, tiene que decir
+        # qué producto/pack y qué valores no cuadran.
+        assert "5-0012.9" in exc.message
+        assert "X3" in exc.message
+        assert "99.0000" in exc.message
+
+    def test_costo_unitario_excel_no_coincide_con_muchas_tiendas_reporta_un_solo_mismatch(self):
+        """Bug real: una fila con cantidad en 30 columnas de tienda generaba 30 items en
+        datos_parsing para el mismo código (uno por tienda), y el mismatch de Costo Unitario
+        se reportaba 30 veces, idéntico, en vez de una sola vez por producto."""
+        service = PedidoService()
+        datos = _datos_con_costo(
+            codigo="REG-028.1012", pack="X1", costo_doc_sin_iva=1.525, costo_unitario_excel=2.0, num_tiendas=30
+        )
+        with _mock_conexion_pack_conversion({"X1": 1.0}):
+            with pytest.raises(BusinessException) as exc_info:
+                service._resolver_costo_unitario_temprana(datos, None)
+        mismatches = exc_info.value.data["validacion_costo_unitario"]["mismatches"]
+        assert len(mismatches) == 1
+        assert mismatches[0]["codigo"] == "REG-028.1012"
+        assert exc_info.value.message.count("REG-028.1012") == 1
+
+    def test_costo_unitario_excel_ausente_no_bloquea(self):
+        """Plantillas sin la columna "Costo Unitario" (o formato antiguo) siguen funcionando."""
+        service = PedidoService()
+        datos = _datos_con_costo(pack="X3", costo_doc_sin_iva=13.38)
+        with _mock_conexion_pack_conversion({"X3": 4.0}):
+            service._resolver_costo_unitario_temprana(datos, None)
+
+    def test_costo_unitario_excel_dentro_de_tolerancia_de_redondeo_no_lanza(self):
+        service = PedidoService()
+        datos = _datos_con_costo(pack="X3", costo_doc_sin_iva=13.38, costo_unitario_excel=(13.38 / 4.0) + 0.00001)
+        with _mock_conexion_pack_conversion({"X3": 4.0}):
+            service._resolver_costo_unitario_temprana(datos, None)
+
+
+class TestOrdenCostoUnitarioAntesDeSap:
+    """
+    El cruce de "Costo Unitario" (columna del Excel) debe bloquear la carga ANTES de
+    consultar SAP, igual que TOTAL/SUBTOTAL: es una verificación interna del propio Excel
+    (no depende de SAP) y la consulta a SAP es la parte lenta del flujo. Antes, este
+    cruce corría DESPUÉS de validar código/pack/pvp contra SAP (dentro de
+    _validar_sap_codigo_y_pack_pvp), por lo que un error de fórmula en esa columna solo
+    se veía tras esperar la respuesta de SAP, y encima combinado con mensajes de código/pack
+    que no tenían relación con el problema real.
+    """
+
+    @staticmethod
+    def _resultado_parsing_con_mismatch_costo():
+        info_producto = {
+            "codigo_interno": "5-0012.9",
+            "pack": "X3",
+            "pvp": 7.99,
+            "costo_doc_sin_iva": 13.38,
+            "costo_unitario_excel": 99.0,
+        }
+        return {
+            "cabecera": {},
+            "data": [{
+                "codigoProducto": "5-0012.9",
+                "idTienda": "T001",
+                "cantidad": 10,
+                "filaOrigen": 2,
+                "es_bodega": False,
+                "info_producto": info_producto,
+            }],
+            "errores": [],
+        }
+
+    def test_costo_unitario_bloquea_sin_llegar_a_consultar_sap(self, monkeypatch):
+        service = PedidoService()
+        monkeypatch.setattr(
+            service.parser, "parsear_excel_pedido",
+            lambda **kwargs: self._resultado_parsing_con_mismatch_costo()
+        )
+        sap_llamado = {"veces": 0}
+
+        def fake_validar_sap(self, **kwargs):
+            sap_llamado["veces"] += 1
+            return {"todos_validos": True, "detalle": {}, "validos": []}
+
+        monkeypatch.setattr(
+            PedidoValidator, "validar_productos_existen_en_sap_con_sugerencias", fake_validar_sap
+        )
+
+        with _mock_conexion_pack_conversion({"X3": 4.0}):
+            with pytest.raises(BusinessException) as exc_info:
+                service._procesar_formato_nuevo_v1_0(
+                    file_content=b"", hoja_cabecera="cabecera", hoja_detalle="detalle",
+                    filename="test.xlsx", usuario_id=None, validar_sap=True, correcciones_codigos=None
+                )
+
+        assert exc_info.value.error_code == "COSTO_UNITARIO_EXCEL_INCONSISTENTE"
+        assert sap_llamado["veces"] == 0

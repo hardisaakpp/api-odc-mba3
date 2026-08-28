@@ -130,6 +130,11 @@ class TestColumnaCostoMargen:
         assert info is not None
         assert info["costo_margen"] == 3.2
         assert info["costo_doc_sin_iva"] == 10.5
+        # La misma columna física "Costo Unitario" también se lee aparte como
+        # costo_unitario_excel, para contrastarla contra el cálculo del backend
+        # (ver PedidoService._resolver_costo_unitario_temprana) y detectar fórmulas
+        # mal aplicadas en esa celda.
+        assert info["costo_unitario_excel"] == 3.2
 
         distribuciones = {d["idTienda"]: d["cantidad"] for d in resultado["data"] if d["codigoProducto"] == "SKU-1"}
         assert distribuciones.get("RL-CD") == 4

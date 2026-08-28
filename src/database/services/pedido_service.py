@@ -848,7 +848,6 @@ class PedidoService:
             pack_pvp_exc = e
 
         if not codigo_invalido and pack_pvp_exc is None:
-            self._resolver_costo_unitario_temprana(datos_parsing, correcciones_codigos)
             return
         self._raise_validacion_sap_combinada(
             codigo_invalido, validacion_sap_productos, codigos_productos_parsing, pack_pvp_exc,
@@ -862,19 +861,32 @@ class PedidoService:
     ) -> None:
         """
         Calcula costo_unitario = costo_doc_sin_iva / unidad_conversion para cada
-        producto, usando el pack del Excel (ya validado contra SAP: solo se llega
-        aquí si coinciden, ver _validar_sap_codigo_y_pack_pvp). Reemplaza a
-        costo_margen (columna "Costo" del Excel, manual) como insumo del Margen
-        de Rentabilidad (req. 1.5).
+        producto, usando el pack tal como viene en el Excel. Reemplaza a costo_margen
+        (columna "Costo" del Excel, manual) como insumo del Margen de Rentabilidad
+        (req. 1.5).
+
+        Se ejecuta ANTES de validar el pack contra SAP (ver _procesar_formato_nuevo_v1_0),
+        igual que _validar_calculo_total_subtotal: es una verificación de consistencia
+        interna del propio Excel, no depende de SAP. Si el pack del Excel resulta estar
+        mal (typo, no coincide con SAP), eso lo bloquea después _validar_pack_pvp_temprana;
+        aquí solo importa que el cálculo sea coherente con lo que trae la plantilla.
 
         Bloquea la carga si el pack final no tiene una unidad de conversión
         configurada en pack_conversion (código inexistente, inactivo, o pack vacío).
+
+        También contrasta este cálculo contra la columna "Costo Unitario" del Excel
+        (fórmula =SI.ERROR(COSTO_SIN_IVA/(12/pack);"")), que usa la misma convención
+        12/pack que pack_conversion.unidad_conversion. Si difieren, la fórmula de esa
+        celda está mal aplicada (ej. referencia a la fila incorrecta, como pasó con
+        SUBTOTAL) y se bloquea la carga de inmediato, antes de gastar tiempo en la
+        validación SAP (código/pack/pvp), que es más lenta.
         """
         codigo_a_info_productos = self._agrupar_info_productos_por_codigo(datos_parsing, correcciones_codigos)
         if not codigo_a_info_productos:
             return
 
         packs_invalidos: List[Dict[str, Any]] = []
+        mismatches_costo: List[Dict[str, Any]] = []
         with get_db_connection_context() as conn:
             repo = ProductoSAPRepository(conn)
             for codigo, info_productos in codigo_a_info_productos.items():
@@ -888,9 +900,76 @@ class PedidoService:
                     info_producto["costo_unitario"] = (
                         costo_doc_sin_iva / unidad_conversion if costo_doc_sin_iva is not None else None
                     )
+                self._evaluar_costo_unitario_excel(codigo, info_productos, mismatches_costo)
 
         if packs_invalidos:
             self._raise_pack_sin_unidad_conversion(packs_invalidos)
+        if mismatches_costo:
+            self._raise_costo_unitario_excel_invalido(mismatches_costo)
+
+    @staticmethod
+    def _evaluar_costo_unitario_excel(
+        codigo: str,
+        info_productos: List[Dict[str, Any]],
+        mismatches_costo: List[Dict[str, Any]],
+    ) -> None:
+        """Una sola comparación por código (no por fila/distribución): una misma fila del
+        Excel genera un info_producto por cada tienda/bodega con cantidad, y los repetiría
+        tantas veces como columnas de tienda tenga esa fila (ver _evaluar_pack_producto/
+        _evaluar_pvp_producto, mismo criterio: se toma el primer valor no nulo)."""
+        representante = next(
+            (
+                ip for ip in info_productos
+                if ip.get("costo_unitario") is not None and ip.get("costo_unitario_excel") is not None
+            ),
+            None
+        )
+        if representante is None:
+            return
+        costo_unitario_calculado = representante["costo_unitario"]
+        costo_unitario_excel = representante["costo_unitario_excel"]
+        if abs(costo_unitario_calculado - costo_unitario_excel) > 0.0001:
+            mismatches_costo.append({
+                "codigo": codigo,
+                "pack": representante.get("pack"),
+                "costo_unitario_excel": costo_unitario_excel,
+                "costo_unitario_calculado": costo_unitario_calculado,
+            })
+
+    @staticmethod
+    def _raise_costo_unitario_excel_invalido(mismatches_costo: List[Dict[str, Any]]) -> None:
+        """Bloquea la carga si la columna "Costo Unitario" del Excel no coincide con el
+        costo_unitario que el backend calcula de forma independiente (costo_doc_sin_iva /
+        unidad_conversion). El mensaje embebe el detalle por producto (igual que
+        _validar_calculo_total_subtotal) porque el frontend, al no reconocer este
+        error_code, muestra el mensaje del backend tal cual: si solo llevara el conteo,
+        el usuario vería "Existen N discrepancia(s)..." sin ninguna pista de qué corregir."""
+        logger.error(f"❌ {len(mismatches_costo)} producto(s) con Costo Unitario del Excel inconsistente")
+        lineas = [
+            f"{m['codigo']} (Pack '{m['pack']}'): el Excel trae Costo Unitario "
+            f"{m['costo_unitario_excel']:.4f}, pero a partir de Costo sin IVA debería ser "
+            f"{m['costo_unitario_calculado']:.4f}"
+            for m in mismatches_costo
+        ]
+        mensaje = (
+            f"Se encontraron {len(mismatches_costo)} inconsistencia(s) en la columna 'Costo Unitario' "
+            "de la plantilla: el valor de la celda no coincide con el que resulta de dividir "
+            "'Costo sin IVA' entre la unidad de conversión del Pack. Es probable que la fórmula de "
+            "'Costo Unitario' esté mal aplicada en esas filas (ej. referencia a la fila incorrecta, "
+            "como ocurrió con SUBTOTAL). Corrige la fórmula en el Excel y vuelve a subirlo:\n\n"
+            + "\n".join(lineas)
+        )
+        raise BusinessException(
+            message=mensaje,
+            error_code="COSTO_UNITARIO_EXCEL_INCONSISTENTE",
+            data={
+                "validacion_costo_unitario": {
+                    "mismatches": mismatches_costo,
+                    "mensajes": lineas,
+                    "total_productos_con_error": len(mismatches_costo),
+                }
+            }
+        )
 
     @staticmethod
     def _raise_pack_sin_unidad_conversion(packs_invalidos: List[Dict[str, Any]]) -> None:
@@ -1222,6 +1301,8 @@ class PedidoService:
         cabecera_parseada = resultado_parsing.get("cabecera", {})
         self._validar_numero_pedido_duplicado(cabecera_parseada)
         datos_parsing = resultado_parsing.get("data", [])
+        if datos_parsing:
+            self._resolver_costo_unitario_temprana(datos_parsing, correcciones_codigos)
         if validar_sap and datos_parsing:
             self._validar_sap_codigo_y_pack_pvp(datos_parsing, correcciones_codigos)
         cabecera = self._normalizar_cabecera_para_bd(

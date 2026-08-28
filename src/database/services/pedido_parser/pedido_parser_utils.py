@@ -72,6 +72,7 @@ class PedidoParserUtils:
     CAMPOS_CRITICOS_CABECERA = ["numero_pedido", "CODIGO PEDIDO", "CÓDIGO PEDIDO"]
     
     _CLAVE_CODIGO_BARRAS = 'codigo barras'
+    _CLAVE_COSTO_UNITARIO = 'costo unitario'
 
     # Constantes: Mapeo de columnas de producto
     # NOTA: La columna "marca" fue eliminada de la plantilla Excel (2026-02-05)
@@ -83,7 +84,14 @@ class PedidoParserUtils:
         'costo sin iva': ('costo sin iva', 'costo doc sin iva', 'precio sin iva'),
         # Columna "Costo" (req. 1.4/1.5, SIS-PYTD-0002): informativa para el Margen de
         # Rentabilidad, distinta de "Costo sin IVA" (costo_doc_sin_iva ya alimenta OC/ajustes).
+        # En la plantilla real esta columna suele llamarse "Costo Unitario" (H) y trae la
+        # fórmula =SI.ERROR(COSTO_SIN_IVA/(12/pack);""). _CLAVE_COSTO_UNITARIO se detecta
+        # aparte (ver identificar_columnas_producto) para poder leer el mismo valor también
+        # como costo_unitario_excel y contrastarlo contra el costo_unitario que el backend
+        # calcula de forma independiente (costo_doc_sin_iva / unidad_conversion vía
+        # pack_conversion), detectando fórmulas mal aplicadas igual que con TOTAL/SUBTOTAL.
         'costo margen': ('costo',),
+        _CLAVE_COSTO_UNITARIO: (_CLAVE_COSTO_UNITARIO,),
         'descuento': ('descuento', 'dscto', 'dscto 1', 'descuento 1'),
         'pvp': ('pvp', 'precio venta publico', 'precio de venta'),
         'total': ('total',),
