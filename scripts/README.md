@@ -87,11 +87,6 @@ scripts/
 - `add_estado_finalizado.sql` - Estado FINALIZADO
 - `add_estado_despachar_y_facturar.sql` - Estado DESPACHAR_Y_FACTURAR
 - `renombrar_estado_4_a_confirmado.sql` - Renombrar estado 4
-- `renumerar_estados_gestionar_3_redistribucion.sql` - Reestructurar estados
-
-#### SAP (Configuración Manual)
-- `configure_sap_linked_server.sql` - Servidor vinculado SAP HANA
-- `configure_sap_linked_server_alternative.sql` - Configuración alternativa
 
 #### Utilidades Python
 - `check_db_connection.py` - Verificar conexión a BD

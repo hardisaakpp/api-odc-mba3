@@ -174,10 +174,10 @@ Ver [SEGURIDAD.md](SEGURIDAD.md) para más detalles.
 3. **Acceso al servidor SAP HANA**
 4. **Credenciales** para conectarse a SAP HANA
 
-### Método 1: Script SQL (Recomendado)
+### Método 1: Script SQL
 
 1. Conéctate a tu instancia de SQL Server en SSMS
-2. Ejecuta el script `scripts/configure_sap_linked_server.sql` o ejecuta manualmente:
+2. Ejecuta manualmente (ajustando los valores a tu entorno):
 
 ```sql
 -- Ajusta estos valores según tu configuración
