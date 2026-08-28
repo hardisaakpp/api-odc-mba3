@@ -111,7 +111,21 @@ class SolicitudTransferenciaRepository:
         tienda_codigo = (r.get("tienda_codigo") or "N/A")[:20]
         tienda_nombre = (r.get("tienda_nombre") or "")[:255] if r.get("tienda_nombre") else None
         success = bool(r.get("success", False))
-        if r.get("queued"):
+        estado_resultado = r.get("estado")
+        if estado_resultado == "confirmada":
+            estado = "Creada"
+        elif estado_resultado == "error_confirmado":
+            estado = "Error"
+        elif estado_resultado == "pendiente_confirmacion":
+            # Sin confirmar todavía (timeout con reintentos agotados, o job SAP
+            # en curso) -- se persiste como 'Encolada' para que el próximo
+            # reintento la vuelva a mirar (get_tiendas_pendientes_reintento_st
+            # ya trata 'Encolada' como pendiente), aunque no venga de un HTTP
+            # 202 real con job_id.
+            estado = "Encolada"
+        elif r.get("queued"):
+            # Compatibilidad: resultados sin el campo 'estado' (llamadores que
+            # aún no pasan por la clasificación de 3 estados de _enviar_itrs_a_sap).
             estado = "Encolada"
         else:
             estado = "Creada" if success else "Error"
@@ -179,6 +193,122 @@ class SolicitudTransferenciaRepository:
             except Exception:
                 pass
             return 0
+
+    def insert_detalle_individual(self, solicitud_transferencia_id: str, r: Dict[str, Any]) -> bool:
+        """
+        Inserta el detalle de UNA tienda de inmediato (su propio cursor + commit),
+        en vez de esperar a que el lote de hasta 23 tiendas termine para persistir
+        todo junto. Si el proceso se interrumpe (deploy, worker reiniciado, un bug)
+        a mitad del envío a SAP, las tiendas ya resueltas hasta ese punto quedan
+        registradas igual -- el batch-al-final original podía perder de golpe todas
+        las confirmaciones reales de SAP si la interrupción ocurría después del
+        último POST pero antes de ese guardado (ver conversación 2026-08-28).
+        """
+        try:
+            cursor = self.conn.cursor()
+            insertado = self._insert_one_detalle(cursor, solicitud_transferencia_id, r)
+            self.conn.commit()
+            cursor.close()
+            return insertado
+        except Exception as e:
+            logger.warning(
+                f"⚠️ No se pudo persistir de inmediato el detalle de "
+                f"{r.get('tienda_codigo', 'N/A')}: {e}"
+            )
+            try:
+                self.conn.rollback()
+            except Exception:
+                pass
+            return False
+
+    def update_detalle_individual(self, solicitud_transferencia_id: str, r: Dict[str, Any]) -> bool:
+        """
+        Actualiza el detalle ya persistido de UNA tienda (match por
+        solicitud_transferencia_id + tienda_codigo) -- para cuando una tienda que
+        se guardó como 'Encolada' (pendiente_confirmacion) se confirma más tarde,
+        dentro del mismo request, vía la reconciliación de solo lectura al cierre
+        (StockTransferService._reconciliar_pendientes_confirmacion). Evita dejar en
+        la BD un estado ya superado en memoria.
+        """
+        tienda_codigo = (r.get("tienda_codigo") or "N/A")[:20]
+        estado_resultado = r.get("estado")
+        estado = "Creada" if estado_resultado == "confirmada" else (
+            "Error" if estado_resultado == "error_confirmado" else "Encolada"
+        )
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute(
+                """
+                UPDATE solicitud_transferencia_detalle
+                SET estado = ?, doc_num = ?, doc_entry = ?, error_mensaje = ?
+                WHERE solicitud_transferencia_id = ? AND tienda_codigo = ?
+                """,
+                (
+                    estado,
+                    r.get("doc_num"),
+                    r.get("doc_entry"),
+                    (r.get("error") or "")[:500] if r.get("error") else None,
+                    str(solicitud_transferencia_id),
+                    tienda_codigo,
+                ),
+            )
+            actualizado = cursor.rowcount > 0
+            self.conn.commit()
+            cursor.close()
+            return actualizado
+        except Exception as e:
+            logger.warning(
+                f"⚠️ No se pudo actualizar el detalle confirmado tardíamente de "
+                f"{tienda_codigo}: {e}"
+            )
+            try:
+                self.conn.rollback()
+            except Exception:
+                pass
+            return False
+
+    def update_resumen(self, solicitud_transferencia_id: str, resultado: Dict[str, Any]) -> bool:
+        """
+        Actualiza los contadores finales del encabezado (creado antes del envío a
+        SAP con insert(), en 0/False) una vez que el lote completo terminó. El
+        detalle por tienda ya se persistió aparte, tienda por tienda, vía
+        insert_detalle_individual/update_detalle_individual -- esto solo cierra el
+        resumen del encabezado (no vuelve a tocar solicitud_transferencia_detalle).
+        """
+        try:
+            resultado_json = None
+            try:
+                resultado_json = json.dumps(resultado, ensure_ascii=False, default=str)
+            except Exception as e:
+                logger.warning(f"No se pudo serializar resultado a JSON: {e}")
+
+            cursor = self.conn.cursor()
+            cursor.execute(
+                """
+                UPDATE solicitud_transferencia
+                SET transferencias_creadas = ?, transferencias_errores = ?,
+                    success = ?, resultado_json = ?
+                WHERE solicitud_transferencia_id = ?
+                """,
+                (
+                    resultado.get("transferencias_creadas", 0),
+                    resultado.get("transferencias_errores", 0),
+                    1 if resultado.get("success") else 0,
+                    resultado_json,
+                    str(solicitud_transferencia_id),
+                ),
+            )
+            actualizado = cursor.rowcount > 0
+            self.conn.commit()
+            cursor.close()
+            return actualizado
+        except Exception as e:
+            logger.warning(f"No se pudo actualizar el resumen de solicitud_transferencia: {e}")
+            try:
+                self.conn.rollback()
+            except Exception:
+                pass
+            return False
 
     def get_doc_num_itr_por_oc_ids(self, oc_ids: List[str]) -> Dict[str, Any]:
         """
@@ -516,6 +646,74 @@ class SolicitudTransferenciaRepository:
             logger.warning(f"No se pudo listar ITR OK por oc_id: {e}")
         return norms
 
+    def get_tiendas_faltantes_por_oc_id(self, oc_id: str) -> List[str]:
+        """
+        Tiendas (es_bodega=False) que la distribución confirmada del pedido espera
+        con cantidad_asignada > 0, pero que NO tienen ningún registro (ni Creada,
+        ni Error, ni Encolada) en solicitud_transferencia_detalle en ningún batch
+        de esta OC -- a diferencia de get_tiendas_pendientes_reintento_st, que solo
+        detecta tiendas que SÍ se intentaron y quedaron en Error/Encolada.
+
+        Cubre el hueco donde una tienda nunca llegó a intentarse (bug silencioso
+        en la generación de payloads, no un fallo de SAP) -- ver conversación
+        2026-08-28 (F4.5).
+
+        Usa la ÚLTIMA versión de distribucion_confirmada del pedido (redistribución
+        más reciente); excluye bodegas (RL-CD/RG-CD/OUT-CD) porque esas se envían
+        por un flujo aparte (OCSAPService._enviar_itrs_por_bodega, ver
+        solicitud_transferencia_bodega_repository.py) que este método no cubre.
+        """
+        if not oc_id:
+            return []
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute(
+                """
+                WITH pedido AS (
+                    SELECT TOP 1 pedido_id
+                    FROM solicitud_transferencia
+                    WHERE oc_id = ? AND pedido_id IS NOT NULL
+                    ORDER BY creado_fecha DESC
+                ),
+                ultima_version AS (
+                    SELECT MAX(dc.version) AS version
+                    FROM distribucion_confirmada dc
+                    INNER JOIN pedido p ON p.pedido_id = dc.pedido_id
+                ),
+                esperadas AS (
+                    SELECT DISTINCT t.codigo AS tienda_codigo
+                    FROM distribucion_confirmada dc
+                    INNER JOIN pedido p ON p.pedido_id = dc.pedido_id
+                    INNER JOIN ultima_version uv ON uv.version = dc.version
+                    INNER JOIN tienda t ON t.tienda_id = dc.tienda_id
+                    LEFT JOIN pedido_detalle_tienda pdt
+                        ON pdt.pedido_detalle_id = dc.pedido_detalle_id
+                        AND pdt.tienda_id = dc.tienda_id
+                    WHERE ISNULL(pdt.es_bodega, 0) = 0
+                      AND dc.cantidad_asignada > 0
+                ),
+                intentadas AS (
+                    SELECT DISTINCT d.tienda_codigo
+                    FROM solicitud_transferencia_detalle d
+                    INNER JOIN solicitud_transferencia st
+                        ON st.solicitud_transferencia_id = d.solicitud_transferencia_id
+                    WHERE st.oc_id = ?
+                )
+                SELECT e.tienda_codigo
+                FROM esperadas e
+                LEFT JOIN intentadas i
+                    ON UPPER(LTRIM(RTRIM(i.tienda_codigo))) = UPPER(LTRIM(RTRIM(e.tienda_codigo)))
+                WHERE i.tienda_codigo IS NULL
+                """,
+                (str(oc_id), str(oc_id)),
+            )
+            faltantes = [row[0] for row in cursor.fetchall() if row[0]]
+            cursor.close()
+            return faltantes
+        except Exception as e:
+            logger.warning(f"No se pudo calcular tiendas faltantes por oc_id: {e}")
+            return []
+
     def get_tiendas_pendientes_reintento_st(self, oc_id: str) -> List[str]:
         """
         Tiendas del último batch aún en Error o Encolada, excluyendo las que ya
@@ -667,11 +865,17 @@ class SolicitudTransferenciaRepository:
             return {}
         return {str(oid): self.get_st_pendiente_reintento_count(str(oid)) for oid in oc_ids}
 
-    def get_oc_ids_con_tiendas_pendientes(self) -> List[str]:
+    def get_oc_ids_con_tiendas_pendientes(self, dias_ventana: int) -> List[str]:
         """
-        OCs en estado ENVIADA cuyo último batch ST tiene al menos una tienda en Error
+        OCs en estado ENVIADA, con su primer intento de ST dentro de los últimos
+        `dias_ventana` días, cuyo último batch ST tiene al menos una tienda en Error
         sin ITR ya creado en ningún intento previo (misma idempotencia que
         get_tiendas_pendientes_reintento_st, pero calculada para todas las OCs a la vez).
+
+        `dias_ventana` es obligatorio a propósito (sin default): la reconciliación
+        automática NO debe alcanzar OCs viejas sin que quien la llama lo decida
+        explícitamente -- ver conversación 2026-08-28 (barrido diario corto vs.
+        semanal más amplio en celery_reconciliar_transferencias.py).
 
         Candidatas a reconciliación automática (tarea Celery periódica).
         """
@@ -679,7 +883,13 @@ class SolicitudTransferenciaRepository:
             cursor = self.conn.cursor()
             cursor.execute(
                 """
-                WITH latest AS (
+                WITH primer_envio AS (
+                    SELECT oc_id, MIN(creado_fecha) AS fecha
+                    FROM solicitud_transferencia
+                    WHERE oc_id IS NOT NULL
+                    GROUP BY oc_id
+                ),
+                latest AS (
                     SELECT
                         st.solicitud_transferencia_id,
                         st.oc_id,
@@ -689,7 +899,8 @@ class SolicitudTransferenciaRepository:
                         ) AS rn
                     FROM solicitud_transferencia st
                     INNER JOIN orden_compra_cabecera oc ON oc.oc_id = st.oc_id
-                    WHERE oc.estado = 'ENVIADA'
+                    INNER JOIN primer_envio pe ON pe.oc_id = st.oc_id
+                    WHERE oc.estado = 'ENVIADA' AND pe.fecha >= DATEADD(day, -?, GETDATE())
                 ),
                 latest_error_tiendas AS (
                     SELECT DISTINCT l.oc_id, d.tienda_codigo
@@ -711,13 +922,87 @@ class SolicitudTransferenciaRepository:
                     ON o.oc_id = e.oc_id
                     AND UPPER(LTRIM(RTRIM(o.tienda_codigo))) = UPPER(LTRIM(RTRIM(e.tienda_codigo)))
                 WHERE o.tienda_codigo IS NULL
-                """
+                """,
+                (dias_ventana,),
             )
             oc_ids = [str(row[0]) for row in cursor.fetchall() if row[0]]
             cursor.close()
             return oc_ids
         except Exception as e:
             logger.warning(f"No se pudo obtener OCs con ST pendientes: {e}")
+            return []
+
+    def get_oc_ids_con_tiendas_faltantes(self, dias_ventana: int) -> List[str]:
+        """
+        OCs en estado ENVIADA, con su primer intento de ST dentro de los últimos
+        `dias_ventana` días, donde la distribución confirmada del pedido espera al
+        menos una tienda (es_bodega=False, cantidad_asignada > 0) que NUNCA se
+        intentó -- ningún registro en solicitud_transferencia_detalle, en ningún
+        batch. Complementa get_oc_ids_con_tiendas_pendientes, que solo detecta
+        tiendas que SÍ se intentaron y quedaron en Error/Encolada (F4.5).
+
+        `dias_ventana` es obligatorio a propósito, mismo criterio que
+        get_oc_ids_con_tiendas_pendientes.
+        """
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute(
+                """
+                WITH primer_envio AS (
+                    SELECT oc_id, MIN(creado_fecha) AS fecha
+                    FROM solicitud_transferencia
+                    WHERE oc_id IS NOT NULL
+                    GROUP BY oc_id
+                ),
+                oc_candidatas AS (
+                    SELECT DISTINCT st.oc_id, st.pedido_id
+                    FROM solicitud_transferencia st
+                    INNER JOIN orden_compra_cabecera oc ON oc.oc_id = st.oc_id
+                    INNER JOIN primer_envio pe ON pe.oc_id = st.oc_id
+                    WHERE oc.estado = 'ENVIADA'
+                      AND pe.fecha >= DATEADD(day, -?, GETDATE())
+                      AND st.pedido_id IS NOT NULL
+                ),
+                ultima_version AS (
+                    SELECT dc.pedido_id, MAX(dc.version) AS version
+                    FROM distribucion_confirmada dc
+                    INNER JOIN oc_candidatas c ON c.pedido_id = dc.pedido_id
+                    GROUP BY dc.pedido_id
+                ),
+                esperadas AS (
+                    SELECT DISTINCT c.oc_id, t.codigo AS tienda_codigo
+                    FROM oc_candidatas c
+                    INNER JOIN ultima_version uv ON uv.pedido_id = c.pedido_id
+                    INNER JOIN distribucion_confirmada dc
+                        ON dc.pedido_id = c.pedido_id AND dc.version = uv.version
+                    INNER JOIN tienda t ON t.tienda_id = dc.tienda_id
+                    LEFT JOIN pedido_detalle_tienda pdt
+                        ON pdt.pedido_detalle_id = dc.pedido_detalle_id
+                        AND pdt.tienda_id = dc.tienda_id
+                    WHERE ISNULL(pdt.es_bodega, 0) = 0
+                      AND dc.cantidad_asignada > 0
+                ),
+                intentadas AS (
+                    SELECT DISTINCT st.oc_id, d.tienda_codigo
+                    FROM solicitud_transferencia st
+                    INNER JOIN solicitud_transferencia_detalle d
+                        ON d.solicitud_transferencia_id = st.solicitud_transferencia_id
+                    WHERE st.oc_id IN (SELECT oc_id FROM oc_candidatas)
+                )
+                SELECT DISTINCT e.oc_id
+                FROM esperadas e
+                LEFT JOIN intentadas i
+                    ON i.oc_id = e.oc_id
+                    AND UPPER(LTRIM(RTRIM(i.tienda_codigo))) = UPPER(LTRIM(RTRIM(e.tienda_codigo)))
+                WHERE i.tienda_codigo IS NULL
+                """,
+                (dias_ventana,),
+            )
+            oc_ids = [str(row[0]) for row in cursor.fetchall() if row[0]]
+            cursor.close()
+            return oc_ids
+        except Exception as e:
+            logger.warning(f"No se pudo obtener OCs con tiendas faltantes: {e}")
             return []
 
     def get_doc_num_itr_por_pedido_id(self, pedido_id: str) -> Dict[str, int]:

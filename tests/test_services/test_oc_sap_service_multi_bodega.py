@@ -51,6 +51,51 @@ def test_crear_solicitudes_transferencia_oc_sin_filtro_no_cambia_comportamiento(
     assert llamada.kwargs["tiendas_destino_filtro"] is None
 
 
+def test_crear_solicitudes_transferencia_oc_propaga_process_id():
+    """Fase 2 (tiempo real): process_id debe llegar hasta crear_solicitudes_
+    transferencia_desde_pedido para que registre el alias oc_id<->process_id
+    (ver ProcesoEstadoService.crear_alias_oc) y una reconciliación posterior
+    pueda corregir el snapshot congelado del proceso SAP original."""
+    oc_cabecera = {"codigo_bodega": "RL-CD"}
+    result = {}
+    with patch("src.database.services.stock_transfer_service.StockTransferService") as mock_sts_cls:
+        mock_sts_cls.return_value.crear_solicitudes_transferencia_desde_pedido.return_value = {"success": True, "transferencias_creadas": 1}
+
+        OCSAPService._crear_solicitudes_transferencia_oc(
+            oc_id="oc-1",
+            oc_cabecera=oc_cabecera,
+            doc_num=123,
+            serie_itr=None,
+            oc_repo=MagicMock(),
+            pedido_id="pedido-1",
+            result=result,
+            process_id="proceso-sap-abc123",
+        )
+
+    llamada = mock_sts_cls.return_value.crear_solicitudes_transferencia_desde_pedido.call_args
+    assert llamada.kwargs["process_id"] == "proceso-sap-abc123"
+
+
+def test_crear_solicitudes_transferencia_oc_sin_process_id_no_cambia_comportamiento():
+    oc_cabecera = {"codigo_bodega": "RL-CD"}
+    result = {}
+    with patch("src.database.services.stock_transfer_service.StockTransferService") as mock_sts_cls:
+        mock_sts_cls.return_value.crear_solicitudes_transferencia_desde_pedido.return_value = {"success": True, "transferencias_creadas": 1}
+
+        OCSAPService._crear_solicitudes_transferencia_oc(
+            oc_id="oc-1",
+            oc_cabecera=oc_cabecera,
+            doc_num=123,
+            serie_itr=None,
+            oc_repo=MagicMock(),
+            pedido_id="pedido-1",
+            result=result,
+        )
+
+    llamada = mock_sts_cls.return_value.crear_solicitudes_transferencia_desde_pedido.call_args
+    assert llamada.kwargs["process_id"] is None
+
+
 def test_resolver_tiendas_destino_filtro_none_si_pedido_tiene_una_sola_oc():
     oc_repo = MagicMock()
     oc_repo.get_existing_cabecera.return_value = {"pedido_id": "pedido-1", "codigo_bodega": "RL-CD"}

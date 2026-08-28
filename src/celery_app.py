@@ -32,7 +32,10 @@ from src.config import (
     SYNC_PRODUCTOS_HOUR,
     SYNC_PRODUCTOS_MINUTE,
     ENABLE_RECONCILIACION_ST_AUTOMATICA,
-    RECONCILIAR_ST_INTERVALO_MINUTOS,
+    RECONCILIAR_ST_HORA,
+    RECONCILIAR_ST_MINUTO,
+    RECONCILIAR_ST_VENTANA_DIAS,
+    RECONCILIAR_ST_VENTANA_DIAS_DOMINGO,
     RECONCILIAR_OC_INTERVALO_MINUTOS,
     CELERY_HEARTBEAT_INTERVALO_SEGUNDOS,
     CELERY_HEARTBEAT_TTL_SEGUNDOS,
@@ -130,11 +133,33 @@ celery_app.conf.update(
             }
         } if ENABLE_SYNC_PRODUCTOS_AUTOMATICA else {}),
         **({
-            'reconciliar-transferencias-pendientes': {
+            # Lunes a sábado: barrido corto (RECONCILIAR_ST_VENTANA_DIAS, default 2
+            # días) -- solo ODCs enviadas recientemente. No mira nada más viejo a
+            # propósito (ver conversación 2026-08-28): lo que no se resuelve solo ya
+            # escaló a técnicos vía reconciliar_transferencias_pendientes (2 corridas
+            # consecutivas), así que no hace falta reintentar indefinidamente.
+            'reconciliar-transferencias-pendientes-diaria': {
                 'task': 'src.tasks.celery_reconciliar_transferencias.reconciliar_transferencias_pendientes',
-                'schedule': float(RECONCILIAR_ST_INTERVALO_MINUTOS * 60),
-                'options': {'queue': 'maintenance', 'expires': 240.0},
-            }
+                'schedule': crontab(  # type: ignore[arg-type]
+                    hour=RECONCILIAR_ST_HORA, minute=RECONCILIAR_ST_MINUTO, day_of_week='mon-sat'
+                ),
+                'kwargs': {'dias_ventana': RECONCILIAR_ST_VENTANA_DIAS},
+                'options': {'queue': 'maintenance', 'expires': 3600.0},
+            },
+            # Domingo: barrido semanal más amplio (RECONCILIAR_ST_VENTANA_DIAS_DOMINGO,
+            # default 7 días) -- alcanza cualquier OC que se le haya "escapado" a los
+            # barridos cortos de la semana. También hace de colchón de seguridad: en
+            # vez de una tarea aparte corriendo cada hora, esta misma corrida revisa si
+            # la reconciliación diaria completó al menos una vez recientemente y avisa
+            # por correo si no (ver verificar_salud_diaria en la tarea).
+            'reconciliar-transferencias-pendientes-semanal': {
+                'task': 'src.tasks.celery_reconciliar_transferencias.reconciliar_transferencias_pendientes',
+                'schedule': crontab(  # type: ignore[arg-type]
+                    hour=RECONCILIAR_ST_HORA, minute=RECONCILIAR_ST_MINUTO, day_of_week='sun'
+                ),
+                'kwargs': {'dias_ventana': RECONCILIAR_ST_VENTANA_DIAS_DOMINGO, 'verificar_salud_diaria': True},
+                'options': {'queue': 'maintenance', 'expires': 3600.0},
+            },
         } if ENABLE_RECONCILIACION_ST_AUTOMATICA else {}),
         # Reconciliación de ODC ENCOLADAS: a diferencia de la de ST, no depende de un
         # flag de encendido/apagado -- es parte de la lógica normal del envío a SAP

@@ -131,6 +131,7 @@ def ejecutar_proceso_completo_sap(
             user_id=user_id,
             audit=audit,
             on_progress=_reportar_progreso,
+            process_id=process_id,
         )
 
         # Siempre hay "response" en el dict devuelto (éxito o parcial)

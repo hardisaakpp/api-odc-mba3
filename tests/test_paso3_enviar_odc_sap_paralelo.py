@@ -100,7 +100,7 @@ def test_un_odc_no_usa_thread_pool():
     ):
         resultado = _paso3_enviar_odc_sap(oc_repo, oc_sap_service, odcs, **_args_comunes())
 
-    mock_secuencial.assert_called_once_with(oc_sap_service, oc_repo, odcs[0])
+    mock_secuencial.assert_called_once_with(oc_sap_service, oc_repo, odcs[0], process_id=None, lock=None)
     mock_paralelo.assert_not_called()
     assert resultado["response"].status == "success"
 
@@ -110,7 +110,7 @@ def test_dos_odcs_usa_thread_pool_y_preserva_orden():
     oc_sap_service = MagicMock()
     odcs = [_odc("oc-RL", "RL-CD"), _odc("oc-RG", "RG-CD")]
 
-    def fake_en_thread(odc):
+    def fake_en_thread(odc, process_id=None, lock=None):
         doc_num = 1001 if odc["oc_id"] == "oc-RL" else 1002
         return _envio_ok(odc["oc_id"], odc["resultado_odc"]["codigo_bodega"], doc_num)
 
@@ -145,7 +145,7 @@ def test_dos_odcs_envia_email_despacho_para_cada_una():
     oc_sap_service = MagicMock()
     odcs = [_odc("oc-RL", "RL-CD"), _odc("oc-RG", "RG-CD")]
 
-    def fake_en_thread(odc):
+    def fake_en_thread(odc, process_id=None, lock=None):
         doc_num = 1001 if odc["oc_id"] == "oc-RL" else 1002
         return _envio_ok(odc["oc_id"], odc["resultado_odc"]["codigo_bodega"], doc_num)
 
@@ -177,7 +177,7 @@ def test_odc_exitosa_recibe_correo_aunque_la_hermana_quede_encolada():
     oc_sap_service = MagicMock()
     odcs = [_odc("oc-RL", "RL-CD"), _odc("oc-RG", "RG-CD")]
 
-    def fake_en_thread(odc):
+    def fake_en_thread(odc, process_id=None, lock=None):
         if odc["oc_id"] == "oc-RL":
             return _envio_ok("oc-RL", "RL-CD", 1001)
         return _envio_encolado("oc-RG", "RG-CD")
@@ -207,7 +207,7 @@ def test_odc_exitosa_recibe_correo_aunque_la_hermana_falle_con_error_real():
     oc_sap_service = MagicMock()
     odcs = [_odc("oc-RL", "RL-CD"), _odc("oc-RG", "RG-CD")]
 
-    def fake_en_thread(odc):
+    def fake_en_thread(odc, process_id=None, lock=None):
         if odc["oc_id"] == "oc-RL":
             return _envio_ok("oc-RL", "RL-CD", 1001)
         return _envio_error_real("oc-RG", "RG-CD")

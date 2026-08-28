@@ -217,13 +217,33 @@ USE_BATCH_VALIDATION = os.getenv("USE_BATCH_VALIDATION", "false").lower() == "tr
 # automáticamente a OPENQUERY directo a HANA.
 
 # Reconciliación automática de Solicitudes de Transferencia (ITR) pendientes.
-# Automatiza el botón manual "Reintentar ST": una tarea Celery periódica reintenta
-# las transferencias que quedaron pendientes por una caída transitoria de SAP.
-# Si tras RECONCILIAR_ST_ESCALAMIENTO_HORAS sigue pendiente, notifica a técnicos por
-# correo y deja de reintentar automáticamente esa OC (el botón manual sigue disponible).
+# Automatiza el botón manual "Reintentar ST": una tarea Celery corre a
+# RECONCILIAR_ST_HORA:RECONCILIAR_ST_MINUTO (ventana de baja congestión en SAP), con
+# dos horarios distintos según el día:
+#   - Lunes a sábado: solo mira ODCs enviadas en los últimos RECONCILIAR_ST_VENTANA_DIAS
+#     días (no busca nada más viejo a propósito -- lo que no se resuelve solo ya
+#     escaló a técnicos, ver abajo).
+#   - Domingo: barrido más amplio, RECONCILIAR_ST_VENTANA_DIAS_DOMINGO días, para
+#     alcanzar cualquier OC que se le haya escapado a los barridos cortos de la
+#     semana. También hace de colchón de seguridad ese día (ver
+#     verificar_salud_diaria en celery_reconciliar_transferencias.py).
+# Si una OC sigue pendiente en 2 corridas consecutivas (le da una noche de margen a
+# un problema transitorio antes de escalar), notifica a técnicos por correo y deja
+# de reintentar automáticamente esa OC (el botón manual sigue disponible). Diseño y
+# datos de producción que lo motivaron: conversación 2026-08-27/28, ver
+# docs/CELERY_QUICKSTART.md.
 ENABLE_RECONCILIACION_ST_AUTOMATICA = os.getenv("ENABLE_RECONCILIACION_ST_AUTOMATICA", "false").lower() == "true"
-RECONCILIAR_ST_INTERVALO_MINUTOS = int(os.getenv("RECONCILIAR_ST_INTERVALO_MINUTOS", "5"))
-RECONCILIAR_ST_ESCALAMIENTO_HORAS = float(os.getenv("RECONCILIAR_ST_ESCALAMIENTO_HORAS", "1"))
+RECONCILIAR_ST_HORA = int(os.getenv("RECONCILIAR_ST_HORA", "23"))  # Default: 11:00 PM
+RECONCILIAR_ST_MINUTO = int(os.getenv("RECONCILIAR_ST_MINUTO", "0"))
+RECONCILIAR_ST_VENTANA_DIAS = int(os.getenv("RECONCILIAR_ST_VENTANA_DIAS", "2"))
+RECONCILIAR_ST_VENTANA_DIAS_DOMINGO = int(os.getenv("RECONCILIAR_ST_VENTANA_DIAS_DOMINGO", "7"))
+
+# Colchón de seguridad: si para el domingo (cuando se revisa) la reconciliación no
+# completó exitosamente dentro de este margen, se asume que algo la interrumpió
+# (Celery Beat caído, excepción no manejada) y se avisa por correo. Se revisa dentro
+# de la MISMA corrida semanal del domingo (verificar_salud_diaria), no en una tarea
+# aparte -- evita sumar un chequeo cada hora para un problema que no es urgente.
+RECONCILIAR_ST_MARGEN_COLCHON_HORAS = int(os.getenv("RECONCILIAR_ST_MARGEN_COLCHON_HORAS", "48"))
 
 # Reconciliación automática de ODC ENCOLADAS (HTTP 202 del middleware al crear la
 # Purchase Order, SAP saturado). Mismo patrón que la reconciliación de ST arriba,

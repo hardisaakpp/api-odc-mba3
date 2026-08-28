@@ -25,6 +25,14 @@ logger = logging.getLogger(__name__)
 
 HEARTBEAT_REDIS_KEY = "mba3:celery:worker-heartbeat"
 
+# Escrita por celery_reconciliar_transferencias.reconciliar_transferencias_pendientes
+# al completar exitosamente, con TTL = RECONCILIAR_ST_MARGEN_COLCHON_HORAS. Leída por
+# el chequeo de abajo (reconciliacion_st_al_dia), invocado solo en la corrida
+# semanal del domingo (verificar_salud_diaria=True, ver
+# celery_reconciliar_transferencias._verificar_salud_diaria) -- dentro de la MISMA
+# tarea, no en una separada: el problema que vigila no es urgente.
+RECONCILIAR_ST_LAST_RUN_REDIS_KEY = "mba3:reconciliar-st:last-run"
+
 
 def celery_worker_available() -> bool:
     """
@@ -41,3 +49,23 @@ def celery_worker_available() -> bool:
     except Exception as e:
         logger.warning(f"No se pudo verificar heartbeat de Celery en Redis: {e}")
         return False
+
+
+def reconciliacion_st_al_dia() -> bool:
+    """
+    True si la reconciliación automática de ST (celery_reconciliar_transferencias.
+    reconciliar_transferencias_pendientes) completó exitosamente dentro del margen
+    esperado (RECONCILIAR_ST_MARGEN_COLCHON_HORAS). False si el margen venció --
+    señal de que la corrida diaria dejó de ejecutarse o de terminar (Celery Beat
+    caído, excepción no manejada), NO de que SAP esté fallando -- eso ya se reporta
+    aparte, vía el correo de escalamiento a técnicos por OC.
+
+    Ante un error de Redis en el chequeo mismo se asume True: no tiene sentido
+    generar una alerta de "la tarea no corrió" por un problema transitorio del
+    propio chequeo, no de la tarea que se está verificando.
+    """
+    try:
+        return bool(get_redis_client().exists(RECONCILIAR_ST_LAST_RUN_REDIS_KEY))
+    except Exception as e:
+        logger.warning(f"No se pudo verificar la última corrida de reconciliación ST: {e}")
+        return True

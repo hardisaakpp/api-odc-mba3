@@ -218,6 +218,7 @@ def retry_operation(
     operation_label: str,
     success_message: Optional[str] = None,
     retry_message: Optional[str] = None,
+    check_before_retry: Optional[Callable[[], Optional[Any]]] = None,
 ) -> Dict[str, Any]:
     """
     Ejecuta una operación con retry exponencial y jitter.
@@ -227,8 +228,31 @@ def retry_operation(
             "success": bool,
             "response": Any,
             "attempts": int,
-            "error": str | None
+            "error": str | None,
+            "stopped_early": bool,
         }
+
+    ``stopped_early`` distingue, dentro de un fallo, por qué se dejó de reintentar:
+    True si SAP rechazó la operación de forma definitiva (should_retry devolvió
+    False antes de agotar max_attempts -- no tiene sentido seguir esperando).
+    False si se agotaron los intentos ante un fallo que la heurística seguía
+    considerando transitorio (timeout/conexión) -- SAP puede haber completado la
+    operación igual del otro lado sin que la respuesta llegara a tiempo; el
+    caller no debe tratar esto como "SAP dijo que no" sino como "no se pudo
+    confirmar" (ver stock_transfer_service._enviar_itrs_a_sap).
+
+    ``check_before_retry``, si se pasa, se invoca justo antes de cada reintento
+    (nunca antes del primer intento) para verificar contra el sistema real si
+    la operación ya se completó -- ej. un timeout tras el cual SAP pudo haber
+    procesado la creación igual. Si devuelve una respuesta no-None que
+    ``is_success`` acepta, se adopta esa respuesta y se retorna éxito SIN volver
+    a llamar ``execute()`` -- evita un POST ciego que duplicaría lo que SAP ya
+    creó. Si devuelve None (o una respuesta que is_success rechaza), el flujo
+    de reintento normal continúa sin cambios. Seguro de usar siempre que
+    should_retry ya haya filtrado los rechazos definitivos de negocio: por
+    construcción, solo se llega a un reintento tras un fallo que la heurística
+    considera transitorio (ver sap_service_layer_result_should_retry), nunca
+    tras un 4xx real -- así que no hace falta distinguir tipos de error aquí.
     """
     should_retry_fn = should_retry or (lambda _response: True)
 
@@ -248,6 +272,7 @@ def retry_operation(
                 "response": last_response,
                 "attempts": attempt,
                 "error": None,
+                "stopped_early": False,
             }
 
         last_error = extract_error(last_response)
@@ -261,9 +286,31 @@ def retry_operation(
                 "response": last_response,
                 "attempts": attempt,
                 "error": last_error,
+                "stopped_early": True,
             }
 
         if attempt < max_attempts:
+            if check_before_retry is not None:
+                try:
+                    respuesta_verificada = check_before_retry()
+                except Exception as e:
+                    logger.warning(
+                        f"⚠️ {operation_label}: check_before_retry falló (no bloqueante): {e}"
+                    )
+                    respuesta_verificada = None
+                if respuesta_verificada is not None and is_success(respuesta_verificada):
+                    logger.info(
+                        f"♻️ {operation_label}: ya existía en el sistema real antes de "
+                        f"reintentar (adoptado, sin reenviar) en intento {attempt}/{max_attempts}."
+                    )
+                    return {
+                        "success": True,
+                        "response": respuesta_verificada,
+                        "attempts": attempt,
+                        "error": None,
+                        "stopped_early": False,
+                    }
+
             wait_seconds = (
                 base_delay_seconds * (2 ** (attempt - 1))
                 + random.uniform(0, max_jitter_seconds)
@@ -282,4 +329,5 @@ def retry_operation(
         "response": last_response,
         "attempts": max_attempts,
         "error": last_error,
+        "stopped_early": False,
     }

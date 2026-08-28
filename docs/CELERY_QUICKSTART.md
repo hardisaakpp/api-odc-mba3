@@ -87,9 +87,15 @@ REDIS_URL=redis://localhost:6379/0
 # Sync nocturna de maestros de productos (deshabilitada por defecto desde 2026-07, ver abajo)
 # ENABLE_SYNC_PRODUCTOS_AUTOMATICA=false
 
-# Reconciliación automática de ST pendientes (por defecto deshabilitada; en prod va en true)
+# Reconciliación automática de ST pendientes (por defecto deshabilitada; en prod va en true).
+# Corre UNA VEZ AL DÍA (ventana de baja congestión en SAP), con dos horarios según el
+# día -- ver tabla abajo.
 # ENABLE_RECONCILIACION_ST_AUTOMATICA=true
-# RECONCILIAR_ST_INTERVALO_MINUTOS=5
+# RECONCILIAR_ST_HORA=23        # 11:00 PM
+# RECONCILIAR_ST_MINUTO=0
+# RECONCILIAR_ST_VENTANA_DIAS=2          # lunes a sábado: solo OCs enviadas en estos días
+# RECONCILIAR_ST_VENTANA_DIAS_DOMINGO=7  # domingo: barrido semanal más amplio
+# RECONCILIAR_ST_MARGEN_COLCHON_HORAS=48   # colchón de seguridad, ver abajo
 
 # Reconciliación automática de ODC ENCOLADAS (HTTP 202 del middleware): SIEMPRE
 # activa, sin flag de encendido/apagado. Solo el intervalo es configurable.
@@ -109,10 +115,36 @@ declaradas en `task_queues` en `src/celery_app.py`, así que aplica aunque se la
 
 | Tarea | Flag | Default | Frecuencia |
 |---|---|---|---|
-| `reconciliar_transferencias_pendientes` | `ENABLE_RECONCILIACION_ST_AUTOMATICA` | `false` (prod: `true`) | cada `RECONCILIAR_ST_INTERVALO_MINUTOS` (5 min) |
+| `reconciliar_transferencias_pendientes` (diaria) | `ENABLE_RECONCILIACION_ST_AUTOMATICA` | `false` (prod: `true`) | lunes-sábado, `RECONCILIAR_ST_HORA:MINUTO` (11:00 PM), ventana de `RECONCILIAR_ST_VENTANA_DIAS` (2) días |
+| `reconciliar_transferencias_pendientes` (semanal) | `ENABLE_RECONCILIACION_ST_AUTOMATICA` | `false` | domingo, misma hora, ventana de `RECONCILIAR_ST_VENTANA_DIAS_DOMINGO` (7) días + colchón de seguridad |
 | `reconciliar_ordenes_compra_pendientes` | *(ninguno, siempre activa)* | — | cada `RECONCILIAR_OC_INTERVALO_MINUTOS` (5 min) |
 | `sync_productos_maestro` | `ENABLE_SYNC_PRODUCTOS_AUTOMATICA` | `false` | diaria, `SYNC_PRODUCTOS_HOUR:MINUTE` (3:00 AM) |
 | `execute_auto_migration` (legacy) | `ENABLE_AUTO_MIGRATE` | `false` | cada `AUTO_MIGRATE_INTERVAL_MINUTES` |
+
+**Sobre `reconciliar_transferencias_pendientes` (rediseño 2026-08-28):** antes corría cada
+5 minutos sin límite de antigüedad; los datos de producción mostraron que el caso real es
+raro (~1 cada 4-5 días). El diseño final usa la MISMA tarea con dos configuraciones (ver
+`beat_schedule` en `src/celery_app.py`), pasadas como `kwargs` de Celery Beat:
+- **Lunes a sábado**: `dias_ventana=RECONCILIAR_ST_VENTANA_DIAS` (2) -- solo mira ODCs cuyo
+  primer intento de ST fue en los últimos 2 días. A propósito no alcanza nada más viejo: no
+  se quiere que la automatización reintente a ciegas órdenes de hace meses sin supervisión.
+- **Domingo**: `dias_ventana=RECONCILIAR_ST_VENTANA_DIAS_DOMINGO` (7) -- barrido más amplio,
+  alcanza cualquier OC que se le haya "escapado" a los barridos cortos entre semana. Además
+  `verificar_salud_diaria=True` ese día: revisa si la reconciliación viene completando
+  exitosamente (colchón de seguridad) dentro de la MISMA corrida semanal, en vez de una tarea
+  aparte corriendo cada hora -- el problema que vigila no es urgente.
+
+El escalamiento a técnicos ya no se mide en horas transcurridas (con una corrida diaria,
+cualquier OC pendiente ya lleva "más horas" que cualquier umbral razonable en el primer
+chequeo) sino en **corridas consecutivas**: la primera vez solo se marca, la segunda seguida
+sin resolverse escala por correo (`_evaluar_escalamiento_por_recurrencia`). El colchón de
+seguridad (`RECONCILIAR_ST_MARGEN_COLCHON_HORAS`, 48h por defecto) avisa por correo si, para
+cuando corre el domingo, la última corrida exitosa registrada es más vieja que ese margen --
+señal de que Celery Beat estuvo caído o la tarea viene fallando.
+
+Algo que se queda sin resolver más allá del barrido semanal del domingo deja de reintentarse
+automáticamente (a propósito), pero ya generó su correo de escalamiento mucho antes -- el
+botón manual "Reintentar ST" sigue disponible.
 
 **Sobre `sync_productos_maestro` (deshabilitada el 2026-07):** copia los catálogos completos
 de productos MBA3 (API) y SAP (OPENQUERY) a las tablas staging `producto_mba3_staging` /

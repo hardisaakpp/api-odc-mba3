@@ -13,6 +13,8 @@ NOTA DE RENDIMIENTO:
 
 import asyncio
 import concurrent.futures
+import functools
+import threading
 import json
 import logging
 from typing import Any, Callable, Dict, List, Optional
@@ -220,12 +222,16 @@ def _resolver_doc_num_y_solicitudes(resultado_sap_envio):
     st_raw = resultado_sap_envio.get("solicitudes_transferencia") or {}
     solicitudes_para_response = dict(st_raw) if st_raw else None
     if solicitudes_para_response and solicitudes_para_response.get("resultados"):
+        # Solo ITR realmente creadas en SAP (con doc_num): una fila sin doc_num
+        # no es una solicitud de transferencia creada, es una tienda que falló o
+        # quedó encolada -- no debe aparecer en la tabla DocNum/Tienda del modal.
         solicitudes_para_response["itrs_por_tienda"] = [
             {
                 "doc_num": r.get("doc_num"),
                 "tienda_codigo": (r.get("tienda_codigo") or ""),
             }
             for r in solicitudes_para_response["resultados"]
+            if r.get("doc_num") is not None
         ]
     return doc_num_po, doc_num, solicitudes_para_response
 
@@ -319,7 +325,13 @@ def _enviar_emails_exito_sap(
     )
 
 
-def _enviar_una_odc_a_sap(oc_sap_service, oc_repo, odc: Dict[str, Any]) -> Dict[str, Any]:
+def _enviar_una_odc_a_sap(
+    oc_sap_service,
+    oc_repo,
+    odc: Dict[str, Any],
+    process_id: Optional[str] = None,
+    lock: Optional[threading.Lock] = None,
+) -> Dict[str, Any]:
     """Envía una ODC a SAP y arma su ProcesoCompletoSAPDetalleODC. Función pura por
     ODC, usada tanto para el caso normal (1 ODC) como para cada bodega de un pedido
     mixto (2 ODC) en _paso3_enviar_odc_sap."""
@@ -330,6 +342,8 @@ def _enviar_una_odc_a_sap(oc_sap_service, oc_repo, odc: Dict[str, Any]) -> Dict[
         oc_id=oc_id,
         warehouse_code=None,
         tiendas_destino_filtro=odc.get("tiendas_bodega"),
+        process_id=process_id,
+        lock=lock,
     )
     success = resultado_sap_envio.get("success", False)
     queued = resultado_sap_envio.get("queued", False)
@@ -365,7 +379,11 @@ def _enviar_una_odc_a_sap(oc_sap_service, oc_repo, odc: Dict[str, Any]) -> Dict[
     }
 
 
-def _enviar_una_odc_a_sap_en_thread(odc: Dict[str, Any]) -> Dict[str, Any]:
+def _enviar_una_odc_a_sap_en_thread(
+    odc: Dict[str, Any],
+    process_id: Optional[str] = None,
+    lock: Optional[threading.Lock] = None,
+) -> Dict[str, Any]:
     """Como _enviar_una_odc_a_sap, pero abre su propia conexión a BD y su propio
     OCSAPService en vez de recibirlos del caller. Se usa para enviar en paralelo las
     2 ODC de un pedido mixto (ver _paso3_enviar_odc_sap): una conexión pyodbc no es
@@ -378,10 +396,18 @@ def _enviar_una_odc_a_sap_en_thread(odc: Dict[str, Any]) -> Dict[str, Any]:
     with get_db_connection_context() as conn:
         oc_repo_local = OrdenCompraRepository(conn)
         oc_sap_service_local = OCSAPService()
-        return _enviar_una_odc_a_sap(oc_sap_service_local, oc_repo_local, odc)
+        return _enviar_una_odc_a_sap(
+            oc_sap_service_local, oc_repo_local, odc, process_id=process_id, lock=lock
+        )
 
 
-def _procesar_envios_sap(oc_repo, oc_sap_service, odcs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def _procesar_envios_sap(
+    oc_repo,
+    oc_sap_service,
+    odcs: List[Dict[str, Any]],
+    process_id: Optional[str] = None,
+    lock: Optional[threading.Lock] = None,
+) -> List[Dict[str, Any]]:
     """Envía las ODC a SAP: en paralelo si son 2+ (pedido mixto), secuencial si es 1.
     Usado por `_paso3_enviar_odc_sap`; puede propagar cualquier excepción que
     levanten los envíos individuales."""
@@ -390,9 +416,15 @@ def _procesar_envios_sap(oc_repo, oc_sap_service, odcs: List[Dict[str, Any]]) ->
         # independiente a SAP) en vez de una tras otra, para no duplicar el
         # tiempo total de espera. executor.map conserva el orden de odcs en los
         # resultados sin importar cuál termine primero.
+        envio_en_thread = functools.partial(
+            _enviar_una_odc_a_sap_en_thread, process_id=process_id, lock=lock
+        )
         with concurrent.futures.ThreadPoolExecutor(max_workers=len(odcs)) as executor:
-            return list(executor.map(_enviar_una_odc_a_sap_en_thread, odcs))
-    return [_enviar_una_odc_a_sap(oc_sap_service, oc_repo, odc) for odc in odcs]
+            return list(executor.map(envio_en_thread, odcs))
+    return [
+        _enviar_una_odc_a_sap(oc_sap_service, oc_repo, odc, process_id=process_id, lock=lock)
+        for odc in odcs
+    ]
 
 
 def _notificar_exito_sap(
@@ -573,6 +605,7 @@ def _paso3_enviar_odc_sap(
     repo_pedido,
     audit,
     user_id: str,
+    process_id: Optional[str] = None,
 ):
     """PASO 3/3: Envía la(s) ODC a SAP y construye la respuesta final.
 
@@ -583,8 +616,13 @@ def _paso3_enviar_odc_sap(
     reenviar la(s) que fallaron (evita reenviar la que sí funcionó).
     """
     odcs_generadas = [odc["resultado_odc"] for odc in odcs]
+    # Lock compartido solo cuando hay 2+ ODC en paralelo (pedido mixto): ambos
+    # threads empujan progreso en vivo al MISMO process_id (el proceso es del
+    # pedido, no de la ODC individual) -- sin este lock, uno pisaría lo que el
+    # otro acaba de escribir en Redis (ver StockTransferService._empujar_progreso_itr).
+    lock = threading.Lock() if len(odcs) > 1 else None
     try:
-        envios = _procesar_envios_sap(oc_repo, oc_sap_service, odcs)
+        envios = _procesar_envios_sap(oc_repo, oc_sap_service, odcs, process_id=process_id, lock=lock)
     except Exception as e:
         logger.error(f"❌ Error en PASO 3 (Enviar a SAP): {e}", exc_info=True)
         _actualizar_estado_reintento(repo_pedido, pedido_id, audit)
@@ -628,6 +666,7 @@ def _ejecutar_proceso_completo_sync(
     user_id: str,
     audit: AuditContext,
     on_progress: Optional[Callable[[str, int, str], None]] = None,
+    process_id: Optional[str] = None,
 ) -> dict:
     """
     Ejecuta toda la lógica síncrona del proceso completo SAP.
@@ -643,6 +682,13 @@ def _ejecutar_proceso_completo_sync(
             cada uno de los 3 pasos reales (redistribución, generar ODC, enviar SAP).
             Solo lo usa el task de Celery (ver celery_proceso_sap.py); los callers
             síncronos no lo pasan.
+        process_id: ID del proceso SAP async (proceso-sap-*), si corre vía Celery.
+            Se propaga hasta el envío de cada ODC para registrar el alias
+            oc_id→process_id (ver ProcesoEstadoService.crear_alias_oc) y así poder
+            corregir el snapshot congelado si una reconciliación posterior confirma
+            algo tarde. None en el fallback síncrono (ese camino no tiene process_id
+            real, ver _handle_proceso_completo_sap_async) -- no rompe nada, solo no
+            habilita la reconciliación en tiempo real para ese camino.
 
     Returns:
         dict con:
@@ -697,7 +743,8 @@ def _ejecutar_proceso_completo_sync(
         oc_sap_service = OCSAPService()
         return _paso3_enviar_odc_sap(
             oc_repo, oc_sap_service, odcs, pedido_id, numero_pedido,
-            resultado_redistribucion, resumen, repo_pedido, audit, user_id
+            resultado_redistribucion, resumen, repo_pedido, audit, user_id,
+            process_id=process_id,
         )
 
 
@@ -964,10 +1011,49 @@ def _construir_payload_stream(estado_actual):
     return payload
 
 
+def _tiene_st_pendiente_confirmacion(resultado: Any) -> bool:
+    """
+    True si algún envío de ODC del resultado todavía tiene Solicitudes de
+    Transferencia 'pendiente_confirmacion' (ver StockTransferService.
+    _enviar_itrs_a_sap): SAP no confirmó ni rechazó a tiempo, así que el
+    backend puede corregir el resultado más tarde (reintento manual o
+    reconciliación automática, ver _corregir_snapshot_proceso_original).
+
+    Usado por _event_stream_proceso_sap para no cortar el SSE de golpe en
+    'completed' si todavía puede llegar una corrección.
+    """
+    if not isinstance(resultado, dict):
+        return False
+    envios = resultado.get("envios_sap")
+    if not isinstance(envios, list):
+        envio_unico = resultado.get("envio_sap")
+        envios = [envio_unico] if isinstance(envio_unico, dict) else []
+    for envio in envios:
+        if not isinstance(envio, dict):
+            continue
+        st = envio.get("solicitudes_transferencia")
+        if isinstance(st, dict) and (st.get("transferencias_pendientes_confirmacion") or 0) > 0:
+            return True
+    return False
+
+
 async def _event_stream_proceso_sap(estado_service, process_id: str, request):
-    """Generador SSE para el stream de progreso del proceso SAP."""
+    """Generador SSE para el stream de progreso del proceso SAP.
+
+    Si el proceso llega a 'completed' pero todavía queda alguna Solicitud de
+    Transferencia sin confirmar, no corta la conexión de inmediato: baja la
+    cadencia de polling y espera hasta VENTANA_EXTRA_MAX_SEGUNDOS, para dar margen
+    a que un reintento manual ("Reintentar ST") corrija el resultado mientras el
+    cliente sigue escuchando, en vez de que la única forma de verlo sea recargar el
+    modal. La reconciliación automática de Celery Beat corre una vez al día (ver
+    RECONCILIAR_ST_HORA/MINUTO en config.py), así que casi nunca cae dentro de esta
+    ventana -- esta espera cubre principalmente el reintento manual, no el
+    automático. Pasada la ventana, cierra igual que antes.
+    """
+    VENTANA_EXTRA_MAX_SEGUNDOS = 600
     ultimo_updated_at = None
     ultima_version = None
+    segundos_en_ventana_extra = 0
     while True:
         if await request.is_disconnected():
             break
@@ -985,8 +1071,17 @@ async def _event_stream_proceso_sap(estado_service, process_id: str, request):
             yield f"data: {json.dumps(payload)}\n\n"
             ultimo_updated_at = updated_at
             ultima_version = version
-        if estado_actual["status"] in ("completed", "error"):
+
+        if estado_actual["status"] == "error":
             break
+        if estado_actual["status"] == "completed":
+            if not _tiene_st_pendiente_confirmacion(estado_actual.get("resultado")):
+                break
+            if segundos_en_ventana_extra >= VENTANA_EXTRA_MAX_SEGUNDOS:
+                break
+            segundos_en_ventana_extra += 5
+            await asyncio.sleep(5)
+            continue
         await asyncio.sleep(1)
 
 
