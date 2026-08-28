@@ -1164,6 +1164,44 @@ class PedidoService:
             })
         return list(productos_agrupados.values())
 
+    @staticmethod
+    def _validar_calculo_total_subtotal(resultado_parsing: Dict[str, Any]) -> None:
+        """Bloquea la carga si TOTAL/SUBTOTAL de alguna fila no coincide con las cantidades reales.
+
+        El parser (pedido_parser_detalle.py) ya recalcula, de forma independiente a la fórmula
+        de la celda, la suma real de bodegas/tiendas por fila. Si no coincide con el valor leído
+        de TOTAL o SUBTOTAL, la fórmula del Excel está rota (ej. referencia de fila desplazada) y
+        no se puede confiar en la distribución que trae el archivo: se rechaza antes de guardar.
+        """
+        errores_calculo = [
+            e for e in resultado_parsing.get("errores", [])
+            if isinstance(e, dict) and e.get("tipo") == "ERROR" and e.get("campo") in ("TOTAL", "SUBTOTAL")
+        ]
+        if not errores_calculo:
+            return
+        lineas = [
+            f"Fila {e['fila']} ({e.get('codigoProducto', '?')}): {e['mensaje']}"
+            for e in errores_calculo
+        ]
+        mensaje = (
+            f"Se encontraron {len(errores_calculo)} inconsistencia(s) entre las fórmulas de TOTAL/SUBTOTAL "
+            "de la plantilla y las cantidades reales por bodega/tienda. Corrige las fórmulas en el Excel "
+            "y vuelve a subirlo:\n\n" + "\n".join(lineas)
+        )
+        logger.error(f"❌ Carga rechazada por inconsistencia de TOTAL/SUBTOTAL: {len(errores_calculo)} fila(s)")
+        raise BusinessException(
+            message=mensaje,
+            error_code="CALCULO_TOTAL_SUBTOTAL_INCORRECTO",
+            data={
+                "validacion": {
+                    "calculo_campos": {
+                        "errores": errores_calculo,
+                        "total_filas_con_error": len(errores_calculo)
+                    }
+                }
+            }
+        )
+
     def _procesar_formato_nuevo_v1_0(
         self,
         file_content: bytes,
@@ -1180,6 +1218,7 @@ class PedidoService:
             hoja_cabecera=hoja_cabecera,
             hoja_detalle=hoja_detalle
         )
+        self._validar_calculo_total_subtotal(resultado_parsing)
         cabecera_parseada = resultado_parsing.get("cabecera", {})
         self._validar_numero_pedido_duplicado(cabecera_parseada)
         datos_parsing = resultado_parsing.get("data", [])

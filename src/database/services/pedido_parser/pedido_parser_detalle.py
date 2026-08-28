@@ -589,22 +589,42 @@ class PedidoParserDetalle:
 
             info_producto = self.extraer_info_producto(row, columnas_producto, codigo_producto)
             total_esperado = info_producto.get("total")
-            total_distribuido = (
-                self._procesar_bodegas_fila(row, columnas_bodegas, resultado["data"], codigo_producto, info_producto, row_num)
-                + self._procesar_tiendas_fila(row, columnas_tiendas, df_detalle, nombres_columnas_fila1, resultado["data"], codigo_producto, info_producto, row_num)
+            subtotal_esperado = info_producto.get("subtotal")
+            total_bodegas = self._procesar_bodegas_fila(
+                row, columnas_bodegas, resultado["data"], codigo_producto, info_producto, row_num
             )
+            total_tiendas = self._procesar_tiendas_fila(
+                row, columnas_tiendas, df_detalle, nombres_columnas_fila1, resultado["data"], codigo_producto, info_producto, row_num
+            )
+            total_distribuido = total_bodegas + total_tiendas
+
+            if subtotal_esperado is not None and abs(float(subtotal_esperado) - total_tiendas) > 0.0001:
+                mensaje = (
+                    f"SUBTOTAL del producto ({float(subtotal_esperado):.4f}) no coincide con la suma "
+                    f"de tiendas parseadas ({total_tiendas:.4f}). "
+                    "Revisa la fórmula de SUBTOTAL en el Excel para esta fila."
+                )
+                logger.error(f"❌ Fila {row_num}: {codigo_producto} - {mensaje}")
+                resultado["errores"].append({
+                    "fila": row_num,
+                    "codigoProducto": codigo_producto,
+                    "campo": "SUBTOTAL",
+                    "tipo": "ERROR",
+                    "mensaje": mensaje
+                })
 
             if total_esperado is not None and abs(float(total_esperado) - total_distribuido) > 0.0001:
                 mensaje = (
-                    f"Total del producto ({float(total_esperado):.4f}) no coincide con la suma "
+                    f"TOTAL del producto ({float(total_esperado):.4f}) no coincide con la suma "
                     f"de bodegas/tiendas parseadas ({total_distribuido:.4f}). "
-                    "Puede existir una columna de tienda omitida o una cantidad inválida."
+                    "Revisa la fórmula de TOTAL/SUBTOTAL en el Excel para esta fila."
                 )
-                logger.warning(f"⚠️ Fila {row_num}: {codigo_producto} - {mensaje}")
+                logger.error(f"❌ Fila {row_num}: {codigo_producto} - {mensaje}")
                 resultado["errores"].append({
                     "fila": row_num,
+                    "codigoProducto": codigo_producto,
                     "campo": "TOTAL",
-                    "tipo": "WARNING",
+                    "tipo": "ERROR",
                     "mensaje": mensaje
                 })
 
