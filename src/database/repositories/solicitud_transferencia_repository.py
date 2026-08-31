@@ -232,9 +232,12 @@ class SolicitudTransferenciaRepository:
         """
         tienda_codigo = (r.get("tienda_codigo") or "N/A")[:20]
         estado_resultado = r.get("estado")
-        estado = "Creada" if estado_resultado == "confirmada" else (
-            "Error" if estado_resultado == "error_confirmado" else "Encolada"
-        )
+        if estado_resultado == "confirmada":
+            estado = "Creada"
+        elif estado_resultado == "error_confirmado":
+            estado = "Error"
+        else:
+            estado = "Encolada"
         try:
             cursor = self.conn.cursor()
             cursor.execute(
