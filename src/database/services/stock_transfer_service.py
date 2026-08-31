@@ -1617,6 +1617,150 @@ class StockTransferService:
                     f"(0/{result['total_tiendas']} exitosos)"
                 )
 
+    def _registrar_alias_oc_process_id(self, process_id: Optional[str], oc_id: Optional[str]) -> None:
+        """Registra el alias oc_id→process_id (ProcesoEstadoService.crear_alias_oc)
+        para que una reconciliación posterior (reintentar_pendientes, manual o
+        Celery Beat) pueda localizar y corregir el snapshot ya congelado del
+        proceso SAP async que originó este envío. Best-effort: nunca bloquea el
+        envío si falla. Ver crear_solicitudes_transferencia_desde_pedido."""
+        if not (process_id and oc_id):
+            return
+        try:
+            from .proceso_estado_service import ProcesoEstadoService
+            ProcesoEstadoService().crear_alias_oc(process_id, oc_id)
+        except Exception as e:
+            logger.warning(f"⚠️ No se pudo registrar alias oc_id→process_id (no crítico): {e}")
+
+    def _filtrar_tiendas_en_cola_antes_de_reintentar(
+        self,
+        conn: Any,
+        oc_id: Optional[str],
+        tiendas_destino_filtro: Optional[List[str]],
+        verificar_ya_existente_en_sap: bool,
+    ) -> Tuple[Dict[str, Dict[str, Any]], Optional[List[str]], Optional[Dict[str, Any]]]:
+        """Antes de reintentar, resuelve tiendas cuyo último intento quedó
+        'Encolada' (HTTP 202): consulta el job real en vez de reenviar a ciegas
+        (evita ITR duplicada si el job original sigue en curso). Ver
+        crear_solicitudes_transferencia_desde_pedido.
+
+        Returns:
+            (itrs_adoptadas_por_job, tiendas_destino_filtro actualizado,
+            resultado_temprano) -- resultado_temprano no es None cuando TODAS
+            las tiendas objetivo del reintento siguen con job en cola; el
+            llamador debe fusionarlo en `result` y retornar de inmediato, sin
+            seguir el flujo normal.
+        """
+        itrs_adoptadas_por_job: Dict[str, Dict[str, Any]] = {}
+        if not (verificar_ya_existente_en_sap and oc_id and tiendas_destino_filtro):
+            return itrs_adoptadas_por_job, tiendas_destino_filtro, None
+
+        itrs_adoptadas_por_job, tiendas_en_cola = self._resolver_jobs_encolados_pendientes(
+            conn, oc_id, tiendas_destino_filtro
+        )
+        if not tiendas_en_cola:
+            return itrs_adoptadas_por_job, tiendas_destino_filtro, None
+
+        tiendas_destino_filtro = [
+            t for t in tiendas_destino_filtro
+            if t.strip().upper() not in tiendas_en_cola
+        ]
+        logger.info(
+            f"⏳ {len(tiendas_en_cola)} tienda(s) con job SAP aún en cola, "
+            f"se omiten este ciclo (no se reenvían): {sorted(tiendas_en_cola)}"
+        )
+        if not tiendas_destino_filtro:
+            logger.info(
+                "⏳ Todas las tiendas objetivo del reintento siguen con job SAP "
+                "en cola; nada que hacer este ciclo."
+            )
+            resultado_temprano = {
+                "success": True,
+                "total_tiendas": 0,
+                "tiendas_en_cola": sorted(tiendas_en_cola),
+            }
+            return itrs_adoptadas_por_job, tiendas_destino_filtro, resultado_temprano
+
+        return itrs_adoptadas_por_job, tiendas_destino_filtro, None
+
+    def _validar_formato_itr_o_abortar(
+        self,
+        stock_transfers_json: List[Dict[str, Any]],
+        conn: Any,
+        result: Dict[str, Any],
+        oc_id: Optional[str],
+        pedido_id: str,
+        bodega_origen: str,
+        oc_doc_num: Optional[int],
+    ) -> bool:
+        """Valida el formato básico de los payloads ITR (SAP no requiere validación
+        de stock ni de artículos habilitados en bodega origen para ITR, solo
+        formato). Si falla, persiste el resultado de error y devuelve True para que
+        el llamador aborte el flujo (ver crear_solicitudes_transferencia_desde_pedido)."""
+        try:
+            self._validate_itr_minimal(stock_transfers_json)
+            return False
+        except ValueError as e:
+            # Error de formato básico - esto SÍ debe bloquear el flujo
+            error_msg = str(e)
+            logger.error(f"❌ {error_msg}")
+            result["error"] = error_msg
+            result["success"] = False
+            result["error_type"] = "validacion_formato"
+            self._persistir_y_guardar_json_solicitudes_transferencia(
+                conn=conn, result=result, payloads_sap=stock_transfers_json,
+                oc_id=oc_id, pedido_id=pedido_id, bodega_origen=bodega_origen,
+                oc_doc_num=oc_doc_num,
+            )
+            return True
+
+    def _resolver_itrs_existentes(
+        self,
+        verificar_ya_existente_en_sap: bool,
+        comentario_esperado: str,
+        bodega_origen: str,
+        itrs_adoptadas_por_job: Dict[str, Dict[str, Any]],
+    ) -> Optional[Dict[str, Dict[str, Any]]]:
+        """Resuelve las ITRs que ya existen en SAP para este batch (verificación
+        preventiva de duplicados, solo en reintentos), fusionando las adoptadas por
+        job encolado. Ver crear_solicitudes_transferencia_desde_pedido."""
+        if not verificar_ya_existente_en_sap:
+            return None
+        itrs_existentes = self._buscar_itrs_existentes_en_sap(comentario_esperado, bodega_origen)
+        if itrs_adoptadas_por_job:
+            itrs_existentes.update(itrs_adoptadas_por_job)
+        return itrs_existentes
+
+    def _persistir_resultado_final(
+        self,
+        conn: Any,
+        solicitud_transferencia_id: Optional[str],
+        result: Dict[str, Any],
+        stock_transfers_json: List[Dict[str, Any]],
+        oc_id: Optional[str],
+        pedido_id: str,
+        bodega_origen: str,
+        oc_doc_num: Optional[int],
+    ) -> None:
+        """Persiste el resultado final: si el encabezado de Solicitudes de
+        Transferencia se pudo crear antes del envío, solo cierra el resumen ya
+        persistido tienda por tienda; si no, cae al comportamiento anterior (todo
+        junto al final). Ver crear_solicitudes_transferencia_desde_pedido."""
+        if solicitud_transferencia_id:
+            self._cerrar_resumen_y_guardar_json_solicitudes_transferencia(
+                conn=conn, solicitud_transferencia_id=solicitud_transferencia_id,
+                result=result, payloads_sap=stock_transfers_json,
+                oc_id=oc_id, pedido_id=pedido_id, bodega_origen=bodega_origen,
+                oc_doc_num=oc_doc_num,
+            )
+        else:
+            # El encabezado previo no se pudo crear: cae al comportamiento
+            # anterior (todo junto al final) en vez de perder el resultado.
+            self._persistir_y_guardar_json_solicitudes_transferencia(
+                conn=conn, result=result, payloads_sap=stock_transfers_json,
+                oc_id=oc_id, pedido_id=pedido_id, bodega_origen=bodega_origen,
+                oc_doc_num=oc_doc_num,
+            )
+
     def crear_solicitudes_transferencia_desde_pedido(
         self,
         pedido_id: str,
@@ -1711,12 +1855,7 @@ class StockTransferService:
             "resultados": []
         }
 
-        if process_id and oc_id:
-            try:
-                from .proceso_estado_service import ProcesoEstadoService
-                ProcesoEstadoService().crear_alias_oc(process_id, oc_id)
-            except Exception as e:
-                logger.warning(f"⚠️ No se pudo registrar alias oc_id→process_id (no crítico): {e}")
+        self._registrar_alias_oc_process_id(process_id, oc_id)
 
         try:
             with get_db_connection_context() as conn:
@@ -1751,32 +1890,14 @@ class StockTransferService:
                         "Las Solicitudes de Transferencia se crean desde bodega origen hacia tiendas, no hacia bodegas."
                     )
 
-                # Antes de reintentar, resolver tiendas cuyo último intento quedó
-                # 'Encolada' (HTTP 202): consultar el job real en vez de reenviar a
-                # ciegas (evita ITR duplicada si el job original sigue en curso).
-                itrs_adoptadas_por_job: Dict[str, Dict[str, Any]] = {}
-                if verificar_ya_existente_en_sap and oc_id and tiendas_destino_filtro:
-                    itrs_adoptadas_por_job, tiendas_en_cola = self._resolver_jobs_encolados_pendientes(
-                        conn, oc_id, tiendas_destino_filtro
+                itrs_adoptadas_por_job, tiendas_destino_filtro, resultado_temprano = (
+                    self._filtrar_tiendas_en_cola_antes_de_reintentar(
+                        conn, oc_id, tiendas_destino_filtro, verificar_ya_existente_en_sap
                     )
-                    if tiendas_en_cola:
-                        tiendas_destino_filtro = [
-                            t for t in tiendas_destino_filtro
-                            if t.strip().upper() not in tiendas_en_cola
-                        ]
-                        logger.info(
-                            f"⏳ {len(tiendas_en_cola)} tienda(s) con job SAP aún en cola, "
-                            f"se omiten este ciclo (no se reenvían): {sorted(tiendas_en_cola)}"
-                        )
-                        if not tiendas_destino_filtro:
-                            result["success"] = True
-                            result["total_tiendas"] = 0
-                            result["tiendas_en_cola"] = sorted(tiendas_en_cola)
-                            logger.info(
-                                "⏳ Todas las tiendas objetivo del reintento siguen con job SAP "
-                                "en cola; nada que hacer este ciclo."
-                            )
-                            return result
+                )
+                if resultado_temprano is not None:
+                    result.update(resultado_temprano)
+                    return result
 
                 # Reintento parcial opcional: procesar solo tiendas destino indicadas.
                 if tiendas_destino_filtro:
@@ -1807,20 +1928,9 @@ class StockTransferService:
                 # ⭐ VALIDACIÓN MÍNIMA PARA ITR: Solo validar formato básico.
                 # SAP NO requiere validación de stock ni de artículos habilitados en bodega origen para ITR.
                 # Las ITR son solo solicitudes, no mueven stock.
-                try:
-                    self._validate_itr_minimal(stock_transfers_json)
-                except ValueError as e:
-                    # Error de formato básico - esto SÍ debe bloquear el flujo
-                    error_msg = str(e)
-                    logger.error(f"❌ {error_msg}")
-                    result["error"] = error_msg
-                    result["success"] = False
-                    result["error_type"] = "validacion_formato"
-                    self._persistir_y_guardar_json_solicitudes_transferencia(
-                        conn=conn, result=result, payloads_sap=stock_transfers_json,
-                        oc_id=oc_id, pedido_id=pedido_id, bodega_origen=bodega_origen,
-                        oc_doc_num=oc_doc_num,
-                    )
+                if self._validar_formato_itr_o_abortar(
+                    stock_transfers_json, conn, result, oc_id, pedido_id, bodega_origen, oc_doc_num
+                ):
                     return result
 
                 # Comentario exacto de este batch: se usa siempre para la reconciliación
@@ -1831,13 +1941,9 @@ class StockTransferService:
                 comentario_esperado = SAPStockTransferMapper.build_comentario_transferencia(
                     oc_doc_num, pedido_cabecera.get("numero_pedido", "N/A")
                 )
-                itrs_existentes = None
-                if verificar_ya_existente_en_sap:
-                    itrs_existentes = self._buscar_itrs_existentes_en_sap(
-                        comentario_esperado, bodega_origen
-                    )
-                    if itrs_adoptadas_por_job:
-                        itrs_existentes.update(itrs_adoptadas_por_job)
+                itrs_existentes = self._resolver_itrs_existentes(
+                    verificar_ya_existente_en_sap, comentario_esperado, bodega_origen, itrs_adoptadas_por_job
+                )
 
                 # Encabezado creado ANTES de enviar nada a SAP (en 0/False, "en
                 # progreso"): permite persistir cada tienda de inmediato a medida
@@ -1872,21 +1978,10 @@ class StockTransferService:
                 errores_detalle = self._construir_errores_detalle(result["resultados"], bodega_origen)
                 self._registrar_resultado_final(result, errores_detalle)
 
-                if solicitud_transferencia_id:
-                    self._cerrar_resumen_y_guardar_json_solicitudes_transferencia(
-                        conn=conn, solicitud_transferencia_id=solicitud_transferencia_id,
-                        result=result, payloads_sap=stock_transfers_json,
-                        oc_id=oc_id, pedido_id=pedido_id, bodega_origen=bodega_origen,
-                        oc_doc_num=oc_doc_num,
-                    )
-                else:
-                    # El encabezado previo no se pudo crear: cae al comportamiento
-                    # anterior (todo junto al final) en vez de perder el resultado.
-                    self._persistir_y_guardar_json_solicitudes_transferencia(
-                        conn=conn, result=result, payloads_sap=stock_transfers_json,
-                        oc_id=oc_id, pedido_id=pedido_id, bodega_origen=bodega_origen,
-                        oc_doc_num=oc_doc_num,
-                    )
+                self._persistir_resultado_final(
+                    conn, solicitud_transferencia_id, result, stock_transfers_json,
+                    oc_id, pedido_id, bodega_origen, oc_doc_num,
+                )
                 return result
 
         except Exception as e:
