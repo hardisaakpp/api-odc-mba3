@@ -43,7 +43,16 @@ Si el hallazgo es puramente de estilo/convención (ej. naming conventions, nombr
 3. Trabajar siempre en una rama separada (nunca directo a `main`); el usuario revisa el diff antes de mergear.
 4. Documentar cada cambio: regla resuelta, archivo, línea, y una frase de qué se hizo.
 
-## 6. Métrica de éxito
+## 6. Patrones recurrentes en este repo (para no reincidir al escribir código nuevo)
+
+Hallazgos que ya aparecieron más de una vez y que se deben evitar proactivamente al escribir código nuevo, no solo al corregir el issue existente:
+
+- **`S1192` (literales de string duplicados)**: cuando un mismo literal se repite 3+ veces en un archivo —típicamente nombres de tarea de Celery (`'src.tasks.mod.func'`) usados a la vez en `beat_schedule` y `task_routes`, nombres de cola, o claves de configuración—, extraerlo a una constante a nivel de módulo desde el primer commit. Ejemplo: `src/celery_app.py` define `TASK_RECONCILIAR_TRANSFERENCIAS_PENDIENTES` y la reutiliza en las 3 entradas que antes repetían el string literal.
+- Al agregar una tarea nueva a `beat_schedule`/`task_routes`, revisar si el path de la tarea ya se repite en el mismo archivo antes de copiar/pegar el literal.
+
+Si se detecta un patrón nuevo que se repite en más de un issue, agregarlo a esta lista con el archivo/ejemplo donde se resolvió, para que sirva de referencia al escribir código similar en el futuro.
+
+## 7. Métrica de éxito
 
 - Baja el número de issues abiertos en SonarQube.
 - La cobertura de tests no disminuye.
