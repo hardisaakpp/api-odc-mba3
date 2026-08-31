@@ -408,6 +408,45 @@ def _fetch_integracion_sap(oc_id):
         conn.close()
 
 
+def _generar_excel_integracion_sap_oc(oc_id):
+    """Genera el Excel simple de integración SAP de una OC. Retorna (excel_buffer, numero_oc_sap, error)."""
+    conn = get_db_connection()
+    try:
+        oc_repo = OrdenCompraRepository(conn)
+        envio_repo = EnvioODCSAPRepository(conn)
+        st_repo = SolicitudTransferenciaRepository(conn)
+
+        oc_cabecera = oc_repo.get_existing_cabecera(oc_id)
+        if not oc_cabecera:
+            return None, None, _MSG_OC_NO_ENCONTRADA
+
+        envio = envio_repo.get_by_oc_id(oc_id)
+        if not envio:
+            return None, None, "No se encontró registro de integración SAP para esta orden de compra. Solo existe para OCs ya enviadas a SAP."
+
+        doc_num = envio.get("numero_oc_sap")
+        doc_entry = envio.get("doc_entry")
+
+        resumen = st_repo.get_resumen_agregado_por_oc_id(oc_id)
+        solicitudes_transferencia = {"resultados": resumen["resultados"]}
+
+        pedido_numero = None
+        pedido_id = oc_cabecera.get("pedido_id")
+        if pedido_id:
+            from src.database.services.oc_sap_service import OCSAPService
+            pedido_numero = OCSAPService._obtener_numero_pedido_para_notif(pedido_id, conn)
+
+        from src.utils.integracion_sap_excel_generator import generar_excel_integracion_sap
+        excel_buffer = generar_excel_integracion_sap(
+            oc_cabecera, doc_num, doc_entry, solicitudes_transferencia, pedido_numero
+        )
+
+        numero_oc_sap = doc_num or oc_cabecera.get("numero_oc_sap")
+        return excel_buffer, numero_oc_sap, None
+    finally:
+        conn.close()
+
+
 def _generar_pdf_oc(oc_id):
     """Genera el PDF de una OC. Retorna (pdf_bytes, oc_cabecera, error)."""
     conn = get_db_connection()
@@ -1169,6 +1208,34 @@ async def _get_orden_compra_integracion_sap_handler(request, oc_id):
     )
 
 
+async def _get_orden_compra_integracion_sap_excel_handler(request, oc_id):
+    source = get_source_from_headers(request)
+
+    try:
+        excel_buffer, numero_oc_sap, error = await asyncio.to_thread(_generar_excel_integracion_sap_oc, oc_id)
+    except Exception as e:
+        logger.error(f"❌ Error al generar Excel de integración SAP de OC {oc_id}: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error al generar Excel de integración SAP: {str(e)}"
+        )
+
+    if error:
+        raise HTTPException(status_code=404, detail=error)
+
+    nombre_archivo = f"integracion_sap_{numero_oc_sap or oc_id[:8]}.xlsx"
+
+    return StreamingResponse(
+        excel_buffer,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={
+            "Content-Disposition": f'attachment; filename="{nombre_archivo}"',
+            "X-Source": source,
+            "X-Endpoint": "GET-ORDEN-COMPRA-INTEGRACION-SAP-EXCEL",
+        }
+    )
+
+
 async def _get_orden_compra_pdf_handler(request, oc_id):
     source = get_source_from_headers(request)
 
@@ -1698,6 +1765,24 @@ def register_ordenes_compra_endpoints(app: FastAPI):
         y solicitudes_transferencia (resultados, itrs_por_tienda) para mostrar la sección ITR completa.
         """
         return await _get_orden_compra_integracion_sap_handler(request, oc_id)
+
+    @app.get("/ordenes-compra/{oc_id}/integracion-sap/excel", tags=["Órdenes de Compra"])
+    async def get_orden_compra_integracion_sap_excel(
+        request: Request,
+        oc_id: str = Path(..., description=_DESC_OC_ID),
+        user: dict = Depends(verify_jwt_token),
+        _: None = Depends(require_any_permission([_PERM_ODCSAP, _PERM_MABEL]))
+    ):
+        """
+        Descarga un Excel simple (2 hojas) con la misma información del correo
+        "OC y Solicitudes de Transferencia - Listo para Despacho": datos de la OC
+        en la primera hoja y, en la segunda, DOCNUM / NOMBRE TIENDA / CODIGO TIENDA
+        de cada solicitud de transferencia generada.
+
+        **Path Parameters:**
+        - `oc_id` (string, requerido) - UUID de la orden de compra
+        """
+        return await _get_orden_compra_integracion_sap_excel_handler(request, oc_id)
 
     @app.get("/ordenes-compra/{oc_id}/pdf", tags=["Órdenes de Compra"])
     async def get_orden_compra_pdf(
