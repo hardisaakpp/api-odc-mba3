@@ -210,6 +210,65 @@ def mensaje_sugiere_reintento_transitorio(mensaje: Optional[str]) -> bool:
     return any(n in m for n in needles)
 
 
+def _mensaje_exito_reintento(
+    success_message: Optional[str], operation_label: str, attempt: int, max_attempts: int
+) -> str:
+    """Mensaje de éxito tras reintento (ver retry_operation)."""
+    return success_message or f"✅ Reenvío exitoso de {operation_label} en intento {attempt}/{max_attempts}"
+
+
+def _mensaje_reintento_fallido(
+    retry_message: Optional[str],
+    operation_label: str,
+    attempt: int,
+    max_attempts: int,
+    last_error: str,
+    wait_seconds: float,
+) -> str:
+    """Mensaje de warning antes de esperar el siguiente reintento (ver retry_operation)."""
+    return retry_message or (
+        f"⚠️ {operation_label} fallida en intento {attempt}/{max_attempts}: "
+        f"{last_error}. Reintentando en {wait_seconds:.1f}s..."
+    )
+
+
+def _debe_detenerse_definitivamente(
+    attempt: int, max_attempts: int, should_retry_fn: Callable[[Any], bool], last_response: Any
+) -> bool:
+    """True si SAP rechazó la operación de forma definitiva (should_retry dice que
+    no vale la pena reintentar) y todavía quedan intentos por consumir -- ver
+    retry_operation."""
+    return attempt < max_attempts and not should_retry_fn(last_response)
+
+
+def _resolver_antes_de_reintentar(
+    check_before_retry: Optional[Callable[[], Optional[Any]]],
+    is_success: Callable[[Any], bool],
+    operation_label: str,
+    attempt: int,
+    max_attempts: int,
+    logger: Any,
+) -> Optional[Any]:
+    """Invoca check_before_retry() (si se pasa) antes de un reintento y devuelve la
+    respuesta ya confirmada en el sistema real si is_success la acepta -- para
+    adoptarla sin reenviar, ver docstring de retry_operation sobre
+    check_before_retry -- o None si debe seguir el flujo normal de reintento."""
+    if check_before_retry is None:
+        return None
+    try:
+        respuesta_verificada = check_before_retry()
+    except Exception as e:
+        logger.warning(f"⚠️ {operation_label}: check_before_retry falló (no bloqueante): {e}")
+        return None
+    if respuesta_verificada is not None and is_success(respuesta_verificada):
+        logger.info(
+            f"♻️ {operation_label}: ya existía en el sistema real antes de "
+            f"reintentar (adoptado, sin reenviar) en intento {attempt}/{max_attempts}."
+        )
+        return respuesta_verificada
+    return None
+
+
 def retry_operation(
     *,
     execute: Callable[[], Any],
@@ -268,10 +327,7 @@ def retry_operation(
         last_response = execute()
         if is_success(last_response):
             if attempt > 1:
-                logger.info(
-                    success_message
-                    or f"✅ Reenvío exitoso de {operation_label} en intento {attempt}/{max_attempts}"
-                )
+                logger.info(_mensaje_exito_reintento(success_message, operation_label, attempt, max_attempts))
             return {
                 "success": True,
                 "response": last_response,
@@ -281,7 +337,7 @@ def retry_operation(
             }
 
         last_error = extract_error(last_response)
-        if attempt < max_attempts and not should_retry_fn(last_response):
+        if _debe_detenerse_definitivamente(attempt, max_attempts, should_retry_fn, last_response):
             logger.warning(
                 f"⚠️ {operation_label} fallida en intento {attempt}/{max_attempts}: "
                 f"{last_error}. Error no reintentable; se detiene."
@@ -295,37 +351,24 @@ def retry_operation(
             }
 
         if attempt < max_attempts:
-            if check_before_retry is not None:
-                try:
-                    respuesta_verificada = check_before_retry()
-                except Exception as e:
-                    logger.warning(
-                        f"⚠️ {operation_label}: check_before_retry falló (no bloqueante): {e}"
-                    )
-                    respuesta_verificada = None
-                if respuesta_verificada is not None and is_success(respuesta_verificada):
-                    logger.info(
-                        f"♻️ {operation_label}: ya existía en el sistema real antes de "
-                        f"reintentar (adoptado, sin reenviar) en intento {attempt}/{max_attempts}."
-                    )
-                    return {
-                        "success": True,
-                        "response": respuesta_verificada,
-                        "attempts": attempt,
-                        "error": None,
-                        "stopped_early": False,
-                    }
+            respuesta_adoptada = _resolver_antes_de_reintentar(
+                check_before_retry, is_success, operation_label, attempt, max_attempts, logger
+            )
+            if respuesta_adoptada is not None:
+                return {
+                    "success": True,
+                    "response": respuesta_adoptada,
+                    "attempts": attempt,
+                    "error": None,
+                    "stopped_early": False,
+                }
 
             wait_seconds = (
                 base_delay_seconds * (2 ** (attempt - 1))
                 + random.uniform(0, max_jitter_seconds)
             )
             logger.warning(
-                retry_message
-                or (
-                    f"⚠️ {operation_label} fallida en intento {attempt}/{max_attempts}: "
-                    f"{last_error}. Reintentando en {wait_seconds:.1f}s..."
-                )
+                _mensaje_reintento_fallido(retry_message, operation_label, attempt, max_attempts, last_error, wait_seconds)
             )
             time.sleep(wait_seconds)
 
