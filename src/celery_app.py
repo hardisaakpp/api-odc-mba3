@@ -44,6 +44,12 @@ from src.config import (
 
 logger = logging.getLogger(__name__)
 
+# Nombre completo de la tarea, referenciado 3 veces abajo (beat_schedule x2 + task_routes).
+# Extraído a constante para evitar duplicación de literal (SonarQube python:S1192).
+TASK_RECONCILIAR_TRANSFERENCIAS_PENDIENTES = (
+    'src.tasks.celery_reconciliar_transferencias.reconciliar_transferencias_pendientes'
+)
+
 # Crear app Celery
 celery_app = Celery(
     'mba3_auto_migrate',
@@ -140,7 +146,7 @@ celery_app.conf.update(
             # escaló a técnicos vía reconciliar_transferencias_pendientes (2 corridas
             # consecutivas), así que no hace falta reintentar indefinidamente.
             'reconciliar-transferencias-pendientes-diaria': {
-                'task': 'src.tasks.celery_reconciliar_transferencias.reconciliar_transferencias_pendientes',
+                'task': TASK_RECONCILIAR_TRANSFERENCIAS_PENDIENTES,
                 'schedule': crontab(  # type: ignore[arg-type]
                     hour=RECONCILIAR_ST_HORA, minute=RECONCILIAR_ST_MINUTO, day_of_week='mon-sat'
                 ),
@@ -156,7 +162,7 @@ celery_app.conf.update(
             # anterior completó?) corre en AMBAS entradas, dentro de la tarea misma
             # (ver _verificar_salud_diaria) -- no depende de que sea domingo.
             'reconciliar-transferencias-pendientes-semanal': {
-                'task': 'src.tasks.celery_reconciliar_transferencias.reconciliar_transferencias_pendientes',
+                'task': TASK_RECONCILIAR_TRANSFERENCIAS_PENDIENTES,
                 'schedule': crontab(  # type: ignore[arg-type]
                     hour=RECONCILIAR_ST_HORA, minute=RECONCILIAR_ST_MINUTO, day_of_week='sun'
                 ),
@@ -202,7 +208,7 @@ celery_app.conf.update(
     task_routes={
         'src.tasks.celery_auto_migrate.execute_auto_migration': {'queue': 'maintenance'},
         'src.tasks.celery_sync_productos.sync_productos_maestro': {'queue': 'maintenance'},
-        'src.tasks.celery_reconciliar_transferencias.reconciliar_transferencias_pendientes': {'queue': 'maintenance'},
+        TASK_RECONCILIAR_TRANSFERENCIAS_PENDIENTES: {'queue': 'maintenance'},
     },
     
     # CRÍTICO: Configuración de workers para prevenir acumulación de recursos
