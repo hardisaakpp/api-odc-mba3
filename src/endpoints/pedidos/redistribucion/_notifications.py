@@ -2,13 +2,17 @@
 
 from src.utils.email_notifier import send_mabel_redistribucion_confirmacion_notification
 
+# Permiso destinatario de todas las notificaciones SSE de este módulo (evita
+# duplicar el literal, SonarQube python:S1192).
+_PERMISO_ODCSAP_VIEW = "odcsap.view"
+
 
 async def notificar_redistribucion_confirmada(pedido_id: str, numero_pedido: str) -> None:
     """Envía notificación en tiempo real a EL RAYO."""
     from src.utils.notification_manager import notification_manager, NotificationType
 
     await notification_manager.notify(
-        target_permission="odcsap.view",
+        target_permission=_PERMISO_ODCSAP_VIEW,
         title="Redistribución confirmada por MABEL TRADING",
         message=f"La redistribución del pedido {numero_pedido} ha sido confirmada.",
         notification_type=NotificationType.SUCCESS,
@@ -26,7 +30,7 @@ async def notificar_redistribucion_creada(pedido_id: str, numero_pedido: str) ->
     from src.utils.notification_manager import notification_manager, NotificationType
 
     await notification_manager.notify(
-        target_permission="odcsap.view",
+        target_permission=_PERMISO_ODCSAP_VIEW,
         title="Nueva redistribución de pedido",
         message=f"MABEL TRADING redistribuyó las cantidades del pedido {numero_pedido} entre tiendas.",
         notification_type=NotificationType.INFO,
@@ -44,7 +48,7 @@ async def notificar_redistribucion_procesada_sap(pedido_id: str, numero_pedido: 
     from src.utils.notification_manager import notification_manager, NotificationType
 
     await notification_manager.notify(
-        target_permission="odcsap.view",
+        target_permission=_PERMISO_ODCSAP_VIEW,
         title="Pedido confirmado tras redistribución",
         message=f"El pedido {numero_pedido} fue confirmado tras el procesamiento en SAP y está listo para continuar el flujo.",
         notification_type=NotificationType.SUCCESS,
@@ -75,7 +79,7 @@ async def notificar_error_envio_odc_sap(
 
     titulo, mensaje, tipo = construir_mensaje_error_envio_odc_sap(mensaje, es_error_real)
     await notification_manager.notify(
-        target_permission="odcsap.view",
+        target_permission=_PERMISO_ODCSAP_VIEW,
         title=titulo,
         message=mensaje,
         notification_type=NotificationType(tipo),
@@ -113,7 +117,7 @@ async def notificar_odc_enviada_a_sap(
 
     titulo, mensaje, tipo = construir_mensaje_odc_enviada_a_sap(numero_pedido, doc_num, st_error)
     await notification_manager.notify(
-        target_permission="odcsap.view",
+        target_permission=_PERMISO_ODCSAP_VIEW,
         title=titulo,
         message=mensaje,
         notification_type=NotificationType(tipo),
