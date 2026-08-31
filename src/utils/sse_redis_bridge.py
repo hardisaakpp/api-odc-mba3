@@ -97,6 +97,34 @@ async def _reenviar_mensaje(raw_data: str) -> None:
     )
 
 
+async def _procesar_mensajes_redis(pubsub, ready_event: Optional[asyncio.Event]) -> None:
+    """Marca ready_event (si se indica) y reenvía cada mensaje recibido por `pubsub`
+    -- ya suscrito por el llamador -- hasta que la conexión se caiga o se cancele
+    (ver escuchar_notificaciones_redis)."""
+    if ready_event is not None:
+        ready_event.set()
+    async for message in pubsub.listen():
+        if message.get("type") != "message":
+            continue
+        try:
+            await _reenviar_mensaje(message["data"])
+        except Exception as e:
+            logger.warning(f"⚠️ Notificación SSE de Celery descartada (mensaje inválido): {e}")
+
+
+async def _cerrar_conexion_redis(pubsub, client) -> None:
+    """Cierra pubsub/cliente de Redis del listener, best-effort (ver
+    escuchar_notificaciones_redis): un fallo al cerrar no debe impedir el
+    reintento de conexión."""
+    try:
+        if pubsub is not None:
+            await pubsub.aclose()
+        if client is not None:
+            await client.aclose()
+    except Exception:
+        pass
+
+
 async def escuchar_notificaciones_redis(ready_event: Optional[asyncio.Event] = None) -> None:
     """Tarea de fondo (iniciada en el startup de FastAPI, ver src/api_server.py): se
     suscribe al canal Redis de notificaciones y reenvía cada mensaje a
@@ -121,15 +149,7 @@ async def escuchar_notificaciones_redis(ready_event: Optional[asyncio.Event] = N
             client = redis_asyncio.from_url(REDIS_URL, decode_responses=True)
             pubsub = client.pubsub()
             await pubsub.subscribe(SSE_NOTIFICATIONS_REDIS_CHANNEL)
-            if ready_event is not None:
-                ready_event.set()
-            async for message in pubsub.listen():
-                if message.get("type") != "message":
-                    continue
-                try:
-                    await _reenviar_mensaje(message["data"])
-                except Exception as e:
-                    logger.warning(f"⚠️ Notificación SSE de Celery descartada (mensaje inválido): {e}")
+            await _procesar_mensajes_redis(pubsub, ready_event)
         except asyncio.CancelledError:
             logger.info("📡 Listener SSE↔Redis detenido (shutdown)")
             raise
@@ -140,10 +160,4 @@ async def escuchar_notificaciones_redis(ready_event: Optional[asyncio.Event] = N
             )
             await asyncio.sleep(_RECONEXION_SEGUNDOS)
         finally:
-            try:
-                if pubsub is not None:
-                    await pubsub.aclose()
-                if client is not None:
-                    await client.aclose()
-            except Exception:
-                pass
+            await _cerrar_conexion_redis(pubsub, client)
