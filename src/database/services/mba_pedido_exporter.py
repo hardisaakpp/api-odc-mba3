@@ -265,6 +265,91 @@ Número secuencial de registro\tValor temporal de pedido, marca el bloque que co
             el llamador debe omitirla por completo."""
         return cantidades_asignadas.get(pedido_detalle_id, {}).get(tienda_id)
 
+    def _construir_lineas_producto_mba(
+        self,
+        detalle: dict,
+        codigo_bodega: Optional[str],
+        bodega_por_codigo: dict,
+        cantidades_asignadas: dict,
+        config: "MBAExportConfig",
+        datos: dict,
+        numero_secuencial: int,
+    ) -> tuple[list, int]:
+        """Genera las líneas TXT (una por tienda) de UN producto/detalle para
+        exportar_pedido_formato_mba, y el numero_secuencial actualizado tras
+        procesarlas. Devuelve ([], numero_secuencial sin cambios) si el producto
+        no genera ninguna línea."""
+        lines: list = []
+
+        # Producto excluido: Total editado manualmente a 0 en el Detalle del Pedido
+        if self._excluido_por_total_manual_cero(detalle):
+            return lines, numero_secuencial
+
+        codigo_producto = (detalle.get("codigo_interno") or "").strip()  # Col 21 Código Producto
+        precio_unitario = self._resolver_precio_unitario(detalle)
+        pedido_detalle_id = detalle.get("pedido_detalle_id")
+
+        tiendas = self._filtrar_tiendas_por_bodega(detalle.get("tiendas", []), codigo_bodega, bodega_por_codigo)
+        for tienda in tiendas:
+            cantidad = self._resolver_cantidad_asignada(
+                pedido_detalle_id, tienda.get("tienda_id"), cantidades_asignadas
+            )
+
+            # Sin fila en distribucion_confirmada: nunca se le asignó nada en
+            # la redistribución -- se omite la tienda por completo (no se
+            # exporta con cantidad 0).
+            if cantidad is None:
+                continue
+
+            # Omitir solo si la cantidad es negativa (0 y decimales como 0.5 se exportan)
+            if cantidad < 0:
+                continue
+
+            # Construir las 35 columnas (TXTN SUBIR PEDIDOS CON PRECIO)
+            columnas = [
+                self._format_number(numero_secuencial, 0),  # 1. Numero (col A - secuencial)
+                self._format_number(config.numero_pedido_temporal, 0),  # 2. Número Pedido (col B - agrupa líneas)
+                datos["codigo_cliente"],  # 3. Código Cliente (col C - CLI1795)
+                config.codigo_subcliente,  # 4. Código SubCliente
+                datos["fecha_pedido"],  # 5. Fecha Pedido
+                datos["fecha_entrega"],  # 6. Fecha Entrega
+                datos["moneda"],  # 7. Moneda (col G - divisa local US)
+                datos["bodega"],  # 8. Bodega
+                datos["vendedor"],  # 9. Vendedor
+                datos["pedido_manual"],  # 10. Pedido Manual (numero_pedido interno)
+                "",  # 11. Contrato
+                datos["orden_compra_cliente"],  # 12. Orden Compra Cliente (DocNum de la OC enviada a SAP)
+                "",  # 13. Cotización Original
+                "",  # 14. Medio Captura
+                "",  # 15. Transporte
+                "",  # 16. Nombre Solicitante
+                "",  # 17. Memo
+                self._format_boolean(config.registro_editable),  # 18. Registro Editable
+                self._format_boolean(config.confirmado),  # 19. Confirmado
+                _SUCURSAL_FIJA,  # 20. Sucursal
+                codigo_producto,  # 21. Código Producto
+                self._format_number(cantidad, 4),  # 22. Cantidad Pedido (acepta decimales)
+                "FALSE",  # 23. BackOrder (siempre FALSE)
+                self._format_number(precio_unitario, 3),  # 24. Precio Final (del sistema)
+                self._format_boolean(config.aplica_impuesto_1),  # 25. Aplica Impuesto 1
+                "",  # 26. Departamento
+                "",  # 27. Centro Costo
+                "",  # 28. Proyecto
+                "",  # 29. Subproyecto
+                "",  # 30. Análisis 1
+                "",  # 31. Análisis 2
+                "",  # 32. Análisis 3
+                "0",  # 33. Precio Solicitado
+                self._format_boolean(config.aplica_impuesto_2),  # 34. Aplica Impuesto 2
+                self._format_number(numero_secuencial, 0),  # 35. Numero (col AI - secuencial)
+            ]
+
+            # Unir columnas con TAB
+            lines.append("\t".join(columnas))
+            numero_secuencial += 1
+
+        return lines, numero_secuencial
+
     def exportar_pedido_formato_mba(
         self,
         pedido_id: str,
@@ -326,14 +411,6 @@ Número secuencial de registro\tValor temporal de pedido, marca el bloque que co
                 if codigo_bodega else oc_repo.get_doc_num_by_pedido_id(pedido_id)
             )
             datos = self._extraer_datos_exportacion(cabecera, config, fecha_confirmacion, doc_num)
-            fecha_pedido = datos["fecha_pedido"]
-            fecha_entrega = datos["fecha_entrega"]
-            pedido_manual = datos["pedido_manual"]
-            orden_compra_cliente = datos["orden_compra_cliente"]
-            bodega = datos["bodega"]
-            vendedor = datos["vendedor"]
-            codigo_cliente = datos["codigo_cliente"]
-            moneda = datos["moneda"]
             bodega_por_codigo = self._mapear_tiendas_a_bodega(detalles) if codigo_bodega else {}
 
             # Construir líneas del archivo
@@ -348,75 +425,12 @@ Número secuencial de registro\tValor temporal de pedido, marca el bloque que co
 
             # Generar una línea por cada combinación producto-tienda
             for detalle in detalles:
-                # Producto excluido: Total editado manualmente a 0 en el Detalle del Pedido
-                if self._excluido_por_total_manual_cero(detalle):
-                    continue
+                lineas_detalle, numero_secuencial = self._construir_lineas_producto_mba(
+                    detalle, codigo_bodega, bodega_por_codigo, cantidades_asignadas,
+                    config, datos, numero_secuencial,
+                )
+                lines.extend(lineas_detalle)
 
-                codigo_producto = (detalle.get("codigo_interno") or "").strip()  # Col 21 Código Producto
-                precio_unitario = self._resolver_precio_unitario(detalle)
-                pedido_detalle_id = detalle.get("pedido_detalle_id")
-
-                tiendas = self._filtrar_tiendas_por_bodega(detalle.get("tiendas", []), codigo_bodega, bodega_por_codigo)
-                for tienda in tiendas:
-                    cantidad = self._resolver_cantidad_asignada(
-                        pedido_detalle_id, tienda.get("tienda_id"), cantidades_asignadas
-                    )
-
-                    # Sin fila en distribucion_confirmada: nunca se le asignó nada en
-                    # la redistribución -- se omite la tienda por completo (no se
-                    # exporta con cantidad 0).
-                    if cantidad is None:
-                        continue
-
-                    # Omitir solo si la cantidad es negativa (0 y decimales como 0.5 se exportan)
-                    if cantidad < 0:
-                        continue
-
-                    # Construir las 35 columnas (TXTN SUBIR PEDIDOS CON PRECIO)
-                    columnas = [
-                        self._format_number(numero_secuencial, 0),  # 1. Numero (col A - secuencial)
-                        self._format_number(config.numero_pedido_temporal, 0),  # 2. Número Pedido (col B - agrupa líneas)
-                        codigo_cliente,  # 3. Código Cliente (col C - CLI1795)
-                        config.codigo_subcliente,  # 4. Código SubCliente
-                        fecha_pedido,  # 5. Fecha Pedido
-                        fecha_entrega,  # 6. Fecha Entrega
-                        moneda,  # 7. Moneda (col G - divisa local US)
-                        bodega,  # 8. Bodega
-                        vendedor,  # 9. Vendedor
-                        pedido_manual,  # 10. Pedido Manual (numero_pedido interno)
-                        "",  # 11. Contrato
-                        orden_compra_cliente,  # 12. Orden Compra Cliente (DocNum de la OC enviada a SAP)
-                        "",  # 13. Cotización Original
-                        "",  # 14. Medio Captura
-                        "",  # 15. Transporte
-                        "",  # 16. Nombre Solicitante
-                        "",  # 17. Memo
-                        self._format_boolean(config.registro_editable),  # 18. Registro Editable
-                        self._format_boolean(config.confirmado),  # 19. Confirmado
-                        _SUCURSAL_FIJA,  # 20. Sucursal
-                        codigo_producto,  # 21. Código Producto
-                        self._format_number(cantidad, 4),  # 22. Cantidad Pedido (acepta decimales)
-                        "FALSE",  # 23. BackOrder (siempre FALSE)
-                        self._format_number(precio_unitario, 3),  # 24. Precio Final (del sistema)
-                        self._format_boolean(config.aplica_impuesto_1),  # 25. Aplica Impuesto 1
-                        "",  # 26. Departamento
-                        "",  # 27. Centro Costo
-                        "",  # 28. Proyecto
-                        "",  # 29. Subproyecto
-                        "",  # 30. Análisis 1
-                        "",  # 31. Análisis 2
-                        "",  # 32. Análisis 3
-                        "0",  # 33. Precio Solicitado
-                        self._format_boolean(config.aplica_impuesto_2),  # 34. Aplica Impuesto 2
-                        self._format_number(numero_secuencial, 0),  # 35. Numero (col AI - secuencial)
-                    ]
-                    
-                    # Unir columnas con TAB
-                    line = "\t".join(columnas)
-                    lines.append(line)
-                    
-                    numero_secuencial += 1
-            
             logger.info(f"✅ Exportación MBA completada: {numero_secuencial - 1} líneas generadas")
             
             # Unir todas las líneas con salto de línea
@@ -425,6 +439,99 @@ Número secuencial de registro\tValor temporal de pedido, marca el bloque que co
             # Convertir a bytes (UTF-8 sin BOM para compatibilidad con MBA)
             return content.encode("utf-8")
     
+    def _construir_linea_producto_consolidado(
+        self,
+        detalle: dict,
+        codigo_bodega: Optional[str],
+        bodega_por_codigo: dict,
+        cantidades_asignadas: dict,
+        config: "MBAExportConfig",
+        datos: dict,
+        numero_secuencial: int,
+    ) -> tuple[Optional[str], int]:
+        """Genera la línea TXT consolidada (una por producto) de UN detalle para
+        exportar_pedido_formato_mba_consolidado, y el numero_secuencial actualizado
+        si se generó línea. Devuelve (None, numero_secuencial sin cambios) si el
+        producto no genera línea."""
+        # Producto excluido: Total editado manualmente a 0 en el Detalle del Pedido
+        if self._excluido_por_total_manual_cero(detalle):
+            return None, numero_secuencial
+
+        codigo_producto = (detalle.get("codigo_interno") or "").strip()
+        precio_unitario = self._resolver_precio_unitario(detalle)
+        pedido_detalle_id = detalle.get("pedido_detalle_id")
+
+        tiendas = self._filtrar_tiendas_por_bodega(detalle.get("tiendas", []), codigo_bodega, bodega_por_codigo)
+        # Producto sin tiendas en esta bodega: no pertenece a esta ODC, se omite
+        # por completo (distinto de cantidad_total == 0 con tiendas sí asignadas,
+        # que sí se exporta, ver comentario más abajo).
+        if codigo_bodega and not tiendas:
+            return None, numero_secuencial
+
+        # Resolver la cantidad asignada de cada tienda (None = sin fila en
+        # distribucion_confirmada, nunca se le asignó nada -- se descarta).
+        # Producto con tiendas pero NINGUNA con distribución confirmada -- se le
+        # quitó todo en la redistribución -- se omite por completo, igual que
+        # "sin tiendas en esta bodega" de arriba. Se filtra solo None (no
+        # negativos) para no alterar el criterio histórico de negatividad, que
+        # sigue evaluándose sobre el TOTAL más abajo.
+        cantidades_resueltas = [
+            cantidad_tienda
+            for cantidad_tienda in (
+                self._resolver_cantidad_asignada(pedido_detalle_id, tienda.get("tienda_id"), cantidades_asignadas)
+                for tienda in tiendas
+            )
+            if cantidad_tienda is not None
+        ]
+        if tiendas and not cantidades_resueltas:
+            return None, numero_secuencial
+
+        # Consolidar cantidad total de las tiendas resueltas (de esta bodega, si aplica)
+        cantidad_total = sum(cantidades_resueltas)
+
+        if cantidad_total < 0:
+            return None, numero_secuencial
+
+        columnas = [
+            self._format_number(numero_secuencial, 0),
+            self._format_number(config.numero_pedido_temporal, 0),
+            datos["codigo_cliente"],
+            config.codigo_subcliente,
+            datos["fecha_pedido"],
+            datos["fecha_entrega"],
+            datos["moneda"],
+            datos["bodega"],
+            datos["vendedor"],
+            datos["pedido_manual"],  # Pedido Manual (numero_pedido interno)
+            "",  # Contrato
+            datos["orden_compra_cliente"],  # DocNum de la OC enviada a SAP
+            "",  # Cotización Original
+            "",  # Medio Captura
+            "",  # Transporte
+            "",  # Nombre Solicitante
+            "",  # Memo
+            self._format_boolean(config.registro_editable),
+            self._format_boolean(config.confirmado),
+            _SUCURSAL_FIJA,
+            codigo_producto,
+            self._format_number(cantidad_total, 4),  # Cantidad total (acepta decimales)
+            "FALSE",
+            self._format_number(precio_unitario, 3),
+            self._format_boolean(config.aplica_impuesto_1),
+            "",  # Departamento
+            "",  # Centro Costo
+            "",  # Proyecto
+            "",  # Subproyecto
+            "",  # Análisis 1
+            "",  # Análisis 2
+            "",  # Análisis 3
+            "0",
+            self._format_boolean(config.aplica_impuesto_2),
+            self._format_number(numero_secuencial, 0),
+        ]
+
+        return "\t".join(columnas), numero_secuencial + 1
+
     def exportar_pedido_formato_mba_consolidado(
         self,
         pedido_id: str,
@@ -480,104 +587,23 @@ Número secuencial de registro\tValor temporal de pedido, marca el bloque que co
                 if codigo_bodega else oc_repo.get_doc_num_by_pedido_id(pedido_id)
             )
             datos = self._extraer_datos_exportacion(cabecera, config, fecha_confirmacion, doc_num)
-            fecha_pedido = datos["fecha_pedido"]
-            fecha_entrega = datos["fecha_entrega"]
-            pedido_manual = datos["pedido_manual"]
-            orden_compra_cliente = datos["orden_compra_cliente"]
-            bodega = datos["bodega"]
-            vendedor = datos["vendedor"]
-            codigo_cliente = datos["codigo_cliente"]
-            moneda = datos["moneda"]
             bodega_por_codigo = self._mapear_tiendas_a_bodega(detalles) if codigo_bodega else {}
 
             lines = []
 
             if incluir_encabezado:
                 lines.append(self.MBA_HEADER)
-            
+
             numero_secuencial = 1
 
             for detalle in detalles:
-                # Producto excluido: Total editado manualmente a 0 en el Detalle del Pedido
-                if self._excluido_por_total_manual_cero(detalle):
-                    continue
+                linea, numero_secuencial = self._construir_linea_producto_consolidado(
+                    detalle, codigo_bodega, bodega_por_codigo, cantidades_asignadas,
+                    config, datos, numero_secuencial,
+                )
+                if linea is not None:
+                    lines.append(linea)
 
-                codigo_producto = (detalle.get("codigo_interno") or "").strip()
-                precio_unitario = self._resolver_precio_unitario(detalle)
-                pedido_detalle_id = detalle.get("pedido_detalle_id")
-
-                tiendas = self._filtrar_tiendas_por_bodega(detalle.get("tiendas", []), codigo_bodega, bodega_por_codigo)
-                # Producto sin tiendas en esta bodega: no pertenece a esta ODC, se omite
-                # por completo (distinto de cantidad_total == 0 con tiendas sí asignadas,
-                # que sí se exporta, ver comentario más abajo).
-                if codigo_bodega and not tiendas:
-                    continue
-
-                # Resolver la cantidad asignada de cada tienda (None = sin fila en
-                # distribucion_confirmada, nunca se le asignó nada -- se descarta).
-                # Producto con tiendas pero NINGUNA con distribución confirmada -- se le
-                # quitó todo en la redistribución -- se omite por completo, igual que
-                # "sin tiendas en esta bodega" de arriba. Se filtra solo None (no
-                # negativos) para no alterar el criterio histórico de negatividad, que
-                # sigue evaluándose sobre el TOTAL más abajo.
-                cantidades_resueltas = [
-                    cantidad_tienda
-                    for cantidad_tienda in (
-                        self._resolver_cantidad_asignada(pedido_detalle_id, tienda.get("tienda_id"), cantidades_asignadas)
-                        for tienda in tiendas
-                    )
-                    if cantidad_tienda is not None
-                ]
-                if tiendas and not cantidades_resueltas:
-                    continue
-
-                # Consolidar cantidad total de las tiendas resueltas (de esta bodega, si aplica)
-                cantidad_total = sum(cantidades_resueltas)
-
-                if cantidad_total < 0:
-                    continue
-
-                columnas = [
-                    self._format_number(numero_secuencial, 0),
-                    self._format_number(config.numero_pedido_temporal, 0),
-                    codigo_cliente,
-                    config.codigo_subcliente,
-                    fecha_pedido,
-                    fecha_entrega,
-                    moneda,
-                    bodega,
-                    vendedor,
-                    pedido_manual,  # Pedido Manual (numero_pedido interno)
-                    "",  # Contrato
-                    orden_compra_cliente,  # DocNum de la OC enviada a SAP
-                    "",  # Cotización Original
-                    "",  # Medio Captura
-                    "",  # Transporte
-                    "",  # Nombre Solicitante
-                    "",  # Memo
-                    self._format_boolean(config.registro_editable),
-                    self._format_boolean(config.confirmado),
-                    _SUCURSAL_FIJA,
-                    codigo_producto,
-                    self._format_number(cantidad_total, 4),  # Cantidad total (acepta decimales)
-                    "FALSE",
-                    self._format_number(precio_unitario, 3),
-                    self._format_boolean(config.aplica_impuesto_1),
-                    "",  # Departamento
-                    "",  # Centro Costo
-                    "",  # Proyecto
-                    "",  # Subproyecto
-                    "",  # Análisis 1
-                    "",  # Análisis 2
-                    "",  # Análisis 3
-                    "0",
-                    self._format_boolean(config.aplica_impuesto_2),
-                    self._format_number(numero_secuencial, 0),
-                ]
-                
-                lines.append("\t".join(columnas))
-                numero_secuencial += 1
-            
             logger.info(f"✅ Exportación MBA consolidada completada: {numero_secuencial - 1} líneas")
             
             content = "\n".join(lines)
