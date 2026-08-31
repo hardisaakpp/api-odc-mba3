@@ -301,6 +301,10 @@ class _MiddlewareSAPServiceLayerClient:
             # payload a SAP y los omite si llegan nulos). El middleware acepta camelCase.
             "series": stock_transfer_data.get("Series"),
             "uOdc": stock_transfer_data.get("U_ODC"),
+            # Sistema origen (C = consultas), mismo valor fijo que ya usa create_purchase_order.
+            # El middleware ahora lo exige (requerido también por el módulo de reposición de
+            # mercadería, el otro consumidor de este endpoint).
+            "u_ORIGEN": "C",
             "lines": lines,
         }
 
