@@ -1204,6 +1204,108 @@ class StockTransferService:
             "recuperada": True,
         }
 
+    def _procesar_envio_itr_nuevo(
+        self,
+        stock_transfer_json: Dict[str, Any],
+        idx: int,
+        total_tiendas_batch: int,
+        tienda_id: str,
+        tienda_codigo: str,
+        bodega_origen: str,
+        mapeo_nombre_tienda: Dict[str, str],
+        comentario_exacto: Optional[str],
+        result: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Envía a SAP (con reintento) UNA ITR que no existía previamente y arma su
+        resultado_tienda, actualizando los contadores de `result` (creadas/
+        encoladas/errores/pendientes de confirmación) -- ver _enviar_itrs_a_sap.
+        No cubre el caso "ITR ya existía en SAP" (ver _resultado_desde_itr_existente).
+        """
+        logger.debug(
+            f"🔄 Enviando ITR {idx+1}/{total_tiendas_batch} a SAP: "
+            f"{bodega_origen} → {tienda_codigo}..."
+        )
+        envio_result = self._enviar_itr_con_reintento(
+            payload=stock_transfer_json,
+            bodega_origen=bodega_origen,
+            tienda_codigo=tienda_codigo,
+            comentario_exacto=comentario_exacto,
+        )
+        sap_response = envio_result.get("response")
+        tienda_codigo_upper = tienda_codigo.strip().upper() if tienda_codigo else ""
+        tienda_nombre = mapeo_nombre_tienda.get(tienda_codigo_upper, None)
+        resultado_tienda = {
+            "tienda_id": tienda_id,
+            "tienda_codigo": tienda_codigo,
+            "tienda_nombre": tienda_nombre,  # ⭐ Incluir nombre de la tienda
+            "success": False,
+            # 3 estados reales, no éxito/error binario: 'pendiente_confirmacion'
+            # significa que SAP no confirmó NI rechazó a tiempo -- puede haber
+            # creado el ITR igual del otro lado. Ver reconciliación al final
+            # de este método (evita repetir el incidente "0 de 23" cuando SAP
+            # sí las creó, solo que tarde).
+            "estado": "error_confirmado",
+            "doc_entry": None,
+            "doc_num": None,
+            "error": None
+        }
+        if envio_result.get("success") and isinstance(sap_response, dict):
+            # ✅ SOLO AQUÍ se considera que el ITR fue creado realmente en SAP
+            resultado_tienda["success"] = True
+            resultado_tienda["estado"] = "confirmada"
+            resultado_tienda["doc_entry"] = sap_response.get("doc_entry")
+            resultado_tienda["doc_num"] = sap_response.get("doc_num")
+            resultado_tienda["attempts"] = envio_result.get("attempts")
+            result["transferencias_creadas"] += 1
+            logger.info(
+                f"✅ Inventory Transfer Request CREADO en SAP: {bodega_origen} → {tienda_codigo} "
+                f"(DocEntry={resultado_tienda['doc_entry']}, DocNum={resultado_tienda['doc_num']})"
+            )
+        elif isinstance(sap_response, dict) and sap_response.get("queued"):
+            # ⏳ SAP saturado: el middleware encoló la petición (HTTP 202). No es un
+            # error definitivo — se guarda el job_id para consultar su estado real
+            # antes de reintentar (evita crear una ITR duplicada).
+            resultado_tienda["estado"] = "pendiente_confirmacion"
+            resultado_tienda["queued"] = True
+            resultado_tienda["job_id"] = sap_response.get("job_id")
+            resultado_tienda["error"] = envio_result.get("error") or sap_response.get("error")
+            resultado_tienda["attempts"] = envio_result.get("attempts")
+            result["transferencias_encoladas"] = result.get("transferencias_encoladas", 0) + 1
+            result["transferencias_pendientes_confirmacion"] += 1
+            logger.info(
+                f"⏳ Inventory Transfer Request ENCOLADA en SAP (no es error definitivo): "
+                f"{bodega_origen} → {tienda_codigo} (jobId={resultado_tienda['job_id']})"
+            )
+        else:
+            error_msg = envio_result.get("error") or "No se recibió respuesta de SAP"
+            resultado_tienda["error"] = error_msg
+            resultado_tienda["attempts"] = envio_result.get("attempts")
+            if envio_result.get("stopped_early"):
+                # SAP rechazó la operación de forma definitiva (should_retry
+                # devolvió False antes de agotar los intentos) -- no hay nada
+                # que SAP pudiera haber terminado del otro lado, es un error real.
+                resultado_tienda["estado"] = "error_confirmado"
+                result["transferencias_errores"] += 1
+                logger.warning(
+                    f"⚠️ Inventory Transfer Request NO creado tras "
+                    f"{envio_result.get('attempts', self.RETRY_MAX_ATTEMPTS)} intento(s): "
+                    f"{bodega_origen} → {tienda_codigo}: {error_msg}"
+                )
+            else:
+                # Se agotaron los reintentos ante un fallo que la heurística
+                # seguía considerando transitorio (timeout/conexión) -- SAP
+                # puede haber completado la creación igual sin que la
+                # confirmación llegara a tiempo. No es un error confirmado.
+                resultado_tienda["estado"] = "pendiente_confirmacion"
+                result["transferencias_pendientes_confirmacion"] += 1
+                logger.warning(
+                    f"⏳ Inventory Transfer Request sin confirmar tras "
+                    f"{envio_result.get('attempts', self.RETRY_MAX_ATTEMPTS)} intento(s) "
+                    f"(fallo transitorio, no es un error confirmado): "
+                    f"{bodega_origen} → {tienda_codigo}: {error_msg}"
+                )
+        return resultado_tienda
+
     def _enviar_itrs_a_sap(
         self,
         stock_transfers_json: List[Dict[str, Any]],
@@ -1260,91 +1362,12 @@ class StockTransferService:
                 self._persistir_detalle_itr_inmediato(conn, solicitud_transferencia_id, resultado_existente)
                 continue
 
-            logger.debug(
-                f"🔄 Enviando ITR {idx+1}/{len(stock_transfers_json)} a SAP: "
-                f"{bodega_origen} → {tienda_codigo}..."
+            resultado_tienda = self._procesar_envio_itr_nuevo(
+                stock_transfer_json, idx, total_tiendas_batch, tienda_id, tienda_codigo,
+                bodega_origen, mapeo_nombre_tienda, comentario_exacto, result,
             )
-            envio_result = self._enviar_itr_con_reintento(
-                payload=stock_transfer_json,
-                bodega_origen=bodega_origen,
-                tienda_codigo=tienda_codigo,
-                comentario_exacto=comentario_exacto,
-            )
-            sap_response = envio_result.get("response")
-            tienda_codigo_upper = tienda_codigo.strip().upper() if tienda_codigo else ""
-            tienda_nombre = mapeo_nombre_tienda.get(tienda_codigo_upper, None)
-            resultado_tienda = {
-                "tienda_id": tienda_id,
-                "tienda_codigo": tienda_codigo,
-                "tienda_nombre": tienda_nombre,  # ⭐ Incluir nombre de la tienda
-                "success": False,
-                # 3 estados reales, no éxito/error binario: 'pendiente_confirmacion'
-                # significa que SAP no confirmó NI rechazó a tiempo -- puede haber
-                # creado el ITR igual del otro lado. Ver reconciliación al final
-                # de este método (evita repetir el incidente "0 de 23" cuando SAP
-                # sí las creó, solo que tarde).
-                "estado": "error_confirmado",
-                "doc_entry": None,
-                "doc_num": None,
-                "error": None
-            }
-            if envio_result.get("success") and isinstance(sap_response, dict):
-                # ✅ SOLO AQUÍ se considera que el ITR fue creado realmente en SAP
-                resultado_tienda["success"] = True
-                resultado_tienda["estado"] = "confirmada"
-                resultado_tienda["doc_entry"] = sap_response.get("doc_entry")
-                resultado_tienda["doc_num"] = sap_response.get("doc_num")
-                resultado_tienda["attempts"] = envio_result.get("attempts")
-                result["transferencias_creadas"] += 1
-                logger.info(
-                    f"✅ Inventory Transfer Request CREADO en SAP: {bodega_origen} → {tienda_codigo} "
-                    f"(DocEntry={resultado_tienda['doc_entry']}, DocNum={resultado_tienda['doc_num']})"
-                )
-            elif isinstance(sap_response, dict) and sap_response.get("queued"):
-                # ⏳ SAP saturado: el middleware encoló la petición (HTTP 202). No es un
-                # error definitivo — se guarda el job_id para consultar su estado real
-                # antes de reintentar (evita crear una ITR duplicada).
-                resultado_tienda["estado"] = "pendiente_confirmacion"
-                resultado_tienda["queued"] = True
-                resultado_tienda["job_id"] = sap_response.get("job_id")
-                resultado_tienda["error"] = envio_result.get("error") or sap_response.get("error")
-                resultado_tienda["attempts"] = envio_result.get("attempts")
-                result["transferencias_encoladas"] = result.get("transferencias_encoladas", 0) + 1
-                result["transferencias_pendientes_confirmacion"] += 1
-                logger.info(
-                    f"⏳ Inventory Transfer Request ENCOLADA en SAP (no es error definitivo): "
-                    f"{bodega_origen} → {tienda_codigo} (jobId={resultado_tienda['job_id']})"
-                )
+            if resultado_tienda["estado"] == "pendiente_confirmacion":
                 pendientes_confirmacion.append(resultado_tienda)
-            else:
-                error_msg = envio_result.get("error") or "No se recibió respuesta de SAP"
-                resultado_tienda["error"] = error_msg
-                resultado_tienda["attempts"] = envio_result.get("attempts")
-                if envio_result.get("stopped_early"):
-                    # SAP rechazó la operación de forma definitiva (should_retry
-                    # devolvió False antes de agotar los intentos) -- no hay nada
-                    # que SAP pudiera haber terminado del otro lado, es un error real.
-                    resultado_tienda["estado"] = "error_confirmado"
-                    result["transferencias_errores"] += 1
-                    logger.warning(
-                        f"⚠️ Inventory Transfer Request NO creado tras "
-                        f"{envio_result.get('attempts', self.RETRY_MAX_ATTEMPTS)} intento(s): "
-                        f"{bodega_origen} → {tienda_codigo}: {error_msg}"
-                    )
-                else:
-                    # Se agotaron los reintentos ante un fallo que la heurística
-                    # seguía considerando transitorio (timeout/conexión) -- SAP
-                    # puede haber completado la creación igual sin que la
-                    # confirmación llegara a tiempo. No es un error confirmado.
-                    resultado_tienda["estado"] = "pendiente_confirmacion"
-                    result["transferencias_pendientes_confirmacion"] += 1
-                    logger.warning(
-                        f"⏳ Inventory Transfer Request sin confirmar tras "
-                        f"{envio_result.get('attempts', self.RETRY_MAX_ATTEMPTS)} intento(s) "
-                        f"(fallo transitorio, no es un error confirmado): "
-                        f"{bodega_origen} → {tienda_codigo}: {error_msg}"
-                    )
-                    pendientes_confirmacion.append(resultado_tienda)
             result["resultados"].append(resultado_tienda)
             self._empujar_progreso_itr(
                 process_id, lock, oc_id, resultado_tienda, total_tiendas_batch, idx + 1
