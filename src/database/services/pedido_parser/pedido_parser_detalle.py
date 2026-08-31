@@ -215,23 +215,36 @@ class PedidoParserDetalle:
 
         for col_idx, col_name in enumerate(df_detalle.columns):
             col_lower = normalize_column_name(col_name)
-
-            for campo_bd, posibles_nombres in self.utils.MAPEO_COLUMNAS_PRODUCTO.items():
-                if campo_bd == clave_costo_unitario:
-                    # Se resuelve aparte, más abajo: puede coexistir con 'costo margen'
-                    # en la misma columna física (ej. "Costo Unitario" mapea a ambas).
-                    continue
-                if any(nombre in col_lower for nombre in posibles_nombres):
-                    if campo_bd not in columnas_producto:
-                        columnas_producto[campo_bd] = col_name
-                        logger.debug(f"   Columna producto '{campo_bd}' encontrada: '{col_name}' (índice {col_idx})")
-                        break
-
-            if clave_costo_unitario not in columnas_producto and clave_costo_unitario in col_lower:
-                columnas_producto[clave_costo_unitario] = col_name
-                logger.debug(f"   Columna producto '{clave_costo_unitario}' encontrada: '{col_name}' (índice {col_idx})")
+            self._identificar_columna_producto_individual(
+                col_idx, col_name, col_lower, clave_costo_unitario, columnas_producto
+            )
 
         return columnas_producto
+
+    def _identificar_columna_producto_individual(
+        self,
+        col_idx: int,
+        col_name: str,
+        col_lower: str,
+        clave_costo_unitario: str,
+        columnas_producto: Dict[str, str],
+    ) -> None:
+        """Resuelve a qué campo_bd corresponde UNA columna del Excel y, si aplica,
+        actualiza columnas_producto in-place (ver identificar_columnas_producto)."""
+        for campo_bd, posibles_nombres in self.utils.MAPEO_COLUMNAS_PRODUCTO.items():
+            if campo_bd == clave_costo_unitario:
+                # Se resuelve aparte, más abajo: puede coexistir con 'costo margen'
+                # en la misma columna física (ej. "Costo Unitario" mapea a ambas).
+                continue
+            if any(nombre in col_lower for nombre in posibles_nombres):
+                if campo_bd not in columnas_producto:
+                    columnas_producto[campo_bd] = col_name
+                    logger.debug(f"   Columna producto '{campo_bd}' encontrada: '{col_name}' (índice {col_idx})")
+                    break
+
+        if clave_costo_unitario not in columnas_producto and clave_costo_unitario in col_lower:
+            columnas_producto[clave_costo_unitario] = col_name
+            logger.debug(f"   Columna producto '{clave_costo_unitario}' encontrada: '{col_name}' (índice {col_idx})")
 
     def _buscar_bodega_por_codigo(
         self, col_idx: int, codigos_columnas: Dict[int, str]
