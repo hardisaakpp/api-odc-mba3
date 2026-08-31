@@ -75,6 +75,21 @@ async def _handle_cargar_respuesta_proveedor(pedido_id: str, file: UploadFile, u
         status_code = 200
         if resultado["status"] == "validation_error":
             status_code = 400
+        elif resultado["status"] == "success":
+            try:
+                from src.utils.notification_manager import notification_manager, NotificationType
+                _num = await asyncio.to_thread(_db_numero_pedido_para_notificacion, pedido_id)
+                _username = user.get("username") or user.get("sub") or "unknown"
+                await notification_manager.notify_by_actor(
+                    actor_permission=_PERM_MABEL_VIEW,
+                    actor_username=_username,
+                    title="Respuesta de proveedor cargada",
+                    message=f"El pedido {_num} tiene una nueva respuesta de MABEL TRADING cargada por Excel, pendiente de revisión.",
+                    notification_type=NotificationType.INFO,
+                    metadata={"pedido_id": pedido_id, "numero_pedido": _num, "accion": "respuesta_proveedor_cargada"},
+                )
+            except Exception as notif_err:
+                logger.warning(f"⚠️ Error al enviar notificación en tiempo real: {notif_err}")
         return JSONResponse(status_code=status_code, content=resultado)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -123,6 +138,21 @@ async def _handle_enviar_respuesta_proveedor(
         status_code = 200
         if resultado["status"] == "validation_error":
             status_code = 400
+        elif resultado["status"] == "success" and respuesta.estado == "confirmado":
+            try:
+                from src.utils.notification_manager import notification_manager, NotificationType
+                _num = await asyncio.to_thread(_db_numero_pedido_para_notificacion, pedido_id)
+                _username = user.get("username") or user.get("sub") or "unknown"
+                await notification_manager.notify_by_actor(
+                    actor_permission=_PERM_MABEL_VIEW,
+                    actor_username=_username,
+                    title="MABEL TRADING confirmó su respuesta",
+                    message=f"El pedido {_num} fue confirmado por MABEL TRADING (formulario web) y está listo para redistribución.",
+                    notification_type=NotificationType.SUCCESS,
+                    metadata={"pedido_id": pedido_id, "numero_pedido": _num, "accion": "respuesta_proveedor_confirmada_web"},
+                )
+            except Exception as notif_err:
+                logger.warning(f"⚠️ Error al enviar notificación en tiempo real: {notif_err}")
         return JSONResponse(status_code=status_code, content=resultado)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))

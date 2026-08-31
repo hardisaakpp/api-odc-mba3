@@ -28,6 +28,7 @@ from src.database.pedido_estados import (
     ESTADO_PEDIDO_CONFIRMADO,
     ESTADO_CONFIRMADO_ENVIADO,
     ESTADO_ERROR_ENVIO_SAP_REINTENTO,
+    ESTADOS_REDISTRIBUCION_YA_CONFIRMADA,
 )
 from src.database.repositories.distribucion_confirmada_repository import DistribucionConfirmadaRepository
 from src.database.repositories.pedido_repository import PedidoRepository
@@ -45,7 +46,7 @@ from ._helpers import obtener_pedido_o_404, obtener_respuestas_proveedor
 from ._converters import convertir_ajustes_a_redistribucion
 from ._resumen import calcular_resumen_confirmacion
 from ._sap_processing import procesar_pedido_sap_con_homologacion_sync
-from ._notifications import notificar_odc_enviada_a_sap
+from ._notifications import notificar_odc_enviada_a_sap, notificar_error_envio_odc_sap
 from src.services.celery_availability import celery_worker_available as _celery_workers_available
 
 logger = logging.getLogger(__name__)
@@ -67,48 +68,71 @@ def _paso1_confirmar_redistribucion(
     user_id: str,
     audit,
 ):
-    """PASO 1/3: Confirma redistribución y ejecuta homologación SAP."""
+    """PASO 1/3: Confirma redistribución y ejecuta homologación SAP.
+
+    Si el pedido ya está en un estado que solo se alcanza tras una confirmación
+    de redistribución previa (ver ESTADOS_REDISTRIBUCION_YA_CONFIRMADA), es un
+    reintento de "Proceso completo SAP" tras un fallo en PASO 2/3: no vuelve a
+    crear/confirmar una redistribución (RedistribucionValidator._validar_estado_pedido
+    la rechazaría, ya que ese estado no está en ESTADOS_PUEDE_CONFIRMAR_REDISTRIBUCION)
+    -- reutiliza la versión ya confirmada y continúa igual con la homologación SAP.
+    """
     try:
-        productos_redistribucion = convertir_ajustes_a_redistribucion(
-            ajustes_detalle,
-            pedido_data,
-            repo_pedido.tienda_repo,
+        estado_id_actual = pedido_data.get("cabecera", {}).get("estado_id")
+        version_ya_confirmada = repo_dist.get_version_actual(pedido_id)
+        redistribucion_ya_confirmada = (
+            estado_id_actual in ESTADOS_REDISTRIBUCION_YA_CONFIRMADA and version_ya_confirmada > 0
         )
-        respuestas_proveedor = obtener_respuestas_proveedor(repo_pedido, pedido_id)
-        validator = RedistribucionValidator()
-        es_valido, errores = validator.validar_redistribucion(
-            pedido_data, productos_redistribucion, respuestas_proveedor
-        )
-        if not es_valido:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail={
-                    "error": "validation_error",
-                    "message": "La redistribución no cumple con las reglas de negocio",
-                    "errores": errores
-                }
-            )
-        resultado_crear = repo_dist.crear_redistribucion(
-            pedido_id=pedido_id,
-            productos_redistribucion=productos_redistribucion,
-            usuario=user_id,
-            audit_context=audit
-        )
-        repo_dist.confirmar_redistribucion(
-            pedido_id=pedido_id,
-            version=resultado_crear["version"],
-            usuario=user_id,
-            audit_context=audit
-        )
-        repo_pedido.update_estado(pedido_id, ESTADO_PEDIDO_CONFIRMADO, audit_context=audit)
         resumen = calcular_resumen_confirmacion(ajustes_detalle)
-        total_productos = resumen.total_productos
-        resultado_redistribucion = {
-            "version_confirmada": resultado_crear["version"],
-            "productos_redistribuidos": total_productos,
-            "estado_pedido": "CONFIRMADO REDISTRIBUCION"
-        }
-        logger.info(f"✅ PASO 1/3 completado: Redistribución confirmada (versión {resultado_crear['version']})")
+        if redistribucion_ya_confirmada:
+            resultado_redistribucion = {
+                "version_confirmada": version_ya_confirmada,
+                "productos_redistribuidos": resumen.total_productos,
+                "estado_pedido": "CONFIRMADO REDISTRIBUCION"
+            }
+            logger.info(
+                f"↩️ PASO 1/3 omitido (reintento): redistribución ya confirmada "
+                f"(versión {version_ya_confirmada}), continuando desde PASO 2"
+            )
+        else:
+            productos_redistribucion = convertir_ajustes_a_redistribucion(
+                ajustes_detalle,
+                pedido_data,
+                repo_pedido.tienda_repo,
+            )
+            respuestas_proveedor = obtener_respuestas_proveedor(repo_pedido, pedido_id)
+            validator = RedistribucionValidator()
+            es_valido, errores = validator.validar_redistribucion(
+                pedido_data, productos_redistribucion, respuestas_proveedor
+            )
+            if not es_valido:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail={
+                        "error": "validation_error",
+                        "message": "La redistribución no cumple con las reglas de negocio",
+                        "errores": errores
+                    }
+                )
+            resultado_crear = repo_dist.crear_redistribucion(
+                pedido_id=pedido_id,
+                productos_redistribucion=productos_redistribucion,
+                usuario=user_id,
+                audit_context=audit
+            )
+            repo_dist.confirmar_redistribucion(
+                pedido_id=pedido_id,
+                version=resultado_crear["version"],
+                usuario=user_id,
+                audit_context=audit
+            )
+            repo_pedido.update_estado(pedido_id, ESTADO_PEDIDO_CONFIRMADO, audit_context=audit)
+            resultado_redistribucion = {
+                "version_confirmada": resultado_crear["version"],
+                "productos_redistribuidos": resumen.total_productos,
+                "estado_pedido": "CONFIRMADO REDISTRIBUCION"
+            }
+            logger.info(f"✅ PASO 1/3 completado: Redistribución confirmada (versión {resultado_crear['version']})")
         try:
             resultado_sap = procesar_pedido_sap_con_homologacion_sync(
                 pedido_id=pedido_id,
@@ -481,12 +505,16 @@ def _respuesta_exito_sap(
     logger.debug(f"✅ Estado actualizado para pedido {pedido_id}: estado_id={ESTADO_CONFIRMADO_ENVIADO} (Confirmado y enviado)")
     _notificar_exito_sap(pedido_id, numero_pedido, user_id, resultado_redistribucion, resumen, envios, primera)
 
+    from src.database.services.oc_sap_service import OCSAPService
+    hay_error_st = any(OCSAPService._detectar_error_en_st(e) for e in envios)
+
     return {
         "_notify_sap": True,
         "_notify_data": {
             "pedido_id": pedido_id,
             "numero_pedido": numero_pedido,
             "doc_num": primera["doc_num_po"] and str(primera["doc_num_po"]) or None,
+            "st_error": hay_error_st,
         },
         "response": ProcesoCompletoSAPResponse(
             status="success",
@@ -573,12 +601,20 @@ def _respuesta_fallo_sap(
     # job pendiente antes de considerar un reenvío, ver _resolver_job_encolado_previo).
     _actualizar_estado_reintento(repo_pedido, pedido_id, audit)
 
+    _mensaje = _mensaje_fallo_sap(envios, primera, fallidas_reales, encoladas, error_resumen)
+
     return {
         "_notify_sap": False,
         "_notify_data": {},
+        "_notify_error": {
+            "pedido_id": pedido_id,
+            "numero_pedido": numero_pedido,
+            "mensaje": _mensaje,
+            "es_error_real": bool(fallidas_reales),
+        },
         "response": ProcesoCompletoSAPResponse(
             status="partial",
-            message=_mensaje_fallo_sap(envios, primera, fallidas_reales, encoladas, error_resumen),
+            message=_mensaje,
             pedido_id=pedido_id,
             numero_pedido=numero_pedido,
             redistribucion=resultado_redistribucion,
@@ -626,12 +662,19 @@ def _paso3_enviar_odc_sap(
     except Exception as e:
         logger.error(f"❌ Error en PASO 3 (Enviar a SAP): {e}", exc_info=True)
         _actualizar_estado_reintento(repo_pedido, pedido_id, audit)
+        _mensaje = f"Redistribución y ODC generadas, pero falló el envío a SAP: {str(e)}"
         return {
             "_notify_sap": False,
             "_notify_data": {},
+            "_notify_error": {
+                "pedido_id": pedido_id,
+                "numero_pedido": numero_pedido,
+                "mensaje": _mensaje,
+                "es_error_real": True,
+            },
             "response": ProcesoCompletoSAPResponse(
                 status="partial",
-                message=f"Redistribución y ODC generadas, pero falló el envío a SAP: {str(e)}",
+                message=_mensaje,
                 pedido_id=pedido_id,
                 numero_pedido=numero_pedido,
                 redistribucion=resultado_redistribucion,
@@ -790,10 +833,18 @@ async def _handle_proceso_completo_sap(request, numero_pedido: str, request_body
             try:
                 nd = resultado["_notify_data"]
                 await notificar_odc_enviada_a_sap(
-                    nd["pedido_id"], nd["numero_pedido"], nd.get("doc_num")
+                    nd["pedido_id"], nd["numero_pedido"], nd.get("doc_num"), nd.get("st_error", False)
                 )
             except Exception as notif_err:
                 logger.warning(f"⚠️ Error al enviar notificación SSE de ODC enviada a SAP: {notif_err}")
+        elif resultado.get("_notify_error"):
+            try:
+                ne = resultado["_notify_error"]
+                await notificar_error_envio_odc_sap(
+                    ne["pedido_id"], ne["numero_pedido"], ne["mensaje"], ne.get("es_error_real", True)
+                )
+            except Exception as notif_err:
+                logger.warning(f"⚠️ Error al enviar notificación SSE de error de envío ODC a SAP: {notif_err}")
 
         return resultado["response"]
 
@@ -844,10 +895,18 @@ async def _handle_proceso_sap_sync_fallback(request, numero_pedido: str, request
         try:
             nd = resultado["_notify_data"]
             await notificar_odc_enviada_a_sap(
-                nd["pedido_id"], nd["numero_pedido"], nd.get("doc_num")
+                nd["pedido_id"], nd["numero_pedido"], nd.get("doc_num"), nd.get("st_error", False)
             )
         except Exception as notif_err:
             logger.warning(f"⚠️ Error al enviar notificación SSE de ODC enviada a SAP: {notif_err}")
+    elif resultado.get("_notify_error"):
+        try:
+            ne = resultado["_notify_error"]
+            await notificar_error_envio_odc_sap(
+                ne["pedido_id"], ne["numero_pedido"], ne["mensaje"], ne.get("es_error_real", True)
+            )
+        except Exception as notif_err:
+            logger.warning(f"⚠️ Error al enviar notificación SSE de error de envío ODC a SAP: {notif_err}")
     out = _serializar_response(resultado["response"])
     out["fallback"] = "sync"
     out["process_id"] = None

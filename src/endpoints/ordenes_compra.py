@@ -1197,15 +1197,51 @@ async def _get_orden_compra_pdf_handler(request, oc_id):
         )
 
 
+async def _notificar_reintento_st(user, username, body):
+    """Notificación SSE best-effort tras un reintento manual de ST: una sola notificación
+    que menciona también el desbloqueo del pedido (cambio de estado) si el reintento lo
+    logró resolver (ver StockTransferService._reevaluar_cierre_pedido_tras_reintento)."""
+    try:
+        from src.utils.notification_manager import notification_manager, NotificationType
+        permisos_usuario = (user or {}).get("permissions", []) or []
+        actor_permission = _PERM_ODCSAP if _PERM_ODCSAP in permisos_usuario else _PERM_MABEL
+        numero_pedido = body.get("pedido_numero") or body.get("oc_id")
+        tiendas_count = body.get("tiendas_count", 0)
+        cierre = body.get("cierre_pedido") or {}
+        base = f"Se reintentaron las Solicitudes de Transferencia pendientes del pedido {numero_pedido} ({tiendas_count} tienda(s))."
+        if cierre.get("estado_nuevo"):
+            mensaje = f"{base} El pedido pasó a {cierre['estado_nuevo']}."
+        else:
+            mensaje = base
+        await notification_manager.notify_by_actor(
+            actor_permission=actor_permission,
+            actor_username=username,
+            title="Solicitudes de Transferencia reintentadas",
+            message=mensaje,
+            notification_type=NotificationType.SUCCESS if body.get("status") == "success" else NotificationType.WARNING,
+            metadata={
+                "oc_id": body.get("oc_id"),
+                "pedido_id": body.get("pedido_id"),
+                "numero_pedido": body.get("pedido_numero"),
+                "accion": "reintento_st",
+            },
+        )
+    except Exception as notif_err:
+        logger.warning(f"⚠️ Error al enviar notificación en tiempo real de reintento ST: {notif_err}")
+
+
 async def _reintentar_st_handler(request, oc_id, user):
     source = get_source_from_headers(request)
     username = user.get("username", "unknown") if user else "unknown"
 
     try:
         out = await asyncio.to_thread(_retry_st_only, oc_id, username)
+        body = out.get("body", {}) or {}
+        if body.get("status") in ("success", "partial"):
+            await _notificar_reintento_st(user, username, body)
         return JSONResponse(
             status_code=int(out.get("status_code", 200)),
-            content=out.get("body", {}),
+            content=body,
             headers={"X-Source": source, "X-Endpoint": "POST-ORDEN-COMPRA-REINTENTAR-ST"},
         )
     except Exception as e:

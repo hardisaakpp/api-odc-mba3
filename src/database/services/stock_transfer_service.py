@@ -2050,6 +2050,7 @@ class StockTransferService:
                 self._notificar_st_creadas_en_reintento(oc_id, oc_cabecera, resumen_completo, pedido_numero, origen)
             self._corregir_snapshot_proceso_original(oc_id, resumen_completo, origen)
 
+        cierre_pedido = None
         if resultado_st.get("tiendas_en_cola"):
             status = "en_cola"
             message = (
@@ -2060,7 +2061,7 @@ class StockTransferService:
         else:
             status = "success" if resultado_st.get("success") else "partial"
             message = "Reintento ST ejecutado."
-            self._reevaluar_cierre_pedido_tras_reintento(pedido_id, oc_id)
+            cierre_pedido = self._reevaluar_cierre_pedido_tras_reintento(pedido_id, oc_id)
 
         return {
             "status": status,
@@ -2070,6 +2071,9 @@ class StockTransferService:
             "tiendas_objetivo": tiendas_objetivo,
             "tiendas_count": len(tiendas_objetivo),
             "resultado_st": resultado_st,
+            "pedido_id": str(pedido_id),
+            "pedido_numero": pedido_numero,
+            "cierre_pedido": cierre_pedido,
         }
 
     @staticmethod
@@ -2110,7 +2114,7 @@ class StockTransferService:
             )
 
     @staticmethod
-    def _reevaluar_cierre_pedido_tras_reintento(pedido_id: str, oc_id: str) -> None:
+    def _reevaluar_cierre_pedido_tras_reintento(pedido_id: str, oc_id: str) -> Optional[Dict[str, Any]]:
         """
         Tras un reintento de ST (manual o automático), vuelve a evaluar si el pedido ya
         puede cerrarse (ver PedidoCierreService.cerrar_pedido_si_corresponde).
@@ -2127,6 +2131,11 @@ class StockTransferService:
 
         No crítico: si falla, solo se registra el warning -- no debe romper la
         respuesta del reintento de ST, que ya reporta su propio resultado.
+
+        Returns:
+            El dict de cerrar_pedido_si_corresponde (con 'estado_anterior'/'estado_nuevo'),
+            o None si no se pudo evaluar. Lo usa reintentar_pendientes para incluir el
+            cambio de estado del pedido en la notificación SSE del reintento.
         """
         from .pedido_cierre_service import PedidoCierreService
 
@@ -2154,8 +2163,10 @@ class StockTransferService:
                         f"📋 Pedido {pedido_id} reevaluado tras reintento ST de OC {oc_id[:8]}...: "
                         f"{resultado_cierre.get('estado_anterior')} → {resultado_cierre.get('estado_nuevo')}"
                     )
+                return resultado_cierre
         except Exception as e:
             logger.warning(
                 f"⚠️ No se pudo reevaluar cierre del pedido {pedido_id} tras reintento "
                 f"ST de OC {oc_id}: {e}"
             )
+            return None
