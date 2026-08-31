@@ -98,6 +98,19 @@ ESTADOS_PUEDE_CONFIRMAR_REDISTRIBUCION = frozenset({
     ESTADO_LISTO_PARA_REDISTRIBUCION,  # 25
 })
 
+# "Proceso completo SAP" (endpoints_proceso.py): estados que indican que la
+# redistribución YA fue confirmada en un intento anterior (PASO 1 ya corrió con
+# éxito). El pedido solo llega a alguno de estos dos estados si un paso POSTERIOR
+# (generar ODC o enviar a SAP) falló y quedó pendiente de reintento -- un reintento
+# de "Proceso completo SAP" debe continuar desde ahí, no repetir PASO 1: ninguno de
+# estos dos estados está en ESTADOS_PUEDE_CONFIRMAR_REDISTRIBUCION, así que
+# RedistribucionValidator._validar_estado_pedido lo rechazaría con "La
+# redistribución no cumple con las reglas de negocio".
+ESTADOS_REDISTRIBUCION_YA_CONFIRMADA = frozenset({
+    ESTADO_PEDIDO_CONFIRMADO,  # 10 - PASO 1 recién confirmado, falló PASO 2 (generar ODC)
+    ESTADO_ERROR_ENVIO_SAP_REINTENTO,  # 21 - PASO 1 y 2 ok, falló PASO 3 (envío a SAP)
+})
+
 # Desde Confirmado Enviado (12) en adelante no se permite ni Descartar ni Cancelar Pedido (DELETE rechazado).
 
 # --- Conjuntos útiles para validaciones --------------------------------------
