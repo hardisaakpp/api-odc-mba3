@@ -935,8 +935,11 @@ def register_sap_endpoints(app: FastAPI):
 
         **Estados de ODC:**
         - `PENDIENTE`: Creada pero no enviada a SAP (estado inicial)
+        - `ENVIANDO`: Envío a SAP en curso ahora mismo (se fija aquí antes de la
+          prevalidación/envío; el caller nunca lo pasa como parámetro)
         - `ENVIADA`: Enviada exitosamente a SAP (se actualiza aquí)
         - `ERROR`: Error al enviar a SAP (se actualiza aquí)
+        - `ENCOLADA`: SAP saturado, HTTP 202 con job pendiente de resolver
 
         **Configuración requerida:**
         - Variables de entorno en `.env`:
