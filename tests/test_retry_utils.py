@@ -21,6 +21,12 @@ def test_mensaje_sugiere_reintento_transitorio_sap_saturado():
     ) is True
 
 
+def test_mensaje_sugiere_reintento_transitorio_lock_envio_en_curso():
+    assert mensaje_sugiere_reintento_transitorio(
+        "Ya hay un envío a SAP en curso para esta ODC. Espera a que termine antes de reintentar."
+    ) is True
+
+
 def test_mensaje_sugiere_reintento_transitorio_error_de_datos_es_false():
     assert mensaje_sugiere_reintento_transitorio("Artículo no habilitado para compra") is False
     assert mensaje_sugiere_reintento_transitorio("Proveedor congelado en SAP") is False

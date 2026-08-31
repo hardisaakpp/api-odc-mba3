@@ -201,6 +201,11 @@ def mensaje_sugiere_reintento_transitorio(mensaje: Optional[str]) -> bool:
         "presupuesto excedido rl",
         "código sap: -1116",
         "codigo sap: -1116",
+        # Colisión con el lock interno de envío (redis_lock_envio_odc, ver
+        # OCSAPService.enviar_oc_a_sap): otro envío de la misma ODC ya está en
+        # curso -- se resuelve solo en cuanto ese envío termine, no es un error
+        # real de SAP que deba escalar a técnicos.
+        "ya hay un envío a sap en curso",
     )
     return any(n in m for n in needles)
 
