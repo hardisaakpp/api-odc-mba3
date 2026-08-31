@@ -217,13 +217,47 @@ USE_BATCH_VALIDATION = os.getenv("USE_BATCH_VALIDATION", "false").lower() == "tr
 # automáticamente a OPENQUERY directo a HANA.
 
 # Reconciliación automática de Solicitudes de Transferencia (ITR) pendientes.
-# Automatiza el botón manual "Reintentar ST": una tarea Celery periódica reintenta
-# las transferencias que quedaron pendientes por una caída transitoria de SAP.
-# Si tras RECONCILIAR_ST_ESCALAMIENTO_HORAS sigue pendiente, notifica a técnicos por
-# correo y deja de reintentar automáticamente esa OC (el botón manual sigue disponible).
+# Automatiza el botón manual "Reintentar ST": una tarea Celery corre a
+# RECONCILIAR_ST_HORA:RECONCILIAR_ST_MINUTO (ventana de baja congestión en SAP), con
+# dos horarios distintos según el día:
+#   - Lunes a sábado: solo mira ODCs enviadas en los últimos RECONCILIAR_ST_VENTANA_DIAS
+#     días (no busca nada más viejo a propósito -- lo que no se resuelve solo ya
+#     escaló a técnicos, ver abajo).
+#   - Domingo: barrido más amplio, RECONCILIAR_ST_VENTANA_DIAS_DOMINGO días, para
+#     alcanzar cualquier OC que se le haya escapado a los barridos cortos de la
+#     semana.
+# El colchón de seguridad (ver abajo) corre en TODA corrida, no solo la del domingo.
+# Si una OC sigue pendiente en 2 corridas consecutivas (le da una noche de margen a
+# un problema transitorio antes de escalar), notifica a técnicos por correo y deja
+# de reintentar automáticamente esa OC (el botón manual sigue disponible). Diseño y
+# datos de producción que lo motivaron: conversación 2026-08-27/28, ver
+# docs/CELERY_QUICKSTART.md.
 ENABLE_RECONCILIACION_ST_AUTOMATICA = os.getenv("ENABLE_RECONCILIACION_ST_AUTOMATICA", "false").lower() == "true"
-RECONCILIAR_ST_INTERVALO_MINUTOS = int(os.getenv("RECONCILIAR_ST_INTERVALO_MINUTOS", "5"))
-RECONCILIAR_ST_ESCALAMIENTO_HORAS = float(os.getenv("RECONCILIAR_ST_ESCALAMIENTO_HORAS", "1"))
+RECONCILIAR_ST_HORA = int(os.getenv("RECONCILIAR_ST_HORA", "23"))  # Default: 11:00 PM
+RECONCILIAR_ST_MINUTO = int(os.getenv("RECONCILIAR_ST_MINUTO", "0"))
+RECONCILIAR_ST_VENTANA_DIAS = int(os.getenv("RECONCILIAR_ST_VENTANA_DIAS", "2"))
+RECONCILIAR_ST_VENTANA_DIAS_DOMINGO = int(os.getenv("RECONCILIAR_ST_VENTANA_DIAS_DOMINGO", "7"))
+
+# Margen mínimo de antigüedad (minutos) para que una tienda 'Encolada' (HTTP 202,
+# job de middleware en curso) o "faltante" (nunca intentada) se considere candidata
+# a la reconciliación automática. Evita que la corrida choque con un envío original
+# que todavía puede estar en curso para la misma OC (el envío original no toma
+# ningún lock). Calculado con margen sobre el techo real del middleware: 5
+# reintentos con backoff fijo [15,30,60,120,240]s (465s) + hasta 4 llamadas HTTP a
+# SAP por intento (timeout ~40s c/u) ⇒ máximo teórico ~11-19 min (ver
+# investigación 2026-08-28 sobre api-middleware-sap/JobRunner.cs). Solo aplica a la
+# reconciliación automática -- el botón manual "Reintentar ST" no tiene este
+# margen, es una acción explícita del usuario.
+RECONCILIAR_ST_MARGEN_ANTIGUEDAD_MINUTOS = int(os.getenv("RECONCILIAR_ST_MARGEN_ANTIGUEDAD_MINUTOS", "30"))
+
+# Colchón de seguridad: si al iniciar CUALQUIER corrida (diaria o semanal) la última
+# corrida exitosa registrada es más vieja que este margen, se asume que algo
+# interrumpió la reconciliación (Celery Beat caído, excepción no manejada) y se
+# avisa por correo. Se revisa dentro de la tarea misma en cada corrida
+# (_verificar_salud_diaria), no en una tarea aparte cada hora -- el problema que
+# vigila no es urgente, y corriendo todos los días la latencia de detección queda
+# acotada de todas formas (~24-48h en vez de hasta una semana).
+RECONCILIAR_ST_MARGEN_COLCHON_HORAS = int(os.getenv("RECONCILIAR_ST_MARGEN_COLCHON_HORAS", "48"))
 
 # Reconciliación automática de ODC ENCOLADAS (HTTP 202 del middleware al crear la
 # Purchase Order, SAP saturado). Mismo patrón que la reconciliación de ST arriba,
@@ -232,6 +266,15 @@ RECONCILIAR_ST_ESCALAMIENTO_HORAS = float(os.getenv("RECONCILIAR_ST_ESCALAMIENTO
 # a SAP, no una función opcional (evita el duplicado que motivó esto, ver incidente
 # ODC 24711/24712 e IntegracionSAPModal.vue).
 RECONCILIAR_OC_INTERVALO_MINUTOS = int(os.getenv("RECONCILIAR_OC_INTERVALO_MINUTOS", "5"))
+
+# Heartbeat de disponibilidad de workers Celery (ver src/services/celery_availability.py).
+# Reemplaza el chequeo anterior por inspect().ping() (broadcast al canal de control de
+# Celery), que resultó flaky en producción: un worker sano podía dar falso negativo por
+# contención de hilos, tirando cargas de plantilla/proceso SAP al fallback síncrono sin
+# necesidad (incidente 2026-08-27). Una tarea Celery Beat escribe esta clave cada
+# CELERY_HEARTBEAT_INTERVALO_SEGUNDOS; el chequeo es un GET simple a Redis, sin ping.
+CELERY_HEARTBEAT_INTERVALO_SEGUNDOS = int(os.getenv("CELERY_HEARTBEAT_INTERVALO_SEGUNDOS", "15"))
+CELERY_HEARTBEAT_TTL_SEGUNDOS = int(os.getenv("CELERY_HEARTBEAT_TTL_SEGUNDOS", "45"))
 
 # URL base (sin /Login). Prioridad: SAP_SL_BASE_URL > SAP_SERVICE_LAYER_URL
 _sl_url = os.getenv("SAP_SL_BASE_URL") or os.getenv("SAP_SERVICE_LAYER_URL", "http://localhost:50001/b1s/v1")

@@ -12,6 +12,10 @@ from unittest.mock import MagicMock, patch
 from src.database.services.mba_pedido_exporter import MBAExportConfig, MBAPedidoExporter
 
 
+PEDIDO_DETALLE_ID = "detalle-1"
+TIENDA_ID = "tienda-1"
+
+
 def _pedido(numero_pedido: str = "PED-123", cantidad: float = 1) -> dict:
     return {
         "cabecera": {
@@ -22,9 +26,10 @@ def _pedido(numero_pedido: str = "PED-123", cantidad: float = 1) -> dict:
         },
         "detalles": [
             {
+                "pedido_detalle_id": PEDIDO_DETALLE_ID,
                 "codigo_interno": "COD-1",
                 "costo_doc_sin_iva": 10.0,
-                "tiendas": [{"codigo": "TRL-001", "cantidad": cantidad}],
+                "tiendas": [{"tienda_id": TIENDA_ID, "codigo": "TRL-001", "cantidad": cantidad}],
             }
         ],
     }
@@ -40,12 +45,23 @@ def _mocks(mock_repo_class, mock_oc_class, numero_pedido="PED-123", doc_num="152
     mock_oc_class.return_value.get_doc_num_by_pedido_id.return_value = doc_num
 
 
+def _mock_distribucion(mock_dist_class, cantidad: float = 1):
+    """Mockea DistribucionConfirmadaRepository devolviendo la misma cantidad que
+    la fixture ya tenía en tienda["cantidad"], para no cambiar la intención de
+    estos tests (verifican Pedido Manual/DocNum, no cantidad)."""
+    mock_dist_class.return_value.get_cantidades_asignadas_por_pedido.return_value = {
+        PEDIDO_DETALLE_ID: {TIENDA_ID: cantidad}
+    }
+
+
 def test_pedido_manual_usa_numero_pedido_y_orden_compra_cliente_usa_doc_num():
     with patch("src.database.services.mba_pedido_exporter.get_db_connection_context") as mock_ctx, \
          patch("src.database.services.mba_pedido_exporter.PedidoRepository") as mock_repo_class, \
-         patch("src.database.services.mba_pedido_exporter.OrdenCompraRepository") as mock_oc_class:
+         patch("src.database.services.mba_pedido_exporter.OrdenCompraRepository") as mock_oc_class, \
+         patch("src.database.services.mba_pedido_exporter.DistribucionConfirmadaRepository") as mock_dist_class:
         mock_ctx.return_value.__enter__.return_value = MagicMock()
         _mocks(mock_repo_class, mock_oc_class, numero_pedido="PED-123", doc_num="1524")
+        _mock_distribucion(mock_dist_class)
 
         exporter = MBAPedidoExporter()
         resultado = exporter.exportar_pedido_formato_mba(
@@ -62,9 +78,11 @@ def test_pedido_manual_usa_numero_pedido_y_orden_compra_cliente_usa_doc_num():
 def test_orden_compra_cliente_vacia_si_no_hay_doc_num():
     with patch("src.database.services.mba_pedido_exporter.get_db_connection_context") as mock_ctx, \
          patch("src.database.services.mba_pedido_exporter.PedidoRepository") as mock_repo_class, \
-         patch("src.database.services.mba_pedido_exporter.OrdenCompraRepository") as mock_oc_class:
+         patch("src.database.services.mba_pedido_exporter.OrdenCompraRepository") as mock_oc_class, \
+         patch("src.database.services.mba_pedido_exporter.DistribucionConfirmadaRepository") as mock_dist_class:
         mock_ctx.return_value.__enter__.return_value = MagicMock()
         _mocks(mock_repo_class, mock_oc_class, doc_num=None)
+        _mock_distribucion(mock_dist_class)
 
         exporter = MBAPedidoExporter()
         resultado = exporter.exportar_pedido_formato_mba(
@@ -81,9 +99,11 @@ def test_orden_compra_cliente_vacia_si_no_hay_doc_num():
 def test_pedido_manual_y_doc_num_tambien_en_modo_consolidado():
     with patch("src.database.services.mba_pedido_exporter.get_db_connection_context") as mock_ctx, \
          patch("src.database.services.mba_pedido_exporter.PedidoRepository") as mock_repo_class, \
-         patch("src.database.services.mba_pedido_exporter.OrdenCompraRepository") as mock_oc_class:
+         patch("src.database.services.mba_pedido_exporter.OrdenCompraRepository") as mock_oc_class, \
+         patch("src.database.services.mba_pedido_exporter.DistribucionConfirmadaRepository") as mock_dist_class:
         mock_ctx.return_value.__enter__.return_value = MagicMock()
         _mocks(mock_repo_class, mock_oc_class, numero_pedido="PED-999", doc_num="7788")
+        _mock_distribucion(mock_dist_class)
 
         exporter = MBAPedidoExporter()
         resultado = exporter.exportar_pedido_formato_mba_consolidado(
@@ -101,9 +121,11 @@ def test_orden_compra_cliente_ya_no_usa_numero_pedido():
     """Verifica explícitamente que col. 12 dejó de usar numero_pedido (comportamiento previo)."""
     with patch("src.database.services.mba_pedido_exporter.get_db_connection_context") as mock_ctx, \
          patch("src.database.services.mba_pedido_exporter.PedidoRepository") as mock_repo_class, \
-         patch("src.database.services.mba_pedido_exporter.OrdenCompraRepository") as mock_oc_class:
+         patch("src.database.services.mba_pedido_exporter.OrdenCompraRepository") as mock_oc_class, \
+         patch("src.database.services.mba_pedido_exporter.DistribucionConfirmadaRepository") as mock_dist_class:
         mock_ctx.return_value.__enter__.return_value = MagicMock()
         _mocks(mock_repo_class, mock_oc_class, numero_pedido="PED-777", doc_num="4242")
+        _mock_distribucion(mock_dist_class)
 
         exporter = MBAPedidoExporter()
         resultado = exporter.exportar_pedido_formato_mba(

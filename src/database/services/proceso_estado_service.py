@@ -88,6 +88,10 @@ class ProcesoEstadoService:
             return f"proceso:sap:{process_id}"
         return f"proceso:cruce:{process_id}"
 
+    @staticmethod
+    def _key_alias_oc(oc_id: str) -> str:
+        return f"proceso:sap:by-oc:{oc_id}"
+
     def crear_proceso(self, user_id: Optional[str] = None) -> str:
         """
         Crea un nuevo proceso y devuelve su ID.
@@ -392,6 +396,99 @@ class ProcesoEstadoService:
             logger.error(f"❌ Error obteniendo último completado: {e}")
             return None
     
+    def crear_alias_oc(self, process_id: str, oc_id: str) -> None:
+        """
+        Registra oc_id -> process_id para que una reconciliación posterior (botón
+        manual "Reintentar ST" o el job Celery Beat) pueda encontrar y corregir el
+        snapshot ya congelado del proceso SAP que generó/envió esa ODC, aunque el
+        usuario ya haya cerrado el modal/la pestaña original.
+
+        Best-effort: si falla, solo loggea -- no debe romper el envío de la ODC.
+        Idempotente (mismo TTL que el proceso; no tiene sentido después de que
+        el proceso expira).
+        """
+        try:
+            self.redis_client.setex(self._key_alias_oc(oc_id), self.TTL_HORAS * 3600, process_id)
+        except Exception as e:
+            logger.warning(f"⚠️ No se pudo registrar alias oc_id→process_id ({oc_id}→{process_id}): {e}")
+
+    def obtener_process_id_por_oc(self, oc_id: str) -> Optional[str]:
+        """Resuelve, vía el alias de crear_alias_oc, el process_id (si sigue vivo)
+        que generó/envió una ODC. None si nunca se registró o ya expiró."""
+        try:
+            return cast(Optional[str], self.redis_client.get(self._key_alias_oc(oc_id)))
+        except Exception as e:
+            logger.warning(f"⚠️ No se pudo resolver process_id para oc_id {oc_id}: {e}")
+            return None
+
+    def actualizar_resultado_final(
+        self,
+        process_id: str,
+        oc_id: str,
+        solicitudes_transferencia: Dict[str, Any],
+        origen: str,
+    ) -> bool:
+        """
+        Corrige, dentro de un proceso SAP ya 'completed', el bloque
+        solicitudes_transferencia de UNA ODC (identificada por oc_id) -- sin
+        reabrir el proceso ni tocar 'status'/'progress'. Pensado para que una
+        reconciliación posterior (botón manual "Reintentar ST" o la
+        reconciliación automática de Celery Beat) corrija lo que el usuario ve
+        del proceso original, sin depender de que alguien reabra el modal a
+        mano.
+
+        No-opea (retorna False) si el proceso expiró/no existe, si todavía no
+        está 'completed' (el propio proceso original lo va a cerrar solo), o si
+        oc_id no aparece en el resultado guardado (formato inesperado).
+
+        Args:
+            process_id: proceso SAP original (resuelto vía obtener_process_id_por_oc).
+            oc_id: UUID de la orden de compra cuyo bloque ST se corrige.
+            solicitudes_transferencia: el dict YA corregido (mismo shape que
+                arma StockTransferService: total_tiendas, transferencias_creadas,
+                transferencias_errores, resultados, itrs_por_tienda, ...).
+            origen: para logging ("reintentar_st_manual" | "reconciliacion_celery").
+
+        Returns:
+            True si se aplicó el parche, False si no había nada que corregir.
+        """
+        estado = self._obtener_estado(process_id)
+        if not estado or estado.get("status") != "completed":
+            return False
+
+        resultado = estado.get("resultado")
+        if not isinstance(resultado, dict):
+            return False
+
+        aplicado = False
+        envios = resultado.get("envios_sap")
+        if isinstance(envios, list):
+            for envio in envios:
+                if isinstance(envio, dict) and envio.get("oc_id") == oc_id:
+                    envio["solicitudes_transferencia"] = solicitudes_transferencia
+                    aplicado = True
+
+        envio_principal = resultado.get("envio_sap")
+        if isinstance(envio_principal, dict) and envio_principal.get("oc_id") == oc_id:
+            envio_principal["solicitudes_transferencia"] = solicitudes_transferencia
+            aplicado = True
+            # Campo de conveniencia a nivel de respuesta: refleja siempre la
+            # primera ODC (mismo criterio que arma la respuesta original).
+            resultado["solicitudes_transferencia"] = solicitudes_transferencia
+
+        if not aplicado:
+            return False
+
+        estado["resultado"] = resultado
+        estado["updated_at"] = ahora_naive().isoformat()
+        estado["version"] = estado.get("version", 0) + 1
+        self._guardar_estado(process_id, estado)
+        logger.info(
+            f"♻️ solicitudes_transferencia de oc_id={oc_id} corregidas en {process_id} "
+            f"(origen={origen})"
+        )
+        return True
+
     def _obtener_estado(self, process_id: str) -> Optional[Dict[str, Any]]:
         """
         Obtiene estado desde Redis.

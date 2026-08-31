@@ -9,8 +9,12 @@ mientras nadie lo hiciera, la ODC quedaba "colgada" sin que se supiera si sus
 Solicitudes de Transferencia llegaron a generarse (ver incidente ODC 24711/24712).
 
 Cada RECONCILIAR_OC_INTERVALO_MINUTOS, esta tarea llama a
-OCSAPService.enviar_oc_a_sap sobre cada ODC ENCOLADA: internamente, eso consulta
-primero GET /api/v1/jobs/{jobId} (mismo patrón que la reconciliación de ST, ver
+OCSAPService.enviar_oc_a_sap sobre cada ODC ENCOLADA -- sin lock propio: el lock
+distribuido que serializa envíos de una misma ODC (redis_lock_envio_odc, ver
+oc_sap_service.py) ya vive DENTRO de enviar_oc_a_sap, y protege por igual a
+cualquier llamador (esta tarea o un reintento manual desde la UI) contra 2 envíos
+concurrentes de la misma oc_id. Internamente, eso consulta primero GET
+/api/v1/jobs/{jobId} (mismo patrón que la reconciliación de ST, ver
 celery_reconciliar_transferencias.py) y:
 - Si el job ya COMPLETÓ: adopta el DocEntry/DocNum, crea sus ST, notifica y cierra
   el pedido si corresponde -- sin recrear el documento en SAP.
@@ -33,12 +37,10 @@ from celery import Task
 from src.celery_app import celery_app
 from src.database.connection import get_db_connection_context
 from src.database.repositories.orden_compra_repository import OrdenCompraRepository
-from src.database.services.oc_sap_service import OCSAPService, redis_lock_envio_odc
+from src.database.services.oc_sap_service import OCSAPService
 from src.database.services.retry_utils import mensaje_sugiere_reintento_transitorio
 
 logger = logging.getLogger(__name__)
-
-_LOCK_BLOCKING_TIMEOUT_SEGUNDOS = 3.0
 
 
 def _notificar_error_real_a_tecnicos(oc_id: str, oc_cabecera: Dict[str, Any], error: str) -> None:
@@ -55,34 +57,32 @@ def _notificar_error_real_a_tecnicos(oc_id: str, oc_cabecera: Dict[str, Any], er
 
 
 def _reconciliar_oc(oc_id: str) -> bool:
-    """Intenta resolver una ODC ENCOLADA. Devuelve True si se procesó (con
-    cualquier resultado), False si se omitió por tener un envío en curso."""
-    with redis_lock_envio_odc(oc_id, blocking_timeout=_LOCK_BLOCKING_TIMEOUT_SEGUNDOS) as adquirido:
-        if not adquirido:
-            logger.debug(f"⏭️ OC {oc_id[:8]}... con envío en curso; se omite este ciclo")
-            return False
+    """Intenta resolver una ODC ENCOLADA llamando a enviar_oc_a_sap. Devuelve
+    True si se procesó (con cualquier resultado, incluida una colisión
+    transitoria con otro envío en curso -- ver enviar_oc_a_sap/
+    redis_lock_envio_odc, cuyo lock interno ya protege esta llamada sin
+    necesidad de un lock propio aquí)."""
+    with get_db_connection_context() as conn:
+        oc_repo = OrdenCompraRepository(conn)
+        resultado = OCSAPService().enviar_oc_a_sap(oc_repo=oc_repo, oc_id=oc_id)
+        oc_cabecera = oc_repo.get_existing_cabecera(oc_id)
 
-        with get_db_connection_context() as conn:
-            oc_repo = OrdenCompraRepository(conn)
-            resultado = OCSAPService().enviar_oc_a_sap(oc_repo=oc_repo, oc_id=oc_id)
-            oc_cabecera = oc_repo.get_existing_cabecera(oc_id)
-
-        if resultado.get("queued"):
-            logger.info(f"⏳ OC {oc_id[:8]}... sigue encolada en SAP; se reintenta el próximo ciclo")
-        elif resultado.get("success"):
-            logger.info(f"✅ Reconciliación automática de ODC completada para {oc_id[:8]}...")
-        else:
-            error = resultado.get("error") or "error desconocido"
-            es_transitorio = mensaje_sugiere_reintento_transitorio(error)
-            nivel = logging.WARNING if es_transitorio else logging.ERROR
-            logger.log(
-                nivel,
-                f"❌ ODC {oc_id[:8]}... encolada resolvió en error real al reintentar: {error} "
-                "(requiere atención manual; sigue disponible el botón de reintento en la UI)"
-            )
-            if not es_transitorio:
-                _notificar_error_real_a_tecnicos(oc_id, oc_cabecera, error)
-        return True
+    if resultado.get("queued"):
+        logger.info(f"⏳ OC {oc_id[:8]}... sigue encolada en SAP; se reintenta el próximo ciclo")
+    elif resultado.get("success"):
+        logger.info(f"✅ Reconciliación automática de ODC completada para {oc_id[:8]}...")
+    else:
+        error = resultado.get("error") or "error desconocido"
+        es_transitorio = mensaje_sugiere_reintento_transitorio(error)
+        nivel = logging.WARNING if es_transitorio else logging.ERROR
+        logger.log(
+            nivel,
+            f"❌ ODC {oc_id[:8]}... encolada resolvió en error real al reintentar: {error} "
+            "(requiere atención manual; sigue disponible el botón de reintento en la UI)"
+        )
+        if not es_transitorio:
+            _notificar_error_real_a_tecnicos(oc_id, oc_cabecera, error)
+    return True
 
 
 @celery_app.task(

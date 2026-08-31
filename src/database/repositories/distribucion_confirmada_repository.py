@@ -53,6 +53,49 @@ class DistribucionConfirmadaRepository:
             logger.error(f"❌ Error al obtener versión actual: {e}", exc_info=True)
             return 0
 
+    def get_cantidades_asignadas_por_pedido(self, pedido_id: str) -> Dict[str, Dict[str, float]]:
+        """
+        Obtiene las cantidades asignadas (redistribución de MABEL TRADING) por
+        producto y tienda, para la versión MÁS ALTA de `distribucion_confirmada`
+        de este pedido -- fuente de verdad de "Cantidad Pedido" en el TXT MBA3
+        (mba_pedido_exporter.py), en vez del snapshot original de
+        `pedido_detalle_tienda.cantidad` (que nunca se actualiza tras una
+        redistribución).
+
+        Args:
+            pedido_id: UUID del pedido
+
+        Returns:
+            {pedido_detalle_id: {tienda_id: cantidad_asignada}}. Dict vacío si el
+            pedido no tiene ninguna distribución confirmada (no debería ocurrir
+            para un pedido exportable, ver pedido_sap_service.py, pero no crashea).
+        """
+        cursor = self.conn.cursor()
+        try:
+            version = self.get_version_actual(pedido_id)
+            if version == 0:
+                logger.warning(
+                    f"⚠️ Pedido {pedido_id} sin distribucion_confirmada al exportar TXT MBA3"
+                )
+                return {}
+
+            cursor.execute("""
+                SELECT pedido_detalle_id, tienda_id, cantidad_asignada
+                FROM distribucion_confirmada
+                WHERE pedido_id = ? AND version = ?
+            """, (pedido_id, version))
+
+            resultado: Dict[str, Dict[str, float]] = {}
+            for row in cursor.fetchall():
+                pedido_detalle_id = str(row[0])
+                tienda_id = str(row[1])
+                cantidad_asignada = float(row[2]) if row[2] is not None else 0.0
+                resultado.setdefault(pedido_detalle_id, {})[tienda_id] = cantidad_asignada
+            return resultado
+        except Exception as e:
+            logger.error(f"❌ Error al obtener cantidades asignadas por pedido: {e}", exc_info=True)
+            raise
+
     def _verificar_columna_es_bodega(self, cursor) -> bool:
         cursor.execute("""
             SELECT COUNT(*)

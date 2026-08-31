@@ -604,7 +604,10 @@ def _construir_respuesta(source, enviadas, errores, detalles, oc_ids_a_procesar,
     )
 
 
-def _ejecutar_integrar_sap(request, oc_id, referencia_despacho, user):
+def _ejecutar_integrar_sap(request, oc_id, referencia_despacho, user, notify_info=None):
+    """notify_info: dict mutable opcional donde se registra el resumen de envío (enviadas/
+    errores) para que el endpoint async dispare la notificación SSE tras el asyncio.to_thread
+    (esta función corre en un thread aparte y no puede awaitar notification_manager)."""
     source = get_source_from_headers(request)
     username = user.get('username', 'unknown') if user else 'unknown'
     logger.info(f"🚀 INTEGRAR-SAP iniciado (usuario: {username}, fuente: {source})")
@@ -683,6 +686,11 @@ def _ejecutar_integrar_sap(request, oc_id, referencia_despacho, user):
             usuario=username,
             fuente=source
         ), "No se pudo guardar log de finalización")
+
+        if notify_info is not None:
+            notify_info["total"] = len(oc_ids_a_procesar)
+            notify_info["enviadas"] = enviadas
+            notify_info["errores"] = errores
 
         return _construir_respuesta(source, enviadas, errores, detalles, oc_ids_a_procesar, referencias_usadas, oc_id, referencia_despacho)
 
@@ -944,7 +952,36 @@ def register_sap_endpoints(app: FastAPI):
         # _ejecutar_integrar_sap hace DB (pyodbc), HTTP a SAP Service Layer (requests)
         # y envío de email SMTP, todo síncrono/bloqueante -> se delega a un thread
         # aparte para no bloquear el event loop durante toda la operación.
-        return await asyncio.to_thread(_ejecutar_integrar_sap, request, oc_id, referencia_despacho, user)
+        notify_info = {}
+        resultado = await asyncio.to_thread(
+            _ejecutar_integrar_sap, request, oc_id, referencia_despacho, user, notify_info
+        )
+
+        if notify_info:
+            try:
+                from src.utils.notification_manager import notification_manager, NotificationType
+                _enviadas = notify_info["enviadas"]
+                _errores = notify_info["errores"]
+                _total = notify_info["total"]
+                if _errores:
+                    _titulo = "Reintento de ODC a SAP con errores"
+                    _mensaje = f"Se procesaron {_total} ODC a SAP: {_enviadas} enviada(s), {_errores} con error. Revisa el detalle."
+                    _tipo = NotificationType.WARNING
+                else:
+                    _titulo = "ODC reenviada(s) a SAP exitosamente"
+                    _mensaje = f"Se reenviaron {_enviadas} ODC a SAP exitosamente."
+                    _tipo = NotificationType.SUCCESS
+                await notification_manager.notify(
+                    target_permission="odcsap.view",
+                    title=_titulo,
+                    message=_mensaje,
+                    notification_type=_tipo,
+                    metadata={"accion": "integrar_sap", "enviadas": _enviadas, "errores": _errores, "total": _total},
+                )
+            except Exception as notif_err:
+                logger.warning(f"⚠️ Error al enviar notificación en tiempo real de integrar-sap: {notif_err}")
+
+        return resultado
 
     @app.get("/sap/test", tags=["Integración SAP"])
     async def test_sap_query(

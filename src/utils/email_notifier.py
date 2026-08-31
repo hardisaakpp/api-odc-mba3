@@ -28,6 +28,7 @@ _DEFAULT_NOMBRE_PRODUCTO = "Sin nombre"
 _PROBLEMA_ERROR_CONSULTAR = "Error al consultar"
 _PROBLEMA_NO_EXISTE = "No existe en SAP"
 _SECCION_INFO_PEDIDO = "Informaci&oacute;n del Pedido"
+_SECCION_ACCION_RECOMENDADA = "Acci&oacute;n Recomendada"
 _LABEL_NUMERO_PEDIDO = "N&uacute;mero de Pedido"
 _LABEL_PEDIDO_ID = "Pedido ID"
 _LABEL_NUEVO_ESTADO = "Nuevo Estado"
@@ -545,6 +546,94 @@ def _build_migracion_email(facturas_guardadas, facturas_actualizadas, total_deta
     return subject, body_html
 
 
+def _build_reconciliacion_st_caida_email(fecha_ejecucion):
+    """Construye (subject, body_html) para 'Reconciliación automática de ST caída' (TECNICOS)."""
+    from src.utils.email_template import build_email, warning_section, paragraph
+
+    body_html = build_email(
+        title="Reconciliaci&oacute;n Autom&aacute;tica de ST No Corri&oacute;",
+        subtitle="Se requiere atenci&oacute;n t&eacute;cnica",
+        sections=[
+            paragraph(
+                "La tarea diaria de reconciliaci&oacute;n autom&aacute;tica de Solicitudes de "
+                "Transferencia (ITR) pendientes no complet&oacute; exitosamente dentro del margen "
+                "esperado. Esto NO significa que SAP est&eacute; fallando -- eso se reporta aparte, "
+                "por cada orden de compra afectada. Significa que la tarea en s&iacute; (Celery Beat, "
+                "o el c&oacute;digo de la tarea) dej&oacute; de ejecutarse o de terminar."
+            ),
+            warning_section(
+                _SECCION_ACCION_RECOMENDADA,
+                '<p style="margin:0;color:#5d4037;font-size:14px;">Verificar que celery-beat y el '
+                'worker est&eacute;n corriendo, y revisar los logs de '
+                '<code>reconciliar_transferencias_pendientes</code> para m&aacute;s informaci&oacute;n. '
+                'El bot&oacute;n manual "Reintentar ST" sigue disponible mientras se investiga.</p>',
+            ),
+        ],
+        accent="red",
+        timestamp=fecha_ejecucion,
+    )
+    subject = "Reconciliacion Automatica de ST No Corrio - MBA3"
+    return subject, body_html
+
+
+def send_reconciliacion_st_caida_notification(fecha_ejecucion: Optional[datetime] = None) -> bool:
+    """
+    Envía notificación al USUARIO TÉCNICO cuando el colchón de seguridad detecta que
+    la reconciliación automática de ST (tarea diaria) no completó exitosamente dentro
+    del margen esperado (ver src/services/celery_availability.py).
+
+    DESTINATARIO: TECNICOS -- reutiliza el mismo correo/catálogo que
+    _CORREO_OC_ST_ERROR (ya tiene destinatarios reales configurados en BD) en vez de
+    dar de alta un tipo de correo nuevo que quedaría sin nadie vinculado hasta que
+    alguien lo configure manualmente.
+    """
+    if not ENABLE_EMAIL_NOTIFICATIONS:
+        logger.debug(_MSG_EMAIL_DESHABILITADO)
+        return False
+
+    if not fecha_ejecucion:
+        fecha_ejecucion = ahora_naive()
+
+    try:
+        recipients: list[str] = get_destinatarios_por_correo("TECNICOS", _CORREO_OC_ST_ERROR)
+        if not recipients:
+            logger.warning("⚠️ No hay destinatarios TÉCNICOS configurados para el colchón de reconciliación ST")
+            return False
+
+        from src.utils.email_template import create_email_message
+
+        subject, body_html = _build_reconciliacion_st_caida_email(fecha_ejecucion)
+
+        body_text = (
+            f"Reconciliacion Automatica de ST No Corrio\n"
+            f"{'=' * 45}\n\n"
+            f"La tarea diaria de reconciliacion automatica de Solicitudes de Transferencia "
+            f"pendientes no completo exitosamente dentro del margen esperado.\n\n"
+            f"Verificar que celery-beat y el worker esten corriendo, y revisar los logs de "
+            f"reconciliar_transferencias_pendientes.\n\n"
+            f"Fecha y Hora: {fecha_ejecucion.strftime('%Y-%m-%d %H:%M:%S')}\n"
+        )
+
+        msg = create_email_message(
+            subject=subject,
+            recipients=recipients,
+            body_html=body_html,
+            body_text=body_text,
+        )
+
+        enviado = send_smtp_message(msg, recipients)
+
+        if enviado:
+            logger.info(f"✅ Notificación de reconciliación ST caída enviada a técnicos: {', '.join(recipients)}")
+        else:
+            logger.error(f"❌ Fallo el envío de notificación de reconciliación ST caída a técnicos: {', '.join(recipients)}")
+        return enviado
+
+    except Exception as e:
+        logger.error(f"❌ Error al enviar notificación de reconciliación ST caída: {e}", exc_info=True)
+        return False
+
+
 def _build_error_migracion_email(error_message, fecha_ejecucion):
     """Construye (subject, body_html) para 'Error en Migración Automática' (TECNICOS)."""
     from src.utils.email_template import build_email, info_section, warning_section, paragraph
@@ -557,7 +646,7 @@ def _build_error_migracion_email(error_message, fecha_ejecucion):
             info_section("Detalles del Error", [
                 ("Error", f'<span style="font-family:Consolas,monospace;font-size:13px;color:#c62828;">{error_message}</span>'),
             ], accent="red"),
-            warning_section("Acci&oacute;n Recomendada",
+            warning_section(_SECCION_ACCION_RECOMENDADA,
                 '<p style="margin:0;color:#5d4037;font-size:14px;">Por favor, revisa los logs del sistema para m&aacute;s informaci&oacute;n.</p>'),
         ],
         accent="red",
@@ -647,7 +736,7 @@ def _build_capacity_warning_email(warning_type, details, fecha_ejecucion):
         sections=[
             paragraph(mensaje_principal),
             info_section("Detalles", detail_items, accent=accent),
-            warning_section("Acci&oacute;n Recomendada",
+            warning_section(_SECCION_ACCION_RECOMENDADA,
                 '<p style="margin:0;color:#5d4037;font-size:14px;">Revisar los logs del sistema y considerar ajustar la configuraci&oacute;n si es necesario.</p>'),
         ],
         accent=accent,

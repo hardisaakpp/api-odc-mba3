@@ -75,6 +75,21 @@ async def _handle_cargar_respuesta_proveedor(pedido_id: str, file: UploadFile, u
         status_code = 200
         if resultado["status"] == "validation_error":
             status_code = 400
+        elif resultado["status"] == "success":
+            try:
+                from src.utils.notification_manager import notification_manager, NotificationType
+                _num = await asyncio.to_thread(_db_numero_pedido_para_notificacion, pedido_id)
+                _username = user.get("username") or user.get("sub") or "unknown"
+                await notification_manager.notify_by_actor(
+                    actor_permission=_PERM_MABEL_VIEW,
+                    actor_username=_username,
+                    title="Respuesta de proveedor cargada",
+                    message=f"El pedido {_num} tiene una nueva respuesta de MABEL TRADING cargada por Excel, pendiente de revisión.",
+                    notification_type=NotificationType.INFO,
+                    metadata={"pedido_id": pedido_id, "numero_pedido": _num, "accion": "respuesta_proveedor_cargada"},
+                )
+            except Exception as notif_err:
+                logger.warning(f"⚠️ Error al enviar notificación en tiempo real: {notif_err}")
         return JSONResponse(status_code=status_code, content=resultado)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -123,6 +138,21 @@ async def _handle_enviar_respuesta_proveedor(
         status_code = 200
         if resultado["status"] == "validation_error":
             status_code = 400
+        elif resultado["status"] == "success" and respuesta.estado == "confirmado":
+            try:
+                from src.utils.notification_manager import notification_manager, NotificationType
+                _num = await asyncio.to_thread(_db_numero_pedido_para_notificacion, pedido_id)
+                _username = user.get("username") or user.get("sub") or "unknown"
+                await notification_manager.notify_by_actor(
+                    actor_permission=_PERM_MABEL_VIEW,
+                    actor_username=_username,
+                    title="MABEL TRADING confirmó su respuesta",
+                    message=f"El pedido {_num} fue confirmado por MABEL TRADING (formulario web) y está listo para redistribución.",
+                    notification_type=NotificationType.SUCCESS,
+                    metadata={"pedido_id": pedido_id, "numero_pedido": _num, "accion": "respuesta_proveedor_confirmada_web"},
+                )
+            except Exception as notif_err:
+                logger.warning(f"⚠️ Error al enviar notificación en tiempo real: {notif_err}")
         return JSONResponse(status_code=status_code, content=resultado)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -161,20 +191,39 @@ def _db_numero_pedido_para_notificacion(pedido_id: str) -> str:
 
 
 async def _notificar_confirmacion_rayo(
-    resultado: Dict, transicion_a_confirmado: bool, pedido_id: str, user: Dict
+    resultado: Dict, transicion_a_confirmado: bool, pedido_id: str, user: Dict,
+    numeros_pedido_hijo: Optional[List[str]] = None,
 ):
+    """Notificación SSE de 'EL RAYO confirmó tu pedido'. Un solo tipo de mensaje cuando el
+    pedido se confirma solo, y otro cuando la confirmación generó pedido(s) hijo por
+    diferencia de producción (ver _handle_confirmar_con_diferencia) -- misma notificación
+    del padre, mencionando al/los hijo(s) en vez de una notificación separada por cada uno."""
     if resultado.get("status") == "success" and transicion_a_confirmado:
         try:
             from src.utils.notification_manager import notification_manager, NotificationType
             _num = await asyncio.to_thread(_db_numero_pedido_para_notificacion, pedido_id)
             _username = user.get("username") or user.get("sub") or "unknown"
+            if numeros_pedido_hijo:
+                _sufijo = "s" if len(numeros_pedido_hijo) != 1 else ""
+                mensaje = (
+                    f"El pedido {_num} ha sido confirmado por EL RAYO y está listo para "
+                    f"redistribución. Se generó {len(numeros_pedido_hijo)} pedido{_sufijo} con "
+                    f"la diferencia: {', '.join(numeros_pedido_hijo)}."
+                )
+            else:
+                mensaje = f"El pedido {_num} ha sido confirmado por EL RAYO y está listo para redistribución."
             await notification_manager.notify_by_actor(
                 actor_permission="odcsap.view",
                 actor_username=_username,
                 title="EL RAYO confirmó tu pedido",
-                message=f"El pedido {_num} ha sido confirmado por EL RAYO y está listo para redistribución.",
+                message=mensaje,
                 notification_type=NotificationType.SUCCESS,
-                metadata={"pedido_id": pedido_id, "numero_pedido": _num, "accion": "pedido_confirmado_rayo"},
+                metadata={
+                    "pedido_id": pedido_id,
+                    "numero_pedido": _num,
+                    "accion": "pedido_confirmado_rayo",
+                    "numeros_pedido_hijo": numeros_pedido_hijo or [],
+                },
             )
         except Exception as notif_err:
             logger.warning(f"⚠️ Error al enviar notificación en tiempo real: {notif_err}")
@@ -464,9 +513,14 @@ async def _handle_confirmar_con_diferencia(pedido_id: str, body: ConfirmarConDif
         )
         resultados_hijos.append(resultado_hijo)
 
+    _numeros_hijo = [r["numero_pedido"] for r in resultados_hijos] or None
+    await _notificar_confirmacion_rayo(
+        resultado_confirmacion, transicion_a_confirmado, pedido_id, user,
+        numeros_pedido_hijo=_numeros_hijo,
+    )
     await asyncio.to_thread(
         _enviar_email_confirmacion_rayo, resultado_confirmacion, transicion_a_confirmado, pedido_id, usuario_id,
-        numeros_pedido_hijo=[r["numero_pedido"] for r in resultados_hijos] or None,
+        numeros_pedido_hijo=_numeros_hijo,
     )
 
     logger.info(

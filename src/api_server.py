@@ -21,7 +21,6 @@ Endpoints principales:
 
 import asyncio
 import logging
-import threading
 import uvicorn
 import sys
 from concurrent.futures import ThreadPoolExecutor
@@ -174,19 +173,6 @@ def _configurar_executor_thread_pool() -> None:
         f"🧵 Executor por defecto del event loop: ThreadPoolExecutor("
         f"max_workers={API_THREAD_POOL_MAX_WORKERS})"
     )
-
-
-def _warm_up_celery_connection() -> None:
-    # Precalentar la conexión de control de Celery en un hilo daemon, best-effort
-    # y sin bloquear el arranque: el primer inspect().ping() en un proceso nuevo
-    # paga ~10s+ de setup de la conexión de control Redis/Kombu, y así ese costo
-    # se absorbe aquí en vez de durante la primera petición real de un usuario.
-    try:
-        import src.celery_app as celery_app_module
-        celery_app_module.celery_app.control.inspect(timeout=5.0).ping()
-        logger.debug("🔥 Conexión de control Celery precalentada")
-    except Exception as e:
-        logger.debug(f"Precalentamiento de conexión Celery no disponible (no crítico): {e}")
 
 
 def _inicializar_cliente_mba3() -> None:
@@ -360,9 +346,6 @@ async def startup_event():
     # 0. Executor dedicado del event loop (ver detalle en _configurar_executor_thread_pool)
     _configurar_executor_thread_pool()
 
-    # 0.1 Precalentar conexión de control de Celery en background (ver detalle en _warm_up_celery_connection)
-    threading.Thread(target=_warm_up_celery_connection, daemon=True, name="celery-warmup").start()
-
     # 1. Inicializar cliente MBA3 (warm-up)
     _inicializar_cliente_mba3()
 
@@ -375,6 +358,12 @@ async def startup_event():
     # 3. Log de configuración de migración automática (Celery Beat)
     _log_configuracion_migracion_automatica()
 
+    # 4. Listener SSE↔Redis: reenvía al bus de notificaciones (notification_manager)
+    # los mensajes que publican los workers de Celery (proceso aparte, sin acceso
+    # directo a las colas SSE en memoria de este proceso). Ver src/utils/sse_redis_bridge.py.
+    from src.utils.sse_redis_bridge import escuchar_notificaciones_redis
+    app.state.sse_redis_listener_task = asyncio.create_task(escuchar_notificaciones_redis())
+
     logger.info("=" * 70)
     logger.info("✅ Inicialización completada - Servidor listo para recibir peticiones")
     logger.info("=" * 70)
@@ -386,7 +375,17 @@ async def shutdown_event():
     Evento de cierre del servidor.
     """
     logger.info("🛑 Cerrando servidor...")
-    # Tarea de migración automática deshabilitada - no hay tareas en segundo plano que detener
+
+    listener_task = getattr(app.state, "sse_redis_listener_task", None)
+    if listener_task is not None:
+        listener_task.cancel()
+        try:
+            await listener_task
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            logger.warning(f"⚠️ Error al detener el listener SSE↔Redis: {e}")
+
     logger.info("✅ Servidor cerrado")
 
 

@@ -123,16 +123,6 @@ def _db_confirmar_produccion(pedido_id: str, audit):
                 }
             )
 
-        fecha_entrega = (pedido.get("cabecera") or {}).get("fecha_entrega")
-        if (fecha_entrega or "").strip().upper() == "INMEDIATO":
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail={
-                    "error": "fecha_entrega_requerida",
-                    "message": "Debe seleccionar una fecha de entrega antes de confirmar producción."
-                }
-            )
-
         numero_pedido = (pedido.get("cabecera") or {}).get("numero_pedido")
         repo.update_estado(pedido_id, ESTADO_CONFIRMADO_POR_PRODUCCION, audit_context=audit)
         return numero_pedido
@@ -141,8 +131,8 @@ def _db_confirmar_produccion(pedido_id: str, audit):
 async def _logic_confirmar_produccion(pedido_id: str, request: Request, user: Dict):
     """Lógica de 'Confirmar Producción' (req. 1.8, botón exclusivo de produccion-elrayo.view):
     GESTIONAR_PEDIDO (3) -> CONFIRMADO_POR_PRODUCCION (23), notifica por correo a
-    Administración El Rayo (odcsap.view). Requiere que la fecha de entrega ya no sea
-    INMEDIATO (se debe haber seleccionado una fecha real)."""
+    Administración El Rayo (odcsap.view). No valida fecha_entrega: la confirmación
+    procede sin importar si es INMEDIATO, una fecha real o ninguna."""
     audit = get_audit_context(request, user, origen=ORIGEN_WEB)
     try:
         numero_pedido = await asyncio.to_thread(_db_confirmar_produccion, pedido_id, audit)

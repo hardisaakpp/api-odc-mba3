@@ -22,6 +22,7 @@ def _service():
 class TestResolverTiendasObjetivo:
     def test_usa_detalle_cuando_hay_pendientes(self):
         st_repo = MagicMock()
+        st_repo.get_tiendas_faltantes_por_oc_id.return_value = []
         st_repo.get_tiendas_pendientes_reintento_st.return_value = ["TRL-QSN"]
         tiendas, origen = StockTransferService._resolver_tiendas_objetivo(st_repo, "oc-1")
         assert tiendas == ["TRL-QSN"]
@@ -30,6 +31,7 @@ class TestResolverTiendasObjetivo:
 
     def test_cae_a_fallback_json_si_detalle_vacio(self):
         st_repo = MagicMock()
+        st_repo.get_tiendas_faltantes_por_oc_id.return_value = []
         st_repo.get_tiendas_pendientes_reintento_st.return_value = []
         st_repo.get_tiendas_fallidas_desde_resultado_json_fallback.return_value = ["TOUT-ABC"]
         tiendas, origen = StockTransferService._resolver_tiendas_objetivo(st_repo, "oc-1")
@@ -38,11 +40,44 @@ class TestResolverTiendasObjetivo:
 
     def test_sin_pendientes_en_ninguna_fuente(self):
         st_repo = MagicMock()
+        st_repo.get_tiendas_faltantes_por_oc_id.return_value = []
         st_repo.get_tiendas_pendientes_reintento_st.return_value = []
         st_repo.get_tiendas_fallidas_desde_resultado_json_fallback.return_value = []
         tiendas, origen = StockTransferService._resolver_tiendas_objetivo(st_repo, "oc-1")
         assert tiendas == []
         assert origen == "ninguno"
+
+    def test_agrega_tiendas_faltantes_a_las_pendientes_de_detalle(self):
+        """F4.5: una tienda que nunca se intentó (sin registro en detalle) debe
+        sumarse a las que sí fallaron, no reemplazarlas."""
+        st_repo = MagicMock()
+        st_repo.get_tiendas_pendientes_reintento_st.return_value = ["TRL-QSN"]
+        st_repo.get_tiendas_faltantes_por_oc_id.return_value = ["TOUT-NEW"]
+        tiendas, origen = StockTransferService._resolver_tiendas_objetivo(st_repo, "oc-1")
+        assert tiendas == ["TRL-QSN", "TOUT-NEW"]
+        assert origen == "detalle+faltantes"
+
+    def test_tienda_faltante_duplicada_no_se_repite(self):
+        """Si get_tiendas_faltantes_por_oc_id devuelve una tienda que ya venía de
+        get_tiendas_pendientes_reintento_st (normalizando espacios/mayúsculas), no
+        debe duplicarse en la lista final."""
+        st_repo = MagicMock()
+        st_repo.get_tiendas_pendientes_reintento_st.return_value = ["TRL-QSN"]
+        st_repo.get_tiendas_faltantes_por_oc_id.return_value = [" trl-qsn "]
+        tiendas, origen = StockTransferService._resolver_tiendas_objetivo(st_repo, "oc-1")
+        assert tiendas == ["TRL-QSN"]
+        assert origen == "detalle"
+
+    def test_solo_hay_tiendas_faltantes_sin_ninguna_pendiente_de_error(self):
+        """Caso puro F4.5: nada quedó en Error/Encolada, pero la distribución
+        confirmada espera una tienda que nunca se intentó."""
+        st_repo = MagicMock()
+        st_repo.get_tiendas_pendientes_reintento_st.return_value = []
+        st_repo.get_tiendas_fallidas_desde_resultado_json_fallback.return_value = []
+        st_repo.get_tiendas_faltantes_por_oc_id.return_value = ["TOUT-NEW"]
+        tiendas, origen = StockTransferService._resolver_tiendas_objetivo(st_repo, "oc-1")
+        assert tiendas == ["TOUT-NEW"]
+        assert origen == "faltantes"
 
 
 class TestParseOcDocNum:
@@ -77,6 +112,7 @@ class TestReintentarPendientes:
         oc_repo = MagicMock()
         oc_repo.get_existing_cabecera.return_value = None
         st_repo = MagicMock()
+        st_repo.get_tiendas_faltantes_por_oc_id.return_value = []
         service = _service()
         with self._mock_conn_context(oc_repo, st_repo):
             resultado = service.reintentar_pendientes("oc-1", "user1")
@@ -86,6 +122,7 @@ class TestReintentarPendientes:
         oc_repo = MagicMock()
         oc_repo.get_existing_cabecera.return_value = {"estado": "PENDIENTE"}
         st_repo = MagicMock()
+        st_repo.get_tiendas_faltantes_por_oc_id.return_value = []
         service = _service()
         with self._mock_conn_context(oc_repo, st_repo):
             resultado = service.reintentar_pendientes("oc-1", "user1")
@@ -95,6 +132,7 @@ class TestReintentarPendientes:
         oc_repo = MagicMock()
         oc_repo.get_existing_cabecera.return_value = {"estado": "ENVIADA"}
         st_repo = MagicMock()
+        st_repo.get_tiendas_faltantes_por_oc_id.return_value = []
         st_repo.get_tiendas_pendientes_reintento_st.return_value = []
         st_repo.get_tiendas_fallidas_desde_resultado_json_fallback.return_value = []
         service = _service()
@@ -107,6 +145,7 @@ class TestReintentarPendientes:
         oc_repo = MagicMock()
         oc_repo.get_existing_cabecera.return_value = {"estado": "ENVIADA", "pedido_id": None}
         st_repo = MagicMock()
+        st_repo.get_tiendas_faltantes_por_oc_id.return_value = []
         st_repo.get_tiendas_pendientes_reintento_st.return_value = ["TRL-QSN"]
         service = _service()
         with self._mock_conn_context(oc_repo, st_repo):
@@ -120,6 +159,7 @@ class TestReintentarPendientes:
             "codigo_bodega": "RL-CD", "numero_oc_sap": "555",
         }
         st_repo = MagicMock()
+        st_repo.get_tiendas_faltantes_por_oc_id.return_value = []
         st_repo.get_tiendas_pendientes_reintento_st.return_value = ["TRL-QSN"]
         service = _service()
         with self._mock_conn_context(oc_repo, st_repo):
@@ -155,6 +195,7 @@ class TestReintentarPendientes:
             "codigo_bodega": "RL-CD", "numero_oc_sap": "555",
         }
         st_repo = MagicMock()
+        st_repo.get_tiendas_faltantes_por_oc_id.return_value = []
         st_repo.get_tiendas_pendientes_reintento_st.return_value = ["TRL-QSN", "TRL-PSC"]
         resumen_agregado_completo = {
             "total_tiendas": 5, "transferencias_creadas": 5, "transferencias_errores": 0,
@@ -184,6 +225,7 @@ class TestReintentarPendientes:
             "estado": "ENVIADA", "pedido_id": "pedido-1", "codigo_bodega": "RL-CD",
         }
         st_repo = MagicMock()
+        st_repo.get_tiendas_faltantes_por_oc_id.return_value = []
         st_repo.get_tiendas_pendientes_reintento_st.return_value = ["TRL-QSN"]
         service = _service()
         with self._mock_conn_context(oc_repo, st_repo):
@@ -204,6 +246,7 @@ class TestReintentarPendientes:
             "estado": "ENVIADA", "pedido_id": "pedido-1", "codigo_bodega": "RL-CD",
         }
         st_repo = MagicMock()
+        st_repo.get_tiendas_faltantes_por_oc_id.return_value = []
         st_repo.get_tiendas_pendientes_reintento_st.return_value = ["TRL-PSC"]
         service = _service()
         with self._mock_conn_context(oc_repo, st_repo):
@@ -238,6 +281,7 @@ class TestReevaluarCierrePedidoTrasReintento:
             "codigo_bodega": "OUT-CD", "numero_oc_sap": "1201916",
         }
         st_repo = MagicMock()
+        st_repo.get_tiendas_faltantes_por_oc_id.return_value = []
         st_repo.get_tiendas_pendientes_reintento_st.return_value = ["TOUT-REC"]
         st_repo.get_resumen_agregado_por_oc_id.return_value = {
             "total_tiendas": 1, "transferencias_creadas": 1, "transferencias_errores": 0,
@@ -273,6 +317,7 @@ class TestReevaluarCierrePedidoTrasReintento:
             "estado": "ENVIADA", "pedido_id": "pedido-1", "codigo_bodega": "OUT-CD",
         }
         st_repo = MagicMock()
+        st_repo.get_tiendas_faltantes_por_oc_id.return_value = []
         st_repo.get_tiendas_pendientes_reintento_st.return_value = ["TOUT-REC", "TOUT-BMB"]
         st_repo.get_resumen_agregado_por_oc_id.return_value = {
             "total_tiendas": 2, "transferencias_creadas": 1, "transferencias_errores": 1,
@@ -310,6 +355,7 @@ class TestReevaluarCierrePedidoTrasReintento:
             "estado": "ENVIADA", "pedido_id": "pedido-1", "codigo_bodega": "OUT-CD",
         }
         st_repo = MagicMock()
+        st_repo.get_tiendas_faltantes_por_oc_id.return_value = []
         st_repo.get_tiendas_pendientes_reintento_st.return_value = ["TOUT-REC"]
         service = _service()
         with TestReintentarPendientes._mock_conn_context(oc_repo, st_repo):
@@ -337,6 +383,7 @@ class TestReevaluarCierrePedidoTrasReintento:
             "estado": "ENVIADA", "pedido_id": "pedido-1", "codigo_bodega": "OUT-CD",
         }
         st_repo = MagicMock()
+        st_repo.get_tiendas_faltantes_por_oc_id.return_value = []
         st_repo.get_tiendas_pendientes_reintento_st.return_value = ["TOUT-REC"]
         # transferencias_creadas=0 evita la llamada a get_resumen_agregado_por_oc_id
         # del bloque de notificación (no es lo que este test cubre); el side_effect
@@ -541,6 +588,11 @@ class TestEnviarItrsConVerificacionPrevia:
         """HTTP 202 (job SAP en curso) no es un error definitivo: no incrementa
         transferencias_errores, se registra aparte con su job_id."""
         service = _service()
+        service.sap_client = MagicMock()
+        # Job recién encolado en este mismo intento: la reconciliación al cierre
+        # (_reconciliar_pendientes_confirmacion) lo consulta y sigue en curso, no
+        # se adopta -- el resultado se mantiene 'pendiente_confirmacion'/queued.
+        service.sap_client.get_job_status.return_value = {"status": "ENCOLADO"}
         result = self._result_inicial()
         with patch.object(
             service, "_enviar_itr_con_reintento",
@@ -599,6 +651,7 @@ class TestResolverJobsEncoladosPendientes:
         service.sap_client = MagicMock()
         service.sap_client.get_job_status.side_effect = lambda job_id: job_status_por_id.get(job_id)
         st_repo = MagicMock()
+        st_repo.get_tiendas_faltantes_por_oc_id.return_value = []
         st_repo.get_tiendas_encoladas_con_job_id.return_value = pendientes
         return service, st_repo
 

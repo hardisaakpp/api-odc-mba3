@@ -211,18 +211,40 @@ class PedidoParserDetalle:
     def identificar_columnas_producto(self, df_detalle: pd.DataFrame) -> Dict[str, str]:
         """Identifica las columnas de producto en el DataFrame."""
         columnas_producto = {}
-        
+        clave_costo_unitario = self.utils._CLAVE_COSTO_UNITARIO
+
         for col_idx, col_name in enumerate(df_detalle.columns):
             col_lower = normalize_column_name(col_name)
-            
-            for campo_bd, posibles_nombres in self.utils.MAPEO_COLUMNAS_PRODUCTO.items():
-                if any(nombre in col_lower for nombre in posibles_nombres):
-                    if campo_bd not in columnas_producto:
-                        columnas_producto[campo_bd] = col_name
-                        logger.debug(f"   Columna producto '{campo_bd}' encontrada: '{col_name}' (índice {col_idx})")
-                        break
-        
+            self._identificar_columna_producto_individual(
+                col_idx, col_name, col_lower, clave_costo_unitario, columnas_producto
+            )
+
         return columnas_producto
+
+    def _identificar_columna_producto_individual(
+        self,
+        col_idx: int,
+        col_name: str,
+        col_lower: str,
+        clave_costo_unitario: str,
+        columnas_producto: Dict[str, str],
+    ) -> None:
+        """Resuelve a qué campo_bd corresponde UNA columna del Excel y, si aplica,
+        actualiza columnas_producto in-place (ver identificar_columnas_producto)."""
+        for campo_bd, posibles_nombres in self.utils.MAPEO_COLUMNAS_PRODUCTO.items():
+            if campo_bd == clave_costo_unitario:
+                # Se resuelve aparte, más abajo: puede coexistir con 'costo margen'
+                # en la misma columna física (ej. "Costo Unitario" mapea a ambas).
+                continue
+            if any(nombre in col_lower for nombre in posibles_nombres):
+                if campo_bd not in columnas_producto:
+                    columnas_producto[campo_bd] = col_name
+                    logger.debug(f"   Columna producto '{campo_bd}' encontrada: '{col_name}' (índice {col_idx})")
+                    break
+
+        if clave_costo_unitario not in columnas_producto and clave_costo_unitario in col_lower:
+            columnas_producto[clave_costo_unitario] = col_name
+            logger.debug(f"   Columna producto '{clave_costo_unitario}' encontrada: '{col_name}' (índice {col_idx})")
 
     def _buscar_bodega_por_codigo(
         self, col_idx: int, codigos_columnas: Dict[int, str]
@@ -303,6 +325,7 @@ class PedidoParserDetalle:
     ) -> None:
         mapeo_campos = {
             'costo sin iva': 'costo_doc_sin_iva',
+            'costo unitario': 'costo_unitario_excel',
             'costo margen': 'costo_margen',
             'descuento': 'descuento_1',
             'pvp': 'pvp',
@@ -589,22 +612,42 @@ class PedidoParserDetalle:
 
             info_producto = self.extraer_info_producto(row, columnas_producto, codigo_producto)
             total_esperado = info_producto.get("total")
-            total_distribuido = (
-                self._procesar_bodegas_fila(row, columnas_bodegas, resultado["data"], codigo_producto, info_producto, row_num)
-                + self._procesar_tiendas_fila(row, columnas_tiendas, df_detalle, nombres_columnas_fila1, resultado["data"], codigo_producto, info_producto, row_num)
+            subtotal_esperado = info_producto.get("subtotal")
+            total_bodegas = self._procesar_bodegas_fila(
+                row, columnas_bodegas, resultado["data"], codigo_producto, info_producto, row_num
             )
+            total_tiendas = self._procesar_tiendas_fila(
+                row, columnas_tiendas, df_detalle, nombres_columnas_fila1, resultado["data"], codigo_producto, info_producto, row_num
+            )
+            total_distribuido = total_bodegas + total_tiendas
+
+            if subtotal_esperado is not None and abs(float(subtotal_esperado) - total_tiendas) > 0.0001:
+                mensaje = (
+                    f"SUBTOTAL del producto ({float(subtotal_esperado):.4f}) no coincide con la suma "
+                    f"de tiendas parseadas ({total_tiendas:.4f}). "
+                    "Revisa la fórmula de SUBTOTAL en el Excel para esta fila."
+                )
+                logger.error(f"❌ Fila {row_num}: {codigo_producto} - {mensaje}")
+                resultado["errores"].append({
+                    "fila": row_num,
+                    "codigoProducto": codigo_producto,
+                    "campo": "SUBTOTAL",
+                    "tipo": "ERROR",
+                    "mensaje": mensaje
+                })
 
             if total_esperado is not None and abs(float(total_esperado) - total_distribuido) > 0.0001:
                 mensaje = (
-                    f"Total del producto ({float(total_esperado):.4f}) no coincide con la suma "
+                    f"TOTAL del producto ({float(total_esperado):.4f}) no coincide con la suma "
                     f"de bodegas/tiendas parseadas ({total_distribuido:.4f}). "
-                    "Puede existir una columna de tienda omitida o una cantidad inválida."
+                    "Revisa la fórmula de TOTAL/SUBTOTAL en el Excel para esta fila."
                 )
-                logger.warning(f"⚠️ Fila {row_num}: {codigo_producto} - {mensaje}")
+                logger.error(f"❌ Fila {row_num}: {codigo_producto} - {mensaje}")
                 resultado["errores"].append({
                     "fila": row_num,
+                    "codigoProducto": codigo_producto,
                     "campo": "TOTAL",
-                    "tipo": "WARNING",
+                    "tipo": "ERROR",
                     "mensaje": mensaje
                 })
 

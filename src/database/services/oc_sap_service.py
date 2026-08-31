@@ -8,6 +8,7 @@ import contextlib
 import json
 import logging
 import re
+import threading
 
 from src.utils.timezone import ahora_naive
 from typing import Optional, Dict, Any, List
@@ -660,7 +661,10 @@ class OCSAPService:
         doc_num: Any,
         doc_date_itr: str,
         serie_itr: Optional[int],
-        result: Dict[str, Any]
+        result: Dict[str, Any],
+        conn: Any = None,
+        oc_id: Optional[str] = None,
+        pedido_id: Optional[str] = None,
     ) -> None:
         """Crea y envía Inventory Transfer Requests a SAP (1 por bodega destino)."""
         try:
@@ -672,6 +676,9 @@ class OCSAPService:
                 due_date=doc_date_itr,
                 oc_doc_num=doc_num,
                 serie=serie_itr,
+            )
+            solicitud_bodega_id = self._crear_encabezado_solicitud_bodega(
+                conn, oc_id, pedido_id, doc_num, from_wh
             )
             itr_created = 0
             itr_errors = 0
@@ -713,12 +720,19 @@ class OCSAPService:
                         f"{envio_itr_result.get('attempts', self.ITR_RETRY_MAX_ATTEMPTS)} intento(s): "
                         f"{from_wh} → {to_warehouse}: {error_msg}"
                     )
+                if solicitud_bodega_id:
+                    self._persistir_detalle_itr_bodega(conn, solicitud_bodega_id, itr_results[-1])
             result["inventory_transfer_requests"] = {
                 "created": itr_created,
                 "errors": itr_errors,
                 "total": len(itr_payloads),
                 "resultados": itr_results,
             }
+            if solicitud_bodega_id:
+                self._cerrar_resumen_solicitud_bodega(
+                    conn, solicitud_bodega_id,
+                    {"created": itr_created, "errors": itr_errors, "total": len(itr_payloads)},
+                )
             if itr_created:
                 logger.info(
                     f"✅ Inventory Transfer Requests creados en SAP: {itr_created}/{len(itr_payloads)} "
@@ -734,6 +748,59 @@ class OCSAPService:
         except Exception as e:
             logger.warning(f"⚠️ No se pudieron crear Inventory Transfer Requests (no crítico): {e}")
             result["inventory_transfer_requests_error"] = str(e)
+
+    @staticmethod
+    def _crear_encabezado_solicitud_bodega(
+        conn: Any, oc_id: Optional[str], pedido_id: Optional[str], doc_num: Any, bodega_origen: str
+    ) -> Optional[str]:
+        """Crea el encabezado de auditoría de ITR por bodega (best-effort, no crítico)."""
+        if conn is None:
+            return None
+        try:
+            from ..repositories.solicitud_transferencia_bodega_repository import (
+                SolicitudTransferenciaBodegaRepository,
+            )
+            return SolicitudTransferenciaBodegaRepository(conn).insert(
+                oc_id=oc_id, pedido_id=pedido_id, oc_doc_num=doc_num, bodega_origen=bodega_origen
+            )
+        except Exception as e:
+            logger.warning(f"⚠️ No se pudo crear encabezado de auditoría de ITR por bodega (no crítico): {e}")
+            return None
+
+    @staticmethod
+    def _persistir_detalle_itr_bodega(conn: Any, solicitud_bodega_id: str, itr_result: Dict[str, Any]) -> None:
+        """Persiste de inmediato el resultado de UNA ITR de bodega (best-effort, no crítico)."""
+        if conn is None:
+            return
+        try:
+            from ..repositories.solicitud_transferencia_bodega_repository import (
+                SolicitudTransferenciaBodegaRepository,
+            )
+            SolicitudTransferenciaBodegaRepository(conn).insert_detalle_individual(
+                solicitud_bodega_id,
+                {
+                    "bodega_codigo": itr_result.get("ToWarehouse"),
+                    "success": itr_result.get("success", False),
+                    "doc_num": itr_result.get("doc_num"),
+                    "doc_entry": itr_result.get("doc_entry"),
+                    "error": itr_result.get("error"),
+                },
+            )
+        except Exception as e:
+            logger.warning(f"⚠️ No se pudo persistir detalle de ITR de bodega (no crítico): {e}")
+
+    @staticmethod
+    def _cerrar_resumen_solicitud_bodega(conn: Any, solicitud_bodega_id: str, resultado: Dict[str, Any]) -> None:
+        """Cierra el resumen del encabezado de auditoría de ITR por bodega (best-effort, no crítico)."""
+        if conn is None:
+            return
+        try:
+            from ..repositories.solicitud_transferencia_bodega_repository import (
+                SolicitudTransferenciaBodegaRepository,
+            )
+            SolicitudTransferenciaBodegaRepository(conn).update_resumen(solicitud_bodega_id, resultado)
+        except Exception as e:
+            logger.warning(f"⚠️ No se pudo cerrar resumen de ITR de bodega (no crítico): {e}")
 
     @staticmethod
     def _log_fallo_itr(pedido_id: str, resultado_transferencias: Dict[str, Any]) -> None:
@@ -772,7 +839,9 @@ class OCSAPService:
         oc_repo: 'OrdenCompraRepository',
         pedido_id: str,
         result: Dict[str, Any],
-        tiendas_destino_filtro: Optional[List[str]] = None
+        tiendas_destino_filtro: Optional[List[str]] = None,
+        process_id: Optional[str] = None,
+        lock: Optional[threading.Lock] = None,
     ) -> None:
         """Crea Solicitudes de Transferencia para el pedido asociado a la ODC.
 
@@ -795,7 +864,9 @@ class OCSAPService:
                 bodega_origen=bodega_oc,
                 usuario_id=None,
                 serie=serie_itr,
-                tiendas_destino_filtro=tiendas_destino_filtro
+                tiendas_destino_filtro=tiendas_destino_filtro,
+                process_id=process_id,
+                lock=lock,
             )
             if resultado_transferencias.get("success"):
                 logger.info(
@@ -955,7 +1026,9 @@ class OCSAPService:
         envio_oc_result: Dict[str, Any],
         oc_repo: 'OrdenCompraRepository',
         result: Dict[str, Any],
-        tiendas_destino_filtro: Optional[List[str]] = None
+        tiendas_destino_filtro: Optional[List[str]] = None,
+        process_id: Optional[str] = None,
+        lock: Optional[threading.Lock] = None,
     ) -> None:
         """Procesa el resultado exitoso de envío a SAP: actualiza estado, crea ITRs, STs, notifica y cierra pedido."""
         doc_entry = sap_response.get("doc_entry")
@@ -1001,17 +1074,20 @@ class OCSAPService:
                 doc_date_itr = ahora_naive().strftime("%Y-%m-%d")
 
             from_wh = self._resolver_from_warehouse(oc_cabecera)
+            pedido_id = oc_cabecera.get("pedido_id")
 
             if from_wh and oc_detalles:
-                self._enviar_itrs_por_bodega(oc_detalles, from_wh, doc_num, doc_date_itr, serie_itr, result)
+                self._enviar_itrs_por_bodega(
+                    oc_detalles, from_wh, doc_num, doc_date_itr, serie_itr, result,
+                    conn=oc_repo.conn, oc_id=oc_id, pedido_id=pedido_id,
+                )
 
             logger.info("ℹ️ Envío de correo de ODC al proveedor omitido por configuración funcional")
 
-            pedido_id = oc_cabecera.get("pedido_id")
             if pedido_id:
                 self._crear_solicitudes_transferencia_oc(
                     oc_id, oc_cabecera, doc_num, serie_itr, oc_repo, pedido_id, result,
-                    tiendas_destino_filtro=tiendas_destino_filtro
+                    tiendas_destino_filtro=tiendas_destino_filtro, process_id=process_id, lock=lock,
                 )
                 self._notificar_resultado_oc_st(oc_id, oc_cabecera, doc_num, doc_entry, pedido_id, oc_repo, result)
                 self._cerrar_pedido_desde_resultado_oc(pedido_id, oc_repo, result)
@@ -1072,6 +1148,8 @@ class OCSAPService:
         oc_repo: 'OrdenCompraRepository',
         result: Dict[str, Any],
         tiendas_destino_filtro: Optional[List[str]] = None,
+        process_id: Optional[str] = None,
+        lock: Optional[threading.Lock] = None,
     ) -> Optional[bool]:
         """
         Si la ODC quedó ENCOLADA (HTTP 202 de un intento previo al crear la Purchase
@@ -1132,7 +1210,7 @@ class OCSAPService:
             }
             self._procesar_oc_exitosa(
                 oc_id, oc_cabecera, oc_detalles, sap_response_sintetico, {"attempts": None}, oc_repo, result,
-                tiendas_destino_filtro=tiendas_destino_filtro,
+                tiendas_destino_filtro=tiendas_destino_filtro, process_id=process_id, lock=lock,
             )
             return False
 
@@ -1168,7 +1246,9 @@ class OCSAPService:
         oc_repo: OrdenCompraRepository,
         oc_id: str,
         warehouse_code: Optional[str] = None,
-        tiendas_destino_filtro: Optional[List[str]] = None
+        tiendas_destino_filtro: Optional[List[str]] = None,
+        process_id: Optional[str] = None,
+        lock: Optional[threading.Lock] = None,
     ) -> Dict[str, Any]:
         """
         Envía una orden de compra a SAP Service Layer.
@@ -1190,6 +1270,10 @@ class OCSAPService:
                 este filtro, cada ODC igual solo generaría ST hacia sus propias tiendas
                 (la validación de bodega ya rechaza cruces), pero recorrería también las
                 tiendas de la otra bodega solo para omitirlas con warning.
+            process_id: ID del proceso SAP async (proceso-sap-*) que originó este
+                envío, si lo hay (ver ProcesoEstadoService.crear_alias_oc). None en
+                el flujo síncrono/botones de fila -- no rompe nada, solo no habilita
+                la reconciliación en tiempo real de un reintento posterior.
 
         Returns:
             Diccionario con el resultado:
@@ -1243,7 +1327,7 @@ class OCSAPService:
 
                 resuelto = self._resolver_job_encolado_previo(
                     oc_id, oc_cabecera, oc_detalles, oc_repo, result,
-                    tiendas_destino_filtro=tiendas_destino_filtro,
+                    tiendas_destino_filtro=tiendas_destino_filtro, process_id=process_id, lock=lock,
                 )
                 if resuelto is False:
                     return result
@@ -1269,7 +1353,7 @@ class OCSAPService:
 
                 self._procesar_oc_exitosa(
                     oc_id, oc_cabecera, oc_detalles, sap_response, envio_oc_result, oc_repo, result,
-                    tiendas_destino_filtro=tiendas_destino_filtro
+                    tiendas_destino_filtro=tiendas_destino_filtro, process_id=process_id, lock=lock,
                 )
 
             except Exception as e:

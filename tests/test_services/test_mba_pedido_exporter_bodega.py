@@ -12,6 +12,10 @@ import pytest
 from src.database.services.mba_pedido_exporter import MBAExportConfig, MBAPedidoExporter
 
 
+PEDIDO_DETALLE_ID = "detalle-1"
+TIENDA_ID = "tienda-1"
+
+
 def _pedido(origen_traslado: str, cantidad: float = 1) -> dict:
     return {
         "cabecera": {
@@ -22,11 +26,21 @@ def _pedido(origen_traslado: str, cantidad: float = 1) -> dict:
         },
         "detalles": [
             {
+                "pedido_detalle_id": PEDIDO_DETALLE_ID,
                 "codigo_interno": "COD-1",
                 "costo_doc_sin_iva": 10.0,
-                "tiendas": [{"codigo": "TRL-001", "cantidad": cantidad}],
+                "tiendas": [{"tienda_id": TIENDA_ID, "codigo": "TRL-001", "cantidad": cantidad}],
             }
         ],
+    }
+
+
+def _mock_distribucion(mock_dist_class, cantidad: float = 1):
+    """Mockea DistribucionConfirmadaRepository devolviendo la misma cantidad que
+    la fixture ya tenía en tienda["cantidad"], para no cambiar la intención de
+    estos tests (verifican bodega, no cantidad)."""
+    mock_dist_class.return_value.get_cantidades_asignadas_por_pedido.return_value = {
+        PEDIDO_DETALLE_ID: {TIENDA_ID: cantidad}
     }
 
 
@@ -38,9 +52,11 @@ def _columna_bodega(txt_bytes: bytes) -> str:
 @pytest.mark.parametrize("origen_traslado", ["RL-CD", "RG-CD", "OUT-CD", "", "BODEGA-DESCONOCIDA"])
 def test_bodega_siempre_es_bpt_sin_importar_origen_traslado(origen_traslado):
     with patch("src.database.services.mba_pedido_exporter.get_db_connection_context") as mock_ctx, \
-         patch("src.database.services.mba_pedido_exporter.PedidoRepository") as mock_repo_class:
+         patch("src.database.services.mba_pedido_exporter.PedidoRepository") as mock_repo_class, \
+         patch("src.database.services.mba_pedido_exporter.DistribucionConfirmadaRepository") as mock_dist_class:
         mock_ctx.return_value.__enter__.return_value = MagicMock()
         mock_repo_class.return_value.get_pedido_completo.return_value = _pedido(origen_traslado)
+        _mock_distribucion(mock_dist_class)
 
         exporter = MBAPedidoExporter()
         resultado = exporter.exportar_pedido_formato_mba(
@@ -54,9 +70,11 @@ def test_bodega_siempre_es_bpt_sin_importar_origen_traslado(origen_traslado):
 
 def test_bodega_es_bpt_tambien_en_modo_consolidado():
     with patch("src.database.services.mba_pedido_exporter.get_db_connection_context") as mock_ctx, \
-         patch("src.database.services.mba_pedido_exporter.PedidoRepository") as mock_repo_class:
+         patch("src.database.services.mba_pedido_exporter.PedidoRepository") as mock_repo_class, \
+         patch("src.database.services.mba_pedido_exporter.DistribucionConfirmadaRepository") as mock_dist_class:
         mock_ctx.return_value.__enter__.return_value = MagicMock()
         mock_repo_class.return_value.get_pedido_completo.return_value = _pedido("RG-CD")
+        _mock_distribucion(mock_dist_class)
 
         exporter = MBAPedidoExporter()
         resultado = exporter.exportar_pedido_formato_mba_consolidado(

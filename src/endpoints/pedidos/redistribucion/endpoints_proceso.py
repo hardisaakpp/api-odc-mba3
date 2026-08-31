@@ -13,11 +13,10 @@ NOTA DE RENDIMIENTO:
 
 import asyncio
 import concurrent.futures
+import functools
+import threading
 import json
 import logging
-import os
-import threading
-import time
 from typing import Any, Callable, Dict, List, Optional
 
 from fastapi import FastAPI, Depends, HTTPException, Path, Body, Query, status, Request
@@ -29,6 +28,7 @@ from src.database.pedido_estados import (
     ESTADO_PEDIDO_CONFIRMADO,
     ESTADO_CONFIRMADO_ENVIADO,
     ESTADO_ERROR_ENVIO_SAP_REINTENTO,
+    ESTADOS_REDISTRIBUCION_YA_CONFIRMADA,
 )
 from src.database.repositories.distribucion_confirmada_repository import DistribucionConfirmadaRepository
 from src.database.repositories.pedido_repository import PedidoRepository
@@ -46,112 +46,16 @@ from ._helpers import obtener_pedido_o_404, obtener_respuestas_proveedor
 from ._converters import convertir_ajustes_a_redistribucion
 from ._resumen import calcular_resumen_confirmacion
 from ._sap_processing import procesar_pedido_sap_con_homologacion_sync
-from ._notifications import notificar_odc_enviada_a_sap
-import src.celery_app as celery_app_module
+from ._notifications import notificar_odc_enviada_a_sap, notificar_error_envio_odc_sap
+from src.services.celery_availability import celery_worker_available as _celery_workers_available
 
 logger = logging.getLogger(__name__)
 
-# Timeout para comprobar si hay workers Celery (evitar 202 sin worker y polling colgado)
-# Configurable via .env (mismo patrón que EMAIL_SMTP_TIMEOUT en src/config.py); default
-# subido de 2.5s a 5.0s tras incidente 2026-08 de falso negativo con worker vivo (más
-# margen sobre la latencia típica de ping() sin penalizar demasiado el camino caído).
-CELERY_WORKER_PING_TIMEOUT = float(os.getenv("CELERY_WORKER_PING_TIMEOUT", "5.0"))
-
-# Margen extra sobre CELERY_WORKER_PING_TIMEOUT para el join() externo (ver más abajo
-# por qué es necesario: inspect().ping() no corta exactamente en su propio timeout).
-CELERY_WORKER_PING_JOIN_BUFFER = float(os.getenv("CELERY_WORKER_PING_JOIN_BUFFER", "2.0"))
-
-# TTL del cache de disponibilidad de workers Celery (ver docstring de
-# _celery_workers_available para el porqué: evita que llamadas repetidas en
-# ráfaga disparen un nuevo hilo de ping cada vez).
-CELERY_WORKER_AVAILABILITY_CACHE_TTL = float(os.getenv("CELERY_WORKER_AVAILABILITY_CACHE_TTL", "4.0"))
-
 _PERM_MABEL_VIEW = 'mabel.view'
 
-# Estado del cache single-flight de disponibilidad de workers Celery (ver
-# _celery_workers_available). Módulo-privado.
-_disponibilidad_lock = threading.Lock()
-_disponibilidad_cache = {"resultado": False, "timestamp": 0.0, "verificando": False}
-
-
-def _celery_workers_available() -> bool:
-    """
-    Comprueba si hay al menos un worker Celery disponible.
-    Si no hay workers o hay error/timeout, retorna False (priorizar flujo síncrono).
-
-    inspect().ping() no siempre respeta su propio parámetro `timeout` (el canal
-    de control de Celery puede quedarse colgado bastante más tiempo); por eso
-    se ejecuta en un hilo daemon con un límite externo real, para no arrastrar
-    ese cuelgue a la petición HTTP que espera este chequeo.
-
-    Cache single-flight con TTL corto (CELERY_WORKER_AVAILABILITY_CACHE_TTL):
-    se verificó en vivo que cuando el join() externo se rinde, el hilo daemon
-    abandonado sigue corriendo en segundo plano intentando obtener su pong, y
-    ese hilo huérfano CONTIENDE con el hilo de ping de la siguiente llamada
-    (aparentemente por un pool de conexiones Kombu/Celery compartido y
-    limitado): pings aislados resolvían en ~5.4s, pero pings que competían
-    con un hilo abandonado tardaban 9.6-14s. El resultado era que llamadas
-    repetidas/rápidas a esta función seguían devolviendo falsos negativos,
-    porque chocaban con sus propios rezagados, incluso después del fix del
-    margen de join() (CELERY_WORKER_PING_JOIN_BUFFER) de la ronda anterior.
-
-    Este cache soluciona eso de tres formas:
-      (a) llamadas repetidas dentro del TTL reutilizan la última respuesta en
-          vez de lanzar un hilo de ping nuevo cada vez;
-      (b) si ya hay un ping en curso, los llamadores nuevos reutilizan el
-          último valor conocido en vez de lanzar un hilo de ping COMPETIDOR
-          (esto es lo que elimina la acumulación/contención de hilos);
-      (c) si un hilo de ping abandonado/lento finalmente recibe su pong
-          (incluso después de que su propio llamador se haya rendido),
-          igual actualiza el cache compartido para que el SIGUIENTE llamador
-          se beneficie de inmediato en vez de disparar otro ping lento.
-    """
-    ahora = time.time()
-    with _disponibilidad_lock:
-        edad = ahora - _disponibilidad_cache["timestamp"]
-        if edad < CELERY_WORKER_AVAILABILITY_CACHE_TTL:
-            return _disponibilidad_cache["resultado"]
-        if _disponibilidad_cache["verificando"]:
-            return _disponibilidad_cache["resultado"]
-        _disponibilidad_cache["verificando"] = True
-
-    resultado: Dict[str, Any] = {}
-
-    def _ping():
-        try:
-            inspect = celery_app_module.celery_app.control.inspect(timeout=CELERY_WORKER_PING_TIMEOUT)
-            resultado["ping"] = inspect.ping()
-        except Exception as e:
-            resultado["error"] = e
-        finally:
-            disponible = bool(resultado.get("ping"))
-            with _disponibilidad_lock:
-                _disponibilidad_cache["resultado"] = disponible
-                _disponibilidad_cache["timestamp"] = time.time()
-                _disponibilidad_cache["verificando"] = False
-
-    hilo = threading.Thread(target=_ping, daemon=True)
-    hilo.start()
-    # inspect(timeout=X).ping() no respeta X con precisión: se confirmó en vivo que
-    # excede el timeout pedido por ~0.3-0.4s incluso con un worker sano; sin este
-    # margen el join externo pierde esa carrera casi siempre y devuelve falso negativo.
-    hilo.join(timeout=CELERY_WORKER_PING_TIMEOUT + CELERY_WORKER_PING_JOIN_BUFFER)
-
-    if hilo.is_alive():
-        logger.debug(
-            "Comprobación de workers Celery excedió el timeout (%.1fs); "
-            "el hilo sigue en curso y actualizará el cache al terminar",
-            CELERY_WORKER_PING_TIMEOUT + CELERY_WORKER_PING_JOIN_BUFFER,
-        )
-        return False
-    if "error" in resultado:
-        logger.debug("Comprobación de workers Celery fallida: %s", resultado["error"])
-        return False
-
-    available = bool(resultado.get("ping"))
-    if not available:
-        logger.debug("No hay workers Celery disponibles (ping sin respuesta)")
-    return available
+# _celery_workers_available: alias de celery_worker_available (heartbeat en Redis, ver
+# src/services/celery_availability.py). Se conserva el nombre histórico porque los tests
+# lo monkeypatchean por atributo de módulo (tests/test_encolado_no_bloquea_event_loop.py).
 
 
 def _paso1_confirmar_redistribucion(
@@ -164,48 +68,71 @@ def _paso1_confirmar_redistribucion(
     user_id: str,
     audit,
 ):
-    """PASO 1/3: Confirma redistribución y ejecuta homologación SAP."""
+    """PASO 1/3: Confirma redistribución y ejecuta homologación SAP.
+
+    Si el pedido ya está en un estado que solo se alcanza tras una confirmación
+    de redistribución previa (ver ESTADOS_REDISTRIBUCION_YA_CONFIRMADA), es un
+    reintento de "Proceso completo SAP" tras un fallo en PASO 2/3: no vuelve a
+    crear/confirmar una redistribución (RedistribucionValidator._validar_estado_pedido
+    la rechazaría, ya que ese estado no está en ESTADOS_PUEDE_CONFIRMAR_REDISTRIBUCION)
+    -- reutiliza la versión ya confirmada y continúa igual con la homologación SAP.
+    """
     try:
-        productos_redistribucion = convertir_ajustes_a_redistribucion(
-            ajustes_detalle,
-            pedido_data,
-            repo_pedido.tienda_repo,
+        estado_id_actual = pedido_data.get("cabecera", {}).get("estado_id")
+        version_ya_confirmada = repo_dist.get_version_actual(pedido_id)
+        redistribucion_ya_confirmada = (
+            estado_id_actual in ESTADOS_REDISTRIBUCION_YA_CONFIRMADA and version_ya_confirmada > 0
         )
-        respuestas_proveedor = obtener_respuestas_proveedor(repo_pedido, pedido_id)
-        validator = RedistribucionValidator()
-        es_valido, errores = validator.validar_redistribucion(
-            pedido_data, productos_redistribucion, respuestas_proveedor
-        )
-        if not es_valido:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail={
-                    "error": "validation_error",
-                    "message": "La redistribución no cumple con las reglas de negocio",
-                    "errores": errores
-                }
-            )
-        resultado_crear = repo_dist.crear_redistribucion(
-            pedido_id=pedido_id,
-            productos_redistribucion=productos_redistribucion,
-            usuario=user_id,
-            audit_context=audit
-        )
-        repo_dist.confirmar_redistribucion(
-            pedido_id=pedido_id,
-            version=resultado_crear["version"],
-            usuario=user_id,
-            audit_context=audit
-        )
-        repo_pedido.update_estado(pedido_id, ESTADO_PEDIDO_CONFIRMADO, audit_context=audit)
         resumen = calcular_resumen_confirmacion(ajustes_detalle)
-        total_productos = resumen.total_productos
-        resultado_redistribucion = {
-            "version_confirmada": resultado_crear["version"],
-            "productos_redistribuidos": total_productos,
-            "estado_pedido": "CONFIRMADO REDISTRIBUCION"
-        }
-        logger.info(f"✅ PASO 1/3 completado: Redistribución confirmada (versión {resultado_crear['version']})")
+        if redistribucion_ya_confirmada:
+            resultado_redistribucion = {
+                "version_confirmada": version_ya_confirmada,
+                "productos_redistribuidos": resumen.total_productos,
+                "estado_pedido": "CONFIRMADO REDISTRIBUCION"
+            }
+            logger.info(
+                f"↩️ PASO 1/3 omitido (reintento): redistribución ya confirmada "
+                f"(versión {version_ya_confirmada}), continuando desde PASO 2"
+            )
+        else:
+            productos_redistribucion = convertir_ajustes_a_redistribucion(
+                ajustes_detalle,
+                pedido_data,
+                repo_pedido.tienda_repo,
+            )
+            respuestas_proveedor = obtener_respuestas_proveedor(repo_pedido, pedido_id)
+            validator = RedistribucionValidator()
+            es_valido, errores = validator.validar_redistribucion(
+                pedido_data, productos_redistribucion, respuestas_proveedor
+            )
+            if not es_valido:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail={
+                        "error": "validation_error",
+                        "message": "La redistribución no cumple con las reglas de negocio",
+                        "errores": errores
+                    }
+                )
+            resultado_crear = repo_dist.crear_redistribucion(
+                pedido_id=pedido_id,
+                productos_redistribucion=productos_redistribucion,
+                usuario=user_id,
+                audit_context=audit
+            )
+            repo_dist.confirmar_redistribucion(
+                pedido_id=pedido_id,
+                version=resultado_crear["version"],
+                usuario=user_id,
+                audit_context=audit
+            )
+            repo_pedido.update_estado(pedido_id, ESTADO_PEDIDO_CONFIRMADO, audit_context=audit)
+            resultado_redistribucion = {
+                "version_confirmada": resultado_crear["version"],
+                "productos_redistribuidos": resumen.total_productos,
+                "estado_pedido": "CONFIRMADO REDISTRIBUCION"
+            }
+            logger.info(f"✅ PASO 1/3 completado: Redistribución confirmada (versión {resultado_crear['version']})")
         try:
             resultado_sap = procesar_pedido_sap_con_homologacion_sync(
                 pedido_id=pedido_id,
@@ -319,12 +246,16 @@ def _resolver_doc_num_y_solicitudes(resultado_sap_envio):
     st_raw = resultado_sap_envio.get("solicitudes_transferencia") or {}
     solicitudes_para_response = dict(st_raw) if st_raw else None
     if solicitudes_para_response and solicitudes_para_response.get("resultados"):
+        # Solo ITR realmente creadas en SAP (con doc_num): una fila sin doc_num
+        # no es una solicitud de transferencia creada, es una tienda que falló o
+        # quedó encolada -- no debe aparecer en la tabla DocNum/Tienda del modal.
         solicitudes_para_response["itrs_por_tienda"] = [
             {
                 "doc_num": r.get("doc_num"),
                 "tienda_codigo": (r.get("tienda_codigo") or ""),
             }
             for r in solicitudes_para_response["resultados"]
+            if r.get("doc_num") is not None
         ]
     return doc_num_po, doc_num, solicitudes_para_response
 
@@ -418,7 +349,13 @@ def _enviar_emails_exito_sap(
     )
 
 
-def _enviar_una_odc_a_sap(oc_sap_service, oc_repo, odc: Dict[str, Any]) -> Dict[str, Any]:
+def _enviar_una_odc_a_sap(
+    oc_sap_service,
+    oc_repo,
+    odc: Dict[str, Any],
+    process_id: Optional[str] = None,
+    lock: Optional[threading.Lock] = None,
+) -> Dict[str, Any]:
     """Envía una ODC a SAP y arma su ProcesoCompletoSAPDetalleODC. Función pura por
     ODC, usada tanto para el caso normal (1 ODC) como para cada bodega de un pedido
     mixto (2 ODC) en _paso3_enviar_odc_sap."""
@@ -429,6 +366,8 @@ def _enviar_una_odc_a_sap(oc_sap_service, oc_repo, odc: Dict[str, Any]) -> Dict[
         oc_id=oc_id,
         warehouse_code=None,
         tiendas_destino_filtro=odc.get("tiendas_bodega"),
+        process_id=process_id,
+        lock=lock,
     )
     success = resultado_sap_envio.get("success", False)
     queued = resultado_sap_envio.get("queued", False)
@@ -464,7 +403,11 @@ def _enviar_una_odc_a_sap(oc_sap_service, oc_repo, odc: Dict[str, Any]) -> Dict[
     }
 
 
-def _enviar_una_odc_a_sap_en_thread(odc: Dict[str, Any]) -> Dict[str, Any]:
+def _enviar_una_odc_a_sap_en_thread(
+    odc: Dict[str, Any],
+    process_id: Optional[str] = None,
+    lock: Optional[threading.Lock] = None,
+) -> Dict[str, Any]:
     """Como _enviar_una_odc_a_sap, pero abre su propia conexión a BD y su propio
     OCSAPService en vez de recibirlos del caller. Se usa para enviar en paralelo las
     2 ODC de un pedido mixto (ver _paso3_enviar_odc_sap): una conexión pyodbc no es
@@ -477,10 +420,18 @@ def _enviar_una_odc_a_sap_en_thread(odc: Dict[str, Any]) -> Dict[str, Any]:
     with get_db_connection_context() as conn:
         oc_repo_local = OrdenCompraRepository(conn)
         oc_sap_service_local = OCSAPService()
-        return _enviar_una_odc_a_sap(oc_sap_service_local, oc_repo_local, odc)
+        return _enviar_una_odc_a_sap(
+            oc_sap_service_local, oc_repo_local, odc, process_id=process_id, lock=lock
+        )
 
 
-def _procesar_envios_sap(oc_repo, oc_sap_service, odcs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def _procesar_envios_sap(
+    oc_repo,
+    oc_sap_service,
+    odcs: List[Dict[str, Any]],
+    process_id: Optional[str] = None,
+    lock: Optional[threading.Lock] = None,
+) -> List[Dict[str, Any]]:
     """Envía las ODC a SAP: en paralelo si son 2+ (pedido mixto), secuencial si es 1.
     Usado por `_paso3_enviar_odc_sap`; puede propagar cualquier excepción que
     levanten los envíos individuales."""
@@ -489,9 +440,15 @@ def _procesar_envios_sap(oc_repo, oc_sap_service, odcs: List[Dict[str, Any]]) ->
         # independiente a SAP) en vez de una tras otra, para no duplicar el
         # tiempo total de espera. executor.map conserva el orden de odcs en los
         # resultados sin importar cuál termine primero.
+        envio_en_thread = functools.partial(
+            _enviar_una_odc_a_sap_en_thread, process_id=process_id, lock=lock
+        )
         with concurrent.futures.ThreadPoolExecutor(max_workers=len(odcs)) as executor:
-            return list(executor.map(_enviar_una_odc_a_sap_en_thread, odcs))
-    return [_enviar_una_odc_a_sap(oc_sap_service, oc_repo, odc) for odc in odcs]
+            return list(executor.map(envio_en_thread, odcs))
+    return [
+        _enviar_una_odc_a_sap(oc_sap_service, oc_repo, odc, process_id=process_id, lock=lock)
+        for odc in odcs
+    ]
 
 
 def _notificar_exito_sap(
@@ -548,12 +505,16 @@ def _respuesta_exito_sap(
     logger.debug(f"✅ Estado actualizado para pedido {pedido_id}: estado_id={ESTADO_CONFIRMADO_ENVIADO} (Confirmado y enviado)")
     _notificar_exito_sap(pedido_id, numero_pedido, user_id, resultado_redistribucion, resumen, envios, primera)
 
+    from src.database.services.oc_sap_service import OCSAPService
+    hay_error_st = any(OCSAPService._detectar_error_en_st(e) for e in envios)
+
     return {
         "_notify_sap": True,
         "_notify_data": {
             "pedido_id": pedido_id,
             "numero_pedido": numero_pedido,
             "doc_num": primera["doc_num_po"] and str(primera["doc_num_po"]) or None,
+            "st_error": hay_error_st,
         },
         "response": ProcesoCompletoSAPResponse(
             status="success",
@@ -640,12 +601,20 @@ def _respuesta_fallo_sap(
     # job pendiente antes de considerar un reenvío, ver _resolver_job_encolado_previo).
     _actualizar_estado_reintento(repo_pedido, pedido_id, audit)
 
+    _mensaje = _mensaje_fallo_sap(envios, primera, fallidas_reales, encoladas, error_resumen)
+
     return {
         "_notify_sap": False,
         "_notify_data": {},
+        "_notify_error": {
+            "pedido_id": pedido_id,
+            "numero_pedido": numero_pedido,
+            "mensaje": _mensaje,
+            "es_error_real": bool(fallidas_reales),
+        },
         "response": ProcesoCompletoSAPResponse(
             status="partial",
-            message=_mensaje_fallo_sap(envios, primera, fallidas_reales, encoladas, error_resumen),
+            message=_mensaje,
             pedido_id=pedido_id,
             numero_pedido=numero_pedido,
             redistribucion=resultado_redistribucion,
@@ -672,6 +641,7 @@ def _paso3_enviar_odc_sap(
     repo_pedido,
     audit,
     user_id: str,
+    process_id: Optional[str] = None,
 ):
     """PASO 3/3: Envía la(s) ODC a SAP y construye la respuesta final.
 
@@ -682,17 +652,29 @@ def _paso3_enviar_odc_sap(
     reenviar la(s) que fallaron (evita reenviar la que sí funcionó).
     """
     odcs_generadas = [odc["resultado_odc"] for odc in odcs]
+    # Lock compartido solo cuando hay 2+ ODC en paralelo (pedido mixto): ambos
+    # threads empujan progreso en vivo al MISMO process_id (el proceso es del
+    # pedido, no de la ODC individual) -- sin este lock, uno pisaría lo que el
+    # otro acaba de escribir en Redis (ver StockTransferService._empujar_progreso_itr).
+    lock = threading.Lock() if len(odcs) > 1 else None
     try:
-        envios = _procesar_envios_sap(oc_repo, oc_sap_service, odcs)
+        envios = _procesar_envios_sap(oc_repo, oc_sap_service, odcs, process_id=process_id, lock=lock)
     except Exception as e:
         logger.error(f"❌ Error en PASO 3 (Enviar a SAP): {e}", exc_info=True)
         _actualizar_estado_reintento(repo_pedido, pedido_id, audit)
+        _mensaje = f"Redistribución y ODC generadas, pero falló el envío a SAP: {str(e)}"
         return {
             "_notify_sap": False,
             "_notify_data": {},
+            "_notify_error": {
+                "pedido_id": pedido_id,
+                "numero_pedido": numero_pedido,
+                "mensaje": _mensaje,
+                "es_error_real": True,
+            },
             "response": ProcesoCompletoSAPResponse(
                 status="partial",
-                message=f"Redistribución y ODC generadas, pero falló el envío a SAP: {str(e)}",
+                message=_mensaje,
                 pedido_id=pedido_id,
                 numero_pedido=numero_pedido,
                 redistribucion=resultado_redistribucion,
@@ -727,6 +709,7 @@ def _ejecutar_proceso_completo_sync(
     user_id: str,
     audit: AuditContext,
     on_progress: Optional[Callable[[str, int, str], None]] = None,
+    process_id: Optional[str] = None,
 ) -> dict:
     """
     Ejecuta toda la lógica síncrona del proceso completo SAP.
@@ -742,6 +725,13 @@ def _ejecutar_proceso_completo_sync(
             cada uno de los 3 pasos reales (redistribución, generar ODC, enviar SAP).
             Solo lo usa el task de Celery (ver celery_proceso_sap.py); los callers
             síncronos no lo pasan.
+        process_id: ID del proceso SAP async (proceso-sap-*), si corre vía Celery.
+            Se propaga hasta el envío de cada ODC para registrar el alias
+            oc_id→process_id (ver ProcesoEstadoService.crear_alias_oc) y así poder
+            corregir el snapshot congelado si una reconciliación posterior confirma
+            algo tarde. None en el fallback síncrono (ese camino no tiene process_id
+            real, ver _handle_proceso_completo_sap_async) -- no rompe nada, solo no
+            habilita la reconciliación en tiempo real para ese camino.
 
     Returns:
         dict con:
@@ -796,7 +786,8 @@ def _ejecutar_proceso_completo_sync(
         oc_sap_service = OCSAPService()
         return _paso3_enviar_odc_sap(
             oc_repo, oc_sap_service, odcs, pedido_id, numero_pedido,
-            resultado_redistribucion, resumen, repo_pedido, audit, user_id
+            resultado_redistribucion, resumen, repo_pedido, audit, user_id,
+            process_id=process_id,
         )
 
 
@@ -842,10 +833,18 @@ async def _handle_proceso_completo_sap(request, numero_pedido: str, request_body
             try:
                 nd = resultado["_notify_data"]
                 await notificar_odc_enviada_a_sap(
-                    nd["pedido_id"], nd["numero_pedido"], nd.get("doc_num")
+                    nd["pedido_id"], nd["numero_pedido"], nd.get("doc_num"), nd.get("st_error", False)
                 )
             except Exception as notif_err:
                 logger.warning(f"⚠️ Error al enviar notificación SSE de ODC enviada a SAP: {notif_err}")
+        elif resultado.get("_notify_error"):
+            try:
+                ne = resultado["_notify_error"]
+                await notificar_error_envio_odc_sap(
+                    ne["pedido_id"], ne["numero_pedido"], ne["mensaje"], ne.get("es_error_real", True)
+                )
+            except Exception as notif_err:
+                logger.warning(f"⚠️ Error al enviar notificación SSE de error de envío ODC a SAP: {notif_err}")
 
         return resultado["response"]
 
@@ -896,10 +895,18 @@ async def _handle_proceso_sap_sync_fallback(request, numero_pedido: str, request
         try:
             nd = resultado["_notify_data"]
             await notificar_odc_enviada_a_sap(
-                nd["pedido_id"], nd["numero_pedido"], nd.get("doc_num")
+                nd["pedido_id"], nd["numero_pedido"], nd.get("doc_num"), nd.get("st_error", False)
             )
         except Exception as notif_err:
             logger.warning(f"⚠️ Error al enviar notificación SSE de ODC enviada a SAP: {notif_err}")
+    elif resultado.get("_notify_error"):
+        try:
+            ne = resultado["_notify_error"]
+            await notificar_error_envio_odc_sap(
+                ne["pedido_id"], ne["numero_pedido"], ne["mensaje"], ne.get("es_error_real", True)
+            )
+        except Exception as notif_err:
+            logger.warning(f"⚠️ Error al enviar notificación SSE de error de envío ODC a SAP: {notif_err}")
     out = _serializar_response(resultado["response"])
     out["fallback"] = "sync"
     out["process_id"] = None
@@ -1063,10 +1070,76 @@ def _construir_payload_stream(estado_actual):
     return payload
 
 
+def _tiene_st_pendiente_confirmacion(resultado: Any) -> bool:
+    """
+    True si algún envío de ODC del resultado todavía tiene Solicitudes de
+    Transferencia 'pendiente_confirmacion' (ver StockTransferService.
+    _enviar_itrs_a_sap): SAP no confirmó ni rechazó a tiempo, así que el
+    backend puede corregir el resultado más tarde (reintento manual o
+    reconciliación automática, ver _corregir_snapshot_proceso_original).
+
+    Usado por _event_stream_proceso_sap para no cortar el SSE de golpe en
+    'completed' si todavía puede llegar una corrección.
+    """
+    if not isinstance(resultado, dict):
+        return False
+    envios = resultado.get("envios_sap")
+    if not isinstance(envios, list):
+        envio_unico = resultado.get("envio_sap")
+        envios = [envio_unico] if isinstance(envio_unico, dict) else []
+    for envio in envios:
+        if not isinstance(envio, dict):
+            continue
+        st = envio.get("solicitudes_transferencia")
+        if isinstance(st, dict) and (st.get("transferencias_pendientes_confirmacion") or 0) > 0:
+            return True
+    return False
+
+
+def _hubo_cambio_estado_stream(
+    updated_at: Any, ultimo_updated_at: Any, version: Any, ultima_version: Any,
+) -> bool:
+    """True si el tick actual del stream trae un estado distinto al último
+    payload emitido (ver _event_stream_proceso_sap)."""
+    return updated_at != ultimo_updated_at or version != ultima_version
+
+
+async def _manejar_estado_completado_con_ventana_extra(
+    resultado: Any, segundos_en_ventana_extra: int, ventana_extra_max_segundos: int,
+) -> tuple:
+    """Decide si _event_stream_proceso_sap debe cortar el stream ya que el
+    proceso llegó a 'completed', o esperar otro tick (ver docstring de esa
+    función para la ventana extra por ST pendiente de confirmación).
+
+    Returns:
+        (debe_cortar, segundos_en_ventana_extra actualizado)
+    """
+    if not _tiene_st_pendiente_confirmacion(resultado):
+        return True, segundos_en_ventana_extra
+    if segundos_en_ventana_extra >= ventana_extra_max_segundos:
+        return True, segundos_en_ventana_extra
+    segundos_en_ventana_extra += 5
+    await asyncio.sleep(5)
+    return False, segundos_en_ventana_extra
+
+
 async def _event_stream_proceso_sap(estado_service, process_id: str, request):
-    """Generador SSE para el stream de progreso del proceso SAP."""
+    """Generador SSE para el stream de progreso del proceso SAP.
+
+    Si el proceso llega a 'completed' pero todavía queda alguna Solicitud de
+    Transferencia sin confirmar, no corta la conexión de inmediato: baja la
+    cadencia de polling y espera hasta VENTANA_EXTRA_MAX_SEGUNDOS, para dar margen
+    a que un reintento manual ("Reintentar ST") corrija el resultado mientras el
+    cliente sigue escuchando, en vez de que la única forma de verlo sea recargar el
+    modal. La reconciliación automática de Celery Beat corre una vez al día (ver
+    RECONCILIAR_ST_HORA/MINUTO en config.py), así que casi nunca cae dentro de esta
+    ventana -- esta espera cubre principalmente el reintento manual, no el
+    automático. Pasada la ventana, cierra igual que antes.
+    """
+    VENTANA_EXTRA_MAX_SEGUNDOS = 600
     ultimo_updated_at = None
     ultima_version = None
+    segundos_en_ventana_extra = 0
     while True:
         if await request.is_disconnected():
             break
@@ -1079,13 +1152,21 @@ async def _event_stream_proceso_sap(estado_service, process_id: str, request):
             break
         updated_at = estado_actual.get("updated_at")
         version = estado_actual.get("version", 0)
-        if updated_at != ultimo_updated_at or version != ultima_version:
+        if _hubo_cambio_estado_stream(updated_at, ultimo_updated_at, version, ultima_version):
             payload = _construir_payload_stream(estado_actual)
             yield f"data: {json.dumps(payload)}\n\n"
             ultimo_updated_at = updated_at
             ultima_version = version
-        if estado_actual["status"] in ("completed", "error"):
+
+        if estado_actual["status"] == "error":
             break
+        if estado_actual["status"] == "completed":
+            debe_cortar, segundos_en_ventana_extra = await _manejar_estado_completado_con_ventana_extra(
+                estado_actual.get("resultado"), segundos_en_ventana_extra, VENTANA_EXTRA_MAX_SEGUNDOS
+            )
+            if debe_cortar:
+                break
+            continue
         await asyncio.sleep(1)
 
 

@@ -272,40 +272,30 @@ migrations:
     category: "config"
     dependencies: ["005"]
 
-  - version: "409"
-    name: "renumerar_estados_gestionar_3_redistribucion"
-    file: "renumerar_estados_gestionar_3_redistribucion.sql"
-    description: "Renumerar estados para GESTIONAR_PEDIDO"
-    category: "config"
-    dependencies: ["005"]
-    manual: true
-    warning: "⚠️ Esta migración modifica IDs de estados y falla si hay FKs (pedido.estado_id). Ejecutar solo en BD vacía o con procedimiento coordinado."
-
-  # SAP - Configuración de servidores vinculados
-  - version: "501"
-    name: "configure_sap_linked_server"
-    file: "configure_sap_linked_server.sql"
-    description: "Configurar servidor vinculado SAP"
-    category: "sap"
-    manual: true
-    warning: "⚠️ Requiere credenciales y permisos de administrador. Ejecutar manualmente."
-
-  - version: "502"
-    name: "configure_sap_linked_server_alternative"
-    file: "configure_sap_linked_server_alternative.sql"
-    description: "Configuración alternativa de servidor vinculado SAP"
-    category: "sap"
-    manual: true
-    warning: "⚠️ Solo si la configuración estándar falla."
+  # NOTA: versiones 409, 501 y 502 existieron y se retiraron el 2026-08-28 --
+  # investigación confirmó que las 3 quedaron obsoletas antes de aplicarse:
+  # - 409 (renumerar_estados_gestionar_3_redistribucion): la renumeración que
+  #   describía ya había ocurrido por otra vía en el commit 4123e8b ("ESTADO
+  #   redistribucion", 2026-02-03), que actualizó pedido_estados.py y
+  #   migrate_pedido_estado_id.sql. La BD real (dev) ya coincide con el estado
+  #   destino de este script -- correrlo ahora habría corrompido pedido.estado_id
+  #   de pedidos reales en "GESTIONAR PEDIDO".
+  # - 501/502 (configure_sap_linked_server[_alternative]): el linked server
+  #   MYHANADB ya existe y funciona en el servidor SAP real (SRV-FABRICA/
+  #   STORECONTROL, vía SQL_SERVER_SAP_SERVER), configurado con un DSN que no
+  #   coincide con ninguno de los dos scripts (ambos usan IP cruda). Correr
+  #   cualquiera habría hecho sp_dropserver sobre la configuración que hoy
+  #   funciona. Ninguno de los dos apuntaba siquiera al servidor correcto desde
+  #   este migration_runner (que solo conecta al servidor principal, no al SAP).
+  # No versionar reemplazos con estos números -- quedan retirados permanentemente.
 
   # Ajustes de esquema - solo si se necesita revertir cambios
   - version: "601"
     name: "remove_bodega_column"
     file: "remove_bodega_column.sql"
-    description: "Remover columna bodega (rollback)"
+    description: "Remover columna bodega (rollback). skip_by_default retirado 2026-08-28 tras confirmar en dev que la columna está huérfana: 0/1346 filas de pedido_detalle con valor no nulo, sin objetos de BD ni código que la referencien"
     category: "rollback"
     manual: true
-    skip_by_default: true
 
   - version: "602"
     name: "alter_tienda_codigo_size"
@@ -653,3 +643,9 @@ migrations:
     description: "Correo 'Error al crear ODC en SAP (reconciliación automática)' al catálogo (TECNICOS): se envía cuando la reconciliación automática de una ODC ENCOLADA reintenta el envío y SAP lo rechaza con un error real. orden_flujo=NULL (no es parte de la secuencia de un pedido)"
     category: "data"
     dependencies: ["624"]
+
+  - version: "652"
+    name: "create_solicitud_transferencia_bodega"
+    file: "migrations/create_solicitud_transferencia_bodega.sql"
+    description: "Tablas solicitud_transferencia_bodega / _detalle: persiste el resultado de las Inventory Transfer Requests entre bodegas (OCSAPService._enviar_itrs_por_bodega), antes solo devuelto en la respuesta HTTP y nunca guardado en base de datos. Tablas separadas de solicitud_transferencia / _detalle a propósito, para no interferir con la lógica de 'último batch' que usa el reintento automático de tiendas (F4.5)"
+    category: "base"

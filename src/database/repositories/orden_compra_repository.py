@@ -443,6 +443,38 @@ class OrdenCompraRepository:
         finally:
             cursor.close()
 
+    def get_doc_num_by_pedido_id_y_bodega(self, pedido_id: str, codigo_bodega: str) -> Optional[str]:
+        """
+        Obtiene el DocNum (numero_oc_sap) de la OC de un pedido para una bodega específica.
+
+        Necesario para pedidos que generan más de una ODC (uno por bodega/CD, ver
+        StockTransferService.detectar_origenes_traslado) -- get_doc_num_by_pedido_id
+        por sí solo no puede distinguir cuál de las ODC del pedido es cuál.
+
+        Args:
+            pedido_id: UUID del pedido
+            codigo_bodega: Código de bodega de la ODC (ej. "RL-CD", "RG-CD")
+
+        Returns:
+            DocNum como string si existe una OC con numero_oc_sap registrado para esa
+            bodega, None si no.
+        """
+        cursor = self.conn.cursor()
+        try:
+            cursor.execute(
+                """
+                SELECT TOP 1 numero_oc_sap
+                FROM orden_compra_cabecera
+                WHERE pedido_id = ? AND codigo_bodega = ? AND numero_oc_sap IS NOT NULL
+                ORDER BY created_at DESC
+                """,
+                (pedido_id, codigo_bodega)
+            )
+            result = cursor.fetchone()
+            return str(result[0]) if result and result[0] is not None else None
+        finally:
+            cursor.close()
+
     def find_by_referencia_despacho(self, referencia_despacho: str) -> Optional[Dict[str, Any]]:
         """
         Busca una orden de compra por referencia_despacho (número de factura).

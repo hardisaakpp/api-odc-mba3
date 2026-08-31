@@ -32,11 +32,23 @@ from src.config import (
     SYNC_PRODUCTOS_HOUR,
     SYNC_PRODUCTOS_MINUTE,
     ENABLE_RECONCILIACION_ST_AUTOMATICA,
-    RECONCILIAR_ST_INTERVALO_MINUTOS,
+    RECONCILIAR_ST_HORA,
+    RECONCILIAR_ST_MINUTO,
+    RECONCILIAR_ST_VENTANA_DIAS,
+    RECONCILIAR_ST_VENTANA_DIAS_DOMINGO,
+    RECONCILIAR_ST_MARGEN_ANTIGUEDAD_MINUTOS,
     RECONCILIAR_OC_INTERVALO_MINUTOS,
+    CELERY_HEARTBEAT_INTERVALO_SEGUNDOS,
+    CELERY_HEARTBEAT_TTL_SEGUNDOS,
 )
 
 logger = logging.getLogger(__name__)
+
+# Nombre completo de la tarea, referenciado 3 veces abajo (beat_schedule x2 + task_routes).
+# Extraído a constante para evitar duplicación de literal (SonarQube python:S1192).
+TASK_RECONCILIAR_TRANSFERENCIAS_PENDIENTES = (
+    'src.tasks.celery_reconciliar_transferencias.reconciliar_transferencias_pendientes'
+)
 
 # Crear app Celery
 celery_app = Celery(
@@ -51,6 +63,7 @@ celery_app = Celery(
         'src.tasks.celery_proceso_sap',
         'src.tasks.celery_reconciliar_transferencias',
         'src.tasks.celery_reconciliar_ordenes_compra',
+        'src.tasks.celery_worker_heartbeat',
     ]
 )
 
@@ -127,11 +140,38 @@ celery_app.conf.update(
             }
         } if ENABLE_SYNC_PRODUCTOS_AUTOMATICA else {}),
         **({
-            'reconciliar-transferencias-pendientes': {
-                'task': 'src.tasks.celery_reconciliar_transferencias.reconciliar_transferencias_pendientes',
-                'schedule': float(RECONCILIAR_ST_INTERVALO_MINUTOS * 60),
-                'options': {'queue': 'maintenance', 'expires': 240.0},
-            }
+            # Lunes a sábado: barrido corto (RECONCILIAR_ST_VENTANA_DIAS, default 2
+            # días) -- solo ODCs enviadas recientemente. No mira nada más viejo a
+            # propósito (ver conversación 2026-08-28): lo que no se resuelve solo ya
+            # escaló a técnicos vía reconciliar_transferencias_pendientes (2 corridas
+            # consecutivas), así que no hace falta reintentar indefinidamente.
+            'reconciliar-transferencias-pendientes-diaria': {
+                'task': TASK_RECONCILIAR_TRANSFERENCIAS_PENDIENTES,
+                'schedule': crontab(  # type: ignore[arg-type]
+                    hour=RECONCILIAR_ST_HORA, minute=RECONCILIAR_ST_MINUTO, day_of_week='mon-sat'
+                ),
+                'kwargs': {
+                    'dias_ventana': RECONCILIAR_ST_VENTANA_DIAS,
+                    'margen_antiguedad_minutos': RECONCILIAR_ST_MARGEN_ANTIGUEDAD_MINUTOS,
+                },
+                'options': {'queue': 'maintenance', 'expires': 3600.0},
+            },
+            # Domingo: barrido semanal más amplio (RECONCILIAR_ST_VENTANA_DIAS_DOMINGO,
+            # default 7 días) -- alcanza cualquier OC que se le haya "escapado" a los
+            # barridos cortos de la semana. El colchón de seguridad (¿la corrida
+            # anterior completó?) corre en AMBAS entradas, dentro de la tarea misma
+            # (ver _verificar_salud_diaria) -- no depende de que sea domingo.
+            'reconciliar-transferencias-pendientes-semanal': {
+                'task': TASK_RECONCILIAR_TRANSFERENCIAS_PENDIENTES,
+                'schedule': crontab(  # type: ignore[arg-type]
+                    hour=RECONCILIAR_ST_HORA, minute=RECONCILIAR_ST_MINUTO, day_of_week='sun'
+                ),
+                'kwargs': {
+                    'dias_ventana': RECONCILIAR_ST_VENTANA_DIAS_DOMINGO,
+                    'margen_antiguedad_minutos': RECONCILIAR_ST_MARGEN_ANTIGUEDAD_MINUTOS,
+                },
+                'options': {'queue': 'maintenance', 'expires': 3600.0},
+            },
         } if ENABLE_RECONCILIACION_ST_AUTOMATICA else {}),
         # Reconciliación de ODC ENCOLADAS: a diferencia de la de ST, no depende de un
         # flag de encendido/apagado -- es parte de la lógica normal del envío a SAP
@@ -141,6 +181,15 @@ celery_app.conf.update(
             'task': 'src.tasks.celery_reconciliar_ordenes_compra.reconciliar_ordenes_compra_pendientes',
             'schedule': float(RECONCILIAR_OC_INTERVALO_MINUTOS * 60),
             'options': {'queue': 'maintenance', 'expires': 240.0},
+        },
+        # Heartbeat de disponibilidad de workers (ver src/services/celery_availability.py).
+        # SIEMPRE activo, en la cola 'celery' (la misma que usan las cargas de plantilla y
+        # el proceso completo SAP): si ningún worker la consume, el heartbeat expira y
+        # celery_worker_available() lo detecta como "no disponible".
+        'celery-worker-heartbeat': {
+            'task': 'src.tasks.celery_worker_heartbeat.emitir_heartbeat',
+            'schedule': float(CELERY_HEARTBEAT_INTERVALO_SEGUNDOS),
+            'options': {'queue': 'celery', 'expires': CELERY_HEARTBEAT_TTL_SEGUNDOS},
         },
     },
 
@@ -159,7 +208,7 @@ celery_app.conf.update(
     task_routes={
         'src.tasks.celery_auto_migrate.execute_auto_migration': {'queue': 'maintenance'},
         'src.tasks.celery_sync_productos.sync_productos_maestro': {'queue': 'maintenance'},
-        'src.tasks.celery_reconciliar_transferencias.reconciliar_transferencias_pendientes': {'queue': 'maintenance'},
+        TASK_RECONCILIAR_TRANSFERENCIAS_PENDIENTES: {'queue': 'maintenance'},
     },
     
     # CRÍTICO: Configuración de workers para prevenir acumulación de recursos
@@ -195,6 +244,24 @@ celery_app.conf.update(
     worker_disable_rate_limits=False,
     task_ignore_result=False,  # Guardar resultados para poder consultarlos
 )
+
+
+class _SilenciarHeartbeatFilter(logging.Filter):
+    """Silencia el ruido de ciclo de vida ('received'/'succeeded'/'Sending due
+    task') de la tarea de heartbeat de disponibilidad de workers (ver
+    src/tasks/celery_worker_heartbeat.py): se ejecuta cada
+    CELERY_HEARTBEAT_INTERVALO_SEGUNDOS para siempre y, a diferencia de las
+    demás tareas, nunca falla ni aporta señal una vez confirmado que el
+    mecanismo funciona -- serían miles de líneas idénticas por día tapando el
+    log real. No afecta logs de ninguna otra tarea.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        return "celery_worker_heartbeat.emitir_heartbeat" not in record.getMessage()
+
+
+for _logger_name in ("celery.worker.strategy", "celery.app.trace", "celery.beat"):
+    logging.getLogger(_logger_name).addFilter(_SilenciarHeartbeatFilter())
 
 
 @worker_process_init.connect

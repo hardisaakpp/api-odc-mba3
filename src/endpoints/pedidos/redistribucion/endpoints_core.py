@@ -32,7 +32,11 @@ from ._helpers import (
     calcular_estado_puede_descartar,
 )
 from ._sap_processing import procesar_pedido_sap_con_homologacion_sync
-from ._notifications import notificar_redistribucion_confirmada
+from ._notifications import (
+    notificar_redistribucion_confirmada,
+    notificar_redistribucion_creada,
+    notificar_redistribucion_procesada_sap,
+)
 from ._excel_generators import generar_excel_reporte_diferencias
 
 logger = logging.getLogger(__name__)
@@ -130,6 +134,12 @@ async def _handle_redistribuir_pedido(
             repo_pedido.update_estado(pedido_id, ESTADO_REDISTRIBUIDO, audit_context=audit)
 
             logger.info(f"✅ Redistribución creada para pedido {pedido_id} por usuario {user_id}")
+
+            try:
+                _numero_pedido = pedido_data["cabecera"].get("numero_pedido", "")
+                await notificar_redistribucion_creada(pedido_id, _numero_pedido)
+            except Exception as notif_err:
+                logger.warning(f"⚠️ Error al enviar notificación en tiempo real: {notif_err}")
 
             return JSONResponse(
                 status_code=status.HTTP_200_OK,
@@ -235,6 +245,13 @@ async def _handle_confirmar_redistribucion(
                     repo_pedido.update_estado(pedido_id, ESTADO_PEDIDO_CONFIRMADO, audit_context=audit)
                     estado_nuevo = "CONFIRMADO REDISTRIBUCION"
                     logger.info(f"✅ Estado del pedido {pedido_id} actualizado a CONFIRMADO REDISTRIBUCION")
+
+                    try:
+                        await notificar_redistribucion_procesada_sap(
+                            pedido_id, pedido_data["cabecera"]["numero_pedido"]
+                        )
+                    except Exception as notif_err:
+                        logger.warning(f"⚠️ Error al enviar notificación en tiempo real: {notif_err}")
 
             except Exception as sap_error:
                 logger.error(f"❌ Error al procesar pedido con SAP: {sap_error}", exc_info=True)
