@@ -9,12 +9,14 @@ import json
 import logging
 import re
 import threading
+from datetime import timedelta
 
 from src.utils.timezone import ahora_naive
 from typing import Optional, Dict, Any, List
 
 from src.config import (
     PROJECT_ROOT,
+    ENVIANDO_ESTANCADO_UMBRAL_MINUTOS,
     SAP_ITR_RETRY_MAX_ATTEMPTS,
     SAP_ITR_RETRY_BASE_DELAY_SECONDS,
     SAP_ITR_RETRY_MAX_JITTER_SECONDS,
@@ -270,10 +272,12 @@ class OCSAPService:
     ) -> Optional[Dict[str, Any]]:
         """Carga la cabecera de la ODC y valida que esté en un estado desde el que se
         puede seguir: PENDIENTE (nueva), ENCOLADA (un intento previo recibió HTTP 202
-        del middleware, ver `_resolver_job_encolado_previo`) o ENVIADA (ya se envió
+        del middleware, ver `_resolver_job_encolado_previo`), ENVIADA (ya se envió
         con éxito -- el caller la trata como no-op idempotente, ver `enviar_oc_a_sap`;
         puede llegar aquí en un reintento del pedido completo donde esta ODC en
-        particular ya había tenido éxito)."""
+        particular ya había tenido éxito) o ENVIANDO (un intento previo sigue en
+        curso o quedó estancado por un crash del proceso, ver
+        `_resolver_envio_estancado_previo`)."""
         oc_cabecera = oc_repo.get_existing_cabecera(oc_id)
         if not oc_cabecera:
             error_msg = f"No se encontró orden de compra con ID: {oc_id}"
@@ -284,7 +288,7 @@ class OCSAPService:
             logger.error(f"❌ {error_msg}")
             return None
         estado_actual = oc_cabecera.get("estado")
-        if estado_actual not in ("PENDIENTE", "ENCOLADA", "ENVIADA"):
+        if estado_actual not in ("PENDIENTE", "ENCOLADA", "ENVIADA", "ENVIANDO"):
             error_msg = f"La ODC no está en estado PENDIENTE (estado actual: {estado_actual})"
             result["error"] = error_msg
             result["error_message"] = error_msg
@@ -1241,6 +1245,58 @@ class OCSAPService:
         oc_cabecera["job_id"] = None
         return True
 
+    @staticmethod
+    def _resolver_envio_estancado_previo(
+        oc_id: str,
+        oc_cabecera: Dict[str, Any],
+        result: Dict[str, Any],
+    ) -> Optional[bool]:
+        """
+        Si la ODC quedó ENVIANDO (un intento previo de `enviar_oc_a_sap` sigue en
+        curso, o el proceso murió a mitad del envío -- OOM, reinicio de pod -- sin
+        llegar a fijar un estado terminal), decide si bloquear o dejar pasar.
+
+        A diferencia de ENCOLADA (`_resolver_job_encolado_previo`), acá NO hay un
+        job_id que consultar contra SAP -- no hay forma segura de confirmar si la
+        ODC llegó a crearse antes del crash. Por eso este método solo detecta y
+        bloquea; nunca reintenta ni cambia el estado en BD. El único responsable de
+        escalar una ENVIANDO estancada a ERROR (y notificar) es la reconciliación
+        periódica (ver src/tasks/celery_reconciliar_ordenes_compra.py), que además
+        reintenta el UPDATE con guarda de concurrencia -- este método simplemente
+        espera a que esa reconciliación corra (como mucho unos minutos después).
+
+        Returns:
+            None: la ODC no estaba ENVIANDO -- no aplica, el caller sigue su flujo normal.
+            False: la ODC sigue (o podría seguir) ENVIANDO -- `result` ya quedó armado
+                con un mensaje de error, el caller debe retornar de inmediato.
+        """
+        if oc_cabecera.get("estado") != "ENVIANDO":
+            return None
+
+        fecha_inicio = oc_cabecera.get("fecha_envio_iniciado")
+        umbral = timedelta(minutes=ENVIANDO_ESTANCADO_UMBRAL_MINUTOS)
+        # Sin timestamp (no debería pasar, se fija siempre junto con el estado) se
+        # trata como estancado por seguridad -- no hay forma de probar que es reciente.
+        estancado = fecha_inicio is None or (ahora_naive() - fecha_inicio) >= umbral
+
+        if estancado:
+            error_msg = (
+                f"Posible envío a SAP interrumpido hace más de {ENVIANDO_ESTANCADO_UMBRAL_MINUTOS} "
+                "minutos para esta ODC. El sistema lo revisará automáticamente en los próximos "
+                "minutos; si necesitas reintentar de inmediato, contacta a soporte."
+            )
+            logger.warning(f"⚠️ ODC {oc_id} ENVIANDO estancada (fecha_envio_iniciado={fecha_inicio})")
+            result["retry_recommended"] = False
+        else:
+            error_msg = "Ya hay un envío a SAP en curso para esta ODC. Espera a que termine antes de reintentar."
+            logger.info(f"ℹ️ ODC {oc_id} ya tiene un envío ENVIANDO reciente en curso (fecha_envio_iniciado={fecha_inicio})")
+            result["retry_recommended"] = True
+
+        result["error"] = error_msg
+        result["error_message"] = error_msg
+        result["error_source"] = "BACKEND"
+        return False
+
     def enviar_oc_a_sap(
         self,
         oc_repo: OrdenCompraRepository,
@@ -1332,7 +1388,23 @@ class OCSAPService:
                 if resuelto is False:
                     return result
 
+                if self._resolver_envio_estancado_previo(oc_id, oc_cabecera, result) is False:
+                    return result
+
                 warehouse_code = self._resolver_warehouse_code(oc_cabecera, oc_repo, oc_id, warehouse_code)
+
+                # A partir de acá es un intento de envío real (no un no-op ENVIADA, no
+                # ENCOLADA/ENVIANDO todavía en curso) -- se marca ENVIANDO antes de la
+                # prevalidación/envío (que pueden tardar varios minutos), para que otro
+                # visor de /proceso vea un estado preciso en vez de PENDIENTE engañoso.
+                # No hace falta revertir manualmente: todo camino de salida de acá en
+                # adelante (_ejecutar_validaciones_oc, _construir_json_sap,
+                # _manejar_fallo_envio_sap, _procesar_oc_exitosa, o el except externo de
+                # este método) ya deja `estado` en un valor terminal. Ver
+                # ENVIANDO_ESTANCADO_UMBRAL_MINUTOS para el único caso no cubierto (crash
+                # duro del proceso).
+                oc_repo.update_estado(oc_id, "ENVIANDO")
+                oc_cabecera["estado"] = "ENVIANDO"
 
                 if not self._ejecutar_validaciones_oc(oc_cabecera, oc_detalles, oc_id, oc_repo, result):
                     return result

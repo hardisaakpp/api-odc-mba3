@@ -267,6 +267,17 @@ RECONCILIAR_ST_MARGEN_COLCHON_HORAS = int(os.getenv("RECONCILIAR_ST_MARGEN_COLCH
 # ODC 24711/24712 e IntegracionSAPModal.vue).
 RECONCILIAR_OC_INTERVALO_MINUTOS = int(os.getenv("RECONCILIAR_OC_INTERVALO_MINUTOS", "5"))
 
+# Umbral tras el cual una ODC en estado ENVIANDO se considera estancada (posible crash
+# del proceso -- OOM, reinicio de pod -- a mitad del envío a SAP, antes de que cualquier
+# camino de salida de OCSAPService.enviar_oc_a_sap llegara a fijar un estado terminal).
+# Derivado del peor caso legítimo: prevalidación (SAP_PREVALIDACION_RETRY_MAX_ATTEMPTS=5,
+# ~229s) + envío de la ODC (SAP_ODC_RETRY_MAX_ATTEMPTS=3, ~101s) ≈ 330s. 900s (15 min) da
+# ~2.7x de margen. Si se cambian esos retries, reconsiderar este valor. La reconciliación
+# periódica (RECONCILIAR_OC_INTERVALO_MINUTOS) escala una ENVIANDO estancada a ERROR para
+# revisión manual -- no la reintenta sola, no hay forma segura de verificar contra SAP si
+# la ODC ya se creó sin un job_id (a diferencia de ENCOLADA).
+ENVIANDO_ESTANCADO_UMBRAL_MINUTOS = int(os.getenv("ENVIANDO_ESTANCADO_UMBRAL_MINUTOS", "15"))
+
 # Heartbeat de disponibilidad de workers Celery (ver src/services/celery_availability.py).
 # Reemplaza el chequeo anterior por inspect().ping() (broadcast al canal de control de
 # Celery), que resultó flaky en producción: un worker sano podía dar falso negativo por
