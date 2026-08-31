@@ -19,6 +19,11 @@ BODEGA_POR_TIENDA = {
     "RG-INT": "RG-CD",
 }
 
+TIENDA_ID_POR_CODIGO = {
+    "TRL-QSN": "tienda-trl-qsn",
+    "RG-INT": "tienda-rg-int",
+}
+
 
 def _pedido_mixto() -> dict:
     return {
@@ -30,14 +35,16 @@ def _pedido_mixto() -> dict:
         },
         "detalles": [
             {
+                "pedido_detalle_id": "detalle-roland",
                 "codigo_interno": "COD-ROLAND",
                 "costo_doc_sin_iva": 10.0,
-                "tiendas": [{"codigo": "TRL-QSN", "cantidad": 5}],
+                "tiendas": [{"tienda_id": TIENDA_ID_POR_CODIGO["TRL-QSN"], "codigo": "TRL-QSN", "cantidad": 5}],
             },
             {
+                "pedido_detalle_id": "detalle-regions",
                 "codigo_interno": "COD-REGIONS",
                 "costo_doc_sin_iva": 20.0,
-                "tiendas": [{"codigo": "RG-INT", "cantidad": 7}],
+                "tiendas": [{"tienda_id": TIENDA_ID_POR_CODIGO["RG-INT"], "codigo": "RG-INT", "cantidad": 7}],
             },
         ],
     }
@@ -47,11 +54,28 @@ def _lineas_detalle(txt_bytes: bytes) -> list:
     return [linea for linea in txt_bytes.decode("utf-8").split("\n") if linea]
 
 
-def _patch_comunes(mock_ctx, mock_repo_class, mock_oc_repo_class, mock_stock_service):
+def _cantidades_asignadas_desde_pedido(pedido: dict) -> dict:
+    """Deriva {pedido_detalle_id: {tienda_id: cantidad}} directamente de las
+    cantidades que la fixture ya tenía en tienda["cantidad"], para que el mock de
+    DistribucionConfirmadaRepository reproduzca exactamente lo mismo -- estos tests
+    verifican bodega/DocNum, no cantidad."""
+    return {
+        detalle["pedido_detalle_id"]: {
+            tienda["tienda_id"]: tienda["cantidad"] for tienda in detalle["tiendas"]
+        }
+        for detalle in pedido["detalles"]
+    }
+
+
+def _patch_comunes(mock_ctx, mock_repo_class, mock_oc_repo_class, mock_stock_service, mock_dist_class):
     mock_ctx.return_value.__enter__.return_value = MagicMock()
-    mock_repo_class.return_value.get_pedido_completo.return_value = _pedido_mixto()
+    pedido = _pedido_mixto()
+    mock_repo_class.return_value.get_pedido_completo.return_value = pedido
     mock_repo_class.return_value.get_fecha_confirmacion_estado.return_value = None
     mock_stock_service.obtener_bodega_de_tienda.side_effect = lambda codigo: BODEGA_POR_TIENDA.get(codigo)
+    mock_dist_class.return_value.get_cantidades_asignadas_por_pedido.return_value = (
+        _cantidades_asignadas_desde_pedido(pedido)
+    )
 
     oc_repo = MagicMock()
     oc_repo.get_doc_num_by_pedido_id_y_bodega.side_effect = lambda pedido_id, bodega: (
@@ -65,10 +89,15 @@ def _patch_comunes(mock_ctx, mock_repo_class, mock_oc_repo_class, mock_stock_ser
 def test_sin_codigo_bodega_incluye_todas_las_tiendas_y_docnum_generico():
     with patch("src.database.services.mba_pedido_exporter.get_db_connection_context") as mock_ctx, \
          patch("src.database.services.mba_pedido_exporter.PedidoRepository") as mock_repo_class, \
-         patch("src.database.services.mba_pedido_exporter.OrdenCompraRepository") as mock_oc_repo_class:
+         patch("src.database.services.mba_pedido_exporter.OrdenCompraRepository") as mock_oc_repo_class, \
+         patch("src.database.services.mba_pedido_exporter.DistribucionConfirmadaRepository") as mock_dist_class:
         mock_ctx.return_value.__enter__.return_value = MagicMock()
-        mock_repo_class.return_value.get_pedido_completo.return_value = _pedido_mixto()
+        pedido = _pedido_mixto()
+        mock_repo_class.return_value.get_pedido_completo.return_value = pedido
         mock_repo_class.return_value.get_fecha_confirmacion_estado.return_value = None
+        mock_dist_class.return_value.get_cantidades_asignadas_por_pedido.return_value = (
+            _cantidades_asignadas_desde_pedido(pedido)
+        )
         oc_repo = MagicMock()
         oc_repo.get_doc_num_by_pedido_id.return_value = "DOCNUM-MAS-RECIENTE"
         mock_oc_repo_class.return_value = oc_repo
@@ -91,8 +120,9 @@ def test_codigo_bodega_roland_filtra_solo_sus_tiendas_y_su_docnum():
     with patch("src.database.services.mba_pedido_exporter.get_db_connection_context") as mock_ctx, \
          patch("src.database.services.mba_pedido_exporter.PedidoRepository") as mock_repo_class, \
          patch("src.database.services.mba_pedido_exporter.OrdenCompraRepository") as mock_oc_repo_class, \
+         patch("src.database.services.mba_pedido_exporter.DistribucionConfirmadaRepository") as mock_dist_class, \
          patch("src.database.services.stock_transfer_service.StockTransferService") as mock_stock_service:
-        oc_repo = _patch_comunes(mock_ctx, mock_repo_class, mock_oc_repo_class, mock_stock_service)
+        oc_repo = _patch_comunes(mock_ctx, mock_repo_class, mock_oc_repo_class, mock_stock_service, mock_dist_class)
 
         exporter = MBAPedidoExporter()
         resultado = exporter.exportar_pedido_formato_mba_consolidado(
@@ -115,8 +145,9 @@ def test_codigo_bodega_regions_filtra_solo_sus_tiendas_y_su_docnum():
     with patch("src.database.services.mba_pedido_exporter.get_db_connection_context") as mock_ctx, \
          patch("src.database.services.mba_pedido_exporter.PedidoRepository") as mock_repo_class, \
          patch("src.database.services.mba_pedido_exporter.OrdenCompraRepository") as mock_oc_repo_class, \
+         patch("src.database.services.mba_pedido_exporter.DistribucionConfirmadaRepository") as mock_dist_class, \
          patch("src.database.services.stock_transfer_service.StockTransferService") as mock_stock_service:
-        _patch_comunes(mock_ctx, mock_repo_class, mock_oc_repo_class, mock_stock_service)
+        _patch_comunes(mock_ctx, mock_repo_class, mock_oc_repo_class, mock_stock_service, mock_dist_class)
 
         exporter = MBAPedidoExporter()
         resultado = exporter.exportar_pedido_formato_mba(
@@ -140,9 +171,14 @@ def _pedido_muchas_lineas_pocas_tiendas(n_lineas: int) -> dict:
         "cabecera": {"numero_pedido": "PED-1", "fecha_pedido": None, "fecha_entrega": None, "origen_traslado": ""},
         "detalles": [
             {
+                "pedido_detalle_id": f"detalle-{i}",
                 "codigo_interno": f"COD-{i}",
                 "costo_doc_sin_iva": 10.0,
-                "tiendas": [{"codigo": "TRL-QSN" if i % 2 == 0 else "RG-INT", "cantidad": 1}],
+                "tiendas": [{
+                    "tienda_id": TIENDA_ID_POR_CODIGO["TRL-QSN"] if i % 2 == 0 else TIENDA_ID_POR_CODIGO["RG-INT"],
+                    "codigo": "TRL-QSN" if i % 2 == 0 else "RG-INT",
+                    "cantidad": 1,
+                }],
             }
             for i in range(n_lineas)
         ],
@@ -157,9 +193,14 @@ def test_no_repite_consulta_de_bodega_por_cada_linea_del_pedido():
     with patch("src.database.services.mba_pedido_exporter.get_db_connection_context") as mock_ctx, \
          patch("src.database.services.mba_pedido_exporter.PedidoRepository") as mock_repo_class, \
          patch("src.database.services.mba_pedido_exporter.OrdenCompraRepository") as mock_oc_repo_class, \
+         patch("src.database.services.mba_pedido_exporter.DistribucionConfirmadaRepository") as mock_dist_class, \
          patch("src.database.services.stock_transfer_service.StockTransferService") as mock_stock_service:
-        oc_repo = _patch_comunes(mock_ctx, mock_repo_class, mock_oc_repo_class, mock_stock_service)
-        mock_repo_class.return_value.get_pedido_completo.return_value = _pedido_muchas_lineas_pocas_tiendas(12)
+        oc_repo = _patch_comunes(mock_ctx, mock_repo_class, mock_oc_repo_class, mock_stock_service, mock_dist_class)
+        pedido_muchas_lineas = _pedido_muchas_lineas_pocas_tiendas(12)
+        mock_repo_class.return_value.get_pedido_completo.return_value = pedido_muchas_lineas
+        mock_dist_class.return_value.get_cantidades_asignadas_por_pedido.return_value = (
+            _cantidades_asignadas_desde_pedido(pedido_muchas_lineas)
+        )
 
         exporter = MBAPedidoExporter()
         resultado = exporter.exportar_pedido_formato_mba_consolidado(

@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from ..connection import get_db_connection_context
 from ..repositories.pedido_repository import PedidoRepository
 from ..repositories.orden_compra_repository import OrdenCompraRepository
+from ..repositories.distribucion_confirmada_repository import DistribucionConfirmadaRepository
 from ..pedido_estados import ESTADO_REDISTRIBUCION
 
 logger = logging.getLogger(__name__)
@@ -248,6 +249,22 @@ Número secuencial de registro\tValor temporal de pedido, marca el bloque que co
         producto no debe exportarse al TXT MBA3."""
         return bool(detalle.get("total_modificado_manual")) and not detalle.get("total")
 
+    @staticmethod
+    def _resolver_cantidad_asignada(
+        pedido_detalle_id: Optional[str], tienda_id: Optional[str], cantidades_asignadas: dict
+    ) -> Optional[float]:
+        """Resuelve la cantidad FINAL asignada por MABEL TRADING a esta tienda tras
+        la redistribución (distribucion_confirmada.cantidad_asignada, versión más
+        alta -- ver DistribucionConfirmadaRepository.get_cantidades_asignadas_por_pedido),
+        en vez del snapshot original de pedido_detalle_tienda.cantidad (que nunca se
+        actualiza después de una redistribución).
+
+        Returns:
+            La cantidad asignada (puede ser 0.0), o None si esta tienda no tiene
+            fila en esa versión -- nunca se le asignó nada en la redistribución,
+            el llamador debe omitirla por completo."""
+        return cantidades_asignadas.get(pedido_detalle_id, {}).get(tienda_id)
+
     def exportar_pedido_formato_mba(
         self,
         pedido_id: str,
@@ -262,6 +279,13 @@ Número secuencial de registro\tValor temporal de pedido, marca el bloque que co
         - 19 líneas de encabezado (opcional, se eliminan al importar en MBA)
         - Líneas de detalle: una por cada combinación producto-tienda
         - 35 columnas separadas por TAB
+
+        Cantidad Pedido (col. 22) sale de distribucion_confirmada.cantidad_asignada
+        (versión más alta) -- la cantidad FINAL que MABEL TRADING asignó a esa tienda
+        tras la redistribución -- y NO del snapshot original de
+        pedido_detalle_tienda.cantidad, que nunca se actualiza cuando el pedido se
+        edita o se redistribuye después de cargado el Excel. Una tienda sin fila en
+        esa versión (nunca se le asignó nada) se omite del TXT por completo.
 
         Args:
             pedido_id: UUID del pedido a exportar
@@ -296,6 +320,7 @@ Número secuencial de registro\tValor temporal de pedido, marca el bloque que co
 
             fecha_confirmacion = repo.get_fecha_confirmacion_estado(pedido_id, ESTADO_REDISTRIBUCION)
             oc_repo = OrdenCompraRepository(conn)
+            cantidades_asignadas = DistribucionConfirmadaRepository(conn).get_cantidades_asignadas_por_pedido(pedido_id)
             doc_num = (
                 oc_repo.get_doc_num_by_pedido_id_y_bodega(pedido_id, codigo_bodega)
                 if codigo_bodega else oc_repo.get_doc_num_by_pedido_id(pedido_id)
@@ -329,10 +354,19 @@ Número secuencial de registro\tValor temporal de pedido, marca el bloque que co
 
                 codigo_producto = (detalle.get("codigo_interno") or "").strip()  # Col 21 Código Producto
                 precio_unitario = self._resolver_precio_unitario(detalle)
+                pedido_detalle_id = detalle.get("pedido_detalle_id")
 
                 tiendas = self._filtrar_tiendas_por_bodega(detalle.get("tiendas", []), codigo_bodega, bodega_por_codigo)
                 for tienda in tiendas:
-                    cantidad = tienda.get("cantidad", 0)
+                    cantidad = self._resolver_cantidad_asignada(
+                        pedido_detalle_id, tienda.get("tienda_id"), cantidades_asignadas
+                    )
+
+                    # Sin fila en distribucion_confirmada: nunca se le asignó nada en
+                    # la redistribución -- se omite la tienda por completo (no se
+                    # exporta con cantidad 0).
+                    if cantidad is None:
+                        continue
 
                     # Omitir solo si la cantidad es negativa (0 y decimales como 0.5 se exportan)
                     if cantidad < 0:
@@ -406,6 +440,13 @@ Número secuencial de registro\tValor temporal de pedido, marca el bloque que co
 
         Útil cuando el pedido no necesita distinguir por tienda/sucursal.
 
+        La cantidad consolidada por producto suma distribucion_confirmada.cantidad_asignada
+        (versión más alta) de sus tiendas, no el snapshot original de
+        pedido_detalle_tienda.cantidad -- ver exportar_pedido_formato_mba. Si ninguna
+        tienda del producto (dentro de la bodega filtrada, si aplica) tiene fila en
+        esa distribución, el producto entero se omite (mismo criterio que "sin
+        tiendas en esta bodega").
+
         Args:
             pedido_id: UUID del pedido a exportar
             config: Configuración de exportación
@@ -433,6 +474,7 @@ Número secuencial de registro\tValor temporal de pedido, marca el bloque que co
 
             fecha_confirmacion = repo.get_fecha_confirmacion_estado(pedido_id, ESTADO_REDISTRIBUCION)
             oc_repo = OrdenCompraRepository(conn)
+            cantidades_asignadas = DistribucionConfirmadaRepository(conn).get_cantidades_asignadas_por_pedido(pedido_id)
             doc_num = (
                 oc_repo.get_doc_num_by_pedido_id_y_bodega(pedido_id, codigo_bodega)
                 if codigo_bodega else oc_repo.get_doc_num_by_pedido_id(pedido_id)
@@ -462,6 +504,7 @@ Número secuencial de registro\tValor temporal de pedido, marca el bloque que co
 
                 codigo_producto = (detalle.get("codigo_interno") or "").strip()
                 precio_unitario = self._resolver_precio_unitario(detalle)
+                pedido_detalle_id = detalle.get("pedido_detalle_id")
 
                 tiendas = self._filtrar_tiendas_por_bodega(detalle.get("tiendas", []), codigo_bodega, bodega_por_codigo)
                 # Producto sin tiendas en esta bodega: no pertenece a esta ODC, se omite
@@ -470,12 +513,30 @@ Número secuencial de registro\tValor temporal de pedido, marca el bloque que co
                 if codigo_bodega and not tiendas:
                     continue
 
-                # Consolidar cantidad total de las tiendas (de esta bodega, si aplica)
-                cantidad_total = sum(t.get("cantidad", 0) for t in tiendas)
+                # Resolver la cantidad asignada de cada tienda (None = sin fila en
+                # distribucion_confirmada, nunca se le asignó nada -- se descarta).
+                # Producto con tiendas pero NINGUNA con distribución confirmada -- se le
+                # quitó todo en la redistribución -- se omite por completo, igual que
+                # "sin tiendas en esta bodega" de arriba. Se filtra solo None (no
+                # negativos) para no alterar el criterio histórico de negatividad, que
+                # sigue evaluándose sobre el TOTAL más abajo.
+                cantidades_resueltas = [
+                    cantidad_tienda
+                    for cantidad_tienda in (
+                        self._resolver_cantidad_asignada(pedido_detalle_id, tienda.get("tienda_id"), cantidades_asignadas)
+                        for tienda in tiendas
+                    )
+                    if cantidad_tienda is not None
+                ]
+                if tiendas and not cantidades_resueltas:
+                    continue
+
+                # Consolidar cantidad total de las tiendas resueltas (de esta bodega, si aplica)
+                cantidad_total = sum(cantidades_resueltas)
 
                 if cantidad_total < 0:
                     continue
-                
+
                 columnas = [
                     self._format_number(numero_secuencial, 0),
                     self._format_number(config.numero_pedido_temporal, 0),

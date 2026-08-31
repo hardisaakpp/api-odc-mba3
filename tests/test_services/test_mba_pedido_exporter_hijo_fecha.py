@@ -16,6 +16,10 @@ from unittest.mock import MagicMock, patch
 from src.database.services.mba_pedido_exporter import MBAExportConfig, MBAPedidoExporter
 
 
+PEDIDO_DETALLE_ID = "detalle-1"
+TIENDA_ID = "tienda-1"
+
+
 def _pedido_hijo(cantidad: float = 1) -> dict:
     return {
         "cabecera": {
@@ -27,9 +31,10 @@ def _pedido_hijo(cantidad: float = 1) -> dict:
         },
         "detalles": [
             {
+                "pedido_detalle_id": PEDIDO_DETALLE_ID,
                 "codigo_interno": "COD-1",
                 "costo_doc_sin_iva": 10.0,
-                "tiendas": [{"codigo": "TRL-001", "cantidad": cantidad}],
+                "tiendas": [{"tienda_id": TIENDA_ID, "codigo": "TRL-001", "cantidad": cantidad}],
             }
         ],
     }
@@ -47,11 +52,22 @@ def _mock_repo(mock_repo_class, pedido: dict):
     mock_repo_class.return_value.get_fecha_confirmacion_estado.return_value = None
 
 
+def _mock_distribucion(mock_dist_class, cantidad: float = 1):
+    """Mockea DistribucionConfirmadaRepository devolviendo la misma cantidad que
+    la fixture ya tenía en tienda["cantidad"], para no cambiar la intención de
+    estos tests (verifican fecha del pedido hijo, no cantidad)."""
+    mock_dist_class.return_value.get_cantidades_asignadas_por_pedido.return_value = {
+        PEDIDO_DETALLE_ID: {TIENDA_ID: cantidad}
+    }
+
+
 def test_hijo_usa_su_propia_fecha_pedido_y_entrega():
     with patch("src.database.services.mba_pedido_exporter.get_db_connection_context") as mock_ctx, \
-         patch("src.database.services.mba_pedido_exporter.PedidoRepository") as mock_repo_class:
+         patch("src.database.services.mba_pedido_exporter.PedidoRepository") as mock_repo_class, \
+         patch("src.database.services.mba_pedido_exporter.DistribucionConfirmadaRepository") as mock_dist_class:
         mock_ctx.return_value.__enter__.return_value = MagicMock()
         _mock_repo(mock_repo_class, _pedido_hijo())
+        _mock_distribucion(mock_dist_class)
 
         exporter = MBAPedidoExporter()
         resultado = exporter.exportar_pedido_formato_mba(
@@ -67,9 +83,11 @@ def test_hijo_usa_su_propia_fecha_pedido_y_entrega():
 
 def test_hijo_usa_su_propia_fecha_tambien_en_modo_consolidado():
     with patch("src.database.services.mba_pedido_exporter.get_db_connection_context") as mock_ctx, \
-         patch("src.database.services.mba_pedido_exporter.PedidoRepository") as mock_repo_class:
+         patch("src.database.services.mba_pedido_exporter.PedidoRepository") as mock_repo_class, \
+         patch("src.database.services.mba_pedido_exporter.DistribucionConfirmadaRepository") as mock_dist_class:
         mock_ctx.return_value.__enter__.return_value = MagicMock()
         _mock_repo(mock_repo_class, _pedido_hijo())
+        _mock_distribucion(mock_dist_class)
 
         exporter = MBAPedidoExporter()
         resultado = exporter.exportar_pedido_formato_mba_consolidado(
@@ -93,10 +111,12 @@ def test_padre_sin_pedido_padre_id_sigue_usando_fecha_confirmacion():
     pedido["cabecera"]["pedido_padre_id"] = None
 
     with patch("src.database.services.mba_pedido_exporter.get_db_connection_context") as mock_ctx, \
-         patch("src.database.services.mba_pedido_exporter.PedidoRepository") as mock_repo_class:
+         patch("src.database.services.mba_pedido_exporter.PedidoRepository") as mock_repo_class, \
+         patch("src.database.services.mba_pedido_exporter.DistribucionConfirmadaRepository") as mock_dist_class:
         mock_ctx.return_value.__enter__.return_value = MagicMock()
         mock_repo_class.return_value.get_pedido_completo.return_value = pedido
         mock_repo_class.return_value.get_fecha_confirmacion_estado.return_value = datetime(2026, 5, 1)
+        _mock_distribucion(mock_dist_class)
 
         exporter = MBAPedidoExporter()
         resultado = exporter.exportar_pedido_formato_mba(
