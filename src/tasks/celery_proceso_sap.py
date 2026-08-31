@@ -67,6 +67,46 @@ def _log_resultado_proceso_sap(
     logger.error(f"❌ Proceso SAP Celery con status inesperado: {ctx} detalle={error_detalle}")
 
 
+def _publicar_notificacion_sse(resultado: Dict[str, Any]) -> None:
+    """Publica (best-effort, vía Redis) la notificación SSE 'ODC enviada a SAP' /
+    'Error al enviar ODC a SAP' para el camino Celery (el preferido en producción
+    cuando hay workers disponibles -- ver NOTA DE RENDIMIENTO en endpoints_proceso.py).
+
+    Este proceso (worker de Celery) no tiene acceso a las colas SSE en memoria del
+    proceso mba3-api; publish_notification_from_worker las alcanza vía Redis pub/sub
+    (ver src/utils/sse_redis_bridge.py). Nunca debe romper la tarea si falla."""
+    try:
+        from src.utils.sse_redis_bridge import publish_notification_from_worker
+        from src.endpoints.pedidos.redistribucion._notifications import (
+            construir_mensaje_odc_enviada_a_sap,
+            construir_mensaje_error_envio_odc_sap,
+        )
+
+        if resultado.get("_notify_sap"):
+            nd = resultado["_notify_data"]
+            titulo, mensaje, tipo = construir_mensaje_odc_enviada_a_sap(
+                nd["numero_pedido"], nd.get("doc_num"), nd.get("st_error", False)
+            )
+            publish_notification_from_worker(
+                "odcsap.view", titulo, mensaje, tipo,
+                {"pedido_id": nd["pedido_id"], "numero_pedido": nd["numero_pedido"],
+                 "doc_num": nd.get("doc_num"), "st_error": nd.get("st_error", False),
+                 "accion": "odc_enviada_sap"},
+            )
+        elif resultado.get("_notify_error"):
+            ne = resultado["_notify_error"]
+            titulo, mensaje, tipo = construir_mensaje_error_envio_odc_sap(
+                ne["mensaje"], ne.get("es_error_real", True)
+            )
+            publish_notification_from_worker(
+                "odcsap.view", titulo, mensaje, tipo,
+                {"pedido_id": ne["pedido_id"], "numero_pedido": ne["numero_pedido"],
+                 "accion": "error_envio_odc_sap"},
+            )
+    except Exception as e:
+        logger.warning(f"⚠️ No se pudo publicar notificación SSE del proceso SAP Celery (no crítico): {e}")
+
+
 def _response_to_dict(response: Any) -> Dict[str, Any]:
     """Serializa la respuesta del proceso completo a dict JSON-serializable para Redis."""
     if hasattr(response, "model_dump"):
@@ -149,6 +189,7 @@ def ejecutar_proceso_completo_sap(
         _log_resultado_proceso_sap(
             process_id, numero_pedido, user_id, resultado_serialized
         )
+        _publicar_notificacion_sse(resultado)
 
     except HTTPException as e:
         detail = e.detail if isinstance(e.detail, dict) else {"message": str(e.detail)}

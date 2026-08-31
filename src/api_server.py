@@ -358,6 +358,12 @@ async def startup_event():
     # 3. Log de configuración de migración automática (Celery Beat)
     _log_configuracion_migracion_automatica()
 
+    # 4. Listener SSE↔Redis: reenvía al bus de notificaciones (notification_manager)
+    # los mensajes que publican los workers de Celery (proceso aparte, sin acceso
+    # directo a las colas SSE en memoria de este proceso). Ver src/utils/sse_redis_bridge.py.
+    from src.utils.sse_redis_bridge import escuchar_notificaciones_redis
+    app.state.sse_redis_listener_task = asyncio.create_task(escuchar_notificaciones_redis())
+
     logger.info("=" * 70)
     logger.info("✅ Inicialización completada - Servidor listo para recibir peticiones")
     logger.info("=" * 70)
@@ -369,7 +375,17 @@ async def shutdown_event():
     Evento de cierre del servidor.
     """
     logger.info("🛑 Cerrando servidor...")
-    # Tarea de migración automática deshabilitada - no hay tareas en segundo plano que detener
+
+    listener_task = getattr(app.state, "sse_redis_listener_task", None)
+    if listener_task is not None:
+        listener_task.cancel()
+        try:
+            await listener_task
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            logger.warning(f"⚠️ Error al detener el listener SSE↔Redis: {e}")
+
     logger.info("✅ Servidor cerrado")
 
 

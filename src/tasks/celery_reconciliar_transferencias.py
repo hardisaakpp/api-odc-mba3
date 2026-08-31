@@ -141,6 +141,7 @@ def _fetch_oc_cabecera(oc_id: str) -> Optional[Dict[str, Any]]:
 
 def _escalar_a_tecnicos(oc_cabecera: Dict[str, Any], resultado_st: Dict[str, Any]) -> None:
     from src.utils.email_notifier import send_oc_st_error_notification_tecnicos
+    from src.utils.sse_redis_bridge import publish_notification_from_worker_multi
 
     send_oc_st_error_notification_tecnicos(
         oc_cabecera=oc_cabecera,
@@ -148,6 +149,15 @@ def _escalar_a_tecnicos(oc_cabecera: Dict[str, Any], resultado_st: Dict[str, Any
         doc_entry=oc_cabecera.get("doc_entry"),
         solicitudes_transferencia=resultado_st,
         pedido_numero=None,
+    )
+    referencia = oc_cabecera.get("numero_oc_sap") or oc_cabecera.get("oc_id") or "?"
+    publish_notification_from_worker_multi(
+        ["odcsap.view", "mabel.view"],
+        "Pedido pendiente requiere revisión manual",
+        f"La ODC {referencia} sigue con Solicitudes de Transferencia pendientes tras la "
+        "reconciliación automática y se escaló a soporte técnico.",
+        "warning",
+        {"oc_id": oc_cabecera.get("oc_id"), "accion": "reconciliacion_st_escalada"},
     )
 
 
@@ -193,6 +203,31 @@ def _evaluar_escalamiento_por_recurrencia(oc_id: str, resultado_st: Dict[str, An
     redis_client.delete(key)
 
 
+def _notificar_pedido_desbloqueado(resultado: Dict[str, Any]) -> None:
+    """Notificación SSE best-effort cuando la reconciliación automática (sin usuario
+    actor) resuelve las ST pendientes de una OC y eso desbloquea el pedido -- ver
+    StockTransferService._reevaluar_cierre_pedido_tras_reintento (bug histórico de
+    'pedido congelado' que quedaba así sin ningún aviso en tiempo real)."""
+    cierre = resultado.get("cierre_pedido") or {}
+    if not cierre.get("estado_nuevo"):
+        return
+    try:
+        from src.utils.sse_redis_bridge import publish_notification_from_worker_multi
+
+        numero_pedido = resultado.get("pedido_numero") or resultado.get("oc_id")
+        publish_notification_from_worker_multi(
+            ["odcsap.view", "mabel.view"],
+            "Pedido desbloqueado automáticamente",
+            f"El pedido {numero_pedido} se desbloqueó: las Solicitudes de Transferencia "
+            f"pendientes se resolvieron y el pedido pasó a {cierre['estado_nuevo']}.",
+            "success",
+            {"pedido_id": resultado.get("pedido_id"), "numero_pedido": numero_pedido,
+             "oc_id": resultado.get("oc_id"), "accion": "pedido_desbloqueado_reconciliacion"},
+        )
+    except Exception as e:
+        logger.warning(f"⚠️ No se pudo publicar notificación SSE de pedido desbloqueado (no crítico): {e}")
+
+
 def _reconciliar_oc(oc_id: str, redis_client) -> Optional[Dict[str, Any]]:
     if _ya_fue_notificado(redis_client, oc_id):
         logger.debug(f"⏭️ OC {oc_id[:8]}... ya escalada a técnicos; se omite reintento automático")
@@ -214,6 +249,7 @@ def _reconciliar_oc(oc_id: str, redis_client) -> Optional[Dict[str, Any]]:
         if resultado["status"] == "success":
             logger.info(f"✅ Reconciliación automática ST completada para OC {oc_id[:8]}...")
             _limpiar_visto_pendiente(redis_client, oc_id)
+            _notificar_pedido_desbloqueado(resultado)
             return resultado
 
         resultado_st = resultado.get("resultado_st") or {}
