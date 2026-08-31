@@ -28,6 +28,7 @@ _DEFAULT_NOMBRE_PRODUCTO = "Sin nombre"
 _PROBLEMA_ERROR_CONSULTAR = "Error al consultar"
 _PROBLEMA_NO_EXISTE = "No existe en SAP"
 _SECCION_INFO_PEDIDO = "Informaci&oacute;n del Pedido"
+_SECCION_ACCION_RECOMENDADA = "Acci&oacute;n Recomendada"
 _LABEL_NUMERO_PEDIDO = "N&uacute;mero de Pedido"
 _LABEL_PEDIDO_ID = "Pedido ID"
 _LABEL_NUEVO_ESTADO = "Nuevo Estado"
@@ -561,7 +562,7 @@ def _build_reconciliacion_st_caida_email(fecha_ejecucion):
                 "o el c&oacute;digo de la tarea) dej&oacute; de ejecutarse o de terminar."
             ),
             warning_section(
-                "Acci&oacute;n Recomendada",
+                _SECCION_ACCION_RECOMENDADA,
                 '<p style="margin:0;color:#5d4037;font-size:14px;">Verificar que celery-beat y el '
                 'worker est&eacute;n corriendo, y revisar los logs de '
                 '<code>reconciliar_transferencias_pendientes</code> para m&aacute;s informaci&oacute;n. '
@@ -645,7 +646,7 @@ def _build_error_migracion_email(error_message, fecha_ejecucion):
             info_section("Detalles del Error", [
                 ("Error", f'<span style="font-family:Consolas,monospace;font-size:13px;color:#c62828;">{error_message}</span>'),
             ], accent="red"),
-            warning_section("Acci&oacute;n Recomendada",
+            warning_section(_SECCION_ACCION_RECOMENDADA,
                 '<p style="margin:0;color:#5d4037;font-size:14px;">Por favor, revisa los logs del sistema para m&aacute;s informaci&oacute;n.</p>'),
         ],
         accent="red",
@@ -735,7 +736,7 @@ def _build_capacity_warning_email(warning_type, details, fecha_ejecucion):
         sections=[
             paragraph(mensaje_principal),
             info_section("Detalles", detail_items, accent=accent),
-            warning_section("Acci&oacute;n Recomendada",
+            warning_section(_SECCION_ACCION_RECOMENDADA,
                 '<p style="margin:0;color:#5d4037;font-size:14px;">Revisar los logs del sistema y considerar ajustar la configuraci&oacute;n si es necesario.</p>'),
         ],
         accent=accent,
