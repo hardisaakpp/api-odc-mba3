@@ -140,8 +140,8 @@ el endpoint de Redistribución (`DistribucionConfirmadaRepository.get_distribuci
 
 ## Validaciones
 
-Idénticas a `/api/pedidos/{pedido_id}/distribucion/descargar-excel`: 404 si el pedido no
-existe o si no hay distribución confirmada, con el mismo formato de error.
+404 si el pedido no existe o si no hay distribución confirmada, con el formato de error
+estándar (`{"error": "not_found", "message": "..."}`).
 
 ## Nombre del Archivo
 
@@ -157,16 +157,6 @@ A diferencia del botón "Descargar Redistribución" (que hasta esta implementaci
 visible en modo `soloLectura`), **este botón y el existente ahora se muestran para ambos
 roles** en `MabelTradingRedistribucionView.vue`.
 
-## Diferencias con "Descargar Redistribución"
-
-| Característica | Descargar Redistribución | Exportar a Excel (Traslados) |
-|---|---|---|
-| Endpoint | `/api/pedidos/{id}/distribucion/descargar-excel` | `/api/pedidos/{id}/traslados/exportar-excel` |
-| Nº de traslado | Consulta en vivo a SAP (`SAPServiceLayerClient`), con fallback silencioso si falla | Solo base de datos, sin llamada a SAP |
-| Unidad de fila | Producto (con sub-filas por tienda en la hoja de detalle) | Producto **+** tienda (una fila por combinación) |
-| Costo unitario | Sí (hoja "Distribución por Tienda") | No — fuera de alcance del requerimiento 1.9 |
-| Bodegas | Incluidas, sin distinción visual | Incluidas, marcadas explícitamente como sin Nº de traslado |
-
 ## Soporte y Mantenimiento
 
 Para cualquier modificación:
@@ -181,10 +171,10 @@ Para cualquier modificación:
    `src/modules/mba3-consultas/services/domains/pedidos.ts`
    (`exportarTrasladosExcel`)
 
-Ver también: [CONFIGURACION_DESCARGA_DISTRIBUCION_EXCEL.md](CONFIGURACION_DESCARGA_DISTRIBUCION_EXCEL.md)
-para el export "hermano" de Redistribución del que este endpoint reutiliza el patrón de
-descarga y los estilos (`_crear_estilos` en `_excel_generators.py`), pero **no** su libro:
-son dos endpoints y dos archivos `.xlsx` distintos.
+Nota histórica: el botón "Descargar Redistribución" (`/api/pedidos/{id}/distribucion/descargar-excel`)
+del que este endpoint reutilizaba el patrón de descarga y los estilos (`_crear_estilos`
+en `_excel_generators.py`) fue eliminado por completo (frontend y backend, 2026-08-31);
+este endpoint de traslados no dependía de su lógica y sigue funcionando sin cambios.
 
 ## Pendiente de decisión del negocio (no bloqueante para esta entrega)
 

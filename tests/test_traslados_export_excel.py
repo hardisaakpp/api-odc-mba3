@@ -505,9 +505,3 @@ class TestContratoRutaExportarTraslados:
         }
 
         assert {"mabel.view", "odcsap.view"} <= permisos
-
-    def test_no_altera_la_ruta_de_descarga_existente(self):
-        """Guarda de no regresión: el export de distribución sigue registrado."""
-        paths = {r.path for r in self._routes()}
-
-        assert "/api/pedidos/{pedido_id}/distribucion/descargar-excel" in paths

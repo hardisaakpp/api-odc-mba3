@@ -340,7 +340,7 @@ def _hoja_traslados_detalle(wb, matriz: Dict[str, Any], estilos: Dict[str, Any])
         ws.cell(row=row, column=10, value=fila["confirmado_total_producto"])
         row += 1
 
-    # Fila de totales, separada por una fila en blanco (igual que _hoja_resumen).
+    # Fila de totales, separada por una fila en blanco.
     row += 1
     ws.cell(row=row, column=1, value="TOTALES").font = Font(bold=True)
     ws.cell(row=row, column=7, value=matriz.get("gran_total_solicitada", 0.0)).font = Font(bold=True)
