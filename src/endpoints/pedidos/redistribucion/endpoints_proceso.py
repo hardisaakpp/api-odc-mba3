@@ -1096,6 +1096,33 @@ def _tiene_st_pendiente_confirmacion(resultado: Any) -> bool:
     return False
 
 
+def _hubo_cambio_estado_stream(
+    updated_at: Any, ultimo_updated_at: Any, version: Any, ultima_version: Any,
+) -> bool:
+    """True si el tick actual del stream trae un estado distinto al último
+    payload emitido (ver _event_stream_proceso_sap)."""
+    return updated_at != ultimo_updated_at or version != ultima_version
+
+
+async def _manejar_estado_completado_con_ventana_extra(
+    resultado: Any, segundos_en_ventana_extra: int, ventana_extra_max_segundos: int,
+) -> tuple:
+    """Decide si _event_stream_proceso_sap debe cortar el stream ya que el
+    proceso llegó a 'completed', o esperar otro tick (ver docstring de esa
+    función para la ventana extra por ST pendiente de confirmación).
+
+    Returns:
+        (debe_cortar, segundos_en_ventana_extra actualizado)
+    """
+    if not _tiene_st_pendiente_confirmacion(resultado):
+        return True, segundos_en_ventana_extra
+    if segundos_en_ventana_extra >= ventana_extra_max_segundos:
+        return True, segundos_en_ventana_extra
+    segundos_en_ventana_extra += 5
+    await asyncio.sleep(5)
+    return False, segundos_en_ventana_extra
+
+
 async def _event_stream_proceso_sap(estado_service, process_id: str, request):
     """Generador SSE para el stream de progreso del proceso SAP.
 
@@ -1125,7 +1152,7 @@ async def _event_stream_proceso_sap(estado_service, process_id: str, request):
             break
         updated_at = estado_actual.get("updated_at")
         version = estado_actual.get("version", 0)
-        if updated_at != ultimo_updated_at or version != ultima_version:
+        if _hubo_cambio_estado_stream(updated_at, ultimo_updated_at, version, ultima_version):
             payload = _construir_payload_stream(estado_actual)
             yield f"data: {json.dumps(payload)}\n\n"
             ultimo_updated_at = updated_at
@@ -1134,12 +1161,11 @@ async def _event_stream_proceso_sap(estado_service, process_id: str, request):
         if estado_actual["status"] == "error":
             break
         if estado_actual["status"] == "completed":
-            if not _tiene_st_pendiente_confirmacion(estado_actual.get("resultado")):
+            debe_cortar, segundos_en_ventana_extra = await _manejar_estado_completado_con_ventana_extra(
+                estado_actual.get("resultado"), segundos_en_ventana_extra, VENTANA_EXTRA_MAX_SEGUNDOS
+            )
+            if debe_cortar:
                 break
-            if segundos_en_ventana_extra >= VENTANA_EXTRA_MAX_SEGUNDOS:
-                break
-            segundos_en_ventana_extra += 5
-            await asyncio.sleep(5)
             continue
         await asyncio.sleep(1)
 
