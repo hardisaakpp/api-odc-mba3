@@ -232,7 +232,12 @@ USE_BATCH_VALIDATION = os.getenv("USE_BATCH_VALIDATION", "false").lower() == "tr
 # de reintentar automáticamente esa OC (el botón manual sigue disponible). Diseño y
 # datos de producción que lo motivaron: conversación 2026-08-27/28, ver
 # docs/CELERY_QUICKSTART.md.
-ENABLE_RECONCILIACION_ST_AUTOMATICA = os.getenv("ENABLE_RECONCILIACION_ST_AUTOMATICA", "false").lower() == "true"
+# SIEMPRE ACTIVA (sin flag de encendido/apagado, mismo criterio que
+# RECONCILIAR_OC_INTERVALO_MINUTOS abajo): automatiza un botón manual ya existente,
+# no es una función opcional -- que quede prendida o apagada según el ambiente
+# depende de que alguien recuerde setear la variable, y ese olvido ya causó que
+# quedara apagada en producción (docs/CELERY_QUICKSTART.md documentaba "prod: true"
+# pero .env.production nunca la seteó). 2026-09-01.
 RECONCILIAR_ST_HORA = int(os.getenv("RECONCILIAR_ST_HORA", "23"))  # Default: 11:00 PM
 RECONCILIAR_ST_MINUTO = int(os.getenv("RECONCILIAR_ST_MINUTO", "0"))
 RECONCILIAR_ST_VENTANA_DIAS = int(os.getenv("RECONCILIAR_ST_VENTANA_DIAS", "2"))
@@ -261,7 +266,7 @@ RECONCILIAR_ST_MARGEN_COLCHON_HORAS = int(os.getenv("RECONCILIAR_ST_MARGEN_COLCH
 
 # Reconciliación automática de ODC ENCOLADAS (HTTP 202 del middleware al crear la
 # Purchase Order, SAP saturado). Mismo patrón que la reconciliación de ST arriba,
-# pero SIEMPRE ACTIVA (sin flag de encendido/apagado): cierra el mismo loop que abre
+# también SIEMPRE ACTIVA (sin flag de encendido/apagado): cierra el mismo loop que abre
 # OCSAPService._resolver_job_encolado_previo, es parte de la lógica normal del envío
 # a SAP, no una función opcional (evita el duplicado que motivó esto, ver incidente
 # ODC 24711/24712 e IntegracionSAPModal.vue).

@@ -31,7 +31,6 @@ from src.config import (
     ENABLE_SYNC_PRODUCTOS_AUTOMATICA,
     SYNC_PRODUCTOS_HOUR,
     SYNC_PRODUCTOS_MINUTE,
-    ENABLE_RECONCILIACION_ST_AUTOMATICA,
     RECONCILIAR_ST_HORA,
     RECONCILIAR_ST_MINUTO,
     RECONCILIAR_ST_VENTANA_DIAS,
@@ -139,42 +138,44 @@ celery_app.conf.update(
                 }
             }
         } if ENABLE_SYNC_PRODUCTOS_AUTOMATICA else {}),
-        **({
-            # Lunes a sábado: barrido corto (RECONCILIAR_ST_VENTANA_DIAS, default 2
-            # días) -- solo ODCs enviadas recientemente. No mira nada más viejo a
-            # propósito (ver conversación 2026-08-28): lo que no se resuelve solo ya
-            # escaló a técnicos vía reconciliar_transferencias_pendientes (2 corridas
-            # consecutivas), así que no hace falta reintentar indefinidamente.
-            'reconciliar-transferencias-pendientes-diaria': {
-                'task': TASK_RECONCILIAR_TRANSFERENCIAS_PENDIENTES,
-                'schedule': crontab(  # type: ignore[arg-type]
-                    hour=RECONCILIAR_ST_HORA, minute=RECONCILIAR_ST_MINUTO, day_of_week='mon-sat'
-                ),
-                'kwargs': {
-                    'dias_ventana': RECONCILIAR_ST_VENTANA_DIAS,
-                    'margen_antiguedad_minutos': RECONCILIAR_ST_MARGEN_ANTIGUEDAD_MINUTOS,
-                },
-                'options': {'queue': 'maintenance', 'expires': 3600.0},
+        # Reconciliación de Solicitudes de Transferencia (ST) pendientes: automatiza el
+        # botón manual "Reintentar ST", no depende de un flag de encendido/apagado --
+        # mismo criterio que la reconciliación de ODC ENCOLADAS de abajo (un ambiente no
+        # debe poder dejarla apagada por descuido, ver src/config.py).
+        # Lunes a sábado: barrido corto (RECONCILIAR_ST_VENTANA_DIAS, default 2
+        # días) -- solo ODCs enviadas recientemente. No mira nada más viejo a
+        # propósito (ver conversación 2026-08-28): lo que no se resuelve solo ya
+        # escaló a técnicos vía reconciliar_transferencias_pendientes (2 corridas
+        # consecutivas), así que no hace falta reintentar indefinidamente.
+        'reconciliar-transferencias-pendientes-diaria': {
+            'task': TASK_RECONCILIAR_TRANSFERENCIAS_PENDIENTES,
+            'schedule': crontab(  # type: ignore[arg-type]
+                hour=RECONCILIAR_ST_HORA, minute=RECONCILIAR_ST_MINUTO, day_of_week='mon-sat'
+            ),
+            'kwargs': {
+                'dias_ventana': RECONCILIAR_ST_VENTANA_DIAS,
+                'margen_antiguedad_minutos': RECONCILIAR_ST_MARGEN_ANTIGUEDAD_MINUTOS,
             },
-            # Domingo: barrido semanal más amplio (RECONCILIAR_ST_VENTANA_DIAS_DOMINGO,
-            # default 7 días) -- alcanza cualquier OC que se le haya "escapado" a los
-            # barridos cortos de la semana. El colchón de seguridad (¿la corrida
-            # anterior completó?) corre en AMBAS entradas, dentro de la tarea misma
-            # (ver _verificar_salud_diaria) -- no depende de que sea domingo.
-            'reconciliar-transferencias-pendientes-semanal': {
-                'task': TASK_RECONCILIAR_TRANSFERENCIAS_PENDIENTES,
-                'schedule': crontab(  # type: ignore[arg-type]
-                    hour=RECONCILIAR_ST_HORA, minute=RECONCILIAR_ST_MINUTO, day_of_week='sun'
-                ),
-                'kwargs': {
-                    'dias_ventana': RECONCILIAR_ST_VENTANA_DIAS_DOMINGO,
-                    'margen_antiguedad_minutos': RECONCILIAR_ST_MARGEN_ANTIGUEDAD_MINUTOS,
-                },
-                'options': {'queue': 'maintenance', 'expires': 3600.0},
+            'options': {'queue': 'maintenance', 'expires': 3600.0},
+        },
+        # Domingo: barrido semanal más amplio (RECONCILIAR_ST_VENTANA_DIAS_DOMINGO,
+        # default 7 días) -- alcanza cualquier OC que se le haya "escapado" a los
+        # barridos cortos de la semana. El colchón de seguridad (¿la corrida
+        # anterior completó?) corre en AMBAS entradas, dentro de la tarea misma
+        # (ver _verificar_salud_diaria) -- no depende de que sea domingo.
+        'reconciliar-transferencias-pendientes-semanal': {
+            'task': TASK_RECONCILIAR_TRANSFERENCIAS_PENDIENTES,
+            'schedule': crontab(  # type: ignore[arg-type]
+                hour=RECONCILIAR_ST_HORA, minute=RECONCILIAR_ST_MINUTO, day_of_week='sun'
+            ),
+            'kwargs': {
+                'dias_ventana': RECONCILIAR_ST_VENTANA_DIAS_DOMINGO,
+                'margen_antiguedad_minutos': RECONCILIAR_ST_MARGEN_ANTIGUEDAD_MINUTOS,
             },
-        } if ENABLE_RECONCILIACION_ST_AUTOMATICA else {}),
-        # Reconciliación de ODC ENCOLADAS: a diferencia de la de ST, no depende de un
-        # flag de encendido/apagado -- es parte de la lógica normal del envío a SAP
+            'options': {'queue': 'maintenance', 'expires': 3600.0},
+        },
+        # Reconciliación de ODC ENCOLADAS: tampoco depende de un flag de
+        # encendido/apagado -- es parte de la lógica normal del envío a SAP
         # (cierra el mismo loop que _resolver_job_encolado_previo abre), no una
         # función opcional que un ambiente pueda dejar apagada por descuido.
         'reconciliar-ordenes-compra-pendientes': {

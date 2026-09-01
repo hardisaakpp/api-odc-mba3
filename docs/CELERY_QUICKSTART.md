@@ -87,10 +87,10 @@ REDIS_URL=redis://localhost:6379/0
 # Sync nocturna de maestros de productos (deshabilitada por defecto desde 2026-07, ver abajo)
 # ENABLE_SYNC_PRODUCTOS_AUTOMATICA=false
 
-# Reconciliación automática de ST pendientes (por defecto deshabilitada; en prod va en true).
+# Reconciliación automática de ST pendientes: SIEMPRE activa, sin flag de
+# encendido/apagado (mismo criterio que la reconciliación de ODC ENCOLADAS de abajo).
 # Corre UNA VEZ AL DÍA (ventana de baja congestión en SAP), con dos horarios según el
-# día -- ver tabla abajo.
-# ENABLE_RECONCILIACION_ST_AUTOMATICA=true
+# día -- ver tabla abajo. Solo los horarios/ventanas son configurables.
 # RECONCILIAR_ST_HORA=23        # 11:00 PM
 # RECONCILIAR_ST_MINUTO=0
 # RECONCILIAR_ST_VENTANA_DIAS=2          # lunes a sábado: solo OCs enviadas en estos días
@@ -116,8 +116,8 @@ declaradas en `task_queues` en `src/celery_app.py`, así que aplica aunque se la
 
 | Tarea | Flag | Default | Frecuencia |
 |---|---|---|---|
-| `reconciliar_transferencias_pendientes` (diaria) | `ENABLE_RECONCILIACION_ST_AUTOMATICA` | `false` (prod: `true`) | lunes-sábado, `RECONCILIAR_ST_HORA:MINUTO` (11:00 PM), ventana de `RECONCILIAR_ST_VENTANA_DIAS` (2) días + colchón de seguridad |
-| `reconciliar_transferencias_pendientes` (semanal) | `ENABLE_RECONCILIACION_ST_AUTOMATICA` | `false` | domingo, misma hora, ventana de `RECONCILIAR_ST_VENTANA_DIAS_DOMINGO` (7) días + colchón de seguridad |
+| `reconciliar_transferencias_pendientes` (diaria) | *(ninguno, siempre activa)* | — | lunes-sábado, `RECONCILIAR_ST_HORA:MINUTO` (11:00 PM), ventana de `RECONCILIAR_ST_VENTANA_DIAS` (2) días + colchón de seguridad |
+| `reconciliar_transferencias_pendientes` (semanal) | *(ninguno, siempre activa)* | — | domingo, misma hora, ventana de `RECONCILIAR_ST_VENTANA_DIAS_DOMINGO` (7) días + colchón de seguridad |
 | `reconciliar_ordenes_compra_pendientes` | *(ninguno, siempre activa)* | — | cada `RECONCILIAR_OC_INTERVALO_MINUTOS` (5 min) |
 | `sync_productos_maestro` | `ENABLE_SYNC_PRODUCTOS_AUTOMATICA` | `false` | diaria, `SYNC_PRODUCTOS_HOUR:MINUTE` (3:00 AM) |
 | `execute_auto_migration` (legacy) | `ENABLE_AUTO_MIGRATE` | `false` | cada `AUTO_MIGRATE_INTERVAL_MINUTES` |
