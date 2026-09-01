@@ -47,3 +47,18 @@ class TestEvaluarCierrePedidoConEncolada:
         assert resultado["puede_cerrar"] is True
         assert resultado["odc_encoladas"] == 0
         assert resultado["razon_no_cierre"] is None
+
+
+class TestEvaluarCierrePedidoConEnviando:
+    def test_una_odc_enviando_impide_el_cierre_con_razon_especifica(self):
+        ocs = [
+            {"estado": "ENVIADA", "doc_entry": 111},
+            {"estado": "ENVIANDO", "doc_entry": None},
+        ]
+        oc_repo = _oc_repo_con(ocs)
+
+        resultado = PedidoCierreService().evaluar_cierre_pedido("pedido-1", oc_repo)
+
+        assert resultado["puede_cerrar"] is False
+        assert resultado["odc_enviando"] == 1
+        assert "enviándose a SAP ahora mismo" in resultado["razon_no_cierre"]

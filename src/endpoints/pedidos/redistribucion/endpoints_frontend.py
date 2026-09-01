@@ -31,7 +31,6 @@ from ._converters import convertir_ajustes_a_redistribucion
 from ._resumen import calcular_resumen_confirmacion
 from ._sap_processing import procesar_pedido_sap_con_homologacion_sync
 from ._notifications import notificar_redistribucion_confirmada, enviar_email_confirmacion_redistribucion
-from ._excel_generators import generar_excel_distribucion
 from ._excel_traslados import generar_excel_traslados
 
 logger = logging.getLogger(__name__)
@@ -257,100 +256,6 @@ async def _ajustar_bodegas_handler(
         )
 
 
-def _db_descargar_excel(
-    pedido_id: str, version: Optional[int], user: Dict
-) -> StreamingResponse:
-    """Consulta bloqueante (pyodbc + HTTP SAP); se ejecuta vía asyncio.to_thread."""
-    with get_db_connection_context() as conn:
-        repo_dist = DistribucionConfirmadaRepository(conn)
-        repo_pedido = PedidoRepository(conn)
-
-        distribucion_data = repo_dist.get_distribucion_completa(pedido_id, version)
-
-        if not distribucion_data or not distribucion_data.get("productos"):
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail={
-                    "error": "not_found",
-                    "message": "No se encontró distribución confirmada para este pedido"
-                }
-            )
-
-        pedido_data = obtener_pedido_o_404(repo_pedido, pedido_id)
-        cabecera = pedido_data.get("cabecera", {})
-
-        productos_enriquecidos = enriquecer_productos_con_pedido(
-            distribucion_data.get("productos", []),
-            pedido_data.get("detalles", []),
-        )
-
-        itr_por_tienda: Dict[str, int] = {}
-        numero_pedido_buscar = cabecera.get("numero_pedido", "")
-        if numero_pedido_buscar:
-            try:
-                from src.database.clients.sap_service_layer_client import SAPServiceLayerClient
-                sap_client = SAPServiceLayerClient()
-                itrs = sap_client.get_inventory_transfer_requests_by_comment(
-                    f"Pedido {numero_pedido_buscar}"
-                )
-                for itr in itrs:
-                    to_wh = itr.get("to_warehouse")
-                    doc_num = itr.get("doc_num")
-                    if to_wh and doc_num:
-                        itr_por_tienda[to_wh] = doc_num
-                if itr_por_tienda:
-                    logger.info(
-                        f"📋 ITR DocNums obtenidos para {len(itr_por_tienda)} tienda(s) "
-                        f"del pedido {numero_pedido_buscar}"
-                    )
-            except Exception as e_itr:
-                logger.warning(f"⚠️ No se pudieron obtener ITR DocNums (no crítico): {e_itr}")
-
-        excel_buffer = generar_excel_distribucion(
-            pedido_id=pedido_id,
-            pedido_data=pedido_data,
-            distribucion_data=distribucion_data,
-            productos_enriquecidos=productos_enriquecidos,
-            user=user,
-            itr_por_tienda=itr_por_tienda,
-        )
-
-        numero_pedido = cabecera.get("numero_pedido", pedido_id)
-        numero_pedido_safe = re.sub(r'[^\w\-\. ]', '_', numero_pedido)
-        version_str = f"_v{distribucion_data.get('version_actual', 1)}"
-        filename = f"distribucion_{numero_pedido_safe}{version_str}_{ahora_naive().strftime('%Y%m%d_%H%M%S')}.xlsx"
-
-        logger.info(f"✅ Excel de distribución generado para pedido {pedido_id} ({numero_pedido}) por usuario {user.get('username', 'UNKNOWN')}")
-
-        return StreamingResponse(
-            excel_buffer,
-            media_type=MEDIA_TYPE_EXCEL,
-            headers={
-                "Content-Disposition": f"attachment; filename={filename}",
-                "Content-Type": MEDIA_TYPE_EXCEL
-            }
-        )
-
-
-async def _descargar_excel_handler(
-    pedido_id: str, version: Optional[int], user: Dict
-) -> StreamingResponse:
-    try:
-        return await asyncio.to_thread(_db_descargar_excel, pedido_id, version, user)
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"❌ Error al generar Excel de distribución para pedido {pedido_id}: {e}", exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail={
-                "error": "internal_error",
-                "message": f"Error al generar Excel de distribución: {str(e)}"
-            }
-        )
-
-
 def _db_exportar_traslados_excel(
     pedido_id: str, version: Optional[int], user: Dict
 ) -> StreamingResponse:
@@ -419,9 +324,8 @@ async def _exportar_traslados_excel_handler(
 ) -> StreamingResponse:
     """Genera el Excel de Solicitudes de Traslado (requerimiento 1.9).
 
-    A diferencia de _descargar_excel_handler, el Nº de traslado se resuelve contra
-    base de datos y no con una consulta en vivo a SAP: el archivo no depende de que
-    el middleware esté disponible.
+    El Nº de traslado se resuelve contra base de datos, no con una consulta en
+    vivo a SAP: el archivo no depende de que el middleware esté disponible.
     """
     try:
         return await asyncio.to_thread(_db_exportar_traslados_excel, pedido_id, version, user)
@@ -466,16 +370,6 @@ def register_frontend_endpoints(app: FastAPI):
     ):
         """Retorna los datos de redistribución sin ajustar automáticamente las bodegas."""
         return await _ajustar_bodegas_handler(numero_pedido, request_body)
-
-    @app.get("/api/pedidos/{pedido_id}/distribucion/descargar-excel", tags=["Pedidos - Redistribución"])
-    async def descargar_distribucion_excel(
-        pedido_id: str = Path(..., description="UUID del pedido"),
-        version: Optional[int] = Query(None, ge=1, description="Versión específica (si no se especifica, obtiene la última)"),
-        user: Dict = Depends(verify_jwt_token),
-        _: None = Depends(require_any_permission([_PERM_ODCSAP, _PERM_MABEL]))
-    ):
-        """Descargar distribución confirmada del pedido en formato Excel (.xlsx)."""
-        return await _descargar_excel_handler(pedido_id, version, user)
 
     @app.get("/api/pedidos/{pedido_id}/traslados/exportar-excel", tags=["Pedidos - Redistribución"])
     async def exportar_traslados_excel(

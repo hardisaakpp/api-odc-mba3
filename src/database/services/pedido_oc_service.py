@@ -513,15 +513,19 @@ class PedidoOCService:
         if existing_oc_id:
             existing_cabecera = oc_repo.get_existing_cabecera(existing_oc_id)
             existing_estado = existing_cabecera.get("estado") if existing_cabecera else None
-            if existing_estado in ("ENVIADA", "ENCOLADA"):
-                # No reescribir una ODC ya enviada o con un envío encolado (HTTP 202)
-                # sin resolver: el upsert ciego de más abajo (reset a PENDIENTE +
-                # borrar/reinsertar detalles) duplicaría el documento en SAP en un
-                # reintento del pedido completo -- este fue exactamente el mecanismo
-                # que generó la ODC 24712 duplicada de la 24711 encolada. Se reutiliza
-                # la ODC tal cual; enviar_oc_a_sap decide qué hacer con ella (ENVIADA:
-                # nada pendiente; ENCOLADA: resuelve el job antes de reintentar, ver
-                # OCSAPService._resolver_job_encolado_previo).
+            if existing_estado in ("ENVIADA", "ENCOLADA", "ENVIANDO"):
+                # No reescribir una ODC ya enviada, con un envío encolado (HTTP 202)
+                # sin resolver, o con un envío en curso ahora mismo: el upsert ciego de
+                # más abajo (reset a PENDIENTE + borrar/reinsertar detalles) duplicaría
+                # el documento en SAP en un reintento del pedido completo -- este fue
+                # exactamente el mecanismo que generó la ODC 24712 duplicada de la
+                # 24711 encolada; ENVIANDO reabriría el mismo hueco por un disparador
+                # distinto (regenerar las ODC de un pedido mientras una se está
+                # enviando). Se reutiliza la ODC tal cual; enviar_oc_a_sap decide qué
+                # hacer con ella (ENVIADA: nada pendiente; ENCOLADA: resuelve el job
+                # antes de reintentar; ENVIANDO: bloquea o espera la reconciliación,
+                # ver OCSAPService._resolver_job_encolado_previo /
+                # _resolver_envio_estancado_previo).
                 logger.info(
                     f"♻️ OC {existing_oc_id} ya está en estado {existing_estado} "
                     f"para pedido {pedido_id} (bodega {codigo_bodega}); no se recrea (evita duplicado en SAP)"

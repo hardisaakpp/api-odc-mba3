@@ -186,17 +186,22 @@ def _enrich_oc_actions(
 
     Regla de negocio:
     - PENDIENTE / ERROR: mostrar botón "Reintentar ODC" en lugar de "Descargar PDF".
+    - ENVIANDO: envío en curso ahora mismo -- ni "Reintentar" (sería un doble envío
+      engañoso, ver OCSAPService._resolver_envio_estancado_previo) ni "Descargar PDF"
+      (todavía no hay nada que descargar). El frontend muestra un indicador de
+      "enviando" en su lugar, derivado de oc.estado directamente.
     - ENVIADA + ITR/ST aún pendientes (reintento): mostrar botón "Reintentar ST".
     - Resto de estados: mantener botón "Descargar PDF".
     """
     estado = str(oc.get("estado") or "").strip().upper()
     mostrar_reintentar = estado in {"PENDIENTE", "ERROR"}
+    mostrar_descargar_pdf = estado != "ENVIANDO" and not mostrar_reintentar
     transferencias_errores = int((st_resumen or {}).get("transferencias_errores", 0) or 0)
     pendientes = int(st_pendientes_reintento or 0)
     # Botón ST: hay tiendas pendientes reales (tras éxitos parciales o último batch con error).
     mostrar_reintentar_st = estado == "ENVIADA" and pendientes > 0
     oc["mostrar_reintentar"] = mostrar_reintentar
-    oc["mostrar_descargar_pdf"] = not mostrar_reintentar
+    oc["mostrar_descargar_pdf"] = mostrar_descargar_pdf
     oc["mostrar_reintentar_st"] = mostrar_reintentar_st
     oc["st_pendientes_reintento"] = pendientes
     oc["st_total_tiendas"] = int((st_resumen or {}).get("total_tiendas", 0) or 0)
@@ -403,6 +408,45 @@ def _fetch_integracion_sap(oc_id):
         conn.close()
 
 
+def _generar_excel_integracion_sap_oc(oc_id):
+    """Genera el Excel simple de integración SAP de una OC. Retorna (excel_buffer, numero_oc_sap, error)."""
+    conn = get_db_connection()
+    try:
+        oc_repo = OrdenCompraRepository(conn)
+        envio_repo = EnvioODCSAPRepository(conn)
+        st_repo = SolicitudTransferenciaRepository(conn)
+
+        oc_cabecera = oc_repo.get_existing_cabecera(oc_id)
+        if not oc_cabecera:
+            return None, None, _MSG_OC_NO_ENCONTRADA
+
+        envio = envio_repo.get_by_oc_id(oc_id)
+        if not envio:
+            return None, None, "No se encontró registro de integración SAP para esta orden de compra. Solo existe para OCs ya enviadas a SAP."
+
+        doc_num = envio.get("numero_oc_sap")
+        doc_entry = envio.get("doc_entry")
+
+        resumen = st_repo.get_resumen_agregado_por_oc_id(oc_id)
+        solicitudes_transferencia = {"resultados": resumen["resultados"]}
+
+        pedido_numero = None
+        pedido_id = oc_cabecera.get("pedido_id")
+        if pedido_id:
+            from src.database.services.oc_sap_service import OCSAPService
+            pedido_numero = OCSAPService._obtener_numero_pedido_para_notif(pedido_id, conn)
+
+        from src.utils.integracion_sap_excel_generator import generar_excel_integracion_sap
+        excel_buffer = generar_excel_integracion_sap(
+            oc_cabecera, doc_num, doc_entry, solicitudes_transferencia, pedido_numero
+        )
+
+        numero_oc_sap = doc_num or oc_cabecera.get("numero_oc_sap")
+        return excel_buffer, numero_oc_sap, None
+    finally:
+        conn.close()
+
+
 def _generar_pdf_oc(oc_id):
     """Genera el PDF de una OC. Retorna (pdf_bytes, oc_cabecera, error)."""
     conn = get_db_connection()
@@ -583,6 +627,14 @@ def _obtener_y_actualizar_sku(oc_id, oc_detalle_id, nuevo_sku_clean):
             raise ValueError(f"No se encontró la OC {oc_id}")
 
         estado_actual = oc_cabecera.get("estado")
+        if estado_actual == "ENVIANDO":
+            # A diferencia de otros estados no-ERROR/PENDIENTE (donde solo se avisa),
+            # esto sí se bloquea de forma dura: editar una línea de detalle mientras
+            # el envío a SAP está en curso ahora mismo es una condición de carrera
+            # real (el JSON ya construido/en tránsito no reflejaría el cambio).
+            raise ValueError(
+                f"No se puede editar el SKU: la OC {oc_id} se está enviando a SAP en este momento"
+            )
         if estado_actual not in ["ERROR", "PENDIENTE"]:
             logger.warning(f"⚠️ OC está en estado '{estado_actual}', permitiendo actualización de SKU")
 
@@ -1156,6 +1208,34 @@ async def _get_orden_compra_integracion_sap_handler(request, oc_id):
     )
 
 
+async def _get_orden_compra_integracion_sap_excel_handler(request, oc_id):
+    source = get_source_from_headers(request)
+
+    try:
+        excel_buffer, numero_oc_sap, error = await asyncio.to_thread(_generar_excel_integracion_sap_oc, oc_id)
+    except Exception as e:
+        logger.error(f"❌ Error al generar Excel de integración SAP de OC {oc_id}: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error al generar Excel de integración SAP: {str(e)}"
+        )
+
+    if error:
+        raise HTTPException(status_code=404, detail=error)
+
+    nombre_archivo = f"integracion_sap_{numero_oc_sap or oc_id[:8]}.xlsx"
+
+    return StreamingResponse(
+        excel_buffer,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={
+            "Content-Disposition": f'attachment; filename="{nombre_archivo}"',
+            "X-Source": source,
+            "X-Endpoint": "GET-ORDEN-COMPRA-INTEGRACION-SAP-EXCEL",
+        }
+    )
+
+
 async def _get_orden_compra_pdf_handler(request, oc_id):
     source = get_source_from_headers(request)
 
@@ -1397,7 +1477,7 @@ def register_ordenes_compra_endpoints(app: FastAPI):
         page: int = Query(1, ge=1, description="Número de página (1-based)"),
         page_size: int = Query(10, ge=1, le=100, description="Tamaño de página (snake_case)"),
         page_size_camel: Optional[int] = Query(None, ge=1, le=100, alias="pageSize", description="Tamaño de página (camelCase)"),
-        estado: Optional[str] = Query(None, description="Filtrar por estado (PENDIENTE, ENVIADA, ERROR)"),
+        estado: Optional[str] = Query(None, description="Filtrar por estado (PENDIENTE, ENVIANDO, ENVIADA, ERROR, ENCOLADA)"),
         referencia_despacho: Optional[str] = Query(None, description="Búsqueda parcial por referencia de despacho"),
         numero_oc_sap: Optional[str] = Query(None, description="Búsqueda parcial por número OC SAP / doc_entry"),
         search: Optional[str] = Query(None, description="Búsqueda parcial en referencia o número SAP"),
@@ -1410,7 +1490,7 @@ def register_ordenes_compra_endpoints(app: FastAPI):
         **Query Parameters:**
         - `page` (int, default: 1) - Número de página
         - `pageSize` o `page_size` (int, default: 50, máx. 100) - Registros por página
-        - `estado` (string, opcional) - Filtrar por estado (PENDIENTE, ENVIADA, ERROR)
+        - `estado` (string, opcional) - Filtrar por estado (PENDIENTE, ENVIANDO, ENVIADA, ERROR, ENCOLADA)
         - `referencia_despacho`, `numero_oc_sap`, `search` - Filtros opcionales en servidor
 
         **Ejemplo:**
@@ -1685,6 +1765,24 @@ def register_ordenes_compra_endpoints(app: FastAPI):
         y solicitudes_transferencia (resultados, itrs_por_tienda) para mostrar la sección ITR completa.
         """
         return await _get_orden_compra_integracion_sap_handler(request, oc_id)
+
+    @app.get("/ordenes-compra/{oc_id}/integracion-sap/excel", tags=["Órdenes de Compra"])
+    async def get_orden_compra_integracion_sap_excel(
+        request: Request,
+        oc_id: str = Path(..., description=_DESC_OC_ID),
+        user: dict = Depends(verify_jwt_token),
+        _: None = Depends(require_any_permission([_PERM_ODCSAP, _PERM_MABEL]))
+    ):
+        """
+        Descarga un Excel simple (2 hojas) con la misma información del correo
+        "OC y Solicitudes de Transferencia - Listo para Despacho": datos de la OC
+        en la primera hoja y, en la segunda, DOCNUM / NOMBRE TIENDA / CODIGO TIENDA
+        de cada solicitud de transferencia generada.
+
+        **Path Parameters:**
+        - `oc_id` (string, requerido) - UUID de la orden de compra
+        """
+        return await _get_orden_compra_integracion_sap_excel_handler(request, oc_id)
 
     @app.get("/ordenes-compra/{oc_id}/pdf", tags=["Órdenes de Compra"])
     async def get_orden_compra_pdf(

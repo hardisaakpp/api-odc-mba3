@@ -649,3 +649,9 @@ migrations:
     file: "migrations/create_solicitud_transferencia_bodega.sql"
     description: "Tablas solicitud_transferencia_bodega / _detalle: persiste el resultado de las Inventory Transfer Requests entre bodegas (OCSAPService._enviar_itrs_por_bodega), antes solo devuelto en la respuesta HTTP y nunca guardado en base de datos. Tablas separadas de solicitud_transferencia / _detalle a propósito, para no interferir con la lógica de 'último batch' que usa el reintento automático de tiendas (F4.5)"
     category: "base"
+
+  - version: "653"
+    name: "add_fecha_envio_iniciado_orden_compra_cabecera"
+    file: "migrations/add_fecha_envio_iniciado_orden_compra_cabecera.sql"
+    description: "orden_compra_cabecera.fecha_envio_iniciado: timestamp de inicio del intento de envío a SAP en curso/más reciente, escrito al entrar al nuevo estado ENVIANDO. Defensa en profundidad de UX -- el lock Redis redis_lock_envio_odc ya impide un doble envío real; esto permite a la reconciliación periódica detectar una ENVIANDO estancada (proceso caído a mitad de un envío, sin job_id ni forma segura de verificar contra SAP) y escalarla a ERROR para revisión manual en vez de dejarla colgada indefinidamente. A diferencia de job_id, no se limpia al salir de ENVIANDO"
+    category: "alter"

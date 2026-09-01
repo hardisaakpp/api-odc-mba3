@@ -391,6 +391,32 @@ class OrdenCompraRepository:
         finally:
             cursor.close()
 
+    def get_oc_ids_envianco_estancadas(self, umbral_minutos: int) -> List[str]:
+        """
+        Lista los oc_id de ODC en estado ENVIANDO cuyo fecha_envio_iniciado supera
+        umbral_minutos -- posible crash del proceso a mitad del envío a SAP (ver
+        ENVIANDO_ESTANCADO_UMBRAL_MINUTOS en config.py). Usada por la reconciliación
+        automática periódica (ver src/tasks/celery_reconciliar_ordenes_compra.py), que
+        las escala a ERROR para revisión manual -- no las reintenta sola, no hay job_id
+        que consultar contra SAP como sí existe para ENCOLADA.
+
+        Returns:
+            Lista de oc_id (str)
+        """
+        cursor = self.conn.cursor()
+        try:
+            cursor.execute(
+                """
+                SELECT oc_id FROM orden_compra_cabecera
+                WHERE estado = 'ENVIANDO'
+                AND (fecha_envio_iniciado IS NULL OR fecha_envio_iniciado <= DATEADD(MINUTE, -?, GETDATE()))
+                """,
+                (umbral_minutos,)
+            )
+            return [str(row[0]) for row in cursor.fetchall()]
+        finally:
+            cursor.close()
+
     def find_by_pedido_id_y_bodega(self, pedido_id: str, codigo_bodega: str) -> Optional[str]:
         """
         Busca una orden de compra por pedido_id + codigo_bodega.
@@ -724,7 +750,7 @@ class OrdenCompraRepository:
                 SELECT oc_id, despacho_id, pedido_id, proveedor, fecha_generacion,
                        estado, numero_oc_sap, doc_entry, referencia_despacho, codigo_bodega, created_at,
                        respuesta_sap, fecha_procesado, error_message, error_code, error_source, updated_at,
-                       job_id
+                       job_id, fecha_envio_iniciado
                 FROM orden_compra_cabecera
                 WHERE oc_id = ?
                 """,
@@ -754,6 +780,10 @@ class OrdenCompraRepository:
                 "error_source": result[15],
                 "updated_at": serialize_date(result[16]),
                 "job_id": result[17],
+                # Sin serialize_date a propósito: solo se usa internamente (cómputo de
+                # estancamiento en _resolver_envio_estancado_previo), nunca se expone en
+                # una respuesta HTTP -- se evita el viaje serializar-a-string/reparsear.
+                "fecha_envio_iniciado": result[18],
             }
         finally:
             cursor.close()
@@ -860,7 +890,8 @@ class OrdenCompraRepository:
         error_code: Optional[str] = None,
         error_source: Optional[str] = None,
         job_id: Optional[str] = None,
-        audit_context: Optional["AuditContext"] = None
+        audit_context: Optional["AuditContext"] = None,
+        estado_actual_esperado: Optional[str] = None,
     ) -> bool:
         """
         Actualiza el estado de una orden de compra y respuesta de SAP.
@@ -870,7 +901,7 @@ class OrdenCompraRepository:
 
         Args:
             oc_id: UUID de la orden de compra
-            estado: Nuevo estado (PENDIENTE, ENVIADA, CONFIRMADA, ERROR, ENCOLADA, etc.)
+            estado: Nuevo estado (PENDIENTE, ENVIADA, ERROR, ENCOLADA, ENVIANDO)
             numero_oc_sap: Número de OC asignado por SAP (opcional)
             doc_entry: DocEntry de SAP (ID interno) (opcional)
             respuesta_sap: Mensaje o respuesta de SAP (opcional)
@@ -881,28 +912,35 @@ class OrdenCompraRepository:
                 resolver (opcional). Se limpia automáticamente al pasar a ENVIADA o
                 ERROR (ver más abajo) para no dejar un job_id obsoleto colgado.
             audit_context: Contexto de auditoría opcional (Buenas Prácticas - Sección 3)
+            estado_actual_esperado: si se indica, el UPDATE solo aplica cuando el
+                estado en BD todavía coincide con este valor (`WHERE ... AND estado = ?`).
+                Usado por la reconciliación de ENVIANDO estancadas para evitar pisar un
+                envío que terminó legítimamente (ENVIADA/ERROR) justo entre el SELECT de
+                candidatas y este UPDATE -- si no matchea, el método devuelve False sin
+                tocar nada, en vez de forzar el estado a ciegas.
 
         Returns:
-            True si se actualizó correctamente, False en caso contrario
+            True si se actualizó correctamente, False en caso contrario (incluye el
+            caso en que estado_actual_esperado ya no coincidía con el estado en BD)
         """
         cursor = self.conn.cursor()
-        
+
         try:
             # Construir SQL dinámicamente según campos proporcionados
             set_clauses = ["estado = ?", "updated_at = ?"]
             values: List[Any] = [estado, ahora_naive()]
-            
+
             # Siempre actualizar fecha_procesado cuando se cambia el estado
             set_clauses.append("fecha_procesado = ?")
             values.append(ahora_naive())
-            
+
             # Campos de auditoría (Buenas Prácticas - Sección 3)
             if audit_context:
                 set_clauses.append("modificado_por = ?")
                 values.append(audit_context.get_modificado_por())
                 set_clauses.append("modificado_fecha = ?")
                 values.append(ahora_naive())
-            
+
             _append_set_clause_if_not_none(set_clauses, values, "numero_oc_sap", numero_oc_sap)
             _append_set_clause_if_not_none(set_clauses, values, "doc_entry", doc_entry)
             _append_set_clause_if_not_none(set_clauses, values, "respuesta_sap", respuesta_sap)
@@ -924,15 +962,26 @@ class OrdenCompraRepository:
             # futuro no intente resolverlo contra un job ya obsoleto/cerrado.
             if estado != "ENCOLADA" and job_id is None:
                 set_clauses.append("job_id = NULL")
-            
+
+            # fecha_envio_iniciado se fija al entrar a ENVIANDO; a diferencia de job_id,
+            # NO se limpia en otras transiciones (ver migración 653 -- queda como dato de
+            # soporte del último intento, nada la lee sin filtrar también por ENVIANDO).
+            if estado == "ENVIANDO":
+                set_clauses.append("fecha_envio_iniciado = ?")
+                values.append(ahora_naive())
+
             sql = f"""
             UPDATE orden_compra_cabecera SET
                 {', '.join(set_clauses)}
             WHERE oc_id = ?
             """
-            
+
             values.append(oc_id)
-            
+
+            if estado_actual_esperado is not None:
+                sql += " AND estado = ?"
+                values.append(estado_actual_esperado)
+
             cursor.execute(sql, values)
             rows_affected = cursor.rowcount
             self.conn.commit()

@@ -64,7 +64,6 @@ def test_redistribucion_endpoints_registrados():
         "/api/pedidos/{numero_pedido}/redistribucion/inicial",
         "/api/pedidos/{numero_pedido}/redistribucion/confirmar",
         "/api/pedidos/{numero_pedido}/redistribucion/ajustar-bodegas",
-        "/api/pedidos/{pedido_id}/distribucion/descargar-excel",
         "/api/pedidos/{numero_pedido}/proceso-completo-sap",
         "/api/pedidos/tiendas/buscar",
     }
@@ -146,13 +145,6 @@ def test_redistribucion_endpoints_contrato():
             "path_params": {"numero_pedido"},
             "query_params": set(),
             "body_params": {"request_body"},
-        },
-        ("/api/pedidos/{pedido_id}/distribucion/descargar-excel", "GET"): {
-            "method": "GET",
-            "response_model": None,
-            "path_params": {"pedido_id"},
-            "query_params": {"version"},
-            "body_params": set(),
         },
         ("/api/pedidos/{numero_pedido}/proceso-completo-sap", "POST"): {
             "method": "POST",

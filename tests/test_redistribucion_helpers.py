@@ -19,7 +19,6 @@ from src.endpoints.pedidos.redistribucion._converters import (
 )
 from src.endpoints.pedidos.redistribucion._resumen import calcular_resumen_confirmacion
 from src.endpoints.pedidos.redistribucion._excel_generators import (
-    generar_excel_distribucion,
     generar_excel_reporte_diferencias,
 )
 
@@ -178,35 +177,4 @@ def test_generar_excel_reporte_diferencias():
         "diferencias_tiendas": [{"tienda": "T1"}],
     }
     output = generar_excel_reporte_diferencias(diferencias)
-    assert output.getbuffer().nbytes > 0
-
-
-def test_generar_excel_distribucion():
-    pedido_data = {
-        "cabecera": {
-            "pedido_id": "uuid-1",
-            "numero_pedido": "P-1",
-        }
-    }
-    distribucion_data = {"version_actual": 1}
-    productos = [
-        {
-            "codigo_interno": "C1",
-            "descripcion_sap": "Prod",
-            "cantidad_solicitada_total": 10,
-            "cantidad_confirmada_total": 8,
-            "cantidad_asignada_total": 7,
-            "distribuciones": [
-                {
-                    "tienda_codigo": "T1",
-                    "tienda_nombre": "Tienda 1",
-                    "cantidad_asignada": 7,
-                    "costo_unitario_ajustado": 2.0,
-                    "observaciones": "",
-                }
-            ],
-        }
-    ]
-    user = {"username": "tester"}
-    output = generar_excel_distribucion("uuid-1", pedido_data, distribucion_data, productos, user)
     assert output.getbuffer().nbytes > 0
