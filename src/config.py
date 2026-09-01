@@ -303,8 +303,9 @@ SAP_SERVICE_LAYER_DATABASE = SAP_COMPANY_DB
 # Habilitar envÃ­o de ODC a SAP Service Layer
 ENABLE_SAP_SERVICE_LAYER = os.getenv("ENABLE_SAP_SERVICE_LAYER", "false").lower() == "true"
 
-# Timeout para requests a Service Layer (segundos)
-SAP_SERVICE_LAYER_TIMEOUT = int(os.getenv("SAP_SERVICE_LAYER_TIMEOUT", "30"))
+# Timeout para requests a Service Layer (segundos). Mismo valor en los 3 ambientes
+# desde siempre -- ya no es variable de entorno, es una constante de la aplicación.
+SAP_SERVICE_LAYER_TIMEOUT = 30
 
 # Reintentos ante fallos transitorios (SL caído, RemoteDisconnected, timeouts, 502/503/504)
 # Número de reintentos *adicionales* tras el primer intento (3 => hasta 4 intentos en total)
@@ -329,14 +330,16 @@ SAP_ST_FROM_WAREHOUSE = os.getenv("SAP_ST_FROM_WAREHOUSE", "")
 
 # Reintentos automáticos para Inventory Transfer Requests (ITR) por tienda.
 # Se aplican cuando una ODC fue enviada pero algunas o todas las ITR fallan.
-SAP_ITR_RETRY_MAX_ATTEMPTS = max(1, int(os.getenv("SAP_ITR_RETRY_MAX_ATTEMPTS", "3")))
-SAP_ITR_RETRY_BASE_DELAY_SECONDS = max(0.1, float(os.getenv("SAP_ITR_RETRY_BASE_DELAY_SECONDS", "3.0")))
-SAP_ITR_RETRY_MAX_JITTER_SECONDS = max(0.0, float(os.getenv("SAP_ITR_RETRY_MAX_JITTER_SECONDS", "1.0")))
+# Mismo valor en los 3 ambientes desde siempre -- ya no es variable de entorno.
+SAP_ITR_RETRY_MAX_ATTEMPTS = 3
+SAP_ITR_RETRY_BASE_DELAY_SECONDS = 3.0
+SAP_ITR_RETRY_MAX_JITTER_SECONDS = 1.0
 
 # Reintentos automáticos para envío de ODC (Purchase Orders) a SAP Service Layer.
-SAP_ODC_RETRY_MAX_ATTEMPTS = max(1, int(os.getenv("SAP_ODC_RETRY_MAX_ATTEMPTS", "3")))
-SAP_ODC_RETRY_BASE_DELAY_SECONDS = max(0.1, float(os.getenv("SAP_ODC_RETRY_BASE_DELAY_SECONDS", "3.0")))
-SAP_ODC_RETRY_MAX_JITTER_SECONDS = max(0.0, float(os.getenv("SAP_ODC_RETRY_MAX_JITTER_SECONDS", "1.0")))
+# Mismo valor en los 3 ambientes desde siempre -- ya no es variable de entorno.
+SAP_ODC_RETRY_MAX_ATTEMPTS = 3
+SAP_ODC_RETRY_BASE_DELAY_SECONDS = 3.0
+SAP_ODC_RETRY_MAX_JITTER_SECONDS = 1.0
 
 # Reintentos automáticos para la PREVALIDACIÓN de la ODC contra SAP Service Layer
 # (paso previo al envío: valida proveedor + artículos). A diferencia del envío en sí,
@@ -358,9 +361,13 @@ SAP_ODC_RETRY_MAX_JITTER_SECONDS = max(0.0, float(os.getenv("SAP_ODC_RETRY_MAX_J
 # Celery (asíncrono, no bloquea la UI); reintentos ya resueltos responden al instante
 # vía el cache de job_en_curso en Redis, así que el costo real no escala linealmente
 # con los intentos.
-SAP_PREVALIDACION_RETRY_MAX_ATTEMPTS = max(1, int(os.getenv("SAP_PREVALIDACION_RETRY_MAX_ATTEMPTS", "5")))
-SAP_PREVALIDACION_RETRY_BASE_DELAY_SECONDS = max(0.1, float(os.getenv("SAP_PREVALIDACION_RETRY_BASE_DELAY_SECONDS", "5.0")))
-SAP_PREVALIDACION_RETRY_MAX_JITTER_SECONDS = max(0.0, float(os.getenv("SAP_PREVALIDACION_RETRY_MAX_JITTER_SECONDS", "1.0")))
+#
+# Ya no es variable de entorno: producción y test corrían con este valor (nunca lo
+# sobrescribían), solo desarrollo lo tenía bajado a 3/3.0/1.0 en su .env local -- un
+# valor que el párrafo de arriba documenta como insuficiente en la práctica (2026-09-01).
+SAP_PREVALIDACION_RETRY_MAX_ATTEMPTS = 5
+SAP_PREVALIDACION_RETRY_BASE_DELAY_SECONDS = 5.0
+SAP_PREVALIDACION_RETRY_MAX_JITTER_SECONDS = 1.0
 
 # ============================================================================
 # ConfiguraciÃ³n de Seguridad (Opcional)
