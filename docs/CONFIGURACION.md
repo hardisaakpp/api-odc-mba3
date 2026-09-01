@@ -59,7 +59,6 @@ SQL_SERVER_SERVER=210.17.1.54
 SQL_SERVER_DATABASE=store_control
 SQL_SERVER_UID=tu_usuario
 SQL_SERVER_PWD=tu_contraseña
-ENABLE_SQL_SERVER_STORAGE=true
 ```
 
 **Autenticación Windows:** Dejar `SQL_SERVER_UID` y `SQL_SERVER_PWD` vacíos.

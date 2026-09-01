@@ -274,7 +274,6 @@ Ver [docs/TESTING.md](docs/TESTING.md) para más información.
 ## 📝 Notas Importantes
 
 - El JWT de MBA3 se obtiene y renueva automáticamente
-- Los datos se guardan en SQL Server cuando `ENABLE_SQL_SERVER_STORAGE=true`
 - Las consultas SAP usan cache para optimizar rendimiento
 - Celery requiere Redis ejecutándose
 - Ver logs para debugging detallado

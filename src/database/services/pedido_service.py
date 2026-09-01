@@ -15,7 +15,6 @@ from typing import Dict, Any, List, Optional, cast, Callable
 from datetime import datetime, date
 import io
 
-from src.config import ENABLE_SQL_SERVER_STORAGE
 from src.exceptions import BusinessException
 from ..connection import get_db_connection_context
 from ..repositories.pedido_repository import PedidoRepository
@@ -37,7 +36,6 @@ from src.config import ENABLE_SAP_QUERIES, SAP_USE_MIDDLEWARE
 
 logger = logging.getLogger(__name__)
 
-_MSG_STORAGE_DESHABILITADO = "SQL Server storage está deshabilitado"
 _PATRON_NUM_PEDIDO = "número de pedido"
 _PATRON_YA_EXISTE = "ya existe"
 
@@ -367,12 +365,6 @@ class PedidoService:
                 "errores": []
             }
         """
-        if not ENABLE_SQL_SERVER_STORAGE:
-            return {
-                "status": "error",
-                "message": _MSG_STORAGE_DESHABILITADO
-            }
-        
         resultado = {
             "status": "success",
             "pedido_id": None,
@@ -610,12 +602,6 @@ class PedidoService:
                 on_progress(step, progress, message)
             except Exception as e:
                 logger.warning(f"⚠️ on_progress falló para step={step}: {e}")
-        if not ENABLE_SQL_SERVER_STORAGE:
-            return {
-                "status": "error",
-                "message": _MSG_STORAGE_DESHABILITADO
-            }
-
         resultado = {
             "status": "success",
             "validation": None,
@@ -1520,9 +1506,6 @@ class PedidoService:
         Returns:
             Dict con resultado completo incluyendo validaciones y consolidación
         """
-        if not ENABLE_SQL_SERVER_STORAGE:
-            return {"status": "error", "message": _MSG_STORAGE_DESHABILITADO}
-
         resultado = {
             "status": "success",
             "pedido_id": None,
@@ -2302,11 +2285,6 @@ class PedidoService:
         Raises:
             BusinessException: not_found, estado_no_borrador, sin_detalles
         """
-        if not ENABLE_SQL_SERVER_STORAGE:
-            raise BusinessException(
-                "SQL Server storage está deshabilitado.",
-                error_code="storage_disabled"
-            )
         with get_db_connection_context() as conn:
             repository = PedidoRepository(conn)
             pedido = repository.get_pedido_completo(pedido_id)

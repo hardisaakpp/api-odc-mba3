@@ -51,7 +51,6 @@ from src.config import (
     ENVIRONMENT,
     ENV_FILE_USED,
     HIDE_SWAGGER_IN_PROD,
-    ENABLE_SQL_SERVER_STORAGE,
     API_THREAD_POOL_MAX_WORKERS,
 )
 from src.security.rate_limit import setup_rate_limiting
@@ -196,10 +195,6 @@ def _inicializar_cliente_mba3() -> None:
 
 
 def _verificar_conexion_sql_server() -> None:
-    if not ENABLE_SQL_SERVER_STORAGE:
-        logger.info("⏭️ SQL Server storage deshabilitado (ENABLE_SQL_SERVER_STORAGE=false)")
-        return
-
     try:
         logger.info("💾 Verificando conexión a SQL Server...")
         from database.connection import get_db_connection
