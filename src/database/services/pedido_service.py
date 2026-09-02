@@ -1230,6 +1230,44 @@ class PedidoService:
         return list(productos_agrupados.values())
 
     @staticmethod
+    def _validar_codigos_tienda_reconocidos(resultado_parsing: Dict[str, Any]) -> None:
+        """Bloquea la carga si alguna columna de tienda/bodega tiene un código que no coincide
+        con ningún formato reconocido (ver PedidoParserDetalle._codigo_tienda_no_reconocido).
+
+        Se valida ANTES que TOTAL/SUBTOTAL: una columna de tienda con el código mal escrito
+        (ej. 'RL-PCH' en vez de 'TRL-PCH') es la causa raíz de que esas cantidades no se sumen,
+        lo que a su vez descuadra TOTAL/SUBTOTAL en todas las filas del producto. Mostrar ambos
+        mensajes a la vez le decía al usuario "revisa la fórmula" cuando la fórmula del Excel
+        estaba correcta y el problema real era el código de la columna (incidente 2026-09-01).
+        """
+        errores_codigo = [
+            e for e in resultado_parsing.get("errores", [])
+            if isinstance(e, dict) and e.get("tipo") == "ERROR" and e.get("campo") == "CODIGO_TIENDA"
+        ]
+        if not errores_codigo:
+            return
+        lineas = [e["mensaje"] for e in errores_codigo]
+        mensaje = (
+            f"Se encontraron {len(errores_codigo)} columna(s) de tienda/bodega cuyo código no "
+            "coincide con ningún formato reconocido, así que sus cantidades no se están "
+            "contabilizando. Corrige el código de la columna en el Excel y vuelve a subirlo:\n\n"
+            + "\n".join(lineas)
+        )
+        logger.error(f"❌ Carga rechazada por código(s) de tienda no reconocido(s): {len(errores_codigo)} columna(s)")
+        raise BusinessException(
+            message=mensaje,
+            error_code="CODIGOS_TIENDA_NO_RECONOCIDOS",
+            data={
+                "validacion": {
+                    "codigos_tienda": {
+                        "errores": errores_codigo,
+                        "total_columnas_con_error": len(errores_codigo)
+                    }
+                }
+            }
+        )
+
+    @staticmethod
     def _validar_calculo_total_subtotal(resultado_parsing: Dict[str, Any]) -> None:
         """Bloquea la carga si TOTAL/SUBTOTAL de alguna fila no coincide con las cantidades reales.
 
@@ -1283,6 +1321,7 @@ class PedidoService:
             hoja_cabecera=hoja_cabecera,
             hoja_detalle=hoja_detalle
         )
+        self._validar_codigos_tienda_reconocidos(resultado_parsing)
         self._validar_calculo_total_subtotal(resultado_parsing)
         cabecera_parseada = resultado_parsing.get("cabecera", {})
         self._validar_numero_pedido_duplicado(cabecera_parseada)

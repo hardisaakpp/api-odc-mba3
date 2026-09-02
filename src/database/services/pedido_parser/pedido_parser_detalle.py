@@ -9,7 +9,9 @@ import logging
 import pandas as pd
 import io
 import re
-from typing import Dict, Any, Optional
+from typing import Dict, Any, List, Optional
+
+from openpyxl.utils import get_column_letter
 
 from .pedido_parser_utils import PedidoParserUtils, normalize_column_name, normalize_codigo_columna
 
@@ -20,6 +22,7 @@ class PedidoParserDetalle:
     """Parser para detalle de pedidos."""
 
     _CAMPO_CODIGO_PRODUCTO = "CODIGO PRODUCTO"
+    _ENCABEZADOS_NO_TIENDA = ("COL", "UNNAMED", "TOTAL", "SUBTOTAL", "DIFERENCIA", "OBSERVACION")
 
     def __init__(self):
         """Inicializa el parser con utilidades compartidas."""
@@ -172,7 +175,7 @@ class PedidoParserDetalle:
             )
             columnas_tiendas = self.identificar_columnas_tiendas(
                 df_detalle, columnas_producto, columnas_bodegas,
-                codigos_columnas, nombres_columnas_fila1
+                codigos_columnas, nombres_columnas_fila1, resultado["errores"]
             )
             logger.info(
                 f"📊 Columnas detectadas: {len(columnas_bodegas)} bodegas, {len(columnas_tiendas)} tiendas"
@@ -409,6 +412,11 @@ class PedidoParserDetalle:
             nombre_columna = nombres_columnas_fila1.get(col_idx, df_detalle.columns[col_idx])
             if self._es_codigo_columna_tienda(codigo_columna) or self._es_codigo_columna_tienda(nombre_columna):
                 columnas_con_codigo_tienda.append(col_idx)
+            elif self._codigo_tienda_no_reconocido(codigo_columna, nombre_columna) is not None:
+                # Código sospechoso (no vacío, no encabezado reservado) que no matchea ningún
+                # formato válido: se incluye igual en el rango para que se pueda señalar como
+                # error en vez de quedar fuera del rango y perderse en silencio.
+                columnas_con_codigo_tienda.append(col_idx)
         if columnas_con_codigo_tienda:
             return max(columnas_con_codigo_tienda)
         # Fallback para plantillas antiguas sin fila de códigos
@@ -429,7 +437,8 @@ class PedidoParserDetalle:
         col_idx: int,
         nombre_columna: str,
         codigos_columnas: Dict[int, str],
-        columnas_tiendas: Dict[str, Dict[str, Any]]
+        columnas_tiendas: Dict[str, Dict[str, Any]],
+        errores: List[Dict[str, Any]]
     ) -> None:
         codigo_tienda = codigos_columnas.get(col_idx)
         if self._es_codigo_columna_tienda(codigo_tienda):
@@ -445,6 +454,22 @@ class PedidoParserDetalle:
                 codigo_tienda,
                 nombre_columna,
             )
+            codigo_sospechoso = self._codigo_tienda_no_reconocido(codigo_tienda, nombre_columna)
+            if codigo_sospechoso is not None:
+                mensaje = (
+                    f"La columna '{codigo_sospechoso}' (columna {get_column_letter(col_idx + 1)} del Excel) "
+                    "no coincide con ningún código de tienda o bodega reconocido, así que sus cantidades "
+                    "no se están contabilizando. Los códigos de tienda válidos empiezan con 'TRL-', "
+                    "'TOUT-' o 'RG-' (ej. 'TRL-PCH'), o siguen el formato antiguo 'ROLAND <nombre>'. "
+                    "Verifica si el código de esta tienda está mal escrito."
+                )
+                logger.error(f"❌ {mensaje}")
+                errores.append({
+                    "fila": 0,
+                    "campo": "CODIGO_TIENDA",
+                    "tipo": "ERROR",
+                    "mensaje": mensaje
+                })
 
     def identificar_columnas_tiendas(
         self,
@@ -452,7 +477,8 @@ class PedidoParserDetalle:
         columnas_producto: Dict[str, str],
         columnas_bodegas: Dict[str, str],
         codigos_columnas: Dict[int, str],
-        nombres_columnas_fila1: Dict[int, str]
+        nombres_columnas_fila1: Dict[int, str],
+        errores: List[Dict[str, Any]]
     ) -> Dict[str, Dict[str, Any]]:
         """Identifica las columnas de tiendas en el DataFrame."""
         indices_excluidos = self._calcular_indices_excluidos(df_detalle, columnas_producto, columnas_bodegas)
@@ -474,7 +500,9 @@ class PedidoParserDetalle:
         for col_idx, col_name in enumerate(df_detalle.columns):
             if inicio_tiendas_idx <= col_idx <= ultima_columna_idx and col_idx not in indices_excluidos:
                 nombre_columna = self._resolver_nombre_columna_tienda(col_idx, col_name, nombres_columnas_fila1)
-                self._clasificar_y_registrar_columna_tienda(col_idx, nombre_columna, codigos_columnas, columnas_tiendas)
+                self._clasificar_y_registrar_columna_tienda(
+                    col_idx, nombre_columna, codigos_columnas, columnas_tiendas, errores
+                )
         if columnas_tiendas:
             codigos_detectados = list(columnas_tiendas.keys())
             logger.info(
@@ -496,8 +524,7 @@ class PedidoParserDetalle:
         if codigo in self.utils.BODEGAS_ESPERADAS or codigo in self.utils.VARIANTES_BODEGAS:
             return False
 
-        encabezados_no_tienda = ("COL", "UNNAMED", "TOTAL", "SUBTOTAL", "DIFERENCIA", "OBSERVACION")
-        if codigo.startswith(encabezados_no_tienda):
+        if codigo.startswith(self._ENCABEZADOS_NO_TIENDA):
             return False
 
         return (
@@ -505,6 +532,23 @@ class PedidoParserDetalle:
             or codigo.lower().startswith(self.utils.PREFIJO_TIENDA_ANTIGUO)
             or bool(re.match(self.utils.PATRON_CODIGO_TIENDA, codigo))
         )
+
+    def _codigo_tienda_no_reconocido(self, codigo_tienda: Any, nombre_columna: Any) -> Optional[str]:
+        """
+        Si una columna del área de tiendas no fue reconocida por `_es_codigo_columna_tienda`
+        pero tampoco está vacía ni es un encabezado reservado (TOTAL, OBSERVACION, etc.),
+        devuelve el valor que probablemente sea un código de tienda/bodega mal escrito
+        (ej. 'RL-PCH' en vez de 'TRL-PCH') para que se pueda señalar como error en vez de
+        omitirse en silencio.
+        """
+        for valor in (codigo_tienda, nombre_columna):
+            if valor is None or pd.isna(valor):
+                continue
+            codigo = normalize_codigo_columna(valor).upper().strip()
+            if not codigo or codigo.startswith(self._ENCABEZADOS_NO_TIENDA):
+                continue
+            return codigo
+        return None
 
     def _parsear_cantidad_raw(self, cantidad_raw: Any, etiqueta: str, row_num: int) -> Optional[float]:
         if cantidad_raw is None or pd.isna(cantidad_raw):
