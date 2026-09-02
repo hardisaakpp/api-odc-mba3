@@ -65,7 +65,7 @@ class _Paginacion:
     """Agrupa los parámetros de paginación para reducir la aridad de los endpoints."""
     def __init__(
         self,
-        limit: Optional[int] = Query(None, description="Límite de registros por página"),
+        limit: Optional[int] = Query(None, le=500, description="Límite de registros por página"),
         offset: Optional[int] = Query(None, description="Offset para paginación"),
         page: Optional[int] = Query(1, ge=1, description="Número de página (1-based, alternativa a offset)"),
         page_size: Optional[int] = Query(10, ge=1, le=100, description="Tamaño de página (snake_case)"),

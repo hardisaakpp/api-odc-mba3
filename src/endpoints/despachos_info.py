@@ -5,8 +5,6 @@ Endpoints para consultar información de despachos (solo lectura).
 import logging
 import threading
 import asyncio
-from datetime import datetime, timedelta
-
 from src.utils.timezone import ahora_naive
 from typing import Optional, Dict, Any
 from fastapi import FastAPI, Request, Query, Depends
@@ -16,9 +14,16 @@ from src.utils import get_source_from_headers
 from src.database.repositories.despacho_repository import DespachoRepository
 from src.database.repositories.orden_compra_repository import OrdenCompraRepository
 from src.database.connection import get_db_connection
-from src.security.jwt_auth import verify_jwt_token, require_permission, require_any_permission
+from src.security.jwt_auth import verify_jwt_token, require_any_permission
 
 logger = logging.getLogger(__name__)
+
+# Tope por defecto cuando el caller no especifica `limit` explícito: evita
+# materializar sin control una tabla de trabajo que en operación normal debería
+# ser una cola chica (despachos pendientes de OC). Si se alcanza, se loguea un
+# warning para detectar una cola creciendo de forma anormal, sin romper el
+# contrato del endpoint (que hoy el frontend siempre llama sin `limit`).
+_DESPACHOS_SIN_OC_LIMITE_DEFECTO = 2000
 
 # ============================================================================
 # Sistema de Caché para /despachos/count
@@ -28,6 +33,12 @@ logger = logging.getLogger(__name__)
 _cache_lock = threading.Lock()
 _despachos_cache: Dict[str, Any] = {}
 _cache_ttl_seconds = 30  # 30 segundos de caché
+# Tope de entradas: una clave nueva por cada valor distinto de `limit` jamás
+# pedido, y la limpieza por TTL es perezosa (solo al releer la misma clave), así
+# que sin este tope el dict podría crecer sin límite si alguien pide muchos
+# valores de `limit` distintos. Se llega a este número solo con abuso del
+# parámetro; en uso normal hay 1-2 claves.
+_CACHE_MAX_ENTRIES = 20
 
 
 def get_cached_despachos(limit: Optional[int] = None) -> Optional[Dict[str, Any]]:
@@ -70,6 +81,12 @@ def set_cached_despachos(data: Dict[str, Any], limit: Optional[int] = None):
     """
     with _cache_lock:
         cache_key = f"despachos_{limit or 'all'}"
+        if cache_key not in _despachos_cache and len(_despachos_cache) >= _CACHE_MAX_ENTRIES:
+            logger.warning(
+                f"⚠️ Caché de /despachos/count alcanzó el tope de {_CACHE_MAX_ENTRIES} "
+                "claves distintas; limpiando para evitar crecimiento sin control."
+            )
+            _despachos_cache.clear()
         _despachos_cache[cache_key] = {
             'data': data,
             'timestamp': ahora_naive()
@@ -111,8 +128,16 @@ def _query_despachos_count(limit_param: Optional[int]):
         # Contar despachos sin OC (misma lógica que usa /procesar-oc)
         count = despacho_repo.count_despachos_sin_oc()
 
-        # Obtener información detallada de despachos con sus OCs
-        despachos_info = despacho_repo.get_despachos_con_info_oc(limit=limit_param)
+        # Obtener información detallada de despachos con sus OCs. Sin `limit`
+        # explícito se aplica un tope por defecto (ver _DESPACHOS_SIN_OC_LIMITE_DEFECTO).
+        limit_efectivo = limit_param or _DESPACHOS_SIN_OC_LIMITE_DEFECTO
+        despachos_info = despacho_repo.get_despachos_con_info_oc(limit=limit_efectivo)
+        if limit_param is None and len(despachos_info) >= _DESPACHOS_SIN_OC_LIMITE_DEFECTO:
+            logger.warning(
+                f"⚠️ /despachos/count alcanzó el tope por defecto de "
+                f"{_DESPACHOS_SIN_OC_LIMITE_DEFECTO} despachos sin OC (count total: {count}); "
+                "posible cola creciendo sin control."
+            )
 
         # Agregar detalles de OC para cada despacho que tenga OC
         _enriquecer_despachos_con_oc(despachos_info, oc_repo)
