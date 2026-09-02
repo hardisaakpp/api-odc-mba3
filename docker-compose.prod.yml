@@ -20,20 +20,26 @@ x-app-prod: &app-prod
     - ./.env:/app/.env:ro
 
 services:
+  redis:
+    mem_limit: 256m
+
   api:
     <<: *app-prod
+    mem_limit: 512m
     volumes:
       - ./.env:/app/.env:ro
       - /opt/odc-sap/logs:/app/logs
 
   celery-worker:
     <<: *app-prod
+    mem_limit: 800m
     volumes:
       - ./.env:/app/.env:ro
       - /opt/odc-sap/logs:/app/logs
 
   celery-beat:
     <<: *app-prod
+    mem_limit: 256m
     volumes:
       - ./.env:/app/.env:ro
       - celerybeat_data:/var/lib/celery
