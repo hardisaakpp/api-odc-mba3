@@ -26,7 +26,6 @@ from typing import Dict, Any, Optional, List
 
 from src.config import (
     SAP_MIDDLEWARE_URL,
-    ENABLE_SAP_SERVICE_LAYER,
     SAP_SERVICE_LAYER_TIMEOUT,
     SAP_USE_MIDDLEWARE,
     REDIS_URL,
@@ -79,11 +78,7 @@ class _MiddlewareSAPServiceLayerClient:
 
     def __init__(self):
         self.base_url = SAP_MIDDLEWARE_URL.rstrip("/")
-        self.enabled = ENABLE_SAP_SERVICE_LAYER
         self.timeout = SAP_SERVICE_LAYER_TIMEOUT
-
-        if not self.enabled:
-            logger.warning("⚠️ SAP Service Layer deshabilitado (ENABLE_SAP_SERVICE_LAYER=False)")
 
     # ─── HTTP helpers ──────────────────────────────────────────────────────────
 
@@ -197,10 +192,6 @@ class _MiddlewareSAPServiceLayerClient:
         Traduce el formato PascalCase/OData que produce SAPOCMapper
         al camelCase que espera el middleware (POST /api/v1/purchase-orders).
         """
-        if not self.enabled:
-            logger.debug("⏭️ Creación de Purchase Order deshabilitada")
-            return None
-
         lines = [
             {
                 "itemCode": line.get("ItemCode"),
@@ -275,10 +266,6 @@ class _MiddlewareSAPServiceLayerClient:
         Traduce el formato PascalCase/OData que produce SAPStockTransferMapper
         al camelCase que espera el middleware (POST /api/v1/stock-transfers/requests).
         """
-        if not self.enabled:
-            logger.debug("⏭️ Creación de Inventory Transfer Request deshabilitada")
-            return None
-
         lines = [
             {
                 "itemCode": line.get("ItemCode"),
@@ -358,10 +345,6 @@ class _MiddlewareSAPServiceLayerClient:
 
     def get_inventory_transfer_requests_by_comment(self, comment_filter: str) -> List[Dict[str, Any]]:
         """Consulta ITRs filtrando por texto en Comments via middleware."""
-        if not self.enabled:
-            logger.debug("⏭️ Consulta de ITR deshabilitada")
-            return []
-
         encoded = urllib.parse.quote(comment_filter)
         path = f"/api/v1/inventory-transfer-requests?commentsContain={encoded}"
 
@@ -403,7 +386,7 @@ class _MiddlewareSAPServiceLayerClient:
              "result", "error", ...} o None si no se pudo consultar (el caller
              debe tratarlo igual que "aún no se sabe", sin reenviar a ciegas).
         """
-        if not self.enabled or not job_id:
+        if not job_id:
             return None
         response = self._get(f"/api/v1/jobs/{job_id}")
         if response is None:
@@ -541,10 +524,6 @@ class _MiddlewareSAPServiceLayerClient:
 
     def get_item(self, item_code: str) -> Optional[Dict[str, Any]]:
         """Consulta un artículo en SAP via middleware."""
-        if not self.enabled:
-            logger.debug(f"⏭️ Consulta de Item deshabilitada: {item_code}")
-            return None
-
         en_curso = self._resolver_job_en_curso_o_saturado("item", item_code, self._map_item_data)
         if en_curso is not None:
             return en_curso
@@ -615,9 +594,6 @@ class _MiddlewareSAPServiceLayerClient:
             resolverse (mismo contrato que validate_warehouses_batch cuando
             chunks_ok == 0).
         """
-        if not self.enabled:
-            logger.debug("⏭️ Batch de items deshabilitado")
-            return None
         if not item_codes:
             return {}
 
@@ -652,10 +628,6 @@ class _MiddlewareSAPServiceLayerClient:
 
         Lanza SAPDataMasterError si el artículo no está configurado en esa bodega (404).
         """
-        if not self.enabled:
-            logger.debug("⏭️ Consulta de stock deshabilitada")
-            return None
-
         path = (
             f"/api/v1/items/{urllib.parse.quote(item_code, safe='')}"
             f"/stock/{urllib.parse.quote(warehouse_code, safe='')}"
@@ -716,10 +688,6 @@ class _MiddlewareSAPServiceLayerClient:
 
     def get_business_partner(self, card_code: str) -> Optional[Dict[str, Any]]:
         """Consulta un Business Partner en SAP via middleware."""
-        if not self.enabled:
-            logger.debug(f"⏭️ Consulta de Business Partner deshabilitada: {card_code}")
-            return None
-
         en_curso = self._resolver_job_en_curso_o_saturado("bp", card_code, self._map_business_partner_data)
         if en_curso is not None:
             return en_curso
@@ -818,10 +786,6 @@ class _MiddlewareSAPServiceLayerClient:
 
     def get_all_warehouses(self) -> Optional[List[Dict[str, Any]]]:
         """Consulta el catálogo completo de bodegas via middleware."""
-        if not self.enabled:
-            logger.debug("⏭️ Consulta de bodegas deshabilitada")
-            return None
-
         response = self._get("/api/v1/warehouses")
         if response is None:
             return None
@@ -858,9 +822,6 @@ class _MiddlewareSAPServiceLayerClient:
             pudo consultarse (el caller debe hacer fallback a OPENQUERY). Si solo
             algunos chunks fallan, sus códigos se marcan con errorType="connection_error".
         """
-        if not self.enabled:
-            logger.debug("⏭️ Validación batch de bodegas deshabilitada")
-            return None
         if not warehouse_codes:
             return {"warehouses": []}
 
@@ -903,10 +864,6 @@ class _MiddlewareSAPServiceLayerClient:
             middleware sin el endpoint, o SL totalmente caído) — el caller debe
             hacer fallback a la validación línea por línea.
         """
-        if not self.enabled:
-            logger.debug("⏭️ Validación batch deshabilitada (ENABLE_SAP_SERVICE_LAYER=False)")
-            return None
-
         payload: Dict[str, Any] = {"lines": lines}
         if card_code:
             payload["cardCode"] = card_code

@@ -297,9 +297,6 @@ SAP_SERVICE_LAYER_USERNAME = SAP_USER
 SAP_SERVICE_LAYER_PASSWORD = SAP_PASSWORD
 SAP_SERVICE_LAYER_DATABASE = SAP_COMPANY_DB
 
-# Habilitar envÃ­o de ODC a SAP Service Layer
-ENABLE_SAP_SERVICE_LAYER = os.getenv("ENABLE_SAP_SERVICE_LAYER", "false").lower() == "true"
-
 # Timeout para requests a Service Layer (segundos). Mismo valor en los 3 ambientes
 # desde siempre -- ya no es variable de entorno, es una constante de la aplicación.
 SAP_SERVICE_LAYER_TIMEOUT = 30
@@ -457,7 +454,7 @@ if ENVIRONMENT == "production":
             )
     
     # Advertencia sobre SSL deshabilitado
-    if ENABLE_SAP_SERVICE_LAYER and not SAP_SERVICE_LAYER_VERIFY_SSL:
+    if not SAP_SERVICE_LAYER_VERIFY_SSL:
         logger.warning("=" * 70)
         logger.warning("âš ï¸ ADVERTENCIA DE SEGURIDAD EN PRODUCCIÃ“N")
         logger.warning("   SAP_SERVICE_LAYER_VERIFY_SSL=false")
@@ -484,7 +481,7 @@ elif ENVIRONMENT == "development":
             warnings_found = True
         logger.warning("   JWT_SECRET usando valor por defecto (inseguro)")
     
-    if ENABLE_SAP_SERVICE_LAYER and not SAP_SERVICE_LAYER_VERIFY_SSL:
+    if not SAP_SERVICE_LAYER_VERIFY_SSL:
         if not warnings_found:
             logger.warning("=" * 70)
             logger.warning(_CONFIG_INCOMPLETA_MSG)

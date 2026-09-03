@@ -257,7 +257,6 @@ POST /integrar-sap
   - `SAP_SERVICE_LAYER_USERNAME` - Usuario de SAP
   - `SAP_SERVICE_LAYER_PASSWORD` - Contraseña de SAP
   - `SAP_SERVICE_LAYER_DATABASE` - Base de datos SAP
-  - `ENABLE_SAP_SERVICE_LAYER=true` - Habilitar integración
 
 **Nota:** Este endpoint asume que las ODCs ya están creadas con estado `"PENDIENTE"` (usando `/procesar-oc`).
 
