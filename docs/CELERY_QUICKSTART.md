@@ -311,11 +311,6 @@ pip list | grep celery
 AUTO_MIGRATE_INTERVAL_MINUTES=30  # Cambiar de 15 a 30 minutos
 ```
 
-**Cambiar filtro de fecha** (editar `.env`):
-```bash
-MIGRATE_DATE_FILTER_DAYS=180  # Cambiar de 365 a 180 días
-```
-
 ---
 
 **✅ ¡Listo!** El proceso automático ahora corre en un proceso completamente aislado sin afectar al proceso manual.

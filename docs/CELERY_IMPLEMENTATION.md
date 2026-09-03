@@ -125,7 +125,6 @@ REDIS_URL=redis://localhost:6379/0
 # Configuración de migración automática
 ENABLE_AUTO_MIGRATE=true
 AUTO_MIGRATE_INTERVAL_MINUTES=15
-MIGRATE_DATE_FILTER_DAYS=365
 
 # SQL Server (asegurar que estén configuradas)
 SQL_SERVER_DRIVER={ODBC Driver 18 for SQL Server}
@@ -264,15 +263,6 @@ Editar `.env`:
 ```bash
 # Ejecutar cada 30 minutos (en lugar de 15)
 AUTO_MIGRATE_INTERVAL_MINUTES=30
-```
-
-### Cambiar filtro de fecha
-
-Editar `.env`:
-
-```bash
-# Migrar últimos 180 días (en lugar de 365)
-MIGRATE_DATE_FILTER_DAYS=180
 ```
 
 ### Agregar más workers

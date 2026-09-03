@@ -379,10 +379,9 @@ Consulta documentos de remisión desde MBA3 y guarda solo cabeceras en la base d
 **Características:**
 - ✅ Consulta documentos de remisión desde MBA3 (sin detalles)
 - ✅ Guarda solo cabeceras en `remision_cabecera` (tabla exclusiva, NO guarda detalles)
-- ✅ Filtro automático: siempre trae los últimos N días desde hoy (configurado en `MIGRATE_DATE_FILTER_DAYS`)
+- ✅ Filtro automático: siempre trae los últimos N días desde hoy (constante `MIGRATE_DATE_FILTER_DAYS` en `src/config.py`)
 - ✅ Sin parámetros: solo ejecutar el endpoint
 - ✅ Fecha relativa: calcula automáticamente desde hoy hacia atrás
-- ✅ Configurable: se puede cambiar en `.env` con `MIGRATE_DATE_FILTER_DAYS`
 - ✅ Estos documentos no tienen `ObjDatosFactura`, por lo que no se crean registros de detalles
 - ✅ Se almacenan en la tabla exclusiva `remision_cabecera` (separada de `despacho_cabecera`)
 - ✅ Permisos: requiere `mba3-consultas.proceso.execute`

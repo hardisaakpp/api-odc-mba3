@@ -388,7 +388,6 @@ JWT_AUDIENCE = os.getenv('JWT_AUDIENCE', 'SCNexus.Users')
 # a usuarios y roles de AD segÃºn las pÃ¡ginas a las que pueden tener acceso
 # IMPORTANTE: Configurar en .env (sin default por seguridad, ver validaciÃ³n abajo)
 CORE_API_URL = os.getenv("CORE_API_URL", "")
-CORE_API_TIMEOUT = int(os.getenv("CORE_API_TIMEOUT", "30"))  # Timeout en segundos
 
 # Rate Limiting (lÃ­mite de requests)
 ENABLE_RATE_LIMITING = os.getenv("ENABLE_RATE_LIMITING", "false").lower() == "true"
@@ -498,19 +497,10 @@ ENABLE_AUTO_MIGRATE = os.getenv("ENABLE_AUTO_MIGRATE", "false").lower() == "true
 # Configurar en .env: AUTO_MIGRATE_INTERVAL_MINUTES=15
 AUTO_MIGRATE_INTERVAL_MINUTES = int(os.getenv("AUTO_MIGRATE_INTERVAL_MINUTES", "15"))
 
-# DÃ­as hacia atrÃ¡s para el filtro de fecha en migraciÃ³n (automÃ¡tica y manual)
-# Ambos procesos (automÃ¡tico y manual) usan la misma configuraciÃ³n
-# Por defecto: 365 dÃ­as (1 aÃ±o) desde hoy
-# Configurable en .env con MIGRATE_DATE_FILTER_DAYS
-# 
-# Compatibilidad hacia atrÃ¡s: Si existe AUTO_MIGRATE_DATE_FILTER_DAYS o 
-# MANUAL_MIGRATE_DATE_FILTER_DAYS en .env, se usarÃ¡ ese valor.
-# Si no, se usa MIGRATE_DATE_FILTER_DAYS o el valor por defecto (365).
-_migrate_days = os.getenv("MIGRATE_DATE_FILTER_DAYS") or \
-                os.getenv("AUTO_MIGRATE_DATE_FILTER_DAYS") or \
-                os.getenv("MANUAL_MIGRATE_DATE_FILTER_DAYS") or \
-                "365"
-MIGRATE_DATE_FILTER_DAYS = int(_migrate_days)
+# DÃ­as hacia atrÃ¡s para el filtro de fecha en migraciÃ³n (automÃ¡tica y manual).
+# Mismo valor en los 3 ambientes desde siempre -- ya no es variable de entorno,
+# es una constante de la aplicaciÃ³n.
+MIGRATE_DATE_FILTER_DAYS = 365
 
 # ============================================================================
 # ConfiguraciÃ³n de Celery y Tareas Automatizadas
