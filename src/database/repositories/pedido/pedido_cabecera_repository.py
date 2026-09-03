@@ -48,11 +48,15 @@ _SEP_AND = " AND "
 # Columnas de fecha filtrables por fecha_desde/fecha_hasta + tipo_fecha (whitelist:
 # tipo_fecha nunca se interpola directo en SQL, siempre pasa por este dict.get()).
 # fecha_entrega puede contener el literal 'INMEDIATO' en vez de una fecha, por eso
-# el filtro usa TRY_CAST (devuelve NULL en vez de fallar toda la query).
+# el filtro usa TRY_CAST (devuelve NULL en vez de fallar toda la query). creado_en y
+# modificado_fecha son DATETIME (no DATE); TRY_CAST(... AS DATE) trunca la hora igual
+# que con las columnas DATE, así que no requieren tratamiento especial aparte.
 _COLUMNAS_FECHA_FILTRO = {
     "pedido": "p.fecha_pedido",
     "entrega": "p.fecha_entrega",
     "facturacion": "p.fecha_facturacion",
+    "creacion": "p.creado_en",
+    "modificacion": "p.modificado_fecha",
 }
 
 
@@ -79,6 +83,7 @@ class PedidosFiltros:
     proveedor_nombre: Optional[str] = None
     numero_pedido: Optional[str] = None
     creado_por: Optional[str] = None
+    modificado_por: Optional[str] = None
 
 
 class PedidoCabeceraRepository:
@@ -1508,6 +1513,10 @@ class PedidoCabeceraRepository:
             where_conditions.append("p.creado_por LIKE ?")
             params.append(f"%{filtros.creado_por}%")
 
+        if filtros.modificado_por:
+            where_conditions.append("p.modificado_por LIKE ?")
+            params.append(f"%{filtros.modificado_por}%")
+
         self._agregar_filtro_condicional(
             filtros.solo_pendientes_accion, tiene_estado_id, tiene_estado,
             self._filtro_pendientes_accion, where_conditions, params,
@@ -1577,7 +1586,7 @@ class PedidoCabeceraRepository:
                 - estado: estado_id (int) o nombre legacy (str) para filtrar
                 - fecha_desde, fecha_hasta: rango de fechas (YYYY-MM-DD)
                 - tipo_fecha: columna sobre la que aplica fecha_desde/fecha_hasta —
-                    "pedido" (default), "entrega" o "facturacion"
+                    "pedido" (default), "entrega", "facturacion", "creacion" o "modificacion"
                 - proveedor_nombre, numero_pedido, creado_por
                 - excluir_borrador: si True, excluye pedidos en estado BORRADOR (estado_id=1)
                 - solo_redistribucion: si True, solo incluye pedidos aptos para redistribución
@@ -1693,9 +1702,10 @@ class PedidoCabeceraRepository:
 
     @staticmethod
     def _aplicar_filtros_extra_confirmados(
-        where_clause, params, fecha_desde, fecha_hasta, tipo_fecha, proveedor_nombre, numero_pedido, creado_por
+        where_clause, params, fecha_desde, fecha_hasta, tipo_fecha, proveedor_nombre, numero_pedido, creado_por,
+        modificado_por=None,
     ):
-        """Agrega filtros opcionales (fechas, proveedor, número, creador) a la consulta base."""
+        """Agrega filtros opcionales (fechas, proveedor, número, creador, modificador) a la consulta base."""
         extra_conditions: List[str] = []
         columna_fecha = _columna_fecha_filtro(tipo_fecha)
         if fecha_desde:
@@ -1713,6 +1723,9 @@ class PedidoCabeceraRepository:
         if creado_por:
             extra_conditions.append("p.creado_por LIKE ?")
             params.append(f"%{creado_por}%")
+        if modificado_por:
+            extra_conditions.append("p.modificado_por LIKE ?")
+            params.append(f"%{modificado_por}%")
         if extra_conditions:
             where_clause = f"({where_clause}){_SEP_AND}" + _SEP_AND.join(extra_conditions)
         return where_clause, params
@@ -1745,6 +1758,7 @@ class PedidoCabeceraRepository:
         proveedor_nombre: Optional[str] = None,
         numero_pedido: Optional[str] = None,
         creado_por: Optional[str] = None,
+        modificado_por: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Obtiene pedidos para la pantalla Revisar Redistribución.
@@ -1765,7 +1779,8 @@ class PedidoCabeceraRepository:
 
             where_clause, params, select_fields = self._base_confirmados(tiene_estado_id)
             where_clause, params = self._aplicar_filtros_extra_confirmados(
-                where_clause, params, fecha_desde, fecha_hasta, tipo_fecha, proveedor_nombre, numero_pedido, creado_por
+                where_clause, params, fecha_desde, fecha_hasta, tipo_fecha, proveedor_nombre, numero_pedido, creado_por,
+                modificado_por,
             )
 
             count_query = f"SELECT COUNT(*) FROM pedido p WHERE {where_clause}"
@@ -2078,6 +2093,55 @@ class PedidoCabeceraRepository:
             raise
         finally:
             cursor.close()
+
+    def _get_valores_distintos_columna(self, columna: str, etiqueta: str) -> List[str]:
+        """
+        Devuelve los valores distintos (no NULL, no vacíos) de una columna de
+        auditoría (creado_por/modificado_por) de la tabla pedido, ordenados
+        alfabéticamente. `columna` nunca viene de input de usuario (siempre un
+        literal fijo pasado por get_creadores_distintos/get_modificadores_distintos),
+        así que interpolarla en el SQL es seguro.
+
+        Args:
+            columna: nombre de columna ('creado_por' o 'modificado_por')
+            etiqueta: descripción para el log (ej. 'creador(es)', 'modificador(es)')
+        """
+        cursor = self.conn.cursor()
+
+        try:
+            cursor.execute(f"""
+                SELECT DISTINCT {columna}
+                FROM pedido
+                WHERE {columna} IS NOT NULL AND {columna} <> ''
+                ORDER BY {columna}
+            """)
+
+            valores = [row[0] for row in cursor.fetchall()]
+            logger.debug(f"✓ {len(valores)} {etiqueta} distinto(s) encontrado(s)")
+            return valores
+
+        except Exception as e:
+            logger.error(f"❌ Error al listar {etiqueta} distintos ({columna}): {e}", exc_info=True)
+            raise
+        finally:
+            cursor.close()
+
+    def get_creadores_distintos(self) -> List[str]:
+        """
+        Devuelve la lista de valores distintos de creado_por (usuario que creó el
+        pedido, típicamente email o username, ver src/utils/audit_context.py).
+        Alimenta el <select> de "Creado Por" del contenedor "Filtros de Búsqueda".
+        """
+        return self._get_valores_distintos_columna("creado_por", "creador(es)")
+
+    def get_modificadores_distintos(self) -> List[str]:
+        """
+        Devuelve la lista de valores distintos de modificado_por (usuario que
+        hizo la última modificación al pedido, ver src/utils/audit_context.py).
+        Alimenta el <select> de "Modificado Por" del contenedor "Filtros de
+        Búsqueda".
+        """
+        return self._get_valores_distintos_columna("modificado_por", "modificador(es)")
 
     def get_estados(
         self,

@@ -719,6 +719,7 @@ async def _listar_pedidos_plantillas_handler(
     solo_pendientes_accion: Optional[str],
     user: Dict,
     creado_por: Optional[str] = None,
+    modificado_por: Optional[str] = None,
     fecha_desde: Optional[str] = None,
     fecha_hasta: Optional[str] = None,
     tipo_fecha: Optional[str] = None,
@@ -738,6 +739,7 @@ async def _listar_pedidos_plantillas_handler(
                     estado=estado,
                     numero_pedido=numero_pedido.strip() if numero_pedido else None,
                     creado_por=creado_por.strip() if creado_por else None,
+                    modificado_por=modificado_por.strip() if modificado_por else None,
                     fecha_desde=fecha_desde,
                     fecha_hasta=fecha_hasta,
                     tipo_fecha=tipo_fecha,
@@ -1380,11 +1382,15 @@ def register_plantillas_endpoints(app: FastAPI):
             description="Si 'true', solo pedidos que requieren acción del proveedor",
         ),
         creado_por: Optional[str] = Query(None, description="Búsqueda parcial por usuario que creó el pedido"),
+        modificado_por: Optional[str] = Query(None, description="Búsqueda parcial por usuario que modificó por última vez el pedido"),
         fecha_desde: Optional[str] = Query(None, description="Filtrar desde fecha (YYYY-MM-DD)"),
         fecha_hasta: Optional[str] = Query(None, description="Filtrar hasta fecha (YYYY-MM-DD)"),
         tipo_fecha: Optional[str] = Query(
             None,
-            description="Columna sobre la que aplica fecha_desde/fecha_hasta: 'pedido' (default), 'entrega' o 'facturacion'",
+            description=(
+                "Columna sobre la que aplica fecha_desde/fecha_hasta: 'pedido' (default), "
+                "'creacion', 'modificacion', 'entrega' o 'facturacion'"
+            ),
         ),
         user: Dict = Depends(verify_jwt_token),
         _: None = Depends(require_permission(_PERM_MABEL))
@@ -1392,7 +1398,7 @@ def register_plantillas_endpoints(app: FastAPI):
         """Lista pedidos para la página cargar-plantilla (incluye estado BORRADOR)."""
         return await _listar_pedidos_plantillas_handler(
             estado, numero_pedido, limit, offset, solo_pendientes_accion, user, creado_por,
-            fecha_desde, fecha_hasta, tipo_fecha,
+            modificado_por, fecha_desde, fecha_hasta, tipo_fecha,
         )
 
     @app.get("/api/plantillas/{pedido_id}/descargar-original", tags=["Plantillas"])

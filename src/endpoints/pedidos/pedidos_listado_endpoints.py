@@ -93,6 +93,7 @@ async def _listar_pedidos_handler(
     proveedor_nombre: Optional[str],
     numero_pedido: Optional[str],
     creado_por: Optional[str],
+    modificado_por: Optional[str],
     paginacion: _Paginacion,
     solo_redistribucion: Optional[str],
     solo_pendientes_accion: Optional[str],
@@ -136,6 +137,7 @@ async def _listar_pedidos_handler(
                 proveedor_nombre=proveedor_nombre,
                 numero_pedido=numero_pedido,
                 creado_por=creado_por,
+                modificado_por=modificado_por,
                 excluir_borrador=True,
                 solo_redistribucion=filtrar_redistribucion,
                 solo_pendientes_accion=filtrar_pendientes,
@@ -188,6 +190,7 @@ async def _listar_pedidos_confirmados_handler(
     proveedor_nombre: Optional[str],
     numero_pedido: Optional[str],
     creado_por: Optional[str],
+    modificado_por: Optional[str] = None,
     tipo_fecha: Optional[str] = None,
 ):
     try:
@@ -209,6 +212,7 @@ async def _listar_pedidos_confirmados_handler(
             proveedor_nombre=proveedor_nombre,
             numero_pedido=numero_pedido,
             creado_por=creado_por,
+            modificado_por=modificado_por,
         )
 
         data = []
@@ -379,6 +383,60 @@ async def _verificar_pedidos_existen_handler():
         )
 
 
+def _query_creadores_pedido():
+    """Consulta bloqueante (pyodbc); se ejecuta vía asyncio.to_thread."""
+    with get_db_connection_context() as conn:
+        repo = PedidoRepository(conn)
+        return repo.get_creadores_distintos()
+
+
+async def _listar_creadores_pedido_handler():
+    try:
+        creadores = await asyncio.to_thread(_query_creadores_pedido)
+
+        return JSONResponse(
+            status_code=200,
+            content={
+                "status": "success",
+                "data": creadores,
+            }
+        )
+
+    except Exception as e:
+        logger.error(f"❌ Error al listar creadores de pedido: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error interno al listar creadores de pedido: {str(e)}"
+        )
+
+
+def _query_modificadores_pedido():
+    """Consulta bloqueante (pyodbc); se ejecuta vía asyncio.to_thread."""
+    with get_db_connection_context() as conn:
+        repo = PedidoRepository(conn)
+        return repo.get_modificadores_distintos()
+
+
+async def _listar_modificadores_pedido_handler():
+    try:
+        modificadores = await asyncio.to_thread(_query_modificadores_pedido)
+
+        return JSONResponse(
+            status_code=200,
+            content={
+                "status": "success",
+                "data": modificadores,
+            }
+        )
+
+    except Exception as e:
+        logger.error(f"❌ Error al listar modificadores de pedido: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error interno al listar modificadores de pedido: {str(e)}"
+        )
+
+
 def register_pedidos_listado_endpoints(app: FastAPI):
     """Registra endpoints de listados y maestros de pedidos."""
 
@@ -389,11 +447,15 @@ def register_pedidos_listado_endpoints(app: FastAPI):
         fecha_hasta: Optional[str] = Query(None, description="Filtrar hasta fecha (YYYY-MM-DD)"),
         tipo_fecha: Optional[str] = Query(
             None,
-            description="Columna sobre la que aplica fecha_desde/fecha_hasta: 'pedido' (default), 'entrega' o 'facturacion'",
+            description=(
+                "Columna sobre la que aplica fecha_desde/fecha_hasta: 'pedido' (default), "
+                "'creacion', 'modificacion', 'entrega' o 'facturacion'"
+            ),
         ),
         proveedor_nombre: Optional[str] = Query(None, description="Buscar por nombre de proveedor (parcial)"),
         numero_pedido: Optional[str] = Query(None, description="Buscar por número de pedido (parcial)"),
         creado_por: Optional[str] = Query(None, description="Filtrar por usuario que creó el pedido (parcial)"),
+        modificado_por: Optional[str] = Query(None, description="Filtrar por usuario que modificó por última vez el pedido (parcial)"),
         paginacion: _Paginacion = Depends(_Paginacion),
         solo_redistribucion: Optional[str] = Query(
             None,
@@ -423,10 +485,11 @@ def register_pedidos_listado_endpoints(app: FastAPI):
         - `estado` (string, opcional) - Filtrar por estado (ej: "PENDIENTE_CONFIRMACION_PROVEEDOR", "CONFIRMADO_PROVEEDOR")
         - `fecha_desde` (string, opcional) - Filtrar desde fecha (YYYY-MM-DD)
         - `fecha_hasta` (string, opcional) - Filtrar hasta fecha (YYYY-MM-DD)
-        - `tipo_fecha` (string, opcional) - Columna de fecha a filtrar: "pedido" (default), "entrega" o "facturacion"
+        - `tipo_fecha` (string, opcional) - Columna de fecha a filtrar: "pedido" (default), "creacion", "modificacion", "entrega" o "facturacion"
         - `proveedor_nombre` (string, opcional) - Búsqueda parcial por nombre de proveedor
         - `numero_pedido` (string, opcional) - Búsqueda parcial por número de pedido
         - `creado_por` (string, opcional) - Búsqueda parcial por usuario que creó el pedido
+        - `modificado_por` (string, opcional) - Búsqueda parcial por usuario que modificó por última vez el pedido
         - `limit` (int, default: 50) - Límite de registros por página
         - `offset` (int, default: 0) - Offset para paginación
         - `solo_redistribucion` (string, opcional) - Si "true", solo pedidos aptos para redistribución
@@ -475,6 +538,7 @@ def register_pedidos_listado_endpoints(app: FastAPI):
             proveedor_nombre=proveedor_nombre,
             numero_pedido=numero_pedido,
             creado_por=creado_por,
+            modificado_por=modificado_por,
             paginacion=paginacion,
             solo_redistribucion=solo_redistribucion,
             solo_pendientes_accion=solo_pendientes_accion,
@@ -489,11 +553,15 @@ def register_pedidos_listado_endpoints(app: FastAPI):
         fecha_hasta: Optional[str] = Query(None, description="Filtrar hasta fecha (YYYY-MM-DD)"),
         tipo_fecha: Optional[str] = Query(
             None,
-            description="Columna sobre la que aplica fecha_desde/fecha_hasta: 'pedido' (default), 'entrega' o 'facturacion'",
+            description=(
+                "Columna sobre la que aplica fecha_desde/fecha_hasta: 'pedido' (default), "
+                "'creacion', 'modificacion', 'entrega' o 'facturacion'"
+            ),
         ),
         proveedor_nombre: Optional[str] = Query(None, description="Búsqueda parcial por proveedor"),
         numero_pedido: Optional[str] = Query(None, description="Búsqueda parcial por número de pedido"),
         creado_por: Optional[str] = Query(None, description="Búsqueda parcial por usuario creador"),
+        modificado_por: Optional[str] = Query(None, description="Búsqueda parcial por usuario que modificó por última vez el pedido"),
         redistribucion_confirmada: Optional[str] = Query(
             None,
             description="Si 'true', solo pedidos con redistribución ya confirmada (estado CONFIRMADO REDISTRIBUCION)"
@@ -531,6 +599,7 @@ def register_pedidos_listado_endpoints(app: FastAPI):
             proveedor_nombre=proveedor_nombre,
             numero_pedido=numero_pedido,
             creado_por=creado_por,
+            modificado_por=modificado_por,
         )
 
     @app.get("/api/pedidos/ultimo-redistribucion", tags=["Pedidos"])
@@ -626,6 +695,63 @@ def register_pedidos_listado_endpoints(app: FastAPI):
             JSON con lista de estados disponibles para el filtro
         """
         return await _listar_estados_pedido_handler(contexto=contexto, user=user)
+
+    @app.get("/api/pedidos/creadores", tags=["Pedidos"], responses=READ_RESPONSES)
+    async def listar_creadores_pedido(
+        user: Dict = Depends(verify_jwt_token),
+        _: None = Depends(require_any_permission(_PERMS_LISTADO))
+    ):
+        """
+        Devuelve la lista de usuarios (creado_por) que han creado al menos un
+        pedido, para el <select> de "Creado Por" del contenedor "Filtros de
+        Búsqueda". Antes era un input de texto libre; se reemplazó por un
+        selector para no obligar al usuario a adivinar qué escribir.
+
+        **Ejemplo:**
+        ```
+        GET /api/pedidos/creadores
+        ```
+
+        **Respuesta:**
+        ```json
+        {
+            "status": "success",
+            "data": ["ana.torres@mabeltrading.com.ec", "SYSTEM", "cortiz@mabeltrading.com.ec"]
+        }
+        ```
+
+        Returns:
+            JSON con lista de valores distintos de creado_por
+        """
+        return await _listar_creadores_pedido_handler()
+
+    @app.get("/api/pedidos/modificadores", tags=["Pedidos"], responses=READ_RESPONSES)
+    async def listar_modificadores_pedido(
+        user: Dict = Depends(verify_jwt_token),
+        _: None = Depends(require_any_permission(_PERMS_LISTADO))
+    ):
+        """
+        Devuelve la lista de usuarios (modificado_por) que han modificado al
+        menos un pedido, para el <select> de "Modificado Por" del contenedor
+        "Filtros de Búsqueda".
+
+        **Ejemplo:**
+        ```
+        GET /api/pedidos/modificadores
+        ```
+
+        **Respuesta:**
+        ```json
+        {
+            "status": "success",
+            "data": ["ana.torres@mabeltrading.com.ec", "SYSTEM", "cortiz@mabeltrading.com.ec"]
+        }
+        ```
+
+        Returns:
+            JSON con lista de valores distintos de modificado_por
+        """
+        return await _listar_modificadores_pedido_handler()
 
     @app.get("/api/pedidos/existe", tags=["Pedidos"])
     async def verificar_pedidos_existen(
