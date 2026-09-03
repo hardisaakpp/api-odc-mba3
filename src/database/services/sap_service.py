@@ -6,7 +6,7 @@ import logging
 from enum import Enum, auto
 from typing import Literal, Optional, Dict, Any, List, Union, Tuple
 
-from src.config import SAP_CACHE_DAYS, ENABLE_SAP_QUERIES, SAP_USE_MIDDLEWARE
+from src.config import SAP_CACHE_DAYS, SAP_USE_MIDDLEWARE
 from ..connection import get_db_connection
 from ..clients.sap_client import SAPClient
 from ..clients.sap_service_layer_client import SAPServiceLayerClient
@@ -31,7 +31,6 @@ class SAPService:
     def __init__(self):
         """Inicializa el servicio SAP."""
         self.sap_client = SAPClient()
-        self.enabled = ENABLE_SAP_QUERIES
 
     @staticmethod
     def _consultar_producto_via_middleware(
@@ -233,10 +232,6 @@ class SAPService:
             - El SKU de MBA3 no coincide con el ItemCode de SAP (mismatch)
             - Hay error al consultar
         """
-        if not self.enabled:
-            logger.debug(f"⏭️ Servicio SAP deshabilitado para SKU: {sku}")
-            return None
-
         if not sku or not sku.strip():
             logger.warning("⚠️ SKU vacío o inválido")
             return None
@@ -373,10 +368,6 @@ class SAPService:
         resultados: Dict[str, Optional[Dict[str, Any]]] = {}
         skus_validos = [s for s in skus if s and s.strip()]
         if not skus_validos:
-            return {sku: None for sku in skus}
-
-        if not self.enabled:
-            logger.debug("⏭️ Servicio SAP deshabilitado para batch de productos")
             return {sku: None for sku in skus}
 
         conn = None

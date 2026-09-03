@@ -178,9 +178,6 @@ SAP_LINKED_SERVER = os.getenv("SAP_LINKED_SERVER", "MYHANADB")
 SAP_DATABASE = os.getenv("SAP_DATABASE", "")
 SAP_SCHEMA = os.getenv("SAP_SCHEMA", "")
 
-# Habilitar consultas a SAP (poner a False para deshabilitar)
-ENABLE_SAP_QUERIES = os.getenv("ENABLE_SAP_QUERIES", "true").lower() == "true"
-
 # Tiempo de vida del cache en dÃ­as (cuÃ¡ntos dÃ­as antes de re-consultar SAP)
 SAP_CACHE_DAYS = int(os.getenv("SAP_CACHE_DAYS", "30"))
 

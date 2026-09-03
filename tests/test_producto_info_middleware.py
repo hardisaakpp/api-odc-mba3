@@ -129,21 +129,14 @@ class TestGetOrFetchProductosBatch:
     """
     get_or_fetch_productos_batch: resuelve varios SKUs con UNA sola llamada
     get_items_batch en vez de N get_or_fetch_producto_info. Los que ya están en
-    cache no tocan el middleware; los que el batch no resuelve (flag apagada,
-    batch no disponible, o el código no vino en el resultado) caen a
+    cache no tocan el middleware; los que el batch no resuelve (batch no
+    disponible, o el código no vino en el resultado) caen a
     get_or_fetch_producto_info uno por uno — el camino de siempre.
     """
 
     @staticmethod
     def _service():
-        service = SAPService()
-        service.enabled = True
-        return service
-
-    def test_deshabilitado_retorna_none_para_todos(self):
-        service = SAPService()
-        service.enabled = False
-        assert service.get_or_fetch_productos_batch(["A1", "B2"]) == {"A1": None, "B2": None}
+        return SAPService()
 
     def test_lista_vacia_retorna_vacio(self):
         assert self._service().get_or_fetch_productos_batch([]) == {}

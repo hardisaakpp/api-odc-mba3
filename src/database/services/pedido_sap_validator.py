@@ -121,10 +121,6 @@ class PedidoSAPValidator:
                 "detalle": {}
             }
 
-        resultado_deshabilitado = self._handle_sap_disabled(codigos_productos, sap_obligatorio, "productos")
-        if resultado_deshabilitado:
-            return resultado_deshabilitado
-
         detalle = {}
         validos = []
         no_encontrados = []
@@ -244,10 +240,6 @@ class PedidoSAPValidator:
                 "detalle": {}
             }
 
-        resultado_deshabilitado = self._handle_sap_disabled(codigos_productos, sap_obligatorio, "productos")
-        if resultado_deshabilitado:
-            return resultado_deshabilitado
-
         detalle = {}
         validos = []
         no_encontrados = []
@@ -322,8 +314,7 @@ class PedidoSAPValidator:
         self, codigo_clean: str, incluir_sugerencias: bool, limite_sugerencias: int
     ):
         """Busca en MBA3 y genera sugerencias SAP para un código no encontrado; retorna (info_mba3, sugerencias)."""
-        from src.config import ENABLE_SAP_QUERIES
-        if not incluir_sugerencias or not ENABLE_SAP_QUERIES:
+        if not incluir_sugerencias:
             return None, []
         try:
             info_mba3 = self._buscar_en_mba3(codigo_clean)
@@ -513,10 +504,6 @@ class PedidoSAPValidator:
         try:
             from ..clients.sap_client import SAPClient
             from ..services.sugerencias_homologacion_service import SugerenciasHomologacionService
-            from src.config import ENABLE_SAP_QUERIES
-
-            if not ENABLE_SAP_QUERIES:
-                return []
 
             sap_client = SAPClient()
             sugerencias_service = SugerenciasHomologacionService()
@@ -620,10 +607,6 @@ class PedidoSAPValidator:
                 "todas_validas": True,
                 "detalle": {}
             }
-
-        resultado_deshabilitado = self._handle_sap_disabled(codigos_bodegas, sap_obligatorio, "bodegas")
-        if resultado_deshabilitado:
-            return resultado_deshabilitado
 
         detalle = {}
         validas = []
@@ -757,10 +740,6 @@ class PedidoSAPValidator:
                 "detalle": {}
             }
 
-        resultado_deshabilitado = self._handle_sap_disabled(codigos_tiendas, sap_obligatorio, "tiendas")
-        if resultado_deshabilitado:
-            return resultado_deshabilitado
-
         validas = []
         no_encontradas = []
         errores = []
@@ -860,89 +839,6 @@ class PedidoSAPValidator:
             }
             no_encontradas.append(codigo)
             logger.warning(f"⚠️ Tienda {codigo_clean} no encontrada en SAP")
-
-    def _handle_sap_disabled(
-        self,
-        codigos: List[str],
-        sap_obligatorio: bool,
-        tipo_entidad: str
-    ) -> Dict[str, Any] | None:
-        """
-        Maneja el caso cuando SAP está deshabilitado.
-
-        Args:
-            codigos: Lista de códigos a validar
-            sap_obligatorio: Si True, errores bloquean
-            tipo_entidad: Tipo de entidad ("productos", "bodegas", "tiendas")
-
-        Returns:
-            Diccionario con resultado si SAP está deshabilitado, None si está habilitado
-        """
-        from src.config import ENABLE_SAP_QUERIES
-
-        if ENABLE_SAP_QUERIES:
-            return None
-
-        logger.warning(f"⚠️ Consultas SAP deshabilitadas (ENABLE_SAP_QUERIES=False) para {tipo_entidad}")
-
-        if sap_obligatorio:
-            detalle = {
-                codigo: {
-                    "existe": False,
-                    "info": None,
-                    "error": "SAP deshabilitado",
-                    "severity": "ERROR"
-                }
-                for codigo in codigos
-            }
-            # Para productos: usar "validos", "no_encontrados"
-            # Para bodegas/tiendas: usar "validas", "no_encontradas"
-            if tipo_entidad == "productos":
-                return {
-                    "validos": [],
-                    "no_encontrados": [],
-                    "errores": list(codigos),
-                    "warnings": [],
-                    "todos_validos": False,
-                    "detalle": detalle
-                }
-            else:
-                return {
-                    "validas": [],
-                    "no_encontradas": [],
-                    "errores": list(codigos),
-                    "warnings": [],
-                    "todas_validas": False,
-                    "detalle": detalle
-                }
-        else:
-            detalle = {
-                codigo: {
-                    "existe": False,
-                    "info": None,
-                    "error": "SAP deshabilitado",
-                    "severity": "WARNING"
-                }
-                for codigo in codigos
-            }
-            if tipo_entidad == "productos":
-                return {
-                    "validos": [],
-                    "no_encontrados": [],
-                    "errores": [],
-                    "warnings": list(codigos),
-                    "todos_validos": False,
-                    "detalle": detalle
-                }
-            else:
-                return {
-                    "validas": [],
-                    "no_encontradas": [],
-                    "errores": [],
-                    "warnings": list(codigos),
-                    "todas_validas": False,
-                    "detalle": detalle
-                }
 
     def _procesar_resultado_producto(
         self,

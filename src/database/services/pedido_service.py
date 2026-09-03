@@ -32,7 +32,7 @@ from src.utils.audit_context import AuditContext, ORIGEN_WEB
 from .pedido_formato_processor import PedidoFormatoProcessor
 from ..clients.sap_client import SAPClient
 from ..clients.sap_service_layer_client import SAPServiceLayerClient
-from src.config import ENABLE_SAP_QUERIES, SAP_USE_MIDDLEWARE
+from src.config import SAP_USE_MIDDLEWARE
 
 logger = logging.getLogger(__name__)
 
@@ -260,10 +260,6 @@ class PedidoService:
         Returns:
             Lista de detalles enriquecidos con información de SAP
         """
-        if not ENABLE_SAP_QUERIES:
-            logger.debug("⏭️ Consultas SAP deshabilitadas, omitiendo enriquecimiento")
-            return detalles_con_tiendas
-        
         # Extraer códigos de productos únicos que necesitan enriquecimiento
         codigos_a_consultar = []
         codigos_por_detalle = {}  # Mapeo: codigo_interno -> índices de detalles que lo usan

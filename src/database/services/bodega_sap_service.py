@@ -5,7 +5,7 @@ Servicio para consultar SAP y poblar el cache de bodegas/tiendas.
 import logging
 from typing import Optional, Dict, Any, List
 
-from src.config import SAP_CACHE_DAYS, ENABLE_SAP_QUERIES, SAP_USE_MIDDLEWARE
+from src.config import SAP_CACHE_DAYS, SAP_USE_MIDDLEWARE
 from ..connection import get_db_connection
 from ..clients.sap_client import SAPClient
 from ..clients.sap_service_layer_client import SAPServiceLayerClient
@@ -21,7 +21,6 @@ class BodegaSAPService:
         """Inicializa el servicio SAP."""
         self.sap_client = SAPClient()
         self.sap_sl_client = SAPServiceLayerClient()
-        self.enabled = ENABLE_SAP_QUERIES
     
     def _es_bodega_central(self, whs_code: str) -> bool:
         """
@@ -62,10 +61,6 @@ class BodegaSAPService:
             - No se encuentra en SAP
             - Hay error al consultar
         """
-        if not self.enabled:
-            logger.debug(f"⏭️ Servicio SAP deshabilitado para WhsCode: {whs_code}")
-            return None
-        
         if not whs_code or not whs_code.strip():
             logger.warning("⚠️ WhsCode vacío o inválido")
             return None
@@ -330,9 +325,6 @@ class BodegaSAPService:
                 "NOEXISTE": {"WhsCode": "NOEXISTE", "encontrado": False}
             }
         """
-        if not self.enabled:
-            logger.debug("⏭️ Servicio SAP deshabilitado para validar códigos")
-            return {}
         if not codigos:
             return {}
 
@@ -393,10 +385,6 @@ class BodegaSAPService:
             ]
             O lista vacía si hay error
         """
-        if not self.enabled:
-            logger.debug("⏭️ Servicio SAP deshabilitado para obtener todas las bodegas")
-            return []
-        
         conn = None
         try:
             conn = get_db_connection()

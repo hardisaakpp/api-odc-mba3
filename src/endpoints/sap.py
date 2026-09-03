@@ -17,7 +17,7 @@ from src.database.repositories.orden_compra_repository import OrdenCompraReposit
 from src.database.repositories.sap_integration_log_repository import SAPIntegrationLogRepository, SAPLogEntry
 from src.database.services.oc_sap_service import OCSAPService
 from src.database.connection import get_db_connection, get_db_connection_context
-from src.config import ENABLE_SAP_QUERIES, SAP_LINKED_SERVER, ENABLE_SAP_SERVICE_LAYER
+from src.config import SAP_LINKED_SERVER, ENABLE_SAP_SERVICE_LAYER
 from src.security.jwt_auth import verify_jwt_token, require_permission
 
 logger = logging.getLogger(__name__)
@@ -724,16 +724,6 @@ def _ejecutar_test_sap_query(request, sku):
     logger.info("=" * 70)
 
     try:
-        if not ENABLE_SAP_QUERIES:
-            return JSONResponse(
-                status_code=400,
-                content={
-                    "status": "error",
-                    "message": "Consultas SAP están deshabilitadas",
-                    "hint": "Configura ENABLE_SAP_QUERIES=true en .env"
-                }
-            )
-
         sap_service = SAPService()
         producto_info = sap_service.get_or_fetch_producto_info(sku)
 
@@ -750,7 +740,6 @@ def _ejecutar_test_sap_query(request, sku):
                 },
                 "config": {
                     "sap_linked_server": SAP_LINKED_SERVER,
-                    "sap_enabled": ENABLE_SAP_QUERIES,
                 },
                 "message": "Producto encontrado en SAP",
                 "timestamp": ahora_naive().isoformat()
@@ -815,15 +804,6 @@ def _ejecutar_test_sap_direct(request, sku):
     logger.info("=" * 70)
 
     try:
-        if not ENABLE_SAP_QUERIES:
-            return JSONResponse(
-                status_code=400,
-                content={
-                    "status": "error",
-                    "message": "Consultas SAP están deshabilitadas"
-                }
-            )
-
         client = SAPClient()
         resultado = client.get_producto_info(sku)
 

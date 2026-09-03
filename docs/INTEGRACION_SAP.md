@@ -141,7 +141,6 @@ USE_BATCH_VALIDATION=false          # Prevalidación de OC (proveedor + artícul
 SAP_LINKED_SERVER=MYHANADB
 SAP_DATABASE=SBO_MABEL_PROD
 SAP_SCHEMA=SBO_MABEL_PROD
-ENABLE_SAP_QUERIES=true
 SAP_CACHE_DAYS=30
 
 # SAP Service Layer (usado por el middleware; también accesible directo — ver excepciones)
@@ -245,15 +244,9 @@ SELECT * FROM pack_conversion WHERE pack_id = 'X3';
 
 ## 🚀 Activación
 
-La integración está activa por defecto si:
-- `ENABLE_SAP_QUERIES=true` en `.env`
+La integración está siempre activa (sin flag) si:
 - Las tablas están creadas
 - El servidor vinculado está configurado
-
-Para desactivar temporalmente:
-```env
-ENABLE_SAP_QUERIES=false
-```
 
 ## ⚠️ Notas Importantes
 
