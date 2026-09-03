@@ -118,9 +118,6 @@ SAP_ST_FROM_WAREHOUSE=OUT-CON
 ### Notificaciones por Email
 
 ```env
-# Habilitar/Deshabilitar notificaciones
-ENABLE_EMAIL_NOTIFICATIONS=true
-
 # Configuración SMTP
 EMAIL_SMTP_SERVER=mabeltrading-com-ec.mail.protection.outlook.com
 EMAIL_SMTP_PORT=25

@@ -8,15 +8,11 @@ from datetime import datetime
 
 from src.utils.timezone import ahora_naive
 from typing import List, Optional
-from src.config import (
-    ENABLE_EMAIL_NOTIFICATIONS,
-)
 from src.utils.notificacion_destinatarios import get_destinatarios_por_correo
 from src.utils.smtp_sender import send_smtp_message
 
 logger = logging.getLogger(__name__)
 
-_MSG_NOTIF_DESHABILITADAS = "⏭️ Notificaciones por email deshabilitadas"
 _MSG_SIN_EMAIL_MABEL = "⚠️ No hay email configurado para MABEL TRADING"
 _MSG_SIN_DESTINATARIOS = "⚠️ No hay destinatarios configurados"
 _DEFAULT_FRONTEND_URL = "http://localhost:3000"
@@ -130,9 +126,6 @@ def send_rayo_confirmacion_notification(
     Returns:
         True si el email se envió correctamente, False en caso contrario
     """
-    if not ENABLE_EMAIL_NOTIFICATIONS:
-        logger.debug(_MSG_NOTIF_DESHABILITADAS)
-        return False
 
     if not fecha_ejecucion:
         fecha_ejecucion = ahora_naive()
@@ -239,9 +232,6 @@ def send_despachar_y_facturar_notification(
     Returns:
         True si el email se envió correctamente, False en caso contrario
     """
-    if not ENABLE_EMAIL_NOTIFICATIONS:
-        logger.debug(_MSG_NOTIF_DESHABILITADAS)
-        return False
 
     if not fecha_ejecucion:
         fecha_ejecucion = ahora_naive()
@@ -350,9 +340,6 @@ def send_finalizar_pedido_notification(
     Returns:
         True si el email se envió correctamente, False en caso contrario
     """
-    if not ENABLE_EMAIL_NOTIFICATIONS:
-        logger.debug(_MSG_NOTIF_DESHABILITADAS)
-        return False
 
     if not fecha_ejecucion:
         fecha_ejecucion = ahora_naive()

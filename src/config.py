@@ -535,9 +535,6 @@ SYNC_PRODUCTOS_MINUTE = int(os.getenv('SYNC_PRODUCTOS_MINUTE', '0'))  # Default:
 # ============================================================================
 # ConfiguraciÃ³n de Notificaciones por Email
 # ============================================================================
-# Habilitar notificaciones por correo electronico
-ENABLE_EMAIL_NOTIFICATIONS = os.getenv("ENABLE_EMAIL_NOTIFICATIONS", "true").lower() == "true"
-
 # ConfiguraciÃ³n SMTP (Outlook)
 EMAIL_SMTP_SERVER = os.getenv("EMAIL_SMTP_SERVER", "mabeltrading-com-ec.mail.protection.outlook.com")
 EMAIL_SMTP_PORT = int(os.getenv("EMAIL_SMTP_PORT", "25"))  # Puerto 25 para relay interno (sin TLS)
