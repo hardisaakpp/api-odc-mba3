@@ -579,10 +579,8 @@ except ValueError:
 MAX_EXCEL_UPLOAD_SIZE_MB = max(1, MAX_EXCEL_UPLOAD_SIZE_MB)
 MAX_EXCEL_UPLOAD_SIZE_BYTES = MAX_EXCEL_UPLOAD_SIZE_MB * 1024 * 1024
 
-# Habilitar almacenamiento de archivos Excel originales para descarga posterior
-ENABLE_FILE_STORAGE = os.getenv("ENABLE_FILE_STORAGE", "false").lower() == "true"
-
-# Configuración del storage (compatible con S3 y MinIO)
+# Configuración del storage (compatible con S3 y MinIO). Siempre activo, sin
+# flag: MinIO es infraestructura obligatoria (ver docker-compose.yml).
 FILE_STORAGE_ENDPOINT = os.getenv("FILE_STORAGE_ENDPOINT", "http://localhost:9000")
 FILE_STORAGE_ACCESS_KEY = os.getenv("FILE_STORAGE_ACCESS_KEY", "minioadmin")
 FILE_STORAGE_SECRET_KEY = os.getenv("FILE_STORAGE_SECRET_KEY", "minioadmin")
@@ -590,7 +588,7 @@ FILE_STORAGE_BUCKET = os.getenv("FILE_STORAGE_BUCKET", "plantillas-excel")
 FILE_STORAGE_REGION = os.getenv("FILE_STORAGE_REGION", "us-east-1")
 
 # Validar configuración de storage en producción
-if ENVIRONMENT == "production" and ENABLE_FILE_STORAGE:
+if ENVIRONMENT == "production":
     if FILE_STORAGE_ACCESS_KEY == "minioadmin":
         logger.warning(
             "⚠️ FILE_STORAGE usando credenciales por defecto en producción. "

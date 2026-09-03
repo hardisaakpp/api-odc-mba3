@@ -253,7 +253,6 @@ Para que la **carga de plantillas Excel** no bloquee la aplicación (y otros usu
    cd C:\Users\cortiz\PycharmProjects\mba3-consultas
    celery -A src.celery_app worker --loglevel=info --pool=solo
    ```
-3. **ENABLE_FILE_STORAGE=true** en `.env` (MinIO/S3 para archivos temporales).
 
 ## 📤 Proceso completo SAP (Enviar ODC a SAP) en segundo plano
 
@@ -263,7 +262,7 @@ El flujo **"Enviar ODC a SAP"** (Redistribución + Generar ODC + Enviar a SAP) p
 - **GET /api/pedidos/proceso-sap/resultado/{process_id}** → consultar resultado (polling). Si `status === "completed"`, el cuerpo es el mismo que el endpoint síncrono (incluye `envio_sap.oc_id` para descargar el PDF).
 - **GET /api/pedidos/proceso-sap/stream/{process_id}** → progreso en tiempo real (SSE).
 
-**Requisitos:** Redis y Celery Worker en marcha (mismos que para plantillas). No requiere ENABLE_FILE_STORAGE.
+**Requisitos:** Redis y Celery Worker en marcha (mismos que para plantillas).
 
 El frontend en `/mba3-consultas/proceso` debe llamar al **async** y usar `resultado_url` o `stream_url` para mostrar progreso y, al terminar, el modal de éxito con opción de descargar PDF (`GET /ordenes-compra/{oc_id}/pdf`).
 

@@ -32,7 +32,6 @@ from src.utils.timezone import ahora_naive
 from typing import Optional, Tuple, Dict, Any
 
 from src.config import (
-    ENABLE_FILE_STORAGE,
     FILE_STORAGE_ENDPOINT,
     FILE_STORAGE_ACCESS_KEY,
     FILE_STORAGE_SECRET_KEY,
@@ -86,12 +85,6 @@ class FileStorageService:
         with self._client_lock:
             if self._client is not None:
                 return self._client
-
-            if not ENABLE_FILE_STORAGE:
-                raise FileStorageError(
-                    "El almacenamiento de archivos está deshabilitado. "
-                    "Configura ENABLE_FILE_STORAGE=true en .env"
-                )
 
             try:
                 import boto3
@@ -476,28 +469,13 @@ class FileStorageService:
             logger.error(f"❌ Error al obtener metadatos: {e}")
             raise FileStorageError(f"No se pudo obtener los metadatos: {str(e)}")
     
-    def is_enabled(self) -> bool:
-        """
-        Verifica si el storage está habilitado.
-        
-        Returns:
-            True si ENABLE_FILE_STORAGE=true
-        """
-        return ENABLE_FILE_STORAGE
-    
     def health_check(self) -> Dict[str, Any]:
         """
         Verifica el estado del servicio de storage.
-        
+
         Returns:
             Dict con información del estado
         """
-        if not ENABLE_FILE_STORAGE:
-            return {
-                "status": "disabled",
-                "message": "File storage está deshabilitado"
-            }
-        
         try:
             client = self._get_client()
             

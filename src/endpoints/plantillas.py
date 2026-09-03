@@ -27,7 +27,6 @@ from src.database.pedido_estados import ESTADOS_PUEDE_DESCARTAR, ESTADOS_PUEDE_C
 from src.security.jwt_auth import verify_jwt_token, require_permission, require_any_permission
 from src.exceptions import BusinessException
 from src.endpoints.pedidos.utils import validate_excel_file, get_user_id, MAX_FILE_SIZE
-from src.config import ENABLE_FILE_STORAGE
 from src.database.services.proceso_estado_service import ProcesoEstadoService
 from src.services.celery_availability import celery_worker_available as _celery_workers_available
 
@@ -267,7 +266,7 @@ def _guardar_archivo_original(content: bytes, pedido_id, filename: str, file_siz
 
 def _adjuntar_archivo_original(response_data: Dict, content: bytes, resultado: Dict, filename: str, file_size: int, user_id) -> None:
     """Guarda el archivo original en storage (si aplica) y adjunta el estado al response_data."""
-    if ENABLE_FILE_STORAGE and resultado.get("pedido_id"):
+    if resultado.get("pedido_id"):
         from src.services.file_storage_service import FileStorageError
         try:
             storage_path = _guardar_archivo_original(content, resultado["pedido_id"], filename, file_size, user_id)
@@ -293,12 +292,6 @@ def _adjuntar_archivo_original(response_data: Dict, content: bytes, resultado: D
                 "error": "Error interno al guardar archivo",
                 "descarga_disponible": False
             }
-    elif not ENABLE_FILE_STORAGE:
-        response_data["archivo_original"] = {
-            "guardado": False,
-            "mensaje": "Almacenamiento de archivos deshabilitado (ENABLE_FILE_STORAGE=false)",
-            "descarga_disponible": False
-        }
 
 
 async def _upload_plantilla_handler(
@@ -426,7 +419,7 @@ def _encolar_plantilla_async(
 
 def _adjuntar_archivo_original_fallback(response_data: Dict, content: bytes, resultado: Dict, filename: str, file_size: int, user_id) -> None:
     """Variante fallback-sync del guardado del archivo original en storage."""
-    if ENABLE_FILE_STORAGE and resultado.get("pedido_id"):
+    if resultado.get("pedido_id"):
         try:
             storage_path = _guardar_archivo_original(content, resultado["pedido_id"], filename, file_size, user_id)
             response_data["archivo_original"] = {
@@ -444,7 +437,7 @@ def _adjuntar_archivo_original_fallback(response_data: Dict, content: bytes, res
     else:
         response_data["archivo_original"] = {
             "guardado": False,
-            "mensaje": "Almacenamiento deshabilitado o no aplicable" if not ENABLE_FILE_STORAGE else "No guardado",
+            "mensaje": "No guardado",
             "descarga_disponible": False
         }
 
@@ -523,18 +516,6 @@ async def _upload_plantilla_async_handler(
             "No hay workers Celery disponibles. Procesando plantilla en primer plano (fallback sync)."
         )
         run_async = False
-
-    if not ENABLE_FILE_STORAGE and run_async:
-        raise HTTPException(
-            status_code=503,
-            detail={
-                "error": "storage_required",
-                "message": (
-                    "La carga en segundo plano requiere ENABLE_FILE_STORAGE=true. "
-                    "Activa el storage temporal o usa force_sync=true de forma explícita."
-                )
-            }
-        )
 
     if run_async:
         # to_thread: encolar toca SQL Server, MinIO y Redis de forma sincrona.
@@ -744,7 +725,10 @@ async def _listar_pedidos_plantillas_handler(
                     fecha_hasta=fecha_hasta,
                     tipo_fecha=tipo_fecha,
                     excluir_borrador=False,  # INCLUIR BORRADOR para cargar-plantilla
-                    solo_pendientes_accion=filtrar_pendientes,
+                    # Cargar Plantilla usa su propio set de estados "pendientes" (Producción
+                    # Pospuesta, Despachar y Facturar), no ESTADOS_REQUIERE_ACCION_* (proveedor) --
+                    # ver ESTADOS_REQUIERE_ACCION_CARGAR_PLANTILLA_* en pedido_estados.py.
+                    solo_pendientes_accion_cargar_plantilla=filtrar_pendientes,
                     # LISTO_PARA_REDISTRIBUCION (25, botón "Aceptar") solo se ve en /redistribucion
                     excluir_listo_para_redistribucion=True,
                 ),
@@ -861,15 +845,6 @@ async def _descargar_plantilla(
 ):
     """Descarga el archivo Excel original que fue subido para un pedido."""
     try:
-        if not ENABLE_FILE_STORAGE:
-            raise HTTPException(
-                status_code=503,
-                detail={
-                    "error": "storage_disabled",
-                    "message": "El almacenamiento de archivos está deshabilitado. Contacta al administrador."
-                }
-            )
-
         user_id = get_user_id(user)
 
         if not pedido_id and archivo_id is None:
@@ -937,16 +912,6 @@ async def _descargar_plantilla(
 
 async def _info_archivo_plantilla_handler(pedido_id: str):
     try:
-        if not ENABLE_FILE_STORAGE:
-            return JSONResponse(
-                status_code=200,
-                content={
-                    "existe": False,
-                    "storage_habilitado": False,
-                    "mensaje": "Almacenamiento de archivos deshabilitado"
-                }
-            )
-
         with get_db_connection_context() as conn:
             archivo_repo = ArchivoPlantillaRepository(conn)
             archivo_info = archivo_repo.obtener_por_pedido_id(pedido_id)
@@ -1025,21 +990,6 @@ async def _buscar_pedidos_por_numero_handler(numero_pedido: Optional[str], limit
 
 async def _listar_archivos_originales_handler(limit: int, solo_activos: bool, user: Dict):
     try:
-        if not ENABLE_FILE_STORAGE:
-            return JSONResponse(
-                status_code=200,
-                content={
-                    "status": "warning",
-                    "message": "El almacenamiento de archivos está deshabilitado",
-                    "data": [],
-                    "metadata": {
-                        "total": 0,
-                        "limit": limit,
-                        "storage_habilitado": False
-                    }
-                }
-            )
-
         user_id = get_user_id(user)
         permissions = user.get('permissions', [])
 
@@ -1107,15 +1057,6 @@ async def _listar_archivos_originales_handler(limit: int, solo_activos: bool, us
 
 async def _eliminar_archivo_original_handler(archivo_id: int, eliminar_fisicamente: bool, user: Dict):
     try:
-        if not ENABLE_FILE_STORAGE:
-            raise HTTPException(
-                status_code=503,
-                detail={
-                    "error": "storage_disabled",
-                    "message": "El almacenamiento de archivos está deshabilitado"
-                }
-            )
-
         user_id = get_user_id(user)
 
         with get_db_connection_context() as conn:
@@ -1222,15 +1163,6 @@ async def _eliminar_archivo_original_handler(archivo_id: int, eliminar_fisicamen
 
 async def _storage_health_check_handler():
     try:
-        if not ENABLE_FILE_STORAGE:
-            return JSONResponse(
-                status_code=200,
-                content={
-                    "status": "disabled",
-                    "message": "Almacenamiento de archivos deshabilitado (ENABLE_FILE_STORAGE=false)"
-                }
-            )
-
         from src.services.file_storage_service import get_file_storage
 
         storage = get_file_storage()

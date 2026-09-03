@@ -5,9 +5,9 @@ Este repositorio define varios modos con `docker-compose.yml` (+ overlay de prod
 | Modo | Comando | Qué levanta |
 |------|-----------|-------------|
 | **Solo Redis** (por defecto) | `docker compose up -d` | Redis (6379). |
-| **Redis + MinIO local** (desarrollo) | `docker compose --profile bundled-minio up -d` | Redis + MinIO (9100/9101). |
-| **Stack desarrollo** (perfil `app` + MinIO embebido) | `.\scripts\docker-app-up.ps1` (rebuild por defecto) o `docker compose --profile app --profile bundled-minio up -d --build` | Redis, MinIO, API, Celery worker y beat. |
-| **Stack producción** (`srv-mabuiosapi`) | `docker compose -f docker-compose.yml -f docker-compose.prod.yml --profile app up -d --build` o `./scripts/docker-app-up-prod.sh` | Redis, API, Celery; **MinIO en 192.168.2.211**. Ver [DEPLOY_DOCKER_PRODUCCION.md](DEPLOY_DOCKER_PRODUCCION.md). |
+| **Redis + MinIO local** (debug de storage sin el resto de la app) | `docker compose --profile bundled-minio up -d` | Redis + MinIO (9100/9101). |
+| **Stack desarrollo** (perfil `app`, incluye MinIO embebido) | `.\scripts\docker-app-up.ps1` (rebuild por defecto) o `docker compose --profile app up -d --build` | Redis, MinIO, API, Celery worker y beat. MinIO ya no es opcional: el storage de archivos siempre está activo. |
+| **Stack producción** (`srv-mabuiosapi`) | `docker compose -f docker-compose.yml -f docker-compose.prod.yml --profile app up -d --build` o `./scripts/docker-app-up-prod.sh` | Redis, API, Celery; **MinIO en 192.168.2.211** (el MinIO embebido se desactiva vía overlay). Ver [DEPLOY_DOCKER_PRODUCCION.md](DEPLOY_DOCKER_PRODUCCION.md). |
 
 Con el perfil **`app`** corre **toda la aplicación backend de este repo** (mismos endpoints y tareas Celery que en host). No hay funcionalidad reservada al modo host; solo cambia dónde se ejecutan los procesos.
 
@@ -67,7 +67,7 @@ Comprueba los 5 contenedores, `/health`, Redis/MinIO/SQL desde `mba3-api`, tarea
 # Solo Redis
 docker compose up -d
 
-# Redis + MinIO local (desarrollo)
+# Redis + MinIO local (debug de storage sin el resto de la app)
 docker compose --profile bundled-minio up -d
 
 # Stack completo desarrollo (reconstruye la imagen por defecto)

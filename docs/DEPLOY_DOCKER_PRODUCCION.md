@@ -39,8 +39,8 @@ docker ps   # contenedor minio-storage, puertos 9100->9000, 9101->9001
 
 | Archivo | Uso |
 |---------|-----|
-| `docker-compose.yml` | Base: Redis, servicios `app`, MinIO opcional (perfil `bundled-minio`, solo dev) |
-| `docker-compose.prod.yml` | Producción: monta `/opt/odc-sap/.env`, `ENVIRONMENT=production`, MinIO **192.168.2.211:9100**, sin MinIO local |
+| `docker-compose.yml` | Base: Redis, servicios `app` (incluye MinIO embebido, obligatorio en dev) |
+| `docker-compose.prod.yml` | Producción: monta `/opt/odc-sap/.env`, `ENVIRONMENT=production`, MinIO **192.168.2.211:9100**, desactiva el MinIO embebido |
 
 Comando de arranque / actualización en producción (recomendado):
 

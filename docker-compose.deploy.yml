@@ -22,11 +22,25 @@ x-deploy-common: &deploy-common
     FILE_STORAGE_ENDPOINT: ${FILE_STORAGE_ENDPOINT}
   env_file:
     - /opt/odc-sap/.env
+  # docker-compose.yml declara "minio" como dependencia (perfil "app", storage
+  # siempre activo en dev); acá se quita porque el MinIO embebido está
+  # desactivado en este host (ver nota junto al servicio "minio" abajo).
+  depends_on:
+    minio: !reset null
 
 services:
   redis:
     ports: !reset []   # No publicar 6379: hay un Redis nativo en el host
     mem_limit: ${REDIS_MEM_LIMIT:-256m}
+
+  # El MinIO embebido de docker-compose.yml es solo para desarrollo local: en
+  # test/prod el storage real es externo (FILE_STORAGE_ENDPOINT lo apunta ahí),
+  # así que se desactiva devolviéndolo a un perfil que --profile app no activa.
+  # "profiles" es una lista y Compose la fusiona (concatena) por defecto -- se
+  # necesita "!override" para reemplazarla en vez de sumarle "app".
+  minio:
+    profiles: !override
+      - bundled-minio-dev-only
 
   api:
     <<: *deploy-common
