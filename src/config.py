@@ -390,10 +390,6 @@ JWT_AUDIENCE = os.getenv('JWT_AUDIENCE', 'SCNexus.Users')
 CORE_API_URL = os.getenv("CORE_API_URL", "")
 CORE_API_TIMEOUT = int(os.getenv("CORE_API_TIMEOUT", "30"))  # Timeout en segundos
 
-# Habilitar autenticaciÃ³n JWT (requiere token vÃ¡lido del Core)
-# Cuando estÃ¡ habilitado, los endpoints protegidos requerirÃ¡n JWT vÃ¡lido
-ENABLE_JWT_AUTH = os.getenv("ENABLE_JWT_AUTH", "false").lower() == "true"
-
 # Rate Limiting (lÃ­mite de requests)
 ENABLE_RATE_LIMITING = os.getenv("ENABLE_RATE_LIMITING", "false").lower() == "true"
 RATE_LIMIT_DEFAULT = os.getenv("RATE_LIMIT_DEFAULT", "100/minute")  # LÃ­mite por defecto
@@ -437,21 +433,20 @@ if ENVIRONMENT == "production":
             "Configura en .env"
         )
     
-    # Validar JWT_SECRET y CORE_API_URL si JWT está habilitado
-    if ENABLE_JWT_AUTH:
-        if not JWT_SECRET:
-            raise ValueError(
-                "JWT_SECRET debe configurarse en .env en produccion. No puede estar vacio."
-            )
-        if not CORE_API_URL:
-            raise ValueError(
-                "CORE_API_URL debe configurarse en .env en produccion. No puede estar vacio."
-            )
-        if JWT_SECRET == 'clave_super_secreta_para_jwt_12345':
-            logger.warning(
-                "[TEMPORAL] JWT_SECRET usa valor por defecto (compatibilidad con Core). "
-                "Cuando Core migre a secret seguro, actualizar mba3-consultas."
-            )
+    # Validar JWT_SECRET y CORE_API_URL (requeridos en produccion)
+    if not JWT_SECRET:
+        raise ValueError(
+            "JWT_SECRET debe configurarse en .env en produccion. No puede estar vacio."
+        )
+    if not CORE_API_URL:
+        raise ValueError(
+            "CORE_API_URL debe configurarse en .env en produccion. No puede estar vacio."
+        )
+    if JWT_SECRET == 'clave_super_secreta_para_jwt_12345':
+        logger.warning(
+            "[TEMPORAL] JWT_SECRET usa valor por defecto (compatibilidad con Core). "
+            "Cuando Core migre a secret seguro, actualizar mba3-consultas."
+        )
     
     # Advertencia sobre SSL deshabilitado
     if not SAP_SERVICE_LAYER_VERIFY_SSL:
@@ -474,7 +469,7 @@ elif ENVIRONMENT == "development":
             warnings_found = True
         logger.warning("   Credenciales MBA3 no configuradas en .env")
     
-    if ENABLE_JWT_AUTH and (not JWT_SECRET or JWT_SECRET == 'clave_super_secreta_para_jwt_12345'):
+    if not JWT_SECRET or JWT_SECRET == 'clave_super_secreta_para_jwt_12345':
         if not warnings_found:
             logger.warning("=" * 70)
             logger.warning(_CONFIG_INCOMPLETA_MSG)

@@ -4,11 +4,11 @@ Este documento explica cómo activar las funcionalidades de seguridad de la apli
 
 ## 🔒 Funcionalidades de Seguridad
 
-Todas las funcionalidades de seguridad están **DESHABILITADAS por defecto** para mantener compatibilidad con el código existente. Puedes activarlas gradualmente según tus necesidades.
+La autenticación JWT está **siempre activa** (no es opcional). Rate Limiting, CORS Restrictivo y ocultar Swagger sí son opcionales y se activan gradualmente según tus necesidades.
 
 ### Funcionalidades Disponibles
 
-1. **Autenticación JWT** - Integración con SCNexus.Core mediante tokens JWT
+1. **Autenticación JWT** - Integración con SCNexus.Core mediante tokens JWT (siempre activa)
 2. **Rate Limiting** - Limita el número de requests por tiempo
 3. **CORS Restrictivo** - Limita orígenes permitidos
 4. **Ocultar Swagger en Producción** - Oculta documentación en producción
@@ -26,11 +26,10 @@ Agrega estas variables a tu archivo `.env`:
 # CONFIGURACIÓN DE SEGURIDAD (Opcional)
 # ============================================================================
 
-# Autenticación JWT (integración con SCNexus.Core)
+# Autenticación JWT (integración con SCNexus.Core) - siempre activa
 JWT_SECRET=clave_super_secreta_para_jwt_12345  # DEBE coincidir con Core
 JWT_ISSUER=SCNexus.Core                        # DEBE coincidir con Core
 JWT_AUDIENCE=SCNexus.Users                     # DEBE coincidir con Core
-ENABLE_JWT_AUTH=false                          # true para habilitar JWT
 
 # Rate Limiting
 ENABLE_RATE_LIMITING=false           # true para habilitar rate limiting
@@ -59,9 +58,6 @@ La autenticación JWT permite integrar el módulo backend con el Core de SCNexus
 JWT_SECRET=clave_super_secreta_para_jwt_12345
 JWT_ISSUER=SCNexus.Core
 JWT_AUDIENCE=SCNexus.Users
-
-# Habilitar autenticación JWT (opcional, por defecto false)
-ENABLE_JWT_AUTH=false
 ```
 
 ⚠️ **IMPORTANTE**: Los valores de `JWT_SECRET`, `JWT_ISSUER` y `JWT_AUDIENCE` **DEBEN coincidir exactamente** con los configurados en `appsettings.json` del Core.
@@ -305,18 +301,20 @@ HIDE_SWAGGER_IN_PROD=true
 
 ## 🚀 Activación Gradual Recomendada
 
-### Fase 1: Desarrollo (Sin Seguridad Adicional)
+La autenticación JWT está siempre activa en los tres ambientes; lo que se activa gradualmente es Rate Limiting y CORS Restrictivo.
+
+### Fase 1: Desarrollo (JWT únicamente)
 ```env
-ENABLE_JWT_AUTH=false
+JWT_SECRET=clave_super_secreta_para_jwt_12345
+JWT_ISSUER=SCNexus.Core
+JWT_AUDIENCE=SCNexus.Users
 ENABLE_RATE_LIMITING=false
 ENABLE_CORS_RESTRICTION=false
 ENVIRONMENT=development
 ```
-✅ **Estado actual** - Endpoints disponibles sin autenticación
 
 ### Fase 2: Testing (Activar CORS)
 ```env
-ENABLE_JWT_AUTH=false
 ENABLE_RATE_LIMITING=false
 ENABLE_CORS_RESTRICTION=true
 CORS_ALLOWED_ORIGINS=http://localhost:5173
@@ -326,18 +324,16 @@ ENVIRONMENT=development
 
 ### Fase 3: Staging (Activar Rate Limiting)
 ```env
-ENABLE_JWT_AUTH=false
 ENABLE_RATE_LIMITING=true
 RATE_LIMIT_DEFAULT=50/minute
 ENABLE_CORS_RESTRICTION=true
 CORS_ALLOWED_ORIGINS=https://staging.tu-dominio.com
 ENVIRONMENT=staging
 ```
-✅ **Protege contra abuso** sin requerir autenticación
+✅ **Protege contra abuso**, además de la autenticación JWT
 
 ### Fase 4: Producción (JWT + Rate Limiting + CORS)
 ```env
-ENABLE_JWT_AUTH=true
 JWT_SECRET=clave_super_secreta_para_jwt_12345
 JWT_ISSUER=SCNexus.Core
 JWT_AUDIENCE=SCNexus.Users
@@ -354,8 +350,8 @@ HIDE_SWAGGER_IN_PROD=true
 
 ## ⚠️ Notas Importantes
 
-1. **JWT es la forma de autenticación**: Solo JWT, no API Keys
-2. **Activa Gradualmente**: No necesitas activar todo de una vez
+1. **JWT es la forma de autenticación**: Solo JWT, no API Keys; siempre activa, no es opcional
+2. **Activa Gradualmente**: Rate Limiting y CORS no necesitan activarse todos de una vez
 3. **Prueba en Desarrollo**: Siempre prueba en desarrollo antes de producción
 4. **Guarda Secretos Seguros**: Nunca subas JWT_SECRET al repositorio
 5. **Health Check Siempre Público**: `/health` nunca requiere autenticación
@@ -382,25 +378,25 @@ HIDE_SWAGGER_IN_PROD=true
 ### Ejemplo 1: Desarrollo Local
 ```env
 # .env para desarrollo
-ENABLE_JWT_AUTH=false
+JWT_SECRET=clave_super_secreta_para_jwt_12345
+JWT_ISSUER=SCNexus.Core
+JWT_AUDIENCE=SCNexus.Users
 ENABLE_RATE_LIMITING=false
 ENABLE_CORS_RESTRICTION=false
 ENVIRONMENT=development
 ```
-✅ Todo funciona sin autenticación JWT
+✅ Autenticación JWT activa; sin Rate Limiting ni CORS restrictivo
 
 ### Ejemplo 2: Testing con Frontend
 ```env
-ENABLE_JWT_AUTH=false
 ENABLE_CORS_RESTRICTION=true
 CORS_ALLOWED_ORIGINS=http://localhost:5173
 ENVIRONMENT=development
 ```
-✅ Frontend puede conectarse, sin autenticación JWT
+✅ Frontend puede conectarse, con autenticación JWT activa
 
 ### Ejemplo 3: Producción con SCNexus.Core
 ```env
-ENABLE_JWT_AUTH=true
 JWT_SECRET=clave_super_secreta_para_jwt_12345
 JWT_ISSUER=SCNexus.Core
 JWT_AUDIENCE=SCNexus.Users
