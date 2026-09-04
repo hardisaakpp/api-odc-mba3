@@ -59,9 +59,9 @@ La API **no** tiene por qué ir dentro de Docker en este host: en muchos desplie
 
 ## Variables de entorno en el servidor
 
-La aplicación elige el archivo `.env` según `ENVIRONMENT` o `ENV_FILE`. Resumen en [CONFIGURACION.md](CONFIGURACION.md):
+La aplicación elige el archivo `.env` según `ENV_FILE` (o, si no está definida, `.env` en la raíz del proyecto). Resumen en [CONFIGURACION.md](CONFIGURACION.md):
 
-- Con `ENVIRONMENT=test` se espera **`.env.test`** en la raíz del proyecto, **salvo** que la unidad systemd defina `ENV_FILE` apuntando a otro archivo (por ejemplo un único `.env` en `/opt/odc-sap/.env`).
+- En este servidor la unidad systemd define `ENV_FILE` apuntando al archivo real administrado por el equipo de Azure DevOps (ej. `/opt/odc-sap/.env`) — no depende de un `.env` dentro del checkout del repo.
 
 **Qué editar antes de reiniciar:** no asumas; revisa la unidad:
 
@@ -191,6 +191,6 @@ Migraciones y reinicio del servicio (NSSM, tarea programada, etc.) según cómo 
 | Síntoma | Qué revisar |
 |---------|-------------|
 | `Unit odc-sap-api.service not found` | En test suele ser **`odc-sap-test`**. Lista servicios y busca `odc`: `systemctl list-units --type=service --no-legend`. |
-| API arranca pero no lee tus cambios en `.env` | `systemctl cat odc-sap-test` — puede estar usando **`ENV_FILE`** distinto de `.env.test`. |
+| API arranca pero no lee tus cambios en `.env` | `systemctl cat odc-sap-test` — confirma a qué archivo apunta **`ENV_FILE`**. |
 | Frontend sin cambios | El front se actualiza con el **script/repo del frontend**, no solo con pull del backend. |
 | Celery falla tras recrear Redis | Reiniciar worker (y beat si aplica) tras `docker compose up`. |

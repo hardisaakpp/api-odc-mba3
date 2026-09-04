@@ -261,14 +261,7 @@ python_functions = test_*
 
 ### Variables de Entorno para Tests
 
-Puedes crear un archivo `.env.test` para tests:
-
-```env
-# .env.test
-ENABLE_AUTH=false
-ENABLE_RATE_LIMITING=false
-ENVIRONMENT=test
-```
+Los tests corren contra el mismo `.env` de desarrollo local (ver [CONFIGURACION.md](CONFIGURACION.md)); no hace falta un archivo separado.
 
 ## 🐛 Troubleshooting
 

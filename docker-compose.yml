@@ -15,7 +15,7 @@
 #   Ver docs/DEPLOY_DOCKER_PRODUCCION.md
 #
 # Requisitos para el perfil app (desarrollo):
-#   - Archivo .env.develop en la raíz del repo.
+#   - Archivo .env en la raíz del repo.
 #   - SQL Server / SAP / MBA3 alcanzables desde el contenedor (host.docker.internal o IP).
 #
 # Puertos host: Redis 6379, MinIO embebido 9100/9101 (perfil app, dev), API 8000.
@@ -45,9 +45,9 @@ x-app-common: &app-common
     REDIS_URL: redis://redis:6379/0
     FILE_STORAGE_ENDPOINT: http://minio:9000
   env_file:
-    - .env.develop
+    - .env
   volumes:
-    - ./.env.develop:/app/.env.develop:ro
+    - ./.env:/app/.env:ro
     - ./output:/app/output
   extra_hosts:
     - "host.docker.internal:host-gateway"
@@ -142,7 +142,7 @@ services:
     <<: *app-common
     container_name: mba3-celery-beat
     volumes:
-      - ./.env.develop:/app/.env.develop:ro
+      - ./.env:/app/.env:ro
       - ./output:/app/output
       - celerybeat_data:/var/lib/celery
     command:

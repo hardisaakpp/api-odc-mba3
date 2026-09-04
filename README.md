@@ -26,8 +26,8 @@ venv\Scripts\activate  # Windows
 pip install -r requirements.txt
 
 # 4. Configurar variables de entorno
-# Crear .env.develop / .env.test / .env.production según ambiente (obligatorios; ver CONFIGURACION.md)
-# Arrancar con ENVIRONMENT acorde o usar .\run-dev.ps1 / .\run-test.ps1 / .\run-prod.ps1
+# Crear .env en la raíz del proyecto (obligatorio; ver CONFIGURACION.md)
+# Arrancar con .\run-dev.ps1 (test/producción los administra el equipo de Azure DevOps, fuera de este repo)
 
 # 5. Inicializar base de datos (primera vez)
 python scripts/migration_runner.py --dry-run  # Validar
@@ -52,7 +52,7 @@ Levanta Redis, MinIO, API, Celery worker y Celery beat en contenedores (misma ap
 
 Documentación completa: [docs/DOCKER_COMPOSE.md](docs/DOCKER_COMPOSE.md). Tras editar código Python: `.\scripts\docker-app-up.ps1` (la imagen copia el código en build; no hay hot-reload en contenedor). **No** levantes además la API en el host: el puerto **8000** quedaría en conflicto.
 
-SQL Server, SAP, MBA3 y el Core siguen **fuera** de Docker; configúralos en `.env.develop` (desde el contenedor, evita `SQL_SERVER_SERVER=localhost` si la BD está en tu PC — usa `host.docker.internal` o el host real).
+SQL Server, SAP, MBA3 y el Core siguen **fuera** de Docker; configúralos en `.env` (desde el contenedor, evita `SQL_SERVER_SERVER=localhost` si la BD está en tu PC — usa `host.docker.internal` o el host real).
 
 ---
 

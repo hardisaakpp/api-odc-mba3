@@ -58,7 +58,7 @@ Modelo de datos
 Desplegar en servidor de pruebas (DESA)
 - Host `210.17.1.53` / `DESA-MABUIOSAPP`, usuario `admindesa`
 - Linux: `/opt/odc-sap`, rama `test`, servicio `odc-sap-test`, Docker solo Redis/MinIO
-- Variables: `.env.test` o `ENV_FILE` según systemd (ver `systemctl cat`)
+- Variables: `ENV_FILE` según systemd, administrado por Azure DevOps (ver `systemctl cat`)
 - Frontend: repo y script aparte (documentado en la misma guía)
 
 ### 6. **[DEPLOY_DOCKER_PRODUCCION.md](DEPLOY_DOCKER_PRODUCCION.md)** 🐳

@@ -71,16 +71,12 @@ def _resolve_env_file_path(project_root: Path) -> Path:
     """
     Determina qué archivo .env cargar (ruta absoluta o bajo project_root).
 
-    Orden (sin fallback silencioso a un `.env` genérico sin nombre):
-
-    1) Si existe ``ENV_FILE`` -> ese archivo debe existir (típico en systemd:
-       ``Environment=ENV_FILE=/opt/odc-sap/.env``).
-    2) Si no -> ``.env.develop`` | ``.env.test`` | ``.env.staging`` | ``.env.production``
-       según ``ENVIRONMENT`` (normalizado; por defecto ``development`` → ``.env.develop``).
-
-    El valor lógico de ambiente (``APP_ENV``) se fija **después** de ``load_dotenv``,
-    para que ``ENVIRONMENT`` definido dentro del archivo cargado (o solo ahí) aplique
-    correctamente cuando se usa ``ENV_FILE``.
+    1) Si existe ``ENV_FILE`` -> ese archivo debe existir. Lo usan los
+       despliegues reales de test/producción, administrados fuera de este
+       repo (ej. ``Environment=ENV_FILE=/opt/odc-sap/.env`` en systemd).
+    2) Si no -> ``.env`` en la raíz del proyecto: único archivo de
+       credenciales para desarrollo local (test/producción ya no se simulan
+       localmente con archivos separados dentro del repo).
     """
     explicit_env_file = os.getenv("ENV_FILE", "").strip()
     if explicit_env_file:
@@ -93,14 +89,10 @@ def _resolve_env_file_path(project_root: Path) -> Path:
             )
         return explicit_path
 
-    env_hint = os.getenv("ENVIRONMENT", "development")
-    normalized_env = _normalize_environment(env_hint)
-    env_file_suffix = "develop" if normalized_env == "development" else normalized_env
-    env_file = project_root / f".env.{env_file_suffix}"
+    env_file = project_root / ".env"
     if not env_file.is_file():
         raise FileNotFoundError(
             f"Archivo de entorno obligatorio no encontrado: {env_file}\n"
-            f"Ambiente: {normalized_env} (ENVIRONMENT={env_hint!r}). "
             "Crea ese archivo en la raíz del proyecto o define ENV_FILE con la ruta a tu .env."
         )
     return env_file

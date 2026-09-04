@@ -13,7 +13,7 @@ Con el perfil **`app`** corre **toda la aplicación backend de este repo** (mism
 
 ## Flujo de desarrollo con stack `app`
 
-1. Crear o actualizar **`.env.develop`** (ver [CONFIGURACION.md](CONFIGURACION.md)).
+1. Crear o actualizar **`.env`** (ver [CONFIGURACION.md](CONFIGURACION.md)).
 2. `.\scripts\docker-app-up.ps1` (reconstruye la imagen por defecto, así el contenedor siempre corre el código Python actual; usar `-NoBuild` solo si no cambió nada desde el último build).
 3. `.\scripts\docker-verify.ps1` — smoke test de contenedores y dependencias.
 4. Frontend **scnexus-front**: `npm run dev` con proxy/API en **`http://localhost:8000`** (el navegador no usa el hostname `mba3-api`).
@@ -25,8 +25,8 @@ Con el perfil **`app`** corre **toda la aplicación backend de este repo** (mism
 
 | Fuera del stack | Configuración típica |
 |-----------------|----------------------|
-| SQL Server | `SQL_SERVER_SERVER` en `.env.develop` (no `localhost` si la BD está en el host Windows: `host.docker.internal` o IP) |
-| SAP Service Layer, MBA3 | URLs/credenciales en `.env.develop` |
+| SQL Server | `SQL_SERVER_SERVER` en `.env` (no `localhost` si la BD está en el host Windows: `host.docker.internal` o IP) |
+| SAP Service Layer, MBA3 | URLs/credenciales en `.env` |
 | SCNexus Core (JWT) | Sin llamada de red: valida tokens localmente con `JWT_SECRET`/`JWT_ISSUER`/`JWT_AUDIENCE` (deben coincidir con el Core) |
 | Frontend Vue | Repo `scnexus-front`, `npm run dev` en el host (o su propio compose + red `mba3-nexus_edge`) |
 
@@ -37,7 +37,7 @@ El modo “solo infra” sigue disponible si solo necesitas Redis/MinIO y prefie
 ## Requisitos
 
 - Docker Desktop (Windows/Mac) o Docker Engine + Compose v2.
-- Archivo **`.env.develop`** en la raíz del proyecto (obligatorio para la app; ver [CONFIGURACION.md](CONFIGURACION.md)). Los servicios del perfil `app` montan ese archivo en `/app/.env.develop` dentro del contenedor.
+- Archivo **`.env`** en la raíz del proyecto (obligatorio para la app; ver [CONFIGURACION.md](CONFIGURACION.md)). Los servicios del perfil `app` montan ese archivo en `/app/.env` dentro del contenedor.
 
 ## Variables que Compose fuerza en el perfil `app`
 
@@ -46,7 +46,7 @@ Dentro de la red Docker, `localhost` no apunta a Redis ni a MinIO. Por eso, para
 - `REDIS_URL=redis://redis:6379/0`
 - `FILE_STORAGE_ENDPOINT=http://minio:9000`
 
-El resto de variables (SQL Server, SAP, MBA3, JWT, etc.) salen de tu `.env.develop`. Si la base de datos corre **en tu máquina Windows** y en el `.env` usas `SQL_SERVER_SERVER=localhost`, desde el contenedor **no funcionará**: usa el hostname/IP real del SQL Server o `host.docker.internal` si aplica a tu red y puerto (p. ej. `host.docker.internal,1433`). El compose añade `extra_hosts: host.docker.internal:host-gateway` para Linux; en Docker Desktop para Windows suele resolverse igualmente.
+El resto de variables (SQL Server, SAP, MBA3, JWT, etc.) salen de tu `.env`. Si la base de datos corre **en tu máquina Windows** y en el `.env` usas `SQL_SERVER_SERVER=localhost`, desde el contenedor **no funcionará**: usa el hostname/IP real del SQL Server o `host.docker.internal` si aplica a tu red y puerto (p. ej. `host.docker.internal,1433`). El compose añade `extra_hosts: host.docker.internal:host-gateway` para Linux; en Docker Desktop para Windows suele resolverse igualmente.
 
 La API en contenedor debe poder alcanzar **MBA3**, **SAP Service Layer** y **SQL Server** por red (VPN, firewall, DNS). Eso no lo resuelve Docker por sí solo.
 
@@ -130,4 +130,4 @@ Fragmento de ejemplo listo para copiar: [examples/scnexus-front-docker-network.a
 
 ## Privacidad / CI
 
-Evita ejecutar `docker compose config` en entornos con `.env.develop` real y compartir la salida: Compose expande `env_file` y puede imprimir secretos.
+Evita ejecutar `docker compose config` en entornos con `.env` real y compartir la salida: Compose expande `env_file` y puede imprimir secretos.

@@ -1,6 +1,6 @@
 # Levanta el stack de desarrollo recomendado (perfil "app"):
 # Redis, MinIO, API FastAPI, Celery worker y Celery beat.
-# Requiere: Docker Desktop (o Docker Engine), archivo .env.develop en la raíz del repo.
+# Requiere: Docker Desktop (o Docker Engine), archivo .env en la raíz del repo.
 #
 # Reconstruye la imagen por defecto: el Dockerfile hornea el código con `COPY . .`
 # (no hay bind-mount de src/), así que sin rebuild el contenedor sigue corriendo lo
@@ -27,9 +27,9 @@ if (-not (Test-Path -LiteralPath (Join-Path $Root "docker-compose.yml"))) {
 }
 Set-Location -LiteralPath $Root
 
-$envFile = Join-Path $Root ".env.develop"
+$envFile = Join-Path $Root ".env"
 if (-not (Test-Path -LiteralPath $envFile)) {
-    Write-Error "No existe .env.develop en: $envFile`nCrea el archivo según docs/CONFIGURACION.md antes de usar el stack Docker."
+    Write-Error "No existe .env en: $envFile`nCrea el archivo según docs/CONFIGURACION.md antes de usar el stack Docker."
 }
 
 $dockerArgs = @("compose", "--profile", "app", "up", "-d")

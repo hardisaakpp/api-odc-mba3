@@ -23,7 +23,7 @@ En Windows no viene Redis instalado. **Recomendación para desarrollo: stack Doc
 .\scripts\docker-verify.ps1
 ```
 
-Dentro del contenedor Celery usa `REDIS_URL=redis://redis:6379/0` (Compose lo define; no hace falta cambiar `.env.develop` para Redis si solo usas el stack `app`).
+Dentro del contenedor Celery usa `REDIS_URL=redis://redis:6379/0` (Compose lo define; no hace falta cambiar `.env` para Redis si solo usas el stack `app`).
 
 **Opción A – Solo Redis con Docker Compose de este repo (API/Celery en host):**
 ```powershell
