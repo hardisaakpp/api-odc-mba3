@@ -48,6 +48,23 @@ ESTADOS_REQUIERE_ACCION_NOMBRES = (
     "CONFIRMADO_PROVEEDOR",
 )
 
+# Filtro rápido "solo pendientes" específico de Cargar Plantilla (Mabel Trading, mabel.view):
+# estados en los que el pedido ya fue "transaccionado" por otro actor (Producción confirma/pospone,
+# Administración El Rayo envía la ODC a SAP) y vuelve a la cancha de Mabel Trading para una decisión
+# o acción final (botón Aceptar/Rechazar en Producción Pospuesta, botón Finalizado en Despachar y
+# Facturar -- ambos solo disponibles desde CargarPlantillaView.vue). Distinto de
+# ESTADOS_REQUIERE_ACCION_* (estados de respuesta del proveedor): ese flujo de aprobación quedó sin
+# conectar a ningún endpoint (PedidoAjusteService.procesar_confirmacion_proveedor huérfano), así que
+# CONFIRMADO_PROVEEDOR nunca se alcanza en la práctica y no se incluye aquí.
+ESTADOS_REQUIERE_ACCION_CARGAR_PLANTILLA_IDS = frozenset({
+    ESTADO_PRODUCCION_POSPUESTA,
+    ESTADO_DESPACHAR_Y_FACTURAR,
+})
+ESTADOS_REQUIERE_ACCION_CARGAR_PLANTILLA_NOMBRES = (
+    "PRODUCCION_POSPUESTA",
+    "DESPACHAR_Y_FACTURAR",
+)
+
 # Estados visibles para el perfil Producción El Rayo (req. 1.8, permiso
 # produccion-elrayo.view): solo mientras el pedido está en NUEVO_PEDIDO o
 # GESTIONAR_PEDIDO; a partir de ahí lo gestiona Administración El Rayo (odcsap.view).

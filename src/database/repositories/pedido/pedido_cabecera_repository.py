@@ -74,6 +74,7 @@ class PedidosFiltros:
     excluir_borrador: bool = False
     solo_redistribucion: bool = False
     solo_pendientes_accion: bool = False
+    solo_pendientes_accion_cargar_plantilla: bool = False
     restringir_produccion_el_rayo: bool = False
     excluir_estados_produccion_el_rayo: bool = False
     excluir_listo_para_redistribucion: bool = False
@@ -1408,6 +1409,26 @@ class PedidoCabeceraRepository:
             list(ESTADOS_REQUIERE_ACCION_NOMBRES),
         )
 
+    def _filtro_pendientes_accion_cargar_plantilla(self, tiene_estado_id: bool) -> tuple:
+        """Condición y parámetros para el filtro "solo pendientes" propio de Cargar Plantilla
+        (Producción Pospuesta, Despachar y Facturar) -- ver ESTADOS_REQUIERE_ACCION_CARGAR_PLANTILLA_*
+        en pedido_estados.py."""
+        from src.database.pedido_estados import (
+            ESTADOS_REQUIERE_ACCION_CARGAR_PLANTILLA_IDS,
+            ESTADOS_REQUIERE_ACCION_CARGAR_PLANTILLA_NOMBRES,
+        )
+        if tiene_estado_id:
+            placeholders = ",".join("?" * len(ESTADOS_REQUIERE_ACCION_CARGAR_PLANTILLA_IDS))
+            return (
+                [f"p.estado_id IN ({placeholders})"],
+                list(sorted(ESTADOS_REQUIERE_ACCION_CARGAR_PLANTILLA_IDS)),
+            )
+        legacy_placeholders = ",".join("?" * len(ESTADOS_REQUIERE_ACCION_CARGAR_PLANTILLA_NOMBRES))
+        return (
+            [f"p.estado IN ({legacy_placeholders})"],
+            list(ESTADOS_REQUIERE_ACCION_CARGAR_PLANTILLA_NOMBRES),
+        )
+
     def _filtro_estados_produccion_el_rayo(self, tiene_estado_id: bool) -> tuple:
         """Condición y parámetros para restringir el listado al perfil Producción
         El Rayo (req. 1.8, permiso produccion-elrayo.view): solo NUEVO_PEDIDO y
@@ -1520,6 +1541,10 @@ class PedidoCabeceraRepository:
         self._agregar_filtro_condicional(
             filtros.solo_pendientes_accion, tiene_estado_id, tiene_estado,
             self._filtro_pendientes_accion, where_conditions, params,
+        )
+        self._agregar_filtro_condicional(
+            filtros.solo_pendientes_accion_cargar_plantilla, tiene_estado_id, tiene_estado,
+            self._filtro_pendientes_accion_cargar_plantilla, where_conditions, params,
         )
         self._agregar_filtro_condicional(
             filtros.restringir_produccion_el_rayo, tiene_estado_id, tiene_estado,
