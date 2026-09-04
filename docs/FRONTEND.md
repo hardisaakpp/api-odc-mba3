@@ -603,7 +603,7 @@ Deshabilitar (y no permitir nueva confirmación) **desde el estado CONFIRMADO en
 
 - **`CONFIRMADO`** (`estado_id === 4`) → pedido confirmado para redistribución; **deshabilitar**. (Es el estado que devuelve `POST .../confirmar-para-redistribucion`.)
 - `RESPUESTA_PROVEEDOR_CARGADA` → respuesta ya guardada; deshabilitar.
-- `CONFIRMADO_PROVEEDOR` → confirmación ya procesada; deshabilitar.
+- `CONFIRMADO_PROVEEDOR` → confirmación ya procesada; deshabilitar. **(estado obsoleto, `activo = 0` — ningún pedido real llega a él hoy; ver `docs/ESTADOS_PEDIDO.md`)**
 - `CONFIRMADO REDISTRIBUCION` (o `PEDIDO_CONFIRMADO` por compatibilidad) → redistribución ya confirmada; deshabilitar.
 - Cualquier otro estado posterior (p. ej. `PROCESADO_SAP`, `CONFIRMADO_ENVIADO`, etc.) → deshabilitar.
 
@@ -1931,7 +1931,6 @@ GET /api/pedidos/estados?contexto=redistribucion
     { "id": 3, "nombre": "GESTIONAR PEDIDO", "orden": 3 },
     { "id": 4, "nombre": "CONFIRMADO POR EL RAYO", "orden": 4 },
     { "id": 5, "nombre": "RESPUESTA_PROVEEDOR_CARGADA", "orden": 5 },
-    { "id": 6, "nombre": "CONFIRMADO_PROVEEDOR", "orden": 6 },
     { "id": 9, "nombre": "REDISTRIBUIDO", "orden": 9 },
     { "id": 10, "nombre": "CONFIRMADO REDISTRIBUCION", "orden": 10 },
     { "id": 12, "nombre": "CONFIRMADO_ENVIADO", "orden": 12 },
@@ -1942,6 +1941,7 @@ GET /api/pedidos/estados?contexto=redistribucion
   ]
 }
 ```
+_(Ejemplo parcial — no lista los 19 estados activos completos. Nótese que ya no incluye `id 6` (`CONFIRMADO_PROVEEDOR`): junto con los ids 7, 8, 11, 15 y 16, quedó con `activo = 0` por ser un estado obsoleto sin flujo real que lo alcance — ver detalle y razones en `docs/ESTADOS_PEDIDO.md`.)_
 
 #### Implementación en Frontend
 
@@ -2124,8 +2124,8 @@ Cada elemento de `data` incluye `cabecera` (con `numero_pedido`, `fecha_pedido`,
 **Estados que permiten confirmar redistribución (`puede_confirmar_redistribucion: true`):**
 - `estado_id = 4` (REDISTRIBUCION / CONFIRMADO POR EL RAYO)
 - `estado_id = 5` (RESPUESTA_PROVEEDOR_CARGADA)
-- `estado_id = 6` (CONFIRMADO_PROVEEDOR)
-- `estado_id = 8` (EN_AJUSTE_MABEL)
+- `estado_id = 6` (CONFIRMADO_PROVEEDOR) — **obsoleto** (`activo = 0`); se mantiene en el conjunto del backend por seguridad histórica, pero ningún pedido real llega a este estado hoy
+- `estado_id = 8` (EN_AJUSTE_MABEL) — **obsoleto** (`activo = 0`); mismo caso, sin flujo real que lo alcance
 - `estado_id = 9` (REDISTRIBUIDO)
 
 **Estados que NO permiten confirmar redistribución (`puede_confirmar_redistribucion: false`):**

@@ -12,31 +12,49 @@ Los estados del pedido se identifican por **`estado_id`** (número). El **nombre
 
 ## Tabla maestra `pedido_estado`
 
-| id | nombre (editable) | orden | Uso típico |
-|----|-------------------|-------|------------|
-| 1  | BORRADOR | 1  | Estado inicial (ex PENDIENTE_CONFIRMACION_PROVEEDOR) |
-| 2  | NUEVO PEDIDO | 2  | Enviado a EL RAYO (notificación enviada) |
-| 3  | GESTIONAR PEDIDO | 3  | Al hacer clic en Ver Detalle desde tabla Pedidos |
-| 4  | CONFIRMADO | 4  | Redistribución (tras confirmar respuesta EL RAYO) |
-| 5  | RESPUESTA_PROVEEDOR_CARGADA | 5  | Respuesta del proveedor cargada |
-| 6  | CONFIRMADO_PROVEEDOR | 6  | Aprobado por proveedor |
-| 7  | RECHAZADO_PROVEEDOR | 7  | Rechazado por proveedor |
-| 8  | EN_AJUSTE_MABEL | 8  | En ajuste MABEL (redistribución) |
-| 9  | REDISTRIBUIDO | 9  | Redistribución aplicada |
-| 10 | CONFIRMADO REDISTRIBUCION | 10 | Pedido confirmado (redistribución confirmada) |
-| 11 | PROCESADO_SAP | 11 | Procesado en SAP |
-| 12 | CONFIRMADO_ENVIADO | 12 | Todas las ODC enviadas a SAP |
-| 13 | PENDIENTE_LOGISTICA | 13 | OC OK, ST pendiente/error |
-| 14 | ERROR_DATOS_MAESTROS | 14 | Error en datos maestros |
-| 15 | EN_PROCESO | 15 | En proceso |
-| 16 | COMPLETADO | 16 | Completado |
-| 17 | DESPACHAR Y FACTURAR | 17 | Manual: desde Confirmado y Enviado (ODC enviada a SAP) |
-| 18 | FINALIZADO | 18 | Estado final del flujo; solo desde Despachar y Facturar |
-| 19 | CANCELADO | 19 | Pedido cancelado por MABEL TRADING desde Redistribución |
-| 20 | CANCELADO POR EL RAYO | 20 | Cancelado por EL RAYO desde Gestionar pedido |
-| 21 | ERROR ENVIO SAP REINTENTO | 21 | Fallo al enviar ODC a SAP (típ. conexión / transitorio); permite reintentar |
+| id | nombre (editable) | orden | activo | Uso típico |
+|----|-------------------|-------|:------:|------------|
+| 1  | BORRADOR | 1  | ✅ | Estado inicial (ex PENDIENTE_CONFIRMACION_PROVEEDOR) |
+| 2  | NUEVO PEDIDO | 2  | ✅ | Enviado a EL RAYO (notificación enviada) |
+| 3  | GESTIONAR PEDIDO | 3  | ✅ | Al hacer clic en Ver Detalle desde tabla Pedidos |
+| 4  | CONFIRMADO POR EL RAYO | 4  | ✅ | Redistribución (tras confirmar respuesta EL RAYO) |
+| 5  | RESPUESTA_PROVEEDOR_CARGADA | 5  | ✅ | Respuesta del proveedor cargada |
+| 6  | CONFIRMADO_PROVEEDOR | 6  | ❌ **obsoleto** | Sin caller vivo (`PedidoAjusteService.procesar_confirmacion_proveedor` huérfano) — nunca se alcanza en la práctica |
+| 7  | RECHAZADO_PROVEEDOR | 7  | ❌ **obsoleto** | Sin constante Python, sin ninguna referencia en el repo |
+| 8  | EN_AJUSTE_MABEL | 8  | ❌ **obsoleto** | Sin constante Python, sin ninguna referencia en el repo |
+| 9  | REDISTRIBUIDO | 9  | ✅ | Redistribución aplicada |
+| 10 | CONFIRMADO REDISTRIBUCION | 10 | ✅ | Pedido confirmado (redistribución confirmada) |
+| 11 | PROCESADO_SAP | 11 | ❌ **obsoleto** | Propuesta de un flujo "FUTURO" nunca implementado |
+| 12 | CONFIRMADO_ENVIADO | 12 | ✅ | Todas las ODC enviadas a SAP |
+| 13 | PENDIENTE_LOGISTICA | 13 | ✅ | OC OK, ST pendiente/error |
+| 14 | ERROR_DATOS_MAESTROS | 14 | ✅ | Error en datos maestros |
+| 15 | EN_PROCESO | 15 | ❌ **obsoleto** | Sin constante Python, sin ninguna referencia en el repo |
+| 16 | COMPLETADO | 16 | ❌ **obsoleto** | Sin constante Python, sin ninguna referencia en el repo |
+| 17 | DESPACHAR Y FACTURAR | 17 | ✅ | Manual: desde Confirmado y Enviado (ODC enviada a SAP) |
+| 18 | FINALIZADO | 18 | ✅ | Estado final del flujo; solo desde Despachar y Facturar |
+| 19 | CANCELADO | 19 | ✅ | Pedido cancelado por MABEL TRADING desde Redistribución |
+| 20 | CANCELADO POR EL RAYO | 20 | ✅ | Cancelado por EL RAYO desde Gestionar pedido |
+| 21 | ERROR ENVIO SAP REINTENTO | 21 | ✅ | Fallo al enviar ODC a SAP (típ. conexión / transitorio); permite reintentar |
+| 22 | PRODUCCION POSPUESTA | 22 | ✅ | El proveedor (Producción El Rayo) pospone la producción de las diferencias para decidir con Mabel |
+| 23 | CONFIRMADO POR PRODUCCION | 23 | ✅ | Req. 1.8 — Producción confirma; entre GESTIONAR PEDIDO (3) y CONFIRMADO POR EL RAYO (4) |
+| 24 | RECHAZADO | 24 | ✅ | Botón "Rechazar" sobre un pedido hijo en PRODUCCION POSPUESTA (22); terminal, igual que CANCELADO |
+| 25 | LISTO PARA REDISTRIBUCION | 25 | ✅ | Botón "Aceptar" sobre un pedido hijo en PRODUCCION POSPUESTA (22); va directo a la cola de redistribución |
 
 El **id es semántico** (no depende del orden en BD). El **orden** es solo para visualización (listas, filtros).
+
+---
+
+## Estados obsoletos (`activo = 0`)
+
+Los ids **6, 7, 8, 11, 15 y 16** se sembraron desde el diseño inicial (`create_pedido_estado_table.sql`) pero nunca llegaron a tener un flujo real que los alcanzara — auditoría completa del repo (backend + frontend) confirmó cero código vivo (ni siquiera código muerto, salvo el caso de 6) que los active. Se desactivaron (`activo = 0`, sin borrar filas — evita romper las FK de `pedido.estado_id`/`pedido_estado_historial`) con `scripts/migrations/deactivate_estados_obsoletos.sql` (2026-09-03/04), que antes de tocar cada id verifica que ningún pedido real esté en ese `estado_id`.
+
+**Alcance real de `activo`** (para no asumir que "desactivado" implica "invisible en todas partes"):
+
+- ✅ Alimenta `get_estados(solo_activos=True)` → `GET /api/pedidos/estados` → el dropdown de filtro **"Estado"** en los listados de pedidos. Este es el único consumidor real del flag.
+- ❌ NO afecta el `<select>` editable de "Estado del Pedido" en `PedidoCabecera.vue` (scnexus-front): sus opciones están hardcodeadas en el template, independientes de esta tabla, y además contienen varios valores que nunca correspondieron a ningún `estado_id` real (`PENDIENTE_CONFIRMACION_PROVEEDOR`, `ORDEN_COMPRA_CREADA`, `ENVIADA_SAP`, `CERRADO`) — pendiente de limpieza aparte.
+- ❌ NO afecta ninguna validación de backend: `es_estado_valido()` (que sí consulta `ESTADO_IDS_VALIDOS`) es código muerto, sin ningún caller.
+
+**Nota sobre 7, 8, 11, 15, 16:** en el ambiente de desarrollo estas 5 filas ya no existen físicamente en `pedido_estado` (se eliminaron manualmente en algún momento, fuera de cualquier migración rastreada del repo — no hay ningún `DELETE` sobre esta tabla en `scripts/`). Por eso la migración de arriba no tiene efecto visible sobre ellas: el `UPDATE ... WHERE id = @Id` no encuentra fila que actualizar. Decisión explícita: **no reinsertarlas.**
 
 ---
 
