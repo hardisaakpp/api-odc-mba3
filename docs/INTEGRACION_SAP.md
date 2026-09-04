@@ -25,7 +25,7 @@ Regla práctica para decidir el canal de una operación nueva:
 - Bodega puntual — `bodega_sap_service.py` (`_consultar_bodega_sap`)
 - Catálogo/validación batch de bodegas — `bodega_sap_service.py`
 - SKU exacto (cruce de productos) — `cruce_productos.py` (`_buscar_sku_sap_handler`)
-- Prevalidación de OC (proveedor + artículos) — `oc_sap_service.py` (`_precheck_batch`), flag `USE_BATCH_VALIDATION` (independiente, no es middleware-vs-OPENQUERY sino batch-vs-línea-por-línea; ambas rutas ya pasan por `SAP_USE_MIDDLEWARE`)
+- Prevalidación de OC (proveedor + artículos) — `oc_sap_service.py` (`_precheck_batch`), flag `USE_BATCH_VALIDATION` (independiente de `SAP_USE_MIDDLEWARE`: no es middleware-vs-OPENQUERY sino batch-vs-línea-por-línea, pero solo tiene efecto real si `SAP_USE_MIDDLEWARE=true` — el cliente directo no implementa el batch, siempre cae a línea por línea). En `true` en los 3 ambientes desde 2026-09 (app aún sin desplegar a producción); ver el comentario junto a la definición en `src/config.py` para el runbook si se sospecha un mapeo incorrecto del middleware (poner en `false`, sin deploy, y auditar en SAP las OCs creadas mientras estuvo activo)
 - Validación de existencia de SKU al reasignarlo en una línea de OC — `ordenes_compra.py` (`_sku_existe_en_sap`)
 - Enriquecimiento de detalles de pedido (descripcion_sap/pack) — `pedido_service.py` (`_consultar_productos_sap`). Nota: sigue siendo una llamada HTTP por SKU único (el endpoint batch del middleware de validación no expone `itemName`/`packCode`); si algún día se necesita un batch real de datos de catálogo, pedirlo como extensión al middleware.
 - Info de producto en cache-miss — `sap_service.py` (`_consultar_producto_sap`). Alimenta validación de pedidos y facturación (regla de medias por `ItmsGrpNam`). El middleware ya expone `groupName` (verificado en vivo: `GET /api/v1/items/{code}` → `"groupName": "R-MEDIAS"`); un 404 confirmado se trata como "no existe" definitivo (sin fallback), distinguido del "middleware caído" mediante sentinel.
@@ -135,7 +135,7 @@ ADD precio_unitario_sap DECIMAL(18, 4) NULL;
 # Middleware (canal por defecto — ver Principio Arquitectónico)
 SAP_MIDDLEWARE_URL=http://localhost:8011
 SAP_USE_MIDDLEWARE=true             # Middleware vs Service Layer directo — gatea TODO lo anterior (envío de OC/ITR, bodegas, SKU, info de producto)
-USE_BATCH_VALIDATION=false          # Prevalidación de OC (proveedor + artículos): batch vs línea por línea (independiente)
+USE_BATCH_VALIDATION=true           # Prevalidación de OC (proveedor + artículos): batch vs línea por línea (independiente, solo con SAP_USE_MIDDLEWARE=true)
 
 # SAP HANA (Consultas) — solo sync bulk de staging + puntos pendientes de migrar
 SAP_LINKED_SERVER=MYHANADB

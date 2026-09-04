@@ -202,7 +202,19 @@ SAP_USE_MIDDLEWARE = os.getenv("SAP_USE_MIDDLEWARE", "true").lower() == "true"
 
 # Prevalidación de ODC en una sola llamada batch al middleware
 # (POST /api/v1/validations/purchase-order) en lugar de N requests por línea.
-# Si el batch falla o está deshabilitado, se usa la validación línea por línea.
+# Solo tiene efecto con SAP_USE_MIDDLEWARE=true (el cliente directo no
+# implementa el batch, siempre devuelve None y cae a línea por línea).
+#
+# Riesgo aceptado, app aún sin desplegar a producción (2026-09): el fallback a
+# línea por línea solo se dispara si el batch falla de forma explícita
+# (timeout, error HTTP, más de 500 líneas) -- NO cubre una respuesta "exitosa"
+# con datos mal mapeados por el middleware (ej. reportar un proveedor
+# congelado como activo, o mal calcular el stock disponible), un caso que los
+# tests unitarios no pueden anticipar porque depende de la variedad real de
+# datos de SAP en producción, que esta variable en true todavía no ha visto.
+# Si se sospecha un caso así: poner esta variable en false en el .env (sin
+# deploy, solo reiniciar API/worker) para volver a línea por línea, y auditar
+# en SAP las OCs creadas mientras estuvo en true.
 USE_BATCH_VALIDATION = os.getenv("USE_BATCH_VALIDATION", "false").lower() == "true"
 
 # Bodegas, búsqueda de SKU e info de producto en cache-miss usan la misma
