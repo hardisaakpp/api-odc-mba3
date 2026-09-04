@@ -310,10 +310,10 @@ except Exception:
 una URL a la que la app realmente se conecta, o solo un identificador/constante que por
 convención usa ese prefijo.
 
-### Caso real: default de una URL de servicio (`CORE_API_URL`, `SAP_MIDDLEWARE_URL`, etc.)
+### Caso real: default de una URL de servicio (`SAP_MIDDLEWARE_URL`, `SAP_SERVICE_LAYER_URL`, etc.)
 
-Cuando el literal SÍ es una URL a la que la app hace requests (ej. `os.getenv("CORE_API_URL",
-"http://210.17.1.59:5053")`), **no cambiar el default a `https://` sin antes verificar que el
+Cuando el literal SÍ es una URL a la que la app hace requests (ej. `os.getenv("SAP_SERVICE_LAYER_URL",
+"http://10.10.41.4:50001/b1s/v1")`), **no cambiar el default a `https://` sin antes verificar que el
 servidor real lo soporta**. Un Security Hotspot que toca un servicio de autenticación/permisos
 cae en la "zona gris" de `docs/sonarqube-review-policy.md` (sección 3) y requiere aprobación
 explícita antes de aplicarse.

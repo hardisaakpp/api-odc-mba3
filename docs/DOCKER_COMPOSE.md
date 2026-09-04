@@ -27,7 +27,7 @@ Con el perfil **`app`** corre **toda la aplicación backend de este repo** (mism
 |-----------------|----------------------|
 | SQL Server | `SQL_SERVER_SERVER` en `.env.develop` (no `localhost` si la BD está en el host Windows: `host.docker.internal` o IP) |
 | SAP Service Layer, MBA3 | URLs/credenciales en `.env.develop` |
-| SCNexus Core (JWT) | `CORE_API_URL` |
+| SCNexus Core (JWT) | Sin llamada de red: valida tokens localmente con `JWT_SECRET`/`JWT_ISSUER`/`JWT_AUDIENCE` (deben coincidir con el Core) |
 | Frontend Vue | Repo `scnexus-front`, `npm run dev` en el host (o su propio compose + red `mba3-nexus_edge`) |
 
 Migraciones, `pytest` y lint suelen ejecutarse en el **host** con el venv del proyecto (`python scripts/migration_runner.py`, etc.), aunque uses el stack `app` para la API.
