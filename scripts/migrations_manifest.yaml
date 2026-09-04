@@ -655,3 +655,10 @@ migrations:
     file: "migrations/add_fecha_envio_iniciado_orden_compra_cabecera.sql"
     description: "orden_compra_cabecera.fecha_envio_iniciado: timestamp de inicio del intento de envío a SAP en curso/más reciente, escrito al entrar al nuevo estado ENVIANDO. Defensa en profundidad de UX -- el lock Redis redis_lock_envio_odc ya impide un doble envío real; esto permite a la reconciliación periódica detectar una ENVIANDO estancada (proceso caído a mitad de un envío, sin job_id ni forma segura de verificar contra SAP) y escalarla a ERROR para revisión manual en vez de dejarla colgada indefinidamente. A diferencia de job_id, no se limpia al salir de ENVIANDO"
     category: "alter"
+
+  - version: "654"
+    name: "deactivate_estados_obsoletos"
+    file: "migrations/deactivate_estados_obsoletos.sql"
+    description: "Marca activo=0 en pedido_estado para 6 estados sembrados desde create_pedido_estado_table.sql sin ningún camino de código vivo que los alcance: 6 CONFIRMADO_PROVEEDOR (único setter, PedidoAjusteService.procesar_confirmacion_proveedor, sin caller), y 7 RECHAZADO_PROVEEDOR/8 EN_AJUSTE_MABEL/11 PROCESADO_SAP/15 EN_PROCESO/16 COMPLETADO (sin constante Python ni referencia de código alguna). No borra filas -- solo desactiva, respetado por el único consumidor del catálogo (get_estados, siempre solo_activos=True). Verifica por id que no haya pedidos reales en ese estado antes de desactivarlo; dev confirmó 0 pedidos en los 6 el 2026-09-03"
+    category: "data"
+    dependencies: ["005"]
