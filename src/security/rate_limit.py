@@ -32,17 +32,22 @@ def setup_rate_limiting(app):
         from slowapi import Limiter, _rate_limit_exceeded_handler  # type: ignore[reportMissingImports]
         from slowapi.util import get_remote_address  # type: ignore[reportMissingImports]
         from slowapi.errors import RateLimitExceeded  # type: ignore[reportMissingImports]
-        
+        from slowapi.middleware import SlowAPIMiddleware  # type: ignore[reportMissingImports]
+
         global _limiter
-        
-        # Crear limiter
-        _limiter = Limiter(key_func=get_remote_address)
-        app.state.limiter = _limiter
-        app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
-        
+
         # Configurar límites desde variables de entorno
         default_limit = os.getenv("RATE_LIMIT_DEFAULT", "100/minute")
-        
+
+        # Crear limiter con default_limits: sin esto, el Limiter no aplica
+        # ningún límite a rutas que no tengan un @limiter.limit(...) explícito
+        # (ninguna ruta lo tiene hoy). SlowAPIMiddleware es lo que hace que
+        # default_limits se evalúe en cada request sin decorar cada endpoint.
+        _limiter = Limiter(key_func=get_remote_address, default_limits=[default_limit])
+        app.state.limiter = _limiter
+        app.add_middleware(SlowAPIMiddleware)
+        app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
         logger.info(f"✅ Rate limiting habilitado: {default_limit}")
         logger.info("   Configura RATE_LIMIT_DEFAULT en .env para cambiar el límite")
         

@@ -13,6 +13,8 @@ La autenticación JWT está **siempre activa** (no es opcional). Rate Limiting, 
 3. **CORS Restrictivo** - Limita orígenes permitidos
 4. **Ocultar Swagger en Producción** - Oculta documentación en producción
 
+> **Test/producción real:** estas variables se activan en el `.env` que administra el equipo de Azure DevOps en el servidor (vía `ENV_FILE`, ver [CONFIGURACION.md](CONFIGURACION.md)), no en el `.env` de este repo. Antes de tráfico real de producción, alguien con el dominio real del front debe setear `ENABLE_CORS_RESTRICTION=true` + `CORS_ALLOWED_ORIGINS=<dominio del front>`, e idealmente también `ENABLE_RATE_LIMITING=true`.
+
 ---
 
 ## 📋 Configuración
