@@ -886,20 +886,28 @@ class PedidoCabeceraRepository:
         Agrega cabecera["ordenes_compra"]: lista de las ODC del pedido (una por bodega
         cuando el pedido mezcla tiendas de más de una bodega/CD, ver
         StockTransferService.detectar_origenes_traslado). El frontend la usa para
-        mostrar un botón "Generar TXT MBA3" por ODC cuando hay más de una.
+        mostrar un botón "Generar TXT MBA3" por ODC cuando hay más de una, y también
+        (PedidoCabecera.vue) para abrir el modal "Integración con SAP Completada" de
+        cada ODC (requiere oc_id -- ver GET /ordenes-compra/{oc_id}/integracion-sap).
 
-        Cada elemento: {"codigo_bodega", "numero_oc_sap", "estado"}.
+        Cada elemento: {"oc_id", "codigo_bodega", "numero_oc_sap", "doc_entry", "estado"}.
         """
         cabecera["ordenes_compra"] = []
         try:
             cursor.execute("""
-                SELECT codigo_bodega, numero_oc_sap, estado
+                SELECT oc_id, codigo_bodega, numero_oc_sap, doc_entry, estado
                 FROM orden_compra_cabecera
                 WHERE pedido_id = ?
                 ORDER BY created_at ASC
             """, (pedido_id,))
             cabecera["ordenes_compra"] = [
-                {"codigo_bodega": row[0], "numero_oc_sap": row[1], "estado": row[2]}
+                {
+                    "oc_id": str(row[0]),
+                    "codigo_bodega": row[1],
+                    "numero_oc_sap": row[2],
+                    "doc_entry": row[3],
+                    "estado": row[4],
+                }
                 for row in cursor.fetchall()
             ]
         except Exception as e:
@@ -1069,11 +1077,17 @@ class PedidoCabeceraRepository:
     def _fusionar_datos_update(
         self, cursor: pyodbc.Cursor, existing: Dict[str, Any], datos_cabecera: Dict[str, Any]
     ) -> Dict[str, Any]:
-        """Fusiona datos nuevos sobre los existentes (preserva existente si el nuevo es None)."""
+        """Fusiona datos nuevos sobre los existentes.
+
+        Un campo AUSENTE en datos_cabecera preserva el valor existente (permite updates
+        parciales). Un campo PRESENTE se aplica tal cual, incluso si su valor es None
+        (permite limpiar explícitamente un campo, ej. fecha_entrega tras desmarcar
+        INMEDIATO). datos_cabecera debe venir de un exclude_unset=True para que esta
+        distinción sea correcta.
+        """
         merged = {}
         for key in existing.keys():
-            new_value = datos_cabecera.get(key)
-            merged[key] = new_value if new_value is not None else existing[key]
+            merged[key] = datos_cabecera[key] if key in datos_cabecera else existing[key]
 
         if "fecha_pedido" in merged and merged["fecha_pedido"] is not None:
             fp = merged["fecha_pedido"]
@@ -1184,8 +1198,10 @@ class PedidoCabeceraRepository:
     ) -> bool:
         """
         Actualiza la cabecera de un pedido.
-        
-        Si algún campo en datos_cabecera es None, se preserva el valor existente.
+
+        Si algún campo está AUSENTE en datos_cabecera, se preserva el valor existente
+        (update parcial). Si un campo está presente con valor None, se aplica ese None
+        (limpia el campo explícitamente) — ver _fusionar_datos_update.
         No se puede modificar: pedido_id, numero_pedido (business key), creado_por, creado_en.
         
         Args:
