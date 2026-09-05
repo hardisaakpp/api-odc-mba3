@@ -988,7 +988,9 @@ async def _buscar_pedidos_por_numero_handler(numero_pedido: Optional[str], limit
         )
 
 
-async def _listar_archivos_originales_handler(limit: int, solo_activos: bool, user: Dict):
+async def _listar_archivos_originales_handler(
+    limit: int, offset: int, solo_activos: bool, busqueda: Optional[str], user: Dict
+):
     try:
         user_id = get_user_id(user)
         permissions = user.get('permissions', [])
@@ -1001,19 +1003,23 @@ async def _listar_archivos_originales_handler(limit: int, solo_activos: bool, us
             is_admin = any('admin' in str(r).lower() for r in roles)
 
             if has_odcsap or is_admin:
-                archivos = archivo_repo.listar_todos(
+                resultado = archivo_repo.listar_todos(
                     limit=limit,
-                    solo_activos=solo_activos
+                    offset=offset,
+                    solo_activos=solo_activos,
+                    busqueda=busqueda
                 )
             else:
-                archivos = archivo_repo.listar_por_usuario(
+                resultado = archivo_repo.listar_por_usuario(
                     usuario_id=user_id,
                     limit=limit,
-                    solo_activos=solo_activos
+                    offset=offset,
+                    solo_activos=solo_activos,
+                    busqueda=busqueda
                 )
 
             archivos_enriquecidos = []
-            for archivo in archivos:
+            for archivo in resultado["data"]:
                 archivos_enriquecidos.append({
                     "archivo_id": archivo["archivo_id"],
                     "pedido_id": archivo["pedido_id"],
@@ -1029,9 +1035,11 @@ async def _listar_archivos_originales_handler(limit: int, solo_activos: bool, us
                     "url_descarga": f"/api/plantillas/archivos/{archivo['archivo_id']}/descargar-original"
                 })
 
+            total = resultado["total"]
             logger.info(
                 f"📋 Listando archivos originales: usuario={user_id}, "
-                f"total={len(archivos_enriquecidos)}, limit={limit}, solo_activos={solo_activos}"
+                f"total={total}, devueltos={len(archivos_enriquecidos)}, "
+                f"limit={limit}, offset={offset}, solo_activos={solo_activos}"
             )
 
             return JSONResponse(
@@ -1040,8 +1048,10 @@ async def _listar_archivos_originales_handler(limit: int, solo_activos: bool, us
                     "status": "success",
                     "data": archivos_enriquecidos,
                     "metadata": {
-                        "total": len(archivos_enriquecidos),
+                        "total": total,
                         "limit": limit,
+                        "offset": offset,
+                        "has_more": offset + len(archivos_enriquecidos) < total,
                         "storage_habilitado": True
                     }
                 }
@@ -1378,13 +1388,15 @@ def register_plantillas_endpoints(app: FastAPI):
 
     @app.get("/api/plantillas/archivos", tags=["Plantillas - Archivos Originales"])
     async def listar_archivos_originales(
-        limit: int = Query(50, ge=1, le=200, description="Límite de registros"),
+        limit: int = Query(50, ge=1, le=200, description="Límite de registros por página"),
+        offset: int = Query(0, ge=0, description="Registros a saltar (paginación)"),
         solo_activos: bool = Query(True, description="Solo mostrar archivos activos"),
+        busqueda: Optional[str] = Query(None, description="Filtra por número de pedido o nombre de archivo"),
         user: Dict = Depends(verify_jwt_token),
         _: None = Depends(require_any_permission([_PERM_MABEL, _PERM_ODCSAP]))
     ):
-        """Lista los archivos Excel originales subidos por el usuario."""
-        return await _listar_archivos_originales_handler(limit, solo_activos, user)
+        """Lista los archivos Excel originales subidos por el usuario, paginado."""
+        return await _listar_archivos_originales_handler(limit, offset, solo_activos, busqueda, user)
 
     @app.delete("/api/plantillas/archivos/{archivo_id}", tags=["Plantillas - Archivos Originales"])
     async def eliminar_archivo_original(
