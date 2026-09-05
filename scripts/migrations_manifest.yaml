@@ -669,3 +669,17 @@ migrations:
     description: "Marca activo=0 en pedido_estado para 2 estados con setter real pero código huérfano: 9 REDISTRIBUIDO (solo lo asigna endpoints_core.py, expuesto en rutas que el frontend ya no llama -- usa redistribucion/confirmar y proceso-completo-sap, que van directo a CONFIRMADO REDISTRIBUCION/10), y 14 ERROR_DATOS_MAESTROS (la única clasificación que produce error_type='datos_maestros', stock_transfer_service._validate_stock_before_st, está marcada DEPRECADO PARA ITR y sin caller -- el flujo real usa _validate_itr_minimal). Verificado contra pedido_estado_historial en producción (SCOdcsap, 2026-09-04): 0 transiciones históricas a estos ids en 7717 registros / 6+ meses. Misma mecánica que la migración 654 (no borra filas, verifica 0 pedidos reales por id antes de desactivar)"
     category: "data"
     dependencies: ["005"]
+
+  - version: "656"
+    name: "deactivate_estado_respuesta_proveedor_cargada"
+    file: "migrations/deactivate_estado_respuesta_proveedor_cargada.sql"
+    description: "Marca activo=0 en pedido_estado para el id 5 RESPUESTA_PROVEEDOR_CARGADA (mostrado como 'EN_REVISION' en algunos ambientes -- nombre editable): el único setter real (pedido_proveedor_service.importar_respuesta_proveedor) esta wireado a un endpoint backend valido (POST /api/pedidos/{pedido_id}/cargar-respuesta-proveedor), pero ningun componente/vista de scnexus-front llama al servicio correspondiente -- huerfano a nivel de UI, no de ruta. Mismo flujo muerto que 6 CONFIRMADO_PROVEEDOR (654): 'proveedor responde por Excel' fue reemplazado por Redistribucion sin retirar el endpoint. 0 transiciones historicas a este id en produccion (SCOdcsap, 7717 registros / 6+ meses)"
+    category: "data"
+    dependencies: ["005"]
+
+  - version: "657"
+    name: "reordenar_flujo_pedido_estado"
+    file: "migrations/reordenar_flujo_pedido_estado.sql"
+    description: "Reasigna pedido_estado.orden (1..16) para los 16 estados activos siguiendo la secuencia real del flujo de negocio en vez del orden de creacion (orden = id historicamente): rama principal (Borrador -> Nuevo Pedido -> Gestionar Pedido -> Confirmado por Produccion -> Confirmado por El Rayo -> Confirmado Redistribucion -> Confirmado Enviado -> Despachar y Facturar -> Finalizado) con las ramas de cancelacion/excepcion (Cancelado por El Rayo, Produccion Pospuesta/Listo para Redistribucion/Rechazado, Cancelado, Error Envio SAP Reintento, Pendiente Logistica) ubicadas junto al punto del flujo donde ocurren. No toca estados inactivos (654/655/656), invisibles en cualquier dropdown"
+    category: "data"
+    dependencies: ["005", "654", "655", "656"]

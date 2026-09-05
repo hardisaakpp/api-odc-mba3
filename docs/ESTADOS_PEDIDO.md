@@ -17,30 +17,57 @@ Los estados del pedido se identifican por **`estado_id`** (número). El **nombre
 | 1  | BORRADOR | 1  | ✅ | Estado inicial (ex PENDIENTE_CONFIRMACION_PROVEEDOR) |
 | 2  | NUEVO PEDIDO | 2  | ✅ | Enviado a EL RAYO (notificación enviada) |
 | 3  | GESTIONAR PEDIDO | 3  | ✅ | Al hacer clic en Ver Detalle desde tabla Pedidos |
-| 4  | CONFIRMADO POR EL RAYO | 4  | ✅ | Redistribución (tras confirmar respuesta EL RAYO) |
-| 5  | RESPUESTA_PROVEEDOR_CARGADA | 5  | ✅ | Respuesta del proveedor cargada |
+| 4  | CONFIRMADO POR EL RAYO | 6  | ✅ | Redistribución (tras confirmar respuesta EL RAYO) |
+| 5  | RESPUESTA_PROVEEDOR_CARGADA (a veces "EN_REVISION") | 5  | ❌ **obsoleto** | Setter real (`pedido_proveedor_service.importar_respuesta_proveedor`) sin ningún caller en el frontend — endpoint huérfano a nivel de UI |
 | 6  | CONFIRMADO_PROVEEDOR | 6  | ❌ **obsoleto** | Sin caller vivo (`PedidoAjusteService.procesar_confirmacion_proveedor` huérfano) — nunca se alcanza en la práctica |
 | 7  | RECHAZADO_PROVEEDOR | 7  | ❌ **obsoleto** | Sin constante Python, sin ninguna referencia en el repo |
 | 8  | EN_AJUSTE_MABEL | 8  | ❌ **obsoleto** | Sin constante Python, sin ninguna referencia en el repo |
 | 9  | REDISTRIBUIDO | 9  | ❌ **obsoleto** | Único setter (`endpoints_core.py`) huérfano — el frontend usa rutas que van directo a 10, saltándose el 9 |
-| 10 | CONFIRMADO REDISTRIBUCION | 10 | ✅ | Pedido confirmado (redistribución confirmada) |
+| 10 | CONFIRMADO REDISTRIBUCION | 11 | ✅ | Pedido confirmado (redistribución confirmada) |
 | 11 | PROCESADO_SAP | 11 | ❌ **obsoleto** | Propuesta de un flujo "FUTURO" nunca implementado |
-| 12 | CONFIRMADO_ENVIADO | 12 | ✅ | Todas las ODC enviadas a SAP |
+| 12 | CONFIRMADO_ENVIADO | 14 | ✅ | Todas las ODC enviadas a SAP |
 | 13 | PENDIENTE_LOGISTICA | 13 | ✅ | OC OK, ST pendiente/error |
 | 14 | ERROR_DATOS_MAESTROS | 14 | ❌ **obsoleto** | La clasificación que lo dispara (`_validate_stock_before_st`) está deprecada para ITR y sin caller |
 | 15 | EN_PROCESO | 15 | ❌ **obsoleto** | Sin constante Python, sin ninguna referencia en el repo |
 | 16 | COMPLETADO | 16 | ❌ **obsoleto** | Sin constante Python, sin ninguna referencia en el repo |
-| 17 | DESPACHAR Y FACTURAR | 17 | ✅ | Manual: desde Confirmado y Enviado (ODC enviada a SAP) |
-| 18 | FINALIZADO | 18 | ✅ | Estado final del flujo; solo desde Despachar y Facturar |
-| 19 | CANCELADO | 19 | ✅ | Pedido cancelado por MABEL TRADING desde Redistribución |
-| 20 | CANCELADO POR EL RAYO | 20 | ✅ | Cancelado por EL RAYO desde Gestionar pedido |
-| 21 | ERROR ENVIO SAP REINTENTO | 21 | ✅ | Fallo al enviar ODC a SAP (típ. conexión / transitorio); permite reintentar |
-| 22 | PRODUCCION POSPUESTA | 22 | ✅ | El proveedor (Producción El Rayo) pospone la producción de las diferencias para decidir con Mabel |
-| 23 | CONFIRMADO POR PRODUCCION | 23 | ✅ | Req. 1.8 — Producción confirma; entre GESTIONAR PEDIDO (3) y CONFIRMADO POR EL RAYO (4) |
-| 24 | RECHAZADO | 24 | ✅ | Botón "Rechazar" sobre un pedido hijo en PRODUCCION POSPUESTA (22); terminal, igual que CANCELADO |
-| 25 | LISTO PARA REDISTRIBUCION | 25 | ✅ | Botón "Aceptar" sobre un pedido hijo en PRODUCCION POSPUESTA (22); va directo a la cola de redistribución |
+| 17 | DESPACHAR Y FACTURAR | 15 | ✅ | Manual: desde Confirmado y Enviado (ODC enviada a SAP) |
+| 18 | FINALIZADO | 16 | ✅ | Estado final del flujo; solo desde Despachar y Facturar |
+| 19 | CANCELADO | 10 | ✅ | Pedido cancelado por MABEL TRADING desde Redistribución |
+| 20 | CANCELADO POR EL RAYO | 5  | ✅ | Cancelado por EL RAYO desde Confirmado por Producción |
+| 21 | ERROR ENVIO SAP REINTENTO | 12 | ✅ | Fallo al enviar ODC a SAP (típ. conexión / transitorio); permite reintentar |
+| 22 | PRODUCCION POSPUESTA | 7  | ✅ | El proveedor (Producción El Rayo) pospone la producción de las diferencias para decidir con Mabel |
+| 23 | CONFIRMADO POR PRODUCCION | 4  | ✅ | Req. 1.8 — Producción confirma; entre GESTIONAR PEDIDO (3) y CONFIRMADO POR EL RAYO (4) |
+| 24 | RECHAZADO | 9  | ✅ | Botón "Rechazar" sobre un pedido hijo en PRODUCCION POSPUESTA (22); terminal, igual que CANCELADO |
+| 25 | LISTO PARA REDISTRIBUCION | 8  | ✅ | Botón "Aceptar" sobre un pedido hijo en PRODUCCION POSPUESTA (22); va directo a la cola de redistribución |
 
-El **id es semántico** (no depende del orden en BD). El **orden** es solo para visualización (listas, filtros).
+El **id es semántico** (no depende del orden en BD). El **orden** es solo para visualización (listas, filtros) — desde la migración 657 refleja la secuencia real del flujo, no el orden de creación (ver sección siguiente). Nota: dos ids activos pueden compartir el mismo `orden` numérico con un id inactivo (ej. 4 y 20 ambos usan valores ya libres tras la migración) porque los inactivos no aparecen en ningún dropdown — no genera ambigüedad visible.
+
+---
+
+## Secuencia real del flujo (orden tras la migración 657)
+
+Tabla de arriba ordenada por `orden` en vez de por `id` — así es como se ve en cualquier `<select>` de "Estado" hoy:
+
+| orden | id | nombre | Punto del flujo |
+|:-----:|:--:|--------|------------------|
+| 1  | 1  | BORRADOR | Carga inicial de Excel |
+| 2  | 2  | NUEVO PEDIDO | Notificado a EL RAYO |
+| 3  | 3  | GESTIONAR PEDIDO | Producción El Rayo gestiona |
+| 4  | 23 | CONFIRMADO POR PRODUCCION | Producción confirma |
+| 5  | 20 | CANCELADO POR EL RAYO | Rama terminal desde 23 |
+| 6  | 4  | CONFIRMADO POR EL RAYO | Listo para redistribución |
+| 7  | 22 | PRODUCCION POSPUESTA | Rama: diferencia de cantidad a resolver |
+| 8  | 25 | LISTO PARA REDISTRIBUCION | "Aceptar" en 22 — continúa el flujo |
+| 9  | 24 | RECHAZADO | "Rechazar" en 22 — terminal |
+| 10 | 19 | CANCELADO | Rama terminal ("Cancelar Pedido", habilitado antes de 10) |
+| 11 | 10 | CONFIRMADO REDISTRIBUCION | PASO 1 (Proceso Completo SAP) confirmado |
+| 12 | 21 | ERROR ENVIO SAP REINTENTO | PASO 3 (enviar OC a SAP) falló — reintentable |
+| 13 | 13 | PENDIENTE_LOGISTICA | OC enviada OK, ST falló |
+| 14 | 12 | CONFIRMADO_ENVIADO | OC + ST exitosas |
+| 15 | 17 | DESPACHAR Y FACTURAR | Manual, desde Confirmado y Enviado |
+| 16 | 18 | FINALIZADO | Estado final |
+
+Estados inactivos (5, 6, 7, 8, 9, 11, 14, 15, 16) no aparecen aquí: invisibles en cualquier dropdown (`get_estados(solo_activos=True)`), su `orden` no se tocó.
 
 ---
 
@@ -54,6 +81,8 @@ Los ids **6, 7, 8, 11, 15 y 16** se sembraron desde el diseño inicial (`create_
 - ❌ NO afecta el `<select>` editable de "Estado del Pedido" en `PedidoCabecera.vue` (scnexus-front): sus opciones están hardcodeadas en el template, independientes de esta tabla, y además contienen varios valores que nunca correspondieron a ningún `estado_id` real (`PENDIENTE_CONFIRMACION_PROVEEDOR`, `ORDEN_COMPRA_CREADA`, `ENVIADA_SAP`, `CERRADO`) — pendiente de limpieza aparte.
 - ❌ NO afecta ninguna validación de backend: `es_estado_valido()` (que sí consulta `ESTADO_IDS_VALIDOS`) es código muerto, sin ningún caller.
 
+**`solo_con_pedidos` (2026-09-04, contexto `cargar-plantilla` únicamente):** `get_estados()` acepta además `solo_con_pedidos: bool`, que agrega `EXISTS (SELECT 1 FROM pedido p WHERE p.estado_id = pe.id)`. Complementa a `activo`: mientras `activo` requiere una migración manual para reflejar un estado huérfano, `solo_con_pedidos` oculta del dropdown cualquier estado (activo o no) sin un solo pedido real *ahora mismo*, sin tocar ninguna fila. Solo se usa en el contexto `cargar-plantilla` (`pedidos_listado_endpoints.py::_listar_estados_pedido_handler`), porque ese listado no aplica ninguna otra restricción de filtros -- "pedido real en ese estado_id" refleja exactamente su universo completo.
+
 **Nota sobre 7, 8, 11, 15, 16:** en el ambiente de desarrollo estas 5 filas ya no existen físicamente en `pedido_estado` (se eliminaron manualmente en algún momento, fuera de cualquier migración rastreada del repo — no hay ningún `DELETE` sobre esta tabla en `scripts/`). Por eso la migración de arriba no tiene efecto visible sobre ellas: el `UPDATE ... WHERE id = @Id` no encuentra fila que actualizar. Decisión explícita: **no reinsertarlas.**
 
 ### Segunda ronda: 9 (REDISTRIBUIDO) y 14 (ERROR_DATOS_MAESTROS)
@@ -64,6 +93,20 @@ A diferencia de los 6 anteriores, estos dos **sí tienen código que los asignar
 - **14 ERROR_DATOS_MAESTROS**: `pedido_cierre_service.py:177` solo lo asigna si `error_type == "datos_maestros"`. Ese valor únicamente lo produce `stock_transfer_service._lanzar_error_datos_maestros`, invocado desde `_validate_stock_before_st` — función marcada en su propio docstring como "⚠️ DEPRECADO PARA ITR" y sin ningún caller en el repo. El flujo real de ITR usa `_validate_itr_minimal`, que nunca produce ese `error_type`.
 
 Verificado en producción (`SCOdcsap`, 2026-09-04) contra `pedido_estado_historial`: **0 transiciones** hacia estos dos ids en 7717 registros históricos (cobertura desde 2026-02-25, 1300+ pedidos reales) — consistente con código huérfano, no con "aún no ha ocurrido".
+
+### Tercera ronda: 5 (RESPUESTA_PROVEEDOR_CARGADA)
+
+Mismo patrón, un nivel distinto: código con setter real y ruta backend registrada, pero **sin ningún punto de entrada en la UI**. Desactivado con `scripts/migrations/deactivate_estado_respuesta_proveedor_cargada.sql` (migración 656, 2026-09-04):
+
+- El único setter (`repo.update_estado(pedido_id, ESTADO_RESPUESTA_PROVEEDOR_CARGADA, ...)`) vive en `pedido_proveedor_service.py:478` (`PedidoProveedorService.importar_respuesta_proveedor`), invocado desde `POST /api/pedidos/{pedido_id}/cargar-respuesta-proveedor` (`pedidos_proveedor.py:542`) — ruta real, registrada, funcional si se le llamara.
+- El frontend expone el método de servicio correspondiente (`respuestaProveedorService.cargarRespuestaProveedor` / `mba3ConsultasApi.cargarRespuestaProveedor`), pero **ningún componente ni vista de scnexus-front lo llama** — confirmado por búsqueda en todo `src/` del repo frontend, cero resultados fuera de la propia definición del servicio.
+- Continuación del mismo flujo muerto que **6 CONFIRMADO_PROVEEDOR** (ya desactivado en la primera ronda): "el proveedor responde por Excel, se revisa, se confirma" (5 → 6) quedó completamente reemplazado por el flujo de Redistribución sin que nadie retirara el endpoint ni el botón que lo hubiera llamado.
+
+Verificado en producción (`SCOdcsap`, 2026-09-04): **0 transiciones** hacia este id en el mismo historial de 7717 registros / 6+ meses.
+
+### Orden del flujo (migración 657)
+
+Independiente de qué está activo, `orden` (columna de `pedido_estado`, usada por `ORDER BY pe.orden ASC` en `get_estados()`) nació como copia de `id` — cada migración `add_estado_*.sql` le asigna `orden = id`, así que hasta el 2026-09-04 reflejaba el orden de *creación en el catálogo*, no la secuencia real del flujo (ej. `CONFIRMADO POR PRODUCCION` (23, agregado en la migración 621) ocurre *antes* que `CONFIRMADO POR EL RAYO` (4) en el flujo real, pero tenía un `orden` mayor). `scripts/migrations/reordenar_flujo_pedido_estado.sql` (migración 657) reasigna `orden` 1..16 a los estados activos siguiendo la secuencia real — ver tabla "Secuencia real del flujo" arriba.
 
 ---
 
