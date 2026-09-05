@@ -78,6 +78,35 @@ class _Paginacion:
         self.page_size_camel = page_size_camel
 
 
+class _FiltrosBusquedaPedido:
+    """Agrupa los filtros de búsqueda de listar_pedidos para reducir su aridad."""
+    def __init__(
+        self,
+        estado: Optional[str] = Query(None, description="Filtrar por estado del pedido"),
+        fecha_desde: Optional[str] = Query(None, description="Filtrar desde fecha (YYYY-MM-DD)"),
+        fecha_hasta: Optional[str] = Query(None, description="Filtrar hasta fecha (YYYY-MM-DD)"),
+        tipo_fecha: Optional[str] = Query(
+            None,
+            description=(
+                "Columna sobre la que aplica fecha_desde/fecha_hasta: 'pedido' (default), "
+                "'creacion', 'modificacion', 'entrega' o 'facturacion'"
+            ),
+        ),
+        proveedor_nombre: Optional[str] = Query(None, description="Buscar por nombre de proveedor (parcial)"),
+        numero_pedido: Optional[str] = Query(None, description="Buscar por número de pedido (parcial)"),
+        creado_por: Optional[str] = Query(None, description="Filtrar por usuario que creó el pedido (parcial)"),
+        modificado_por: Optional[str] = Query(None, description="Filtrar por usuario que modificó por última vez el pedido (parcial)"),
+    ):
+        self.estado = estado
+        self.fecha_desde = fecha_desde
+        self.fecha_hasta = fecha_hasta
+        self.tipo_fecha = tipo_fecha
+        self.proveedor_nombre = proveedor_nombre
+        self.numero_pedido = numero_pedido
+        self.creado_por = creado_por
+        self.modificado_por = modificado_por
+
+
 def _query_listar_pedidos(filtros: PedidosFiltros, limit: Optional[int], offset: Optional[int]):
     """Ejecuta la consulta bloqueante de listado (pyodbc); se llama vía asyncio.to_thread
     para no congelar el event loop si SQL Server tarda o no responde."""
@@ -458,20 +487,7 @@ def register_pedidos_listado_endpoints(app: FastAPI):
 
     @app.get("/api/pedidos", tags=["Pedidos"], responses=READ_RESPONSES)
     async def listar_pedidos(
-        estado: Optional[str] = Query(None, description="Filtrar por estado del pedido"),
-        fecha_desde: Optional[str] = Query(None, description="Filtrar desde fecha (YYYY-MM-DD)"),
-        fecha_hasta: Optional[str] = Query(None, description="Filtrar hasta fecha (YYYY-MM-DD)"),
-        tipo_fecha: Optional[str] = Query(
-            None,
-            description=(
-                "Columna sobre la que aplica fecha_desde/fecha_hasta: 'pedido' (default), "
-                "'creacion', 'modificacion', 'entrega' o 'facturacion'"
-            ),
-        ),
-        proveedor_nombre: Optional[str] = Query(None, description="Buscar por nombre de proveedor (parcial)"),
-        numero_pedido: Optional[str] = Query(None, description="Buscar por número de pedido (parcial)"),
-        creado_por: Optional[str] = Query(None, description="Filtrar por usuario que creó el pedido (parcial)"),
-        modificado_por: Optional[str] = Query(None, description="Filtrar por usuario que modificó por última vez el pedido (parcial)"),
+        filtros: _FiltrosBusquedaPedido = Depends(_FiltrosBusquedaPedido),
         paginacion: _Paginacion = Depends(_Paginacion),
         solo_redistribucion: Optional[str] = Query(
             None,
@@ -547,14 +563,14 @@ def register_pedidos_listado_endpoints(app: FastAPI):
             JSON con lista de pedidos y metadata de paginación
         """
         return await _listar_pedidos_handler(
-            estado=estado,
-            fecha_desde=fecha_desde,
-            fecha_hasta=fecha_hasta,
-            tipo_fecha=tipo_fecha,
-            proveedor_nombre=proveedor_nombre,
-            numero_pedido=numero_pedido,
-            creado_por=creado_por,
-            modificado_por=modificado_por,
+            estado=filtros.estado,
+            fecha_desde=filtros.fecha_desde,
+            fecha_hasta=filtros.fecha_hasta,
+            tipo_fecha=filtros.tipo_fecha,
+            proveedor_nombre=filtros.proveedor_nombre,
+            numero_pedido=filtros.numero_pedido,
+            creado_por=filtros.creado_por,
+            modificado_por=filtros.modificado_por,
             paginacion=paginacion,
             solo_redistribucion=solo_redistribucion,
             solo_pendientes_accion=solo_pendientes_accion,
