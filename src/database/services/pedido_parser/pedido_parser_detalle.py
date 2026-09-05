@@ -410,12 +410,14 @@ class PedidoParserDetalle:
                 continue
             codigo_columna = codigos_columnas.get(col_idx)
             nombre_columna = nombres_columnas_fila1.get(col_idx, df_detalle.columns[col_idx])
-            if self._es_codigo_columna_tienda(codigo_columna) or self._es_codigo_columna_tienda(nombre_columna):
-                columnas_con_codigo_tienda.append(col_idx)
-            elif self._codigo_tienda_no_reconocido(codigo_columna, nombre_columna) is not None:
-                # Código sospechoso (no vacío, no encabezado reservado) que no matchea ningún
-                # formato válido: se incluye igual en el rango para que se pueda señalar como
-                # error en vez de quedar fuera del rango y perderse en silencio.
+            # El segundo term (código sospechoso: no vacío, no encabezado reservado, pero que
+            # no matchea ningún formato válido) se incluye igual en el rango para que se pueda
+            # señalar como error en vez de quedar fuera del rango y perderse en silencio.
+            if (
+                self._es_codigo_columna_tienda(codigo_columna)
+                or self._es_codigo_columna_tienda(nombre_columna)
+                or self._codigo_tienda_no_reconocido(codigo_columna, nombre_columna) is not None
+            ):
                 columnas_con_codigo_tienda.append(col_idx)
         if columnas_con_codigo_tienda:
             return max(columnas_con_codigo_tienda)
