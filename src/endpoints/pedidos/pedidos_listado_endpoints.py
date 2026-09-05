@@ -291,7 +291,7 @@ async def _get_ultimo_pedido_redistribucion_handler(
         )
 
 
-def _query_estados_pedido(excluir_ids, solo_ids):
+def _query_estados_pedido(excluir_ids, solo_ids, solo_con_pedidos=False):
     """Consulta bloqueante (pyodbc); se ejecuta vía asyncio.to_thread."""
     with get_db_connection_context() as conn:
         repo = PedidoRepository(conn)
@@ -299,6 +299,7 @@ def _query_estados_pedido(excluir_ids, solo_ids):
             solo_activos=True,
             excluir_ids=excluir_ids,
             solo_ids=solo_ids,
+            solo_con_pedidos=solo_con_pedidos,
         )
 
 
@@ -306,6 +307,7 @@ async def _listar_estados_pedido_handler(contexto: Optional[str], user: Dict):
     try:
         excluir_ids: Optional[List[int]] = None
         solo_ids: Optional[List[int]] = None
+        solo_con_pedidos = False
 
         if contexto == "produccion" or _es_solo_produccion_elrayo(user):
             from src.database.pedido_estados import ESTADOS_PRODUCCION_EL_RAYO_IDS
@@ -314,8 +316,13 @@ async def _listar_estados_pedido_handler(contexto: Optional[str], user: Dict):
             # LISTO_PARA_REDISTRIBUCION (25, botón "Aceptar") solo se ve en /redistribucion
             excluir_ids = [ESTADO_BORRADOR, ESTADO_LISTO_PARA_REDISTRIBUCION]
         elif contexto == "cargar-plantilla":
-            # LISTO_PARA_REDISTRIBUCION (25, botón "Aceptar") solo se ve en /redistribucion
+            # LISTO_PARA_REDISTRIBUCION (25, botón "Aceptar") solo se ve en /redistribucion.
+            # solo_con_pedidos: acota el dropdown a estados que algún pedido real tiene hoy --
+            # get_pedidos_con_filtros para este listado no aplica ninguna otra restricción
+            # (ver _listar_pedidos_plantillas_handler en plantillas.py), así que "pedido real
+            # en ese estado_id" refleja exactamente el universo que este listado puede mostrar.
             excluir_ids = [ESTADO_LISTO_PARA_REDISTRIBUCION]
+            solo_con_pedidos = True
         elif contexto == "redistribucion":
             solo_ids = [
                 ESTADO_REDISTRIBUCION,
@@ -337,7 +344,7 @@ async def _listar_estados_pedido_handler(contexto: Optional[str], user: Dict):
             from src.database.pedido_estados import ESTADOS_PRODUCCION_EL_RAYO_IDS
             excluir_ids = list(excluir_ids or []) + list(sorted(ESTADOS_PRODUCCION_EL_RAYO_IDS))
 
-        estados = await asyncio.to_thread(_query_estados_pedido, excluir_ids, solo_ids)
+        estados = await asyncio.to_thread(_query_estados_pedido, excluir_ids, solo_ids, solo_con_pedidos)
 
         return JSONResponse(
             status_code=200,

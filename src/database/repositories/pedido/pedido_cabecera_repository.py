@@ -2173,21 +2173,27 @@ class PedidoCabeceraRepository:
         solo_activos: bool = True,
         excluir_ids: Optional[List[int]] = None,
         solo_ids: Optional[List[int]] = None,
+        solo_con_pedidos: bool = False,
     ) -> List[Dict[str, Any]]:
         """
         Obtiene la lista de estados de pedido desde la tabla pedido_estado.
-        
+
         Diseñado para alimentar los dropdowns de "Filtros de Búsqueda" en las
         interfaces de listas de pedidos, devolviendo los estados que el usuario
         realmente visualiza en la UI.
-        
+
         Args:
             solo_activos: Si True, solo devuelve estados con activo=1 (default True)
             excluir_ids: Lista opcional de estado_id a excluir del resultado
                          (ej: [1] para excluir BORRADOR en la lista general)
             solo_ids: Lista opcional de estado_id a incluir exclusivamente
                       (ej: [4,5,6,9] para vista de redistribución)
-        
+            solo_con_pedidos: Si True, excluye estados sin ningún pedido real
+                         (EXISTS contra pedido.estado_id) -- evita ofrecer en el
+                         filtro un estado que ningún pedido pueda tener nunca
+                         (ej. código que lo asignaría quedó huérfano), sin
+                         depender de mantener manualmente `activo` al día.
+
         Returns:
             Lista de dicts con id, nombre y orden, ordenados por orden ASC
         """
@@ -2207,6 +2213,11 @@ class PedidoCabeceraRepository:
                 placeholders = ",".join("?" for _ in excluir_ids)
                 where_conditions.append(f"pe.id NOT IN ({placeholders})")
                 params.extend(excluir_ids)
+
+            if solo_con_pedidos:
+                where_conditions.append(
+                    "EXISTS (SELECT 1 FROM pedido p WHERE p.estado_id = pe.id)"
+                )
 
             where_clause = _SEP_AND.join(where_conditions) if where_conditions else "1=1"
 

@@ -255,16 +255,18 @@ class PedidoRepository:
         solo_activos: bool = True,
         excluir_ids: Optional[List[int]] = None,
         solo_ids: Optional[List[int]] = None,
+        solo_con_pedidos: bool = False,
     ) -> List[Dict[str, Any]]:
         """
         Obtiene la lista de estados de pedido para dropdowns de filtros.
-        
+
         DELEGADO a PedidoCabeceraRepository.
         """
         return self.cabecera_repo.get_estados(
             solo_activos=solo_activos,
             excluir_ids=excluir_ids,
             solo_ids=solo_ids,
+            solo_con_pedidos=solo_con_pedidos,
         )
 
     def get_respuestas_proveedor(
