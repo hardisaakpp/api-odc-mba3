@@ -37,25 +37,16 @@ ESTADO_RECHAZADO = 24
 ESTADO_LISTO_PARA_REDISTRIBUCION = 25
 
 
-# Filtro rápido "solo pendientes" en listados de pedidos (El Rayo / Mabel)
-ESTADOS_REQUIERE_ACCION_IDS = frozenset({
-    ESTADO_RESPUESTA_PROVEEDOR_CARGADA,
-    ESTADO_CONFIRMADO_PROVEEDOR,
-})
-ESTADOS_REQUIERE_ACCION_NOMBRES = (
-    "PENDIENTE_CONFIRMACION_PROVEEDOR",
-    "RESPUESTA_PROVEEDOR_CARGADA",
-    "CONFIRMADO_PROVEEDOR",
-)
-
 # Filtro rápido "solo pendientes" específico de Cargar Plantilla (Mabel Trading, mabel.view):
 # estados en los que el pedido ya fue "transaccionado" por otro actor (Producción confirma/pospone,
 # Administración El Rayo envía la ODC a SAP) y vuelve a la cancha de Mabel Trading para una decisión
 # o acción final (botón Aceptar/Rechazar en Producción Pospuesta, botón Finalizado en Despachar y
 # Facturar -- ambos solo disponibles desde CargarPlantillaView.vue). Distinto de
-# ESTADOS_REQUIERE_ACCION_* (estados de respuesta del proveedor): ese flujo de aprobación quedó sin
-# conectar a ningún endpoint (PedidoAjusteService.procesar_confirmacion_proveedor huérfano), así que
-# CONFIRMADO_PROVEEDOR nunca se alcanza en la práctica y no se incluye aquí.
+# ESTADOS_REQUIERE_ACCION_PEDIDOS_*/_REDISTRIBUCION_* (otros listados). El histórico "estados de
+# respuesta del proveedor" (PENDIENTE_CONFIRMACION_PROVEEDOR/RESPUESTA_PROVEEDOR_CARGADA/
+# CONFIRMADO_PROVEEDOR) se eliminó de este archivo: ese flujo de aprobación quedó sin conectar a
+# ningún endpoint (PedidoAjusteService.procesar_confirmacion_proveedor huérfano) y sus 2 estados con
+# id propio ya están desactivados (migraciones 654/656) -- no se alcanzan en la práctica.
 ESTADOS_REQUIERE_ACCION_CARGAR_PLANTILLA_IDS = frozenset({
     ESTADO_PRODUCCION_POSPUESTA,
     ESTADO_DESPACHAR_Y_FACTURAR,
@@ -67,12 +58,10 @@ ESTADOS_REQUIERE_ACCION_CARGAR_PLANTILLA_NOMBRES = (
 
 # Filtro rápido "solo pendientes" específico del listado de Pedidos (EL RAYO, odcsap.view): el
 # pedido ya fue confirmado por Producción o enviado a SAP y vuelve a la cancha de Administración
-# El Rayo para revisar/continuar el flujo. Distinto de ESTADOS_REQUIERE_ACCION_* (estados de
-# respuesta del proveedor, huérfanos y ya desactivados -- ver migraciones 654/655/656) y de
-# ESTADOS_REQUIERE_ACCION_CARGAR_PLANTILLA_* (propio de Mabel Trading). No se reutiliza
-# ESTADOS_REQUIERE_ACCION_* aquí porque ese mismo filtro (`solo_pendientes_accion`) también lo usa
-# /api/pedidos?solo_redistribucion=true (vista de Redistribución) y cambiar su significado global
-# alteraría ese listado sin que se haya pedido.
+# El Rayo para revisar/continuar el flujo. Distinto de ESTADOS_REQUIERE_ACCION_CARGAR_PLANTILLA_*
+# (propio de Mabel Trading) y de ESTADOS_REQUIERE_ACCION_REDISTRIBUCION_* (propio de la vista de
+# Redistribución, aunque comparten el mismo endpoint /api/pedidos) -- cada listado tiene su propio
+# significado de "requiere acción" y su propio flag en PedidosFiltros.
 ESTADOS_REQUIERE_ACCION_PEDIDOS_IDS = frozenset({
     ESTADO_CONFIRMADO_POR_PRODUCCION,
     ESTADO_CONFIRMADO_ENVIADO,
@@ -81,6 +70,21 @@ ESTADOS_REQUIERE_ACCION_PEDIDOS_NOMBRES = (
     "CONFIRMADO POR PRODUCCION",
     "CONFIRMADO_POR_PRODUCCION",
     "CONFIRMADO_ENVIADO",
+)
+
+# Filtro rápido "solo pendientes" específico del listado de Redistribución (Mabel Trading,
+# mabel.view): el pedido ya fue confirmado por EL RAYO (4) o aceptado desde Producción Pospuesta
+# (25, botón "Aceptar") y está listo para que Mabel Trading distribuya cantidades por tienda. Ver
+# ESTADOS_REQUIERE_ACCION_PEDIDOS_* arriba para el porqué de no compartir un único array entre las
+# 3 vistas.
+ESTADOS_REQUIERE_ACCION_REDISTRIBUCION_IDS = frozenset({
+    ESTADO_REDISTRIBUCION,
+    ESTADO_LISTO_PARA_REDISTRIBUCION,
+})
+ESTADOS_REQUIERE_ACCION_REDISTRIBUCION_NOMBRES = (
+    "CONFIRMADO POR EL RAYO",
+    "LISTO PARA REDISTRIBUCION",
+    "LISTO_PARA_REDISTRIBUCION",
 )
 
 # Estados visibles para el perfil Producción El Rayo (req. 1.8, permiso

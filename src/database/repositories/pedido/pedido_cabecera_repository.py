@@ -73,9 +73,9 @@ class PedidosFiltros:
     estado: Optional[str | int] = None
     excluir_borrador: bool = False
     solo_redistribucion: bool = False
-    solo_pendientes_accion: bool = False
     solo_pendientes_accion_cargar_plantilla: bool = False
     solo_pendientes_accion_pedidos: bool = False
+    solo_pendientes_accion_redistribucion: bool = False
     restringir_produccion_el_rayo: bool = False
     excluir_estados_produccion_el_rayo: bool = False
     excluir_listo_para_redistribucion: bool = False
@@ -1392,24 +1392,6 @@ class PedidoCabeceraRepository:
             [],
         )
 
-    def _filtro_pendientes_accion(self, tiene_estado_id: bool) -> tuple:
-        """Condición y parámetros para filtrar estados que requieren acción."""
-        from src.database.pedido_estados import (
-            ESTADOS_REQUIERE_ACCION_IDS,
-            ESTADOS_REQUIERE_ACCION_NOMBRES,
-        )
-        if tiene_estado_id:
-            placeholders = ",".join("?" * len(ESTADOS_REQUIERE_ACCION_IDS))
-            return (
-                [f"p.estado_id IN ({placeholders})"],
-                list(sorted(ESTADOS_REQUIERE_ACCION_IDS)),
-            )
-        legacy_placeholders = ",".join("?" * len(ESTADOS_REQUIERE_ACCION_NOMBRES))
-        return (
-            [f"p.estado IN ({legacy_placeholders})"],
-            list(ESTADOS_REQUIERE_ACCION_NOMBRES),
-        )
-
     def _filtro_pendientes_accion_cargar_plantilla(self, tiene_estado_id: bool) -> tuple:
         """Condición y parámetros para el filtro "solo pendientes" propio de Cargar Plantilla
         (Producción Pospuesta, Despachar y Facturar) -- ver ESTADOS_REQUIERE_ACCION_CARGAR_PLANTILLA_*
@@ -1448,6 +1430,26 @@ class PedidoCabeceraRepository:
         return (
             [f"p.estado IN ({legacy_placeholders})"],
             list(ESTADOS_REQUIERE_ACCION_PEDIDOS_NOMBRES),
+        )
+
+    def _filtro_pendientes_accion_redistribucion(self, tiene_estado_id: bool) -> tuple:
+        """Condición y parámetros para el filtro "solo pendientes" propio del listado de
+        Redistribución (Confirmado por El Rayo / Listo para Redistribución) -- ver
+        ESTADOS_REQUIERE_ACCION_REDISTRIBUCION_* en pedido_estados.py."""
+        from src.database.pedido_estados import (
+            ESTADOS_REQUIERE_ACCION_REDISTRIBUCION_IDS,
+            ESTADOS_REQUIERE_ACCION_REDISTRIBUCION_NOMBRES,
+        )
+        if tiene_estado_id:
+            placeholders = ",".join("?" * len(ESTADOS_REQUIERE_ACCION_REDISTRIBUCION_IDS))
+            return (
+                [f"p.estado_id IN ({placeholders})"],
+                list(sorted(ESTADOS_REQUIERE_ACCION_REDISTRIBUCION_IDS)),
+            )
+        legacy_placeholders = ",".join("?" * len(ESTADOS_REQUIERE_ACCION_REDISTRIBUCION_NOMBRES))
+        return (
+            [f"p.estado IN ({legacy_placeholders})"],
+            list(ESTADOS_REQUIERE_ACCION_REDISTRIBUCION_NOMBRES),
         )
 
     def _filtro_estados_produccion_el_rayo(self, tiene_estado_id: bool) -> tuple:
@@ -1560,16 +1562,16 @@ class PedidoCabeceraRepository:
             params.append(f"%{filtros.modificado_por}%")
 
         self._agregar_filtro_condicional(
-            filtros.solo_pendientes_accion, tiene_estado_id, tiene_estado,
-            self._filtro_pendientes_accion, where_conditions, params,
-        )
-        self._agregar_filtro_condicional(
             filtros.solo_pendientes_accion_cargar_plantilla, tiene_estado_id, tiene_estado,
             self._filtro_pendientes_accion_cargar_plantilla, where_conditions, params,
         )
         self._agregar_filtro_condicional(
             filtros.solo_pendientes_accion_pedidos, tiene_estado_id, tiene_estado,
             self._filtro_pendientes_accion_pedidos, where_conditions, params,
+        )
+        self._agregar_filtro_condicional(
+            filtros.solo_pendientes_accion_redistribucion, tiene_estado_id, tiene_estado,
+            self._filtro_pendientes_accion_redistribucion, where_conditions, params,
         )
         self._agregar_filtro_condicional(
             filtros.restringir_produccion_el_rayo, tiene_estado_id, tiene_estado,
@@ -1643,11 +1645,10 @@ class PedidoCabeceraRepository:
                     (estado_id >= 4 "CONFIRMADO POR EL RAYO", excluyendo CANCELADO (19),
                     CANCELADO POR EL RAYO (20), CONFIRMADO POR PRODUCCION (23) y
                     PRODUCCION POSPUESTA (22) — ver `_filtro_redistribucion`)
-                - solo_pendientes_accion: si True, solo estados que requieren acción del proveedor
-                    (huérfanos, ver ESTADOS_REQUIERE_ACCION_* en pedido_estados.py); usado hoy solo
-                    por /api/pedidos?solo_redistribucion=true (vista de Redistribución)
                 - solo_pendientes_accion_pedidos: si True, solo Confirmado por Producción / Confirmado
                     y Enviado (listado de Pedidos, EL RAYO, odcsap.view)
+                - solo_pendientes_accion_redistribucion: si True, solo Confirmado por El Rayo / Listo
+                    para Redistribución (listado de Redistribución, mabel.view)
                 - restringir_produccion_el_rayo: si True, solo incluye NUEVO_PEDIDO y GESTIONAR_PEDIDO
                     (req. 1.8, perfil Producción El Rayo); se combina (AND) con `estado` si también se indica
                 - excluir_estados_produccion_el_rayo: si True, excluye NUEVO_PEDIDO y GESTIONAR_PEDIDO
