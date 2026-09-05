@@ -303,35 +303,71 @@ class DistribucionConfirmadaRepository:
     ) -> int:
         insertadas = 0
         for distribucion in distribuciones:
-            tienda_id = distribucion["tienda_id"]
-            cantidad_asignada = distribucion["cantidad_asignada"]
-            agregada_manualmente = bool(distribucion.get("agregada_manualmente", False))
-            distrib_orig = distribuciones_orig.get(tienda_id, {})
-            cantidad_solicitada = distrib_orig.get("cantidad_solicitada", 0)
-            costo_unitario_original = distrib_orig.get("costo_unitario")
-
-            cantidad_solicitada_float = float(cantidad_solicitada) if cantidad_solicitada else 0.0
-            cantidad_asignada_float = float(cantidad_asignada) if cantidad_asignada else 0.0
-            factor_proporcion_float = float(factor_proporcion)
-
-            cantidad_confirmada = (
-                round(cantidad_solicitada_float * factor_proporcion_float, 4)
-                if cantidad_solicitada_float > 0 else 0.0
+            self._insertar_una_distribucion(
+                cursor, pedido_id, pedido_detalle_id, distribucion, distribuciones_orig,
+                factor_proporcion, nueva_version, creado_por, origen, ip_origen,
+                fecha_creacion, tiene_agregada_manualmente
             )
+            insertadas += 1
+        return insertadas
 
-            costo_unitario_ajustado = costo_unitario_original
-            subtotal_original = (
-                float(costo_unitario_original) * cantidad_solicitada_float
-                if costo_unitario_original is not None else None
-            )
-            subtotal_ajustado = (
-                float(costo_unitario_ajustado) * cantidad_asignada_float
-                if costo_unitario_ajustado is not None else None
-            )
+    def _insertar_una_distribucion(
+        self, cursor, pedido_id: str, pedido_detalle_id: str,
+        distribucion: Dict[str, Any], distribuciones_orig: Dict[str, Any],
+        factor_proporcion: float, nueva_version: int,
+        creado_por, origen, ip_origen, fecha_creacion,
+        tiene_agregada_manualmente: bool
+    ) -> None:
+        tienda_id = distribucion["tienda_id"]
+        cantidad_asignada = distribucion["cantidad_asignada"]
+        agregada_manualmente = bool(distribucion.get("agregada_manualmente", False))
+        distrib_orig = distribuciones_orig.get(tienda_id, {})
+        cantidad_solicitada = distrib_orig.get("cantidad_solicitada", 0)
+        costo_unitario_original = distrib_orig.get("costo_unitario")
 
-            columna_agregada_manualmente = ", agregada_manualmente" if tiene_agregada_manualmente else ""
-            placeholder_agregada_manualmente = ", ?" if tiene_agregada_manualmente else ""
-            valores = (
+        cantidad_solicitada_float = float(cantidad_solicitada) if cantidad_solicitada else 0.0
+        cantidad_asignada_float = float(cantidad_asignada) if cantidad_asignada else 0.0
+        factor_proporcion_float = float(factor_proporcion)
+
+        cantidad_confirmada = (
+            round(cantidad_solicitada_float * factor_proporcion_float, 4)
+            if cantidad_solicitada_float > 0 else 0.0
+        )
+
+        costo_unitario_ajustado = costo_unitario_original
+        subtotal_original = (
+            float(costo_unitario_original) * cantidad_solicitada_float
+            if costo_unitario_original is not None else None
+        )
+        subtotal_ajustado = (
+            float(costo_unitario_ajustado) * cantidad_asignada_float
+            if costo_unitario_ajustado is not None else None
+        )
+
+        columna_agregada_manualmente = ", agregada_manualmente" if tiene_agregada_manualmente else ""
+        placeholder_agregada_manualmente = ", ?" if tiene_agregada_manualmente else ""
+        valores = (
+            pedido_id,
+            pedido_detalle_id,
+            tienda_id,
+            cantidad_solicitada,
+            cantidad_confirmada,
+            cantidad_asignada,
+            costo_unitario_original,
+            costo_unitario_ajustado,
+            subtotal_original,
+            subtotal_ajustado,
+            nueva_version,
+            creado_por,
+            origen,
+            ip_origen,
+            fecha_creacion
+        )
+        if tiene_agregada_manualmente:
+            valores = valores + (agregada_manualmente,)
+
+        cursor.execute(f"""
+            INSERT INTO distribucion_confirmada (
                 pedido_id,
                 pedido_detalle_id,
                 tienda_id,
@@ -342,37 +378,14 @@ class DistribucionConfirmadaRepository:
                 costo_unitario_ajustado,
                 subtotal_original,
                 subtotal_ajustado,
-                nueva_version,
+                version,
+                estado,
                 creado_por,
                 origen,
                 ip_origen,
-                fecha_creacion
-            )
-            if tiene_agregada_manualmente:
-                valores = valores + (agregada_manualmente,)
-
-            cursor.execute(f"""
-                INSERT INTO distribucion_confirmada (
-                    pedido_id,
-                    pedido_detalle_id,
-                    tienda_id,
-                    cantidad_solicitada,
-                    cantidad_confirmada,
-                    cantidad_asignada,
-                    costo_unitario_original,
-                    costo_unitario_ajustado,
-                    subtotal_original,
-                    subtotal_ajustado,
-                    version,
-                    estado,
-                    creado_por,
-                    origen,
-                    ip_origen,
-                    fecha_creacion{columna_agregada_manualmente}
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'PENDIENTE', ?, ?, ?, ?{placeholder_agregada_manualmente})
-            """, valores)
-            insertadas += 1
-        return insertadas
+                fecha_creacion{columna_agregada_manualmente}
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'PENDIENTE', ?, ?, ?, ?{placeholder_agregada_manualmente})
+        """, valores)
 
     def _procesar_filas_diferencias_productos(self, rows) -> List[Dict[str, Any]]:
         diferencias_productos = []
