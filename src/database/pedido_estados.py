@@ -65,6 +65,24 @@ ESTADOS_REQUIERE_ACCION_CARGAR_PLANTILLA_NOMBRES = (
     "DESPACHAR_Y_FACTURAR",
 )
 
+# Filtro rápido "solo pendientes" específico del listado de Pedidos (EL RAYO, odcsap.view): el
+# pedido ya fue confirmado por Producción o enviado a SAP y vuelve a la cancha de Administración
+# El Rayo para revisar/continuar el flujo. Distinto de ESTADOS_REQUIERE_ACCION_* (estados de
+# respuesta del proveedor, huérfanos y ya desactivados -- ver migraciones 654/655/656) y de
+# ESTADOS_REQUIERE_ACCION_CARGAR_PLANTILLA_* (propio de Mabel Trading). No se reutiliza
+# ESTADOS_REQUIERE_ACCION_* aquí porque ese mismo filtro (`solo_pendientes_accion`) también lo usa
+# /api/pedidos?solo_redistribucion=true (vista de Redistribución) y cambiar su significado global
+# alteraría ese listado sin que se haya pedido.
+ESTADOS_REQUIERE_ACCION_PEDIDOS_IDS = frozenset({
+    ESTADO_CONFIRMADO_POR_PRODUCCION,
+    ESTADO_CONFIRMADO_ENVIADO,
+})
+ESTADOS_REQUIERE_ACCION_PEDIDOS_NOMBRES = (
+    "CONFIRMADO POR PRODUCCION",
+    "CONFIRMADO_POR_PRODUCCION",
+    "CONFIRMADO_ENVIADO",
+)
+
 # Estados visibles para el perfil Producción El Rayo (req. 1.8, permiso
 # produccion-elrayo.view): solo mientras el pedido está en NUEVO_PEDIDO o
 # GESTIONAR_PEDIDO; a partir de ahí lo gestiona Administración El Rayo (odcsap.view).

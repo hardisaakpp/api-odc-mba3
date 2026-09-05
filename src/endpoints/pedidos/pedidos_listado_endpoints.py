@@ -110,6 +110,14 @@ async def _listar_pedidos_handler(
             solo_pendientes_accion is not None
             and str(solo_pendientes_accion).lower() in ("true", "1")
         )
+        # El mismo parámetro `solo_pendientes_accion` significa cosas distintas según la pantalla
+        # que comparte este endpoint: en Redistribución (solo_redistribucion=true) sigue siendo el
+        # filtro histórico de respuesta del proveedor (huérfano, ver ESTADOS_REQUIERE_ACCION_* en
+        # pedido_estados.py); en Pedidos (EL RAYO) pasa a ser Confirmado por Producción/Confirmado y
+        # Enviado (ver ESTADOS_REQUIERE_ACCION_PEDIDOS_*). No se cambia el significado global para no
+        # alterar Redistribución sin que se haya pedido.
+        filtrar_pendientes_redistribucion = filtrar_pendientes and filtrar_redistribucion
+        filtrar_pendientes_pedidos = filtrar_pendientes and not filtrar_redistribucion
         # Restringe a NUEVO_PEDIDO/GESTIONAR_PEDIDO (req. 1.8): ya sea porque la
         # pantalla de Producción El Rayo lo pide explícitamente (solo_produccion_elrayo),
         # o como defensa adicional cuando el llamador solo tiene ese permiso.
@@ -140,7 +148,8 @@ async def _listar_pedidos_handler(
                 modificado_por=modificado_por,
                 excluir_borrador=True,
                 solo_redistribucion=filtrar_redistribucion,
-                solo_pendientes_accion=filtrar_pendientes,
+                solo_pendientes_accion=filtrar_pendientes_redistribucion,
+                solo_pendientes_accion_pedidos=filtrar_pendientes_pedidos,
                 restringir_produccion_el_rayo=filtrar_produccion_elrayo,
                 excluir_estados_produccion_el_rayo=excluir_estados_el_rayo,
                 # LISTO_PARA_REDISTRIBUCION (25, botón "Aceptar") solo debe verse en /redistribucion
