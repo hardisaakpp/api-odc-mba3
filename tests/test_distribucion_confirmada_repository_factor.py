@@ -27,7 +27,7 @@ def _mock_conn(fetchone_values, fetchall_values):
 
 def test_query_respuestas_proveedor_usa_row_number_particionado_por_producto():
     """La query de respuestas del proveedor debe rankear por producto, no colapsar a 1 fila global."""
-    conn, cursor = _mock_conn(fetchone_values=[(0,), (1,)], fetchall_values=[[], []])
+    conn, cursor = _mock_conn(fetchone_values=[(0,), (1,), (0,)], fetchall_values=[[], []])
     repo = DistribucionConfirmadaRepository(conn)
 
     repo.crear_redistribucion(pedido_id="pedido-1", productos_redistribucion=[])
@@ -53,7 +53,7 @@ def test_cada_producto_recibe_su_propia_cantidad_confirmada():
         (det_b, tienda_b, 7, 2.0, 0),
     ]
     conn, cursor = _mock_conn(
-        fetchone_values=[(0,), (1,)],
+        fetchone_values=[(0,), (1,), (0,)],
         fetchall_values=[respuestas_rows, distribuciones_originales_rows],
     )
     repo = DistribucionConfirmadaRepository(conn)

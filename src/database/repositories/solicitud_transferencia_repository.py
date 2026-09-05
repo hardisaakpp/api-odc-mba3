@@ -407,7 +407,7 @@ class SolicitudTransferenciaRepository:
                 "transferencias_creadas": int,
                 "transferencias_errores": int,
                 "resultados": [{tienda_codigo, tienda_nombre, doc_num, doc_entry, success, error}],
-                "itrs_por_tienda": [{doc_num, tienda_codigo}],
+                "itrs_por_tienda": [{doc_num, tienda_codigo, tienda_nombre}],
             }
         """
         vacio: Dict[str, Any] = {
@@ -475,7 +475,7 @@ class SolicitudTransferenciaRepository:
                 "error": row[5] if not success else None,
             })
             if success and row[2] is not None:
-                itrs_por_tienda.append({"doc_num": row[2], "tienda_codigo": row[0] or ""})
+                itrs_por_tienda.append({"doc_num": row[2], "tienda_codigo": row[0] or "", "tienda_nombre": row[1]})
 
         return {
             "total_tiendas": len(rows),

@@ -23,6 +23,7 @@ def enriquecer_distribucion_tiendas_con_nombre(
         nombre = (_get_tienda_value(d, "tienda_nombre") or "").strip()
         cantidad = _get_tienda_value(d, "cantidad", 0)
         es_bodega = _get_tienda_value(d, "es_bodega", False)
+        agregada_manualmente = _get_tienda_value(d, "agregada_manualmente", False)
         if not nombre and codigo and getattr(tienda_repo, "get_nombre_by_codigo", None):
             nombre = tienda_repo.get_nombre_by_codigo(codigo) or ""
         result.append(
@@ -31,6 +32,7 @@ def enriquecer_distribucion_tiendas_con_nombre(
                 tienda_nombre=nombre or codigo,
                 cantidad=float(cantidad) if cantidad is not None else 0.0,
                 es_bodega=bool(es_bodega),
+                agregada_manualmente=bool(agregada_manualmente),
             )
         )
     return result
@@ -97,6 +99,7 @@ def convertir_ajustes_a_redistribucion(
                 {
                     "tienda_id": tienda_id,
                     "cantidad_asignada": dist_tienda.cantidad,
+                    "agregada_manualmente": bool(dist_tienda.agregada_manualmente),
                 }
             )
 

@@ -61,7 +61,7 @@ def test_agrega_creadas_y_errores_de_todos_los_batches():
     assert result["transferencias_creadas"] == 6
     assert result["transferencias_errores"] == 0
     assert len(result["itrs_por_tienda"]) == 6
-    assert {"doc_num": 70215121, "tienda_codigo": "TRL-RGAI"} in result["itrs_por_tienda"]
+    assert {"doc_num": 70215121, "tienda_codigo": "TRL-RGAI", "tienda_nombre": "Tienda Rayo"} in result["itrs_por_tienda"]
 
 
 def test_tienda_sin_exito_en_ningun_batch_queda_como_error():
@@ -79,7 +79,7 @@ def test_tienda_sin_exito_en_ningun_batch_queda_como_error():
     assert result["total_tiendas"] == 2
     assert result["transferencias_creadas"] == 1
     assert result["transferencias_errores"] == 1
-    assert result["itrs_por_tienda"] == [{"doc_num": 70215121, "tienda_codigo": "TRL-RGAI"}]
+    assert result["itrs_por_tienda"] == [{"doc_num": 70215121, "tienda_codigo": "TRL-RGAI", "tienda_nombre": "Tienda Rayo"}]
     fila_error = next(r for r in result["resultados"] if r["tienda_codigo"] == "TRL-X")
     assert fila_error["success"] is False
     assert fila_error["error"] == "Stock insuficiente"

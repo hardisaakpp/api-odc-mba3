@@ -106,60 +106,57 @@ class DistribucionConfirmadaRepository:
         row_check = cursor.fetchone()
         return (row_check[0] if row_check else 0) > 0
 
-    def _query_distribuciones(self, cursor, pedido_id: str, version: int, tiene_es_bodega: bool):
-        if tiene_es_bodega:
-            cursor.execute("""
-                SELECT
-                    dc.id,
-                    dc.pedido_detalle_id,
-                    dc.tienda_id,
-                    t.codigo AS tienda_codigo,
-                    t.nombre AS tienda_nombre,
-                    dc.cantidad_solicitada,
-                    dc.cantidad_confirmada,
-                    dc.cantidad_asignada,
-                    dc.costo_unitario_original,
-                    dc.costo_unitario_ajustado,
-                    dc.subtotal_original,
-                    dc.subtotal_ajustado,
-                    dc.version,
-                    dc.estado,
-                    dc.fecha_creacion,
-                    dc.fecha_modificacion,
-                    ISNULL(pdt.es_bodega, 0) AS es_bodega
-                FROM distribucion_confirmada dc
-                INNER JOIN tienda t ON dc.tienda_id = t.tienda_id
-                LEFT JOIN pedido_detalle_tienda pdt
+    def _verificar_columna_agregada_manualmente(self, cursor) -> bool:
+        """Tolerancia de despliegue: True solo si la migración 658 ya corrió en este
+        ambiente (dev y prod se migran por separado, ver docs del proyecto)."""
+        cursor.execute("""
+            SELECT COUNT(*)
+            FROM INFORMATION_SCHEMA.COLUMNS
+            WHERE TABLE_NAME = 'distribucion_confirmada'
+            AND COLUMN_NAME = 'agregada_manualmente'
+        """)
+        row_check = cursor.fetchone()
+        return (row_check[0] if row_check else 0) > 0
+
+    def _query_distribuciones(
+        self, cursor, pedido_id: str, version: int, tiene_es_bodega: bool, tiene_agregada_manualmente: bool
+    ):
+        columna_es_bodega = "ISNULL(pdt.es_bodega, 0) AS es_bodega" if tiene_es_bodega else "0 AS es_bodega"
+        columna_agregada_manualmente = (
+            "dc.agregada_manualmente" if tiene_agregada_manualmente else "0 AS agregada_manualmente"
+        )
+        join_pdt = (
+            """LEFT JOIN pedido_detalle_tienda pdt
                     ON dc.pedido_detalle_id = pdt.pedido_detalle_id
-                    AND dc.tienda_id = pdt.tienda_id
-                WHERE dc.pedido_id = ? AND dc.version = ?
-                ORDER BY dc.pedido_detalle_id, t.codigo
-            """, (pedido_id, version))
-        else:
-            cursor.execute("""
-                SELECT
-                    dc.id,
-                    dc.pedido_detalle_id,
-                    dc.tienda_id,
-                    t.codigo AS tienda_codigo,
-                    t.nombre AS tienda_nombre,
-                    dc.cantidad_solicitada,
-                    dc.cantidad_confirmada,
-                    dc.cantidad_asignada,
-                    dc.costo_unitario_original,
-                    dc.costo_unitario_ajustado,
-                    dc.subtotal_original,
-                    dc.subtotal_ajustado,
-                    dc.version,
-                    dc.estado,
-                    dc.fecha_creacion,
-                    dc.fecha_modificacion,
-                    0 AS es_bodega
-                FROM distribucion_confirmada dc
-                INNER JOIN tienda t ON dc.tienda_id = t.tienda_id
-                WHERE dc.pedido_id = ? AND dc.version = ?
-                ORDER BY dc.pedido_detalle_id, t.codigo
-            """, (pedido_id, version))
+                    AND dc.tienda_id = pdt.tienda_id"""
+            if tiene_es_bodega else ""
+        )
+        cursor.execute(f"""
+            SELECT
+                dc.id,
+                dc.pedido_detalle_id,
+                dc.tienda_id,
+                t.codigo AS tienda_codigo,
+                t.nombre AS tienda_nombre,
+                dc.cantidad_solicitada,
+                dc.cantidad_confirmada,
+                dc.cantidad_asignada,
+                dc.costo_unitario_original,
+                dc.costo_unitario_ajustado,
+                dc.subtotal_original,
+                dc.subtotal_ajustado,
+                dc.version,
+                dc.estado,
+                dc.fecha_creacion,
+                dc.fecha_modificacion,
+                {columna_es_bodega},
+                {columna_agregada_manualmente}
+            FROM distribucion_confirmada dc
+            INNER JOIN tienda t ON dc.tienda_id = t.tienda_id
+            {join_pdt}
+            WHERE dc.pedido_id = ? AND dc.version = ?
+            ORDER BY dc.pedido_detalle_id, t.codigo
+        """, (pedido_id, version))
         return cursor.fetchall()
 
     def _row_a_distribucion(self, row, tiene_es_bodega: bool) -> Dict[str, Any]:
@@ -185,7 +182,8 @@ class DistribucionConfirmadaRepository:
             "estado": row[13],
             "fecha_creacion": row[14].isoformat() if row[14] else None,
             "fecha_modificacion": row[15].isoformat() if row[15] else None,
-            "es_bodega": es_bodega
+            "es_bodega": es_bodega,
+            "agregada_manualmente": bool(row[17])
         }
 
     def _agrupar_distribuciones(self, rows, tiene_es_bodega: bool) -> Dict[str, Any]:
@@ -300,12 +298,14 @@ class DistribucionConfirmadaRepository:
         self, cursor, pedido_id: str, pedido_detalle_id: str,
         distribuciones: List[Dict[str, Any]], distribuciones_orig: Dict[str, Any],
         factor_proporcion: float, nueva_version: int,
-        creado_por, origen, ip_origen, fecha_creacion
+        creado_por, origen, ip_origen, fecha_creacion,
+        tiene_agregada_manualmente: bool
     ) -> int:
         insertadas = 0
         for distribucion in distribuciones:
             tienda_id = distribucion["tienda_id"]
             cantidad_asignada = distribucion["cantidad_asignada"]
+            agregada_manualmente = bool(distribucion.get("agregada_manualmente", False))
             distrib_orig = distribuciones_orig.get(tienda_id, {})
             cantidad_solicitada = distrib_orig.get("cantidad_solicitada", 0)
             costo_unitario_original = distrib_orig.get("costo_unitario")
@@ -329,7 +329,29 @@ class DistribucionConfirmadaRepository:
                 if costo_unitario_ajustado is not None else None
             )
 
-            cursor.execute("""
+            columna_agregada_manualmente = ", agregada_manualmente" if tiene_agregada_manualmente else ""
+            placeholder_agregada_manualmente = ", ?" if tiene_agregada_manualmente else ""
+            valores = (
+                pedido_id,
+                pedido_detalle_id,
+                tienda_id,
+                cantidad_solicitada,
+                cantidad_confirmada,
+                cantidad_asignada,
+                costo_unitario_original,
+                costo_unitario_ajustado,
+                subtotal_original,
+                subtotal_ajustado,
+                nueva_version,
+                creado_por,
+                origen,
+                ip_origen,
+                fecha_creacion
+            )
+            if tiene_agregada_manualmente:
+                valores = valores + (agregada_manualmente,)
+
+            cursor.execute(f"""
                 INSERT INTO distribucion_confirmada (
                     pedido_id,
                     pedido_detalle_id,
@@ -346,25 +368,9 @@ class DistribucionConfirmadaRepository:
                     creado_por,
                     origen,
                     ip_origen,
-                    fecha_creacion
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'PENDIENTE', ?, ?, ?, ?)
-            """, (
-                pedido_id,
-                pedido_detalle_id,
-                tienda_id,
-                cantidad_solicitada,
-                cantidad_confirmada,
-                cantidad_asignada,
-                costo_unitario_original,
-                costo_unitario_ajustado,
-                subtotal_original,
-                subtotal_ajustado,
-                nueva_version,
-                creado_por,
-                origen,
-                ip_origen,
-                fecha_creacion
-            ))
+                    fecha_creacion{columna_agregada_manualmente}
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'PENDIENTE', ?, ?, ?, ?{placeholder_agregada_manualmente})
+            """, valores)
             insertadas += 1
         return insertadas
 
@@ -442,7 +448,8 @@ class DistribucionConfirmadaRepository:
                     }
 
             tiene_es_bodega = self._verificar_columna_es_bodega(cursor)
-            rows = self._query_distribuciones(cursor, pedido_id, version, tiene_es_bodega)
+            tiene_agregada_manualmente = self._verificar_columna_agregada_manualmente(cursor)
+            rows = self._query_distribuciones(cursor, pedido_id, version, tiene_es_bodega, tiene_agregada_manualmente)
             productos_dict = self._agrupar_distribuciones(rows, tiene_es_bodega)
             respuestas_proveedor = self._query_respuestas_proveedor(cursor, pedido_id)
 
@@ -537,6 +544,7 @@ class DistribucionConfirmadaRepository:
 
             distribuciones_insertadas = 0
             fecha_creacion = ahora_naive()
+            tiene_agregada_manualmente = self._verificar_columna_agregada_manualmente(cursor)
 
             for producto in productos_redistribucion:
                 pedido_detalle_id = producto["pedido_detalle_id"]
@@ -548,7 +556,8 @@ class DistribucionConfirmadaRepository:
                     cursor, pedido_id, pedido_detalle_id,
                     producto["distribuciones"], distribuciones_orig,
                     factor_proporcion, nueva_version,
-                    creado_por, origen, ip_origen, fecha_creacion
+                    creado_por, origen, ip_origen, fecha_creacion,
+                    tiene_agregada_manualmente
                 )
 
             self.conn.commit()

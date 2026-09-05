@@ -851,6 +851,7 @@ class DistribucionConfirmadaItem(BaseModel):
     estado: str = Field(..., description="Estado de la distribución")
     fecha_creacion: Optional[datetime] = None
     fecha_modificacion: Optional[datetime] = None
+    agregada_manualmente: Optional[bool] = Field(default=False, description="Indica si la tienda fue agregada manualmente en redistribución (no venía en el Excel original del pedido)")
 
 
 class DistribucionProductoResponse(BaseModel):
@@ -992,14 +993,16 @@ class DistribucionTiendaFrontend(BaseModel):
     tienda_nombre: Optional[str] = Field(None, description=_DESC_NOMBRE_TIENDA)
     cantidad: float = Field(..., ge=0, description="Cantidad asignada a esta tienda (acepta decimales)")
     es_bodega: Optional[bool] = Field(default=False, description="Indica si es una bodega central (RL-CD, OUT-CD, RG-CD)")
-    
+    agregada_manualmente: Optional[bool] = Field(default=False, description="Indica si la tienda fue agregada manualmente en redistribución (no venía en el Excel original del pedido)")
+
     class Config:
         json_schema_extra = {
             "example": {
                 "tienda_codigo": "T001",
                 "tienda_nombre": "Tienda Principal",
                 "cantidad": 50,
-                "es_bodega": False
+                "es_bodega": False,
+                "agregada_manualmente": False
             }
         }
 
@@ -1511,7 +1514,7 @@ class ProcesoCompletoSAPResponse(BaseModel):
         None,
         description=(
             "Resumen y lista por tienda. Incluye resultados (completo) e itrs_por_tienda: "
-            "[{ doc_num, tienda_codigo }] para tabla en modal (como en el correo, solo DocNum y Tienda)."
+            "[{ doc_num, tienda_codigo, tienda_nombre }] para tabla en modal (DocNum, Nombre y código de Tienda)."
         )
     )
     
@@ -1556,8 +1559,8 @@ class ProcesoCompletoSAPResponse(BaseModel):
                         {"tienda_codigo": "TOUT-CEN", "tienda_nombre": "TRANSITORIA DESCUENTON CENTRO", "doc_num": 70214643, "success": True}
                     ],
                     "itrs_por_tienda": [
-                        {"doc_num": 70214642, "tienda_codigo": "TRL-MRC"},
-                        {"doc_num": 70214643, "tienda_codigo": "TOUT-CEN"}
+                        {"doc_num": 70214642, "tienda_codigo": "TRL-MRC", "tienda_nombre": "TRANSITORIA ROLAND MALL DEL RIO"},
+                        {"doc_num": 70214643, "tienda_codigo": "TOUT-CEN", "tienda_nombre": "TRANSITORIA DESCUENTON CENTRO"}
                     ]
                 },
                 "resumen": {

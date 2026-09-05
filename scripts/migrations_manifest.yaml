@@ -683,3 +683,9 @@ migrations:
     description: "Reasigna pedido_estado.orden (1..16) para los 16 estados activos siguiendo la secuencia real del flujo de negocio en vez del orden de creacion (orden = id historicamente): rama principal (Borrador -> Nuevo Pedido -> Gestionar Pedido -> Confirmado por Produccion -> Confirmado por El Rayo -> Confirmado Redistribucion -> Confirmado Enviado -> Despachar y Facturar -> Finalizado) con las ramas de cancelacion/excepcion (Cancelado por El Rayo, Produccion Pospuesta/Listo para Redistribucion/Rechazado, Cancelado, Error Envio SAP Reintento, Pendiente Logistica) ubicadas junto al punto del flujo donde ocurren. No toca estados inactivos (654/655/656), invisibles en cualquier dropdown"
     category: "data"
     dependencies: ["005", "654", "655", "656"]
+
+  - version: "658"
+    name: "add_agregada_manualmente_distribucion_confirmada"
+    file: "migrations/add_agregada_manualmente_distribucion_confirmada.sql"
+    description: "distribucion_confirmada.agregada_manualmente: marca las filas de tiendas agregadas manualmente en la Vista Excel de Redistribucion (pedidos hijo, fuera del Excel original), para que el frontend pueda resaltar esas columnas de forma permanente (sobrevive recargar la pagina y confirmar la redistribucion)"
+    category: "alter"
