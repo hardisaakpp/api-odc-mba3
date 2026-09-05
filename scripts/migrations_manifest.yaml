@@ -662,3 +662,10 @@ migrations:
     description: "Marca activo=0 en pedido_estado para 6 estados sembrados desde create_pedido_estado_table.sql sin ningún camino de código vivo que los alcance: 6 CONFIRMADO_PROVEEDOR (único setter, PedidoAjusteService.procesar_confirmacion_proveedor, sin caller), y 7 RECHAZADO_PROVEEDOR/8 EN_AJUSTE_MABEL/11 PROCESADO_SAP/15 EN_PROCESO/16 COMPLETADO (sin constante Python ni referencia de código alguna). No borra filas -- solo desactiva, respetado por el único consumidor del catálogo (get_estados, siempre solo_activos=True). Verifica por id que no haya pedidos reales en ese estado antes de desactivarlo; dev confirmó 0 pedidos en los 6 el 2026-09-03"
     category: "data"
     dependencies: ["005"]
+
+  - version: "655"
+    name: "deactivate_estados_redistribuido_error_datos_maestros"
+    file: "migrations/deactivate_estados_redistribuido_error_datos_maestros.sql"
+    description: "Marca activo=0 en pedido_estado para 2 estados con setter real pero código huérfano: 9 REDISTRIBUIDO (solo lo asigna endpoints_core.py, expuesto en rutas que el frontend ya no llama -- usa redistribucion/confirmar y proceso-completo-sap, que van directo a CONFIRMADO REDISTRIBUCION/10), y 14 ERROR_DATOS_MAESTROS (la única clasificación que produce error_type='datos_maestros', stock_transfer_service._validate_stock_before_st, está marcada DEPRECADO PARA ITR y sin caller -- el flujo real usa _validate_itr_minimal). Verificado contra pedido_estado_historial en producción (SCOdcsap, 2026-09-04): 0 transiciones históricas a estos ids en 7717 registros / 6+ meses. Misma mecánica que la migración 654 (no borra filas, verifica 0 pedidos reales por id antes de desactivar)"
+    category: "data"
+    dependencies: ["005"]

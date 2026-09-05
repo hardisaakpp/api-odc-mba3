@@ -22,12 +22,12 @@ Los estados del pedido se identifican por **`estado_id`** (número). El **nombre
 | 6  | CONFIRMADO_PROVEEDOR | 6  | ❌ **obsoleto** | Sin caller vivo (`PedidoAjusteService.procesar_confirmacion_proveedor` huérfano) — nunca se alcanza en la práctica |
 | 7  | RECHAZADO_PROVEEDOR | 7  | ❌ **obsoleto** | Sin constante Python, sin ninguna referencia en el repo |
 | 8  | EN_AJUSTE_MABEL | 8  | ❌ **obsoleto** | Sin constante Python, sin ninguna referencia en el repo |
-| 9  | REDISTRIBUIDO | 9  | ✅ | Redistribución aplicada |
+| 9  | REDISTRIBUIDO | 9  | ❌ **obsoleto** | Único setter (`endpoints_core.py`) huérfano — el frontend usa rutas que van directo a 10, saltándose el 9 |
 | 10 | CONFIRMADO REDISTRIBUCION | 10 | ✅ | Pedido confirmado (redistribución confirmada) |
 | 11 | PROCESADO_SAP | 11 | ❌ **obsoleto** | Propuesta de un flujo "FUTURO" nunca implementado |
 | 12 | CONFIRMADO_ENVIADO | 12 | ✅ | Todas las ODC enviadas a SAP |
 | 13 | PENDIENTE_LOGISTICA | 13 | ✅ | OC OK, ST pendiente/error |
-| 14 | ERROR_DATOS_MAESTROS | 14 | ✅ | Error en datos maestros |
+| 14 | ERROR_DATOS_MAESTROS | 14 | ❌ **obsoleto** | La clasificación que lo dispara (`_validate_stock_before_st`) está deprecada para ITR y sin caller |
 | 15 | EN_PROCESO | 15 | ❌ **obsoleto** | Sin constante Python, sin ninguna referencia en el repo |
 | 16 | COMPLETADO | 16 | ❌ **obsoleto** | Sin constante Python, sin ninguna referencia en el repo |
 | 17 | DESPACHAR Y FACTURAR | 17 | ✅ | Manual: desde Confirmado y Enviado (ODC enviada a SAP) |
@@ -55,6 +55,15 @@ Los ids **6, 7, 8, 11, 15 y 16** se sembraron desde el diseño inicial (`create_
 - ❌ NO afecta ninguna validación de backend: `es_estado_valido()` (que sí consulta `ESTADO_IDS_VALIDOS`) es código muerto, sin ningún caller.
 
 **Nota sobre 7, 8, 11, 15, 16:** en el ambiente de desarrollo estas 5 filas ya no existen físicamente en `pedido_estado` (se eliminaron manualmente en algún momento, fuera de cualquier migración rastreada del repo — no hay ningún `DELETE` sobre esta tabla en `scripts/`). Por eso la migración de arriba no tiene efecto visible sobre ellas: el `UPDATE ... WHERE id = @Id` no encuentra fila que actualizar. Decisión explícita: **no reinsertarlas.**
+
+### Segunda ronda: 9 (REDISTRIBUIDO) y 14 (ERROR_DATOS_MAESTROS)
+
+A diferencia de los 6 anteriores, estos dos **sí tienen código que los asignaría** — pero ese código quedó huérfano en la práctica. Desactivados con `scripts/migrations/deactivate_estados_redistribuido_error_datos_maestros.sql` (migración 655, 2026-09-04):
+
+- **9 REDISTRIBUIDO**: el único setter (`repo_pedido.update_estado(pedido_id, ESTADO_REDISTRIBUIDO, ...)`) vive en `endpoints_core.py` (`_handle_redistribuir_pedido:134`, `_handle_confirmar_redistribucion:217`), expuesto en `POST /api/pedidos/{pedido_id}/redistribuir` y `POST /api/pedidos/{pedido_id}/confirmar-redistribucion`. El frontend no llama a esas rutas — usa `POST /api/pedidos/{numero_pedido}/redistribucion/confirmar` (`endpoints_frontend.py`) y `POST /api/pedidos/{numero_pedido}/proceso-completo-sap` (`endpoints_proceso.py::_paso1_confirmar_redistribucion`), ninguno de los cuales importa `ESTADO_REDISTRIBUIDO` — ambos van directo a `ESTADO_PEDIDO_CONFIRMADO` (10).
+- **14 ERROR_DATOS_MAESTROS**: `pedido_cierre_service.py:177` solo lo asigna si `error_type == "datos_maestros"`. Ese valor únicamente lo produce `stock_transfer_service._lanzar_error_datos_maestros`, invocado desde `_validate_stock_before_st` — función marcada en su propio docstring como "⚠️ DEPRECADO PARA ITR" y sin ningún caller en el repo. El flujo real de ITR usa `_validate_itr_minimal`, que nunca produce ese `error_type`.
+
+Verificado en producción (`SCOdcsap`, 2026-09-04) contra `pedido_estado_historial`: **0 transiciones** hacia estos dos ids en 7717 registros históricos (cobertura desde 2026-02-25, 1300+ pedidos reales) — consistente con código huérfano, no con "aún no ha ocurrido".
 
 ---
 
@@ -191,8 +200,10 @@ pedido pasa a `CONFIRMADO_ENVIADO` (12), o se queda en `PENDIENTE_LOGISTICA` (13
 
 ⭐ Regla:
 - Todas las ODC del pedido `ENVIADA` + ST exitosas → `CONFIRMADO_ENVIADO`.
-- ODC `ENVIADA` pero alguna ST falló → `PENDIENTE_LOGISTICA` (o `ERROR_DATOS_MAESTROS` si
-  el fallo es por datos maestros en SAP).
+- ODC `ENVIADA` pero alguna ST falló → `PENDIENTE_LOGISTICA` (la rama `ERROR_DATOS_MAESTROS`
+  del código sigue ahí, pero es inalcanzable hoy — ver "Estados obsoletos" arriba: la
+  clasificación que la dispararía está deprecada para ITR y sin caller, así que en la
+  práctica todo fallo de ST cae en `PENDIENTE_LOGISTICA`).
 - Alguna ODC no está `ENVIADA` (pendiente o en error) → no se toca el estado del pedido.
 
 Se invoca desde:
