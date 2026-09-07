@@ -66,10 +66,10 @@ Mismo patrón que ITR, aplicado a la creación de la ODC:
 7. **Reconciliación automática vía Celery, siempre activa**
    (`src/tasks/celery_reconciliar_ordenes_compra.py`, mirror de
    `celery_reconciliar_transferencias.py`, intervalo `RECONCILIAR_OC_INTERVALO_MINUTOS`
-   = `5` por defecto): resuelve las ODC `ENCOLADA` sin esperar un clic manual. A
-   diferencia de la reconciliación de ST (gateada por
-   `ENABLE_RECONCILIACION_ST_AUTOMATICA`, apagada por defecto), esta **no depende de
-   ningún flag** — es parte de la lógica normal del envío a SAP, siempre corre.
+   = `5` por defecto): resuelve las ODC `ENCOLADA` sin esperar un clic manual. Igual
+   que la reconciliación de ST (desde 2026-09-01 tampoco depende de un flag, ver
+   `docs/CELERY_QUICKSTART.md`), **no depende de ningún flag** — es parte de la
+   lógica normal del envío a SAP, siempre corre.
 
    Si el job resuelve en un error real no transitorio, notifica a técnicos por correo
    (`send_oc_creacion_error_notification_tecnicos`, nueva plantilla propia — no

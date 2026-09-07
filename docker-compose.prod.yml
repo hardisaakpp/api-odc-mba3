@@ -18,22 +18,42 @@ x-app-prod: &app-prod
     - .env
   volumes:
     - ./.env:/app/.env:ro
+  # docker-compose.yml declara "minio" como dependencia (perfil "app", storage
+  # siempre activo en dev); acá se quita porque el MinIO embebido está
+  # desactivado en este host (ver nota junto al servicio "minio" abajo).
+  depends_on:
+    minio: !reset null
 
 services:
+  redis:
+    mem_limit: 256m
+
+  # El MinIO embebido de docker-compose.yml es solo para desarrollo local: en
+  # este host el storage real es externo (192.168.2.211), así que se desactiva
+  # devolviéndolo a un perfil que --profile app no activa. "profiles" es una
+  # lista y Compose la fusiona (concatena) por defecto -- se necesita
+  # "!override" para reemplazarla en vez de sumarle "app" de docker-compose.yml.
+  minio:
+    profiles: !override
+      - bundled-minio-dev-only
+
   api:
     <<: *app-prod
+    mem_limit: 512m
     volumes:
       - ./.env:/app/.env:ro
       - /opt/odc-sap/logs:/app/logs
 
   celery-worker:
     <<: *app-prod
+    mem_limit: 800m
     volumes:
       - ./.env:/app/.env:ro
       - /opt/odc-sap/logs:/app/logs
 
   celery-beat:
     <<: *app-prod
+    mem_limit: 256m
     volumes:
       - ./.env:/app/.env:ro
       - celerybeat_data:/var/lib/celery

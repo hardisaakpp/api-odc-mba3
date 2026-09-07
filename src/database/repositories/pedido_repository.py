@@ -173,6 +173,7 @@ class PedidoRepository:
         proveedor_nombre: Optional[str] = None,
         numero_pedido: Optional[str] = None,
         creado_por: Optional[str] = None,
+        modificado_por: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Obtiene pedidos en estado confirmado, ordenados por creado_en DESC.
@@ -187,6 +188,7 @@ class PedidoRepository:
             proveedor_nombre=proveedor_nombre,
             numero_pedido=numero_pedido,
             creado_por=creado_por,
+            modificado_por=modificado_por,
         )
 
     def existe_numero_pedido(self, numero_pedido: str) -> bool:
@@ -227,26 +229,44 @@ class PedidoRepository:
     def tiene_pedidos(self) -> bool:
         """
         Verifica si existe al menos un pedido en la base de datos.
-        
+
         DELEGADO a PedidoCabeceraRepository.
         """
         return self.cabecera_repo.tiene_pedidos()
+
+    def get_creadores_distintos(self) -> List[str]:
+        """
+        Devuelve la lista de valores distintos de creado_por existentes.
+
+        DELEGADO a PedidoCabeceraRepository.
+        """
+        return self.cabecera_repo.get_creadores_distintos()
+
+    def get_modificadores_distintos(self) -> List[str]:
+        """
+        Devuelve la lista de valores distintos de modificado_por existentes.
+
+        DELEGADO a PedidoCabeceraRepository.
+        """
+        return self.cabecera_repo.get_modificadores_distintos()
 
     def get_estados(
         self,
         solo_activos: bool = True,
         excluir_ids: Optional[List[int]] = None,
         solo_ids: Optional[List[int]] = None,
+        solo_con_pedidos: bool = False,
     ) -> List[Dict[str, Any]]:
         """
         Obtiene la lista de estados de pedido para dropdowns de filtros.
-        
+
         DELEGADO a PedidoCabeceraRepository.
         """
         return self.cabecera_repo.get_estados(
             solo_activos=solo_activos,
             excluir_ids=excluir_ids,
             solo_ids=solo_ids,
+            solo_con_pedidos=solo_con_pedidos,
         )
 
     def get_respuestas_proveedor(

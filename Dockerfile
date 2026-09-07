@@ -35,6 +35,10 @@ ENV PYTHONPATH=/app
 ENV PYTHONIOENCODING=utf-8
 ENV LANG=C.UTF-8
 ENV LC_ALL=C.UTF-8
+# Limita las arenas de malloc de glibc: sin esto, procesos con muchos threads
+# cortos (conexión pyodbc por request) + pandas (parseo de Excel) pueden ver
+# crecer el RSS por fragmentación entre arenas aunque no haya objetos vivos de más.
+ENV MALLOC_ARENA_MAX=2
 EXPOSE 8000
 
 # Por defecto arranca la API; celery-worker usa otro CMD en docker-compose

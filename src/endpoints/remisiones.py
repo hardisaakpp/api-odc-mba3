@@ -364,10 +364,9 @@ def register_remisiones_endpoints(app: FastAPI):
         **Características:**
         - ✅ Consulta documentos de remisión desde MBA3 (sin detalles)
         - ✅ Guarda solo cabeceras en `remision_cabecera` (NO guarda detalles)
-        - ✅ Filtro automático: siempre trae los últimos N días desde hoy (configurado en MIGRATE_DATE_FILTER_DAYS)
+        - ✅ Filtro automático: siempre trae los últimos N días desde hoy (constante MIGRATE_DATE_FILTER_DAYS)
         - ✅ Sin parámetros: solo ejecutar el endpoint
         - ✅ Fecha relativa: calcula automáticamente desde hoy hacia atrás
-        - ✅ Configurable: se puede cambiar en .env con MIGRATE_DATE_FILTER_DAYS
         - ✅ Estos documentos no tienen `ObjDatosFactura`, por lo que no se crean registros en `despacho_detalle`
 
         **Query utilizada:**

@@ -48,11 +48,15 @@ _SEP_AND = " AND "
 # Columnas de fecha filtrables por fecha_desde/fecha_hasta + tipo_fecha (whitelist:
 # tipo_fecha nunca se interpola directo en SQL, siempre pasa por este dict.get()).
 # fecha_entrega puede contener el literal 'INMEDIATO' en vez de una fecha, por eso
-# el filtro usa TRY_CAST (devuelve NULL en vez de fallar toda la query).
+# el filtro usa TRY_CAST (devuelve NULL en vez de fallar toda la query). creado_en y
+# modificado_fecha son DATETIME (no DATE); TRY_CAST(... AS DATE) trunca la hora igual
+# que con las columnas DATE, así que no requieren tratamiento especial aparte.
 _COLUMNAS_FECHA_FILTRO = {
     "pedido": "p.fecha_pedido",
     "entrega": "p.fecha_entrega",
     "facturacion": "p.fecha_facturacion",
+    "creacion": "p.creado_en",
+    "modificacion": "p.modificado_fecha",
 }
 
 
@@ -69,7 +73,9 @@ class PedidosFiltros:
     estado: Optional[str | int] = None
     excluir_borrador: bool = False
     solo_redistribucion: bool = False
-    solo_pendientes_accion: bool = False
+    solo_pendientes_accion_cargar_plantilla: bool = False
+    solo_pendientes_accion_pedidos: bool = False
+    solo_pendientes_accion_redistribucion: bool = False
     restringir_produccion_el_rayo: bool = False
     excluir_estados_produccion_el_rayo: bool = False
     excluir_listo_para_redistribucion: bool = False
@@ -79,6 +85,7 @@ class PedidosFiltros:
     proveedor_nombre: Optional[str] = None
     numero_pedido: Optional[str] = None
     creado_por: Optional[str] = None
+    modificado_por: Optional[str] = None
 
 
 class PedidoCabeceraRepository:
@@ -879,20 +886,28 @@ class PedidoCabeceraRepository:
         Agrega cabecera["ordenes_compra"]: lista de las ODC del pedido (una por bodega
         cuando el pedido mezcla tiendas de más de una bodega/CD, ver
         StockTransferService.detectar_origenes_traslado). El frontend la usa para
-        mostrar un botón "Generar TXT MBA3" por ODC cuando hay más de una.
+        mostrar un botón "Generar TXT MBA3" por ODC cuando hay más de una, y también
+        (PedidoCabecera.vue) para abrir el modal "Integración con SAP Completada" de
+        cada ODC (requiere oc_id -- ver GET /ordenes-compra/{oc_id}/integracion-sap).
 
-        Cada elemento: {"codigo_bodega", "numero_oc_sap", "estado"}.
+        Cada elemento: {"oc_id", "codigo_bodega", "numero_oc_sap", "doc_entry", "estado"}.
         """
         cabecera["ordenes_compra"] = []
         try:
             cursor.execute("""
-                SELECT codigo_bodega, numero_oc_sap, estado
+                SELECT oc_id, codigo_bodega, numero_oc_sap, doc_entry, estado
                 FROM orden_compra_cabecera
                 WHERE pedido_id = ?
                 ORDER BY created_at ASC
             """, (pedido_id,))
             cabecera["ordenes_compra"] = [
-                {"codigo_bodega": row[0], "numero_oc_sap": row[1], "estado": row[2]}
+                {
+                    "oc_id": str(row[0]),
+                    "codigo_bodega": row[1],
+                    "numero_oc_sap": row[2],
+                    "doc_entry": row[3],
+                    "estado": row[4],
+                }
                 for row in cursor.fetchall()
             ]
         except Exception as e:
@@ -1062,11 +1077,17 @@ class PedidoCabeceraRepository:
     def _fusionar_datos_update(
         self, cursor: pyodbc.Cursor, existing: Dict[str, Any], datos_cabecera: Dict[str, Any]
     ) -> Dict[str, Any]:
-        """Fusiona datos nuevos sobre los existentes (preserva existente si el nuevo es None)."""
+        """Fusiona datos nuevos sobre los existentes.
+
+        Un campo AUSENTE en datos_cabecera preserva el valor existente (permite updates
+        parciales). Un campo PRESENTE se aplica tal cual, incluso si su valor es None
+        (permite limpiar explícitamente un campo, ej. fecha_entrega tras desmarcar
+        INMEDIATO). datos_cabecera debe venir de un exclude_unset=True para que esta
+        distinción sea correcta.
+        """
         merged = {}
         for key in existing.keys():
-            new_value = datos_cabecera.get(key)
-            merged[key] = new_value if new_value is not None else existing[key]
+            merged[key] = datos_cabecera[key] if key in datos_cabecera else existing[key]
 
         if "fecha_pedido" in merged and merged["fecha_pedido"] is not None:
             fp = merged["fecha_pedido"]
@@ -1177,8 +1198,10 @@ class PedidoCabeceraRepository:
     ) -> bool:
         """
         Actualiza la cabecera de un pedido.
-        
-        Si algún campo en datos_cabecera es None, se preserva el valor existente.
+
+        Si algún campo está AUSENTE en datos_cabecera, se preserva el valor existente
+        (update parcial). Si un campo está presente con valor None, se aplica ese None
+        (limpia el campo explícitamente) — ver _fusionar_datos_update.
         No se puede modificar: pedido_id, numero_pedido (business key), creado_por, creado_en.
         
         Args:
@@ -1385,22 +1408,64 @@ class PedidoCabeceraRepository:
             [],
         )
 
-    def _filtro_pendientes_accion(self, tiene_estado_id: bool) -> tuple:
-        """Condición y parámetros para filtrar estados que requieren acción."""
+    def _filtro_pendientes_accion_cargar_plantilla(self, tiene_estado_id: bool) -> tuple:
+        """Condición y parámetros para el filtro "solo pendientes" propio de Cargar Plantilla
+        (Producción Pospuesta, Despachar y Facturar) -- ver ESTADOS_REQUIERE_ACCION_CARGAR_PLANTILLA_*
+        en pedido_estados.py."""
         from src.database.pedido_estados import (
-            ESTADOS_REQUIERE_ACCION_IDS,
-            ESTADOS_REQUIERE_ACCION_NOMBRES,
+            ESTADOS_REQUIERE_ACCION_CARGAR_PLANTILLA_IDS,
+            ESTADOS_REQUIERE_ACCION_CARGAR_PLANTILLA_NOMBRES,
         )
         if tiene_estado_id:
-            placeholders = ",".join("?" * len(ESTADOS_REQUIERE_ACCION_IDS))
+            placeholders = ",".join("?" * len(ESTADOS_REQUIERE_ACCION_CARGAR_PLANTILLA_IDS))
             return (
                 [f"p.estado_id IN ({placeholders})"],
-                list(sorted(ESTADOS_REQUIERE_ACCION_IDS)),
+                list(sorted(ESTADOS_REQUIERE_ACCION_CARGAR_PLANTILLA_IDS)),
             )
-        legacy_placeholders = ",".join("?" * len(ESTADOS_REQUIERE_ACCION_NOMBRES))
+        legacy_placeholders = ",".join("?" * len(ESTADOS_REQUIERE_ACCION_CARGAR_PLANTILLA_NOMBRES))
         return (
             [f"p.estado IN ({legacy_placeholders})"],
-            list(ESTADOS_REQUIERE_ACCION_NOMBRES),
+            list(ESTADOS_REQUIERE_ACCION_CARGAR_PLANTILLA_NOMBRES),
+        )
+
+    def _filtro_pendientes_accion_pedidos(self, tiene_estado_id: bool) -> tuple:
+        """Condición y parámetros para el filtro "solo pendientes" propio del listado de Pedidos
+        (EL RAYO, Confirmado por Producción / Confirmado y Enviado) -- ver
+        ESTADOS_REQUIERE_ACCION_PEDIDOS_* en pedido_estados.py."""
+        from src.database.pedido_estados import (
+            ESTADOS_REQUIERE_ACCION_PEDIDOS_IDS,
+            ESTADOS_REQUIERE_ACCION_PEDIDOS_NOMBRES,
+        )
+        if tiene_estado_id:
+            placeholders = ",".join("?" * len(ESTADOS_REQUIERE_ACCION_PEDIDOS_IDS))
+            return (
+                [f"p.estado_id IN ({placeholders})"],
+                list(sorted(ESTADOS_REQUIERE_ACCION_PEDIDOS_IDS)),
+            )
+        legacy_placeholders = ",".join("?" * len(ESTADOS_REQUIERE_ACCION_PEDIDOS_NOMBRES))
+        return (
+            [f"p.estado IN ({legacy_placeholders})"],
+            list(ESTADOS_REQUIERE_ACCION_PEDIDOS_NOMBRES),
+        )
+
+    def _filtro_pendientes_accion_redistribucion(self, tiene_estado_id: bool) -> tuple:
+        """Condición y parámetros para el filtro "solo pendientes" propio del listado de
+        Redistribución (Confirmado por El Rayo / Listo para Redistribución) -- ver
+        ESTADOS_REQUIERE_ACCION_REDISTRIBUCION_* en pedido_estados.py."""
+        from src.database.pedido_estados import (
+            ESTADOS_REQUIERE_ACCION_REDISTRIBUCION_IDS,
+            ESTADOS_REQUIERE_ACCION_REDISTRIBUCION_NOMBRES,
+        )
+        if tiene_estado_id:
+            placeholders = ",".join("?" * len(ESTADOS_REQUIERE_ACCION_REDISTRIBUCION_IDS))
+            return (
+                [f"p.estado_id IN ({placeholders})"],
+                list(sorted(ESTADOS_REQUIERE_ACCION_REDISTRIBUCION_IDS)),
+            )
+        legacy_placeholders = ",".join("?" * len(ESTADOS_REQUIERE_ACCION_REDISTRIBUCION_NOMBRES))
+        return (
+            [f"p.estado IN ({legacy_placeholders})"],
+            list(ESTADOS_REQUIERE_ACCION_REDISTRIBUCION_NOMBRES),
         )
 
     def _filtro_estados_produccion_el_rayo(self, tiene_estado_id: bool) -> tuple:
@@ -1508,9 +1573,21 @@ class PedidoCabeceraRepository:
             where_conditions.append("p.creado_por LIKE ?")
             params.append(f"%{filtros.creado_por}%")
 
+        if filtros.modificado_por:
+            where_conditions.append("p.modificado_por LIKE ?")
+            params.append(f"%{filtros.modificado_por}%")
+
         self._agregar_filtro_condicional(
-            filtros.solo_pendientes_accion, tiene_estado_id, tiene_estado,
-            self._filtro_pendientes_accion, where_conditions, params,
+            filtros.solo_pendientes_accion_cargar_plantilla, tiene_estado_id, tiene_estado,
+            self._filtro_pendientes_accion_cargar_plantilla, where_conditions, params,
+        )
+        self._agregar_filtro_condicional(
+            filtros.solo_pendientes_accion_pedidos, tiene_estado_id, tiene_estado,
+            self._filtro_pendientes_accion_pedidos, where_conditions, params,
+        )
+        self._agregar_filtro_condicional(
+            filtros.solo_pendientes_accion_redistribucion, tiene_estado_id, tiene_estado,
+            self._filtro_pendientes_accion_redistribucion, where_conditions, params,
         )
         self._agregar_filtro_condicional(
             filtros.restringir_produccion_el_rayo, tiene_estado_id, tiene_estado,
@@ -1577,14 +1654,17 @@ class PedidoCabeceraRepository:
                 - estado: estado_id (int) o nombre legacy (str) para filtrar
                 - fecha_desde, fecha_hasta: rango de fechas (YYYY-MM-DD)
                 - tipo_fecha: columna sobre la que aplica fecha_desde/fecha_hasta —
-                    "pedido" (default), "entrega" o "facturacion"
+                    "pedido" (default), "entrega", "facturacion", "creacion" o "modificacion"
                 - proveedor_nombre, numero_pedido, creado_por
                 - excluir_borrador: si True, excluye pedidos en estado BORRADOR (estado_id=1)
                 - solo_redistribucion: si True, solo incluye pedidos aptos para redistribución
                     (estado_id >= 4 "CONFIRMADO POR EL RAYO", excluyendo CANCELADO (19),
                     CANCELADO POR EL RAYO (20), CONFIRMADO POR PRODUCCION (23) y
                     PRODUCCION POSPUESTA (22) — ver `_filtro_redistribucion`)
-                - solo_pendientes_accion: si True, solo estados que requieren acción del proveedor
+                - solo_pendientes_accion_pedidos: si True, solo Confirmado por Producción / Confirmado
+                    y Enviado (listado de Pedidos, EL RAYO, odcsap.view)
+                - solo_pendientes_accion_redistribucion: si True, solo Confirmado por El Rayo / Listo
+                    para Redistribución (listado de Redistribución, mabel.view)
                 - restringir_produccion_el_rayo: si True, solo incluye NUEVO_PEDIDO y GESTIONAR_PEDIDO
                     (req. 1.8, perfil Producción El Rayo); se combina (AND) con `estado` si también se indica
                 - excluir_estados_produccion_el_rayo: si True, excluye NUEVO_PEDIDO y GESTIONAR_PEDIDO
@@ -1693,9 +1773,10 @@ class PedidoCabeceraRepository:
 
     @staticmethod
     def _aplicar_filtros_extra_confirmados(
-        where_clause, params, fecha_desde, fecha_hasta, tipo_fecha, proveedor_nombre, numero_pedido, creado_por
+        where_clause, params, fecha_desde, fecha_hasta, tipo_fecha, proveedor_nombre, numero_pedido, creado_por,
+        modificado_por=None,
     ):
-        """Agrega filtros opcionales (fechas, proveedor, número, creador) a la consulta base."""
+        """Agrega filtros opcionales (fechas, proveedor, número, creador, modificador) a la consulta base."""
         extra_conditions: List[str] = []
         columna_fecha = _columna_fecha_filtro(tipo_fecha)
         if fecha_desde:
@@ -1713,6 +1794,9 @@ class PedidoCabeceraRepository:
         if creado_por:
             extra_conditions.append("p.creado_por LIKE ?")
             params.append(f"%{creado_por}%")
+        if modificado_por:
+            extra_conditions.append("p.modificado_por LIKE ?")
+            params.append(f"%{modificado_por}%")
         if extra_conditions:
             where_clause = f"({where_clause}){_SEP_AND}" + _SEP_AND.join(extra_conditions)
         return where_clause, params
@@ -1745,6 +1829,7 @@ class PedidoCabeceraRepository:
         proveedor_nombre: Optional[str] = None,
         numero_pedido: Optional[str] = None,
         creado_por: Optional[str] = None,
+        modificado_por: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Obtiene pedidos para la pantalla Revisar Redistribución.
@@ -1765,7 +1850,8 @@ class PedidoCabeceraRepository:
 
             where_clause, params, select_fields = self._base_confirmados(tiene_estado_id)
             where_clause, params = self._aplicar_filtros_extra_confirmados(
-                where_clause, params, fecha_desde, fecha_hasta, tipo_fecha, proveedor_nombre, numero_pedido, creado_por
+                where_clause, params, fecha_desde, fecha_hasta, tipo_fecha, proveedor_nombre, numero_pedido, creado_por,
+                modificado_por,
             )
 
             count_query = f"SELECT COUNT(*) FROM pedido p WHERE {where_clause}"
@@ -2079,26 +2165,81 @@ class PedidoCabeceraRepository:
         finally:
             cursor.close()
 
+    def _get_valores_distintos_columna(self, columna: str, etiqueta: str) -> List[str]:
+        """
+        Devuelve los valores distintos (no NULL, no vacíos) de una columna de
+        auditoría (creado_por/modificado_por) de la tabla pedido, ordenados
+        alfabéticamente. `columna` nunca viene de input de usuario (siempre un
+        literal fijo pasado por get_creadores_distintos/get_modificadores_distintos),
+        así que interpolarla en el SQL es seguro.
+
+        Args:
+            columna: nombre de columna ('creado_por' o 'modificado_por')
+            etiqueta: descripción para el log (ej. 'creador(es)', 'modificador(es)')
+        """
+        cursor = self.conn.cursor()
+
+        try:
+            cursor.execute(f"""
+                SELECT DISTINCT {columna}
+                FROM pedido
+                WHERE {columna} IS NOT NULL AND {columna} <> ''
+                ORDER BY {columna}
+            """)
+
+            valores = [row[0] for row in cursor.fetchall()]
+            logger.debug(f"✓ {len(valores)} {etiqueta} distinto(s) encontrado(s)")
+            return valores
+
+        except Exception as e:
+            logger.error(f"❌ Error al listar {etiqueta} distintos ({columna}): {e}", exc_info=True)
+            raise
+        finally:
+            cursor.close()
+
+    def get_creadores_distintos(self) -> List[str]:
+        """
+        Devuelve la lista de valores distintos de creado_por (usuario que creó el
+        pedido, típicamente email o username, ver src/utils/audit_context.py).
+        Alimenta el <select> de "Creado Por" del contenedor "Filtros de Búsqueda".
+        """
+        return self._get_valores_distintos_columna("creado_por", "creador(es)")
+
+    def get_modificadores_distintos(self) -> List[str]:
+        """
+        Devuelve la lista de valores distintos de modificado_por (usuario que
+        hizo la última modificación al pedido, ver src/utils/audit_context.py).
+        Alimenta el <select> de "Modificado Por" del contenedor "Filtros de
+        Búsqueda".
+        """
+        return self._get_valores_distintos_columna("modificado_por", "modificador(es)")
+
     def get_estados(
         self,
         solo_activos: bool = True,
         excluir_ids: Optional[List[int]] = None,
         solo_ids: Optional[List[int]] = None,
+        solo_con_pedidos: bool = False,
     ) -> List[Dict[str, Any]]:
         """
         Obtiene la lista de estados de pedido desde la tabla pedido_estado.
-        
+
         Diseñado para alimentar los dropdowns de "Filtros de Búsqueda" en las
         interfaces de listas de pedidos, devolviendo los estados que el usuario
         realmente visualiza en la UI.
-        
+
         Args:
             solo_activos: Si True, solo devuelve estados con activo=1 (default True)
             excluir_ids: Lista opcional de estado_id a excluir del resultado
                          (ej: [1] para excluir BORRADOR en la lista general)
             solo_ids: Lista opcional de estado_id a incluir exclusivamente
                       (ej: [4,5,6,9] para vista de redistribución)
-        
+            solo_con_pedidos: Si True, excluye estados sin ningún pedido real
+                         (EXISTS contra pedido.estado_id) -- evita ofrecer en el
+                         filtro un estado que ningún pedido pueda tener nunca
+                         (ej. código que lo asignaría quedó huérfano), sin
+                         depender de mantener manualmente `activo` al día.
+
         Returns:
             Lista de dicts con id, nombre y orden, ordenados por orden ASC
         """
@@ -2118,6 +2259,11 @@ class PedidoCabeceraRepository:
                 placeholders = ",".join("?" for _ in excluir_ids)
                 where_conditions.append(f"pe.id NOT IN ({placeholders})")
                 params.extend(excluir_ids)
+
+            if solo_con_pedidos:
+                where_conditions.append(
+                    "EXISTS (SELECT 1 FROM pedido p WHERE p.estado_id = pe.id)"
+                )
 
             where_clause = _SEP_AND.join(where_conditions) if where_conditions else "1=1"
 

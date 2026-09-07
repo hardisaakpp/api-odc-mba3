@@ -14,7 +14,7 @@ Guía para aplicar cambios del backend en el servidor de producción (Linux).
 - **Puerto API:** 8000
 - **Servicios systemd (producción):** tres unidades — `odc-sap-api`, `celery-worker`, `celery-beat` (detalle y nombres prohibidos en la tabla siguiente).
 
-La aplicación resuelve el fichero de entorno según `src/config.py`: en servidor se recomienda **`ENV_FILE=/opt/odc-sap/.env`** y **`ENVIRONMENT=production`** en la unidad systemd (ver [CONFIGURACION.md](CONFIGURACION.md)). Sin `ENV_FILE`, se usaría `.env.production` en la raíz del proyecto.
+La aplicación resuelve el fichero de entorno según `src/config.py`: en servidor se recomienda **`ENV_FILE=/opt/odc-sap/.env`** y **`ENVIRONMENT=production`** en la unidad systemd (ver [CONFIGURACION.md](CONFIGURACION.md)). Sin `ENV_FILE`, se usaría `.env` en la raíz del proyecto (el archivo de desarrollo local; test/producción se administran fuera de este repo).
 
 ### Nombres exactos de las unidades systemd (no inventar otros)
 

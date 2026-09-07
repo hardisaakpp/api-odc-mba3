@@ -16,14 +16,12 @@ from typing import List, Optional, Dict, Any
 from src.config import (
     EMAIL_SMTP_USER,
     EMAIL_FROM,
-    ENABLE_EMAIL_NOTIFICATIONS,
 )
 from src.utils.notificacion_destinatarios import get_destinatarios_por_correo
 from src.utils.smtp_sender import send_smtp_message
 
 logger = logging.getLogger(__name__)
 
-_MSG_EMAIL_DESHABILITADO = "⏭️ Notificaciones por email deshabilitadas"
 _DEFAULT_NOMBRE_PRODUCTO = "Sin nombre"
 _PROBLEMA_ERROR_CONSULTAR = "Error al consultar"
 _PROBLEMA_NO_EXISTE = "No existe en SAP"
@@ -587,9 +585,6 @@ def send_reconciliacion_st_caida_notification(fecha_ejecucion: Optional[datetime
     dar de alta un tipo de correo nuevo que quedaría sin nadie vinculado hasta que
     alguien lo configure manualmente.
     """
-    if not ENABLE_EMAIL_NOTIFICATIONS:
-        logger.debug(_MSG_EMAIL_DESHABILITADO)
-        return False
 
     if not fecha_ejecucion:
         fecha_ejecucion = ahora_naive()
@@ -1092,9 +1087,6 @@ def send_migration_notification(
     Returns:
         True si el email se envió correctamente, False en caso contrario
     """
-    if not ENABLE_EMAIL_NOTIFICATIONS:
-        logger.debug(_MSG_EMAIL_DESHABILITADO)
-        return False
 
     # Solo enviar email si hay nuevos registros
     if facturas_guardadas == 0:
@@ -1167,8 +1159,6 @@ def send_error_notification(
     Returns:
         True si el email se envió correctamente, False en caso contrario
     """
-    if not ENABLE_EMAIL_NOTIFICATIONS:
-        return False
 
     if not fecha_ejecucion:
         fecha_ejecucion = ahora_naive()
@@ -1256,9 +1246,6 @@ def send_homologacion_notification(
     Returns:
         True si el email se envió correctamente, False en caso contrario
     """
-    if not ENABLE_EMAIL_NOTIFICATIONS:
-        logger.debug(_MSG_EMAIL_DESHABILITADO)
-        return False
 
     if not productos_no_homologados:
         logger.debug("⏭️ No hay productos no homologados, no se envía email")
@@ -1338,8 +1325,6 @@ def send_capacity_warning_notification(
     Returns:
         True si se envió correctamente, False en caso contrario
     """
-    if not ENABLE_EMAIL_NOTIFICATIONS:
-        return False
 
     if not fecha_ejecucion:
         fecha_ejecucion = ahora_naive()
@@ -1435,9 +1420,6 @@ def send_oc_to_supplier(
     Returns:
         True si el email se envió correctamente, False en caso contrario
     """
-    if not ENABLE_EMAIL_NOTIFICATIONS:
-        logger.debug(_MSG_EMAIL_DESHABILITADO)
-        return False
 
     if not fecha_ejecucion:
         fecha_ejecucion = ahora_naive()
@@ -1552,9 +1534,6 @@ def send_oc_ready_for_dispatch_notification(
     Returns:
         True si el email se envió correctamente, False en caso contrario
     """
-    if not ENABLE_EMAIL_NOTIFICATIONS:
-        logger.debug(_MSG_EMAIL_DESHABILITADO)
-        return False
 
     if not fecha_ejecucion:
         fecha_ejecucion = ahora_naive()
@@ -1614,9 +1593,6 @@ def send_oc_st_error_notification_tecnicos(
 
     DESTINATARIO: TECNICOS
     """
-    if not ENABLE_EMAIL_NOTIFICATIONS:
-        logger.debug(_MSG_EMAIL_DESHABILITADO)
-        return False
 
     if not fecha_ejecucion:
         fecha_ejecucion = ahora_naive()
@@ -1693,9 +1669,6 @@ def send_oc_creacion_error_notification_tecnicos(
 
     DESTINATARIO: TECNICOS
     """
-    if not ENABLE_EMAIL_NOTIFICATIONS:
-        logger.debug(_MSG_EMAIL_DESHABILITADO)
-        return False
 
     if not fecha_ejecucion:
         fecha_ejecucion = ahora_naive()
@@ -1780,9 +1753,6 @@ def send_plantilla_upload_notification(
     Returns:
         True si el email se envió correctamente, False en caso contrario
     """
-    if not ENABLE_EMAIL_NOTIFICATIONS:
-        logger.debug(_MSG_EMAIL_DESHABILITADO)
-        return False
 
     if not fecha_ejecucion:
         fecha_ejecucion = ahora_naive()
@@ -1863,9 +1833,6 @@ def send_pedido_cancelado_notification(
     Returns:
         True si el email se envió correctamente, False en caso contrario
     """
-    if not ENABLE_EMAIL_NOTIFICATIONS:
-        logger.debug(_MSG_EMAIL_DESHABILITADO)
-        return False
 
     if not fecha_ejecucion:
         fecha_ejecucion = ahora_naive()
@@ -1936,9 +1903,6 @@ def send_pedido_confirmado_produccion_notification(
     Returns:
         True si el email se envió correctamente, False en caso contrario
     """
-    if not ENABLE_EMAIL_NOTIFICATIONS:
-        logger.debug(_MSG_EMAIL_DESHABILITADO)
-        return False
 
     if not fecha_ejecucion:
         fecha_ejecucion = ahora_naive()
@@ -2007,9 +1971,6 @@ def send_pedido_descartado_notification(
     Returns:
         True si el email se envió correctamente, False en caso contrario
     """
-    if not ENABLE_EMAIL_NOTIFICATIONS:
-        logger.debug(_MSG_EMAIL_DESHABILITADO)
-        return False
 
     if not fecha_ejecucion:
         fecha_ejecucion = ahora_naive()
@@ -2082,9 +2043,6 @@ def send_mabel_redistribucion_confirmacion_notification(
     Returns:
         True si el email se envió correctamente, False en caso contrario
     """
-    if not ENABLE_EMAIL_NOTIFICATIONS:
-        logger.debug(_MSG_EMAIL_DESHABILITADO)
-        return False
 
     if not fecha_ejecucion:
         fecha_ejecucion = ahora_naive()
@@ -2174,9 +2132,6 @@ def send_pedido_cancelado_por_el_rayo_notification(
     Returns:
         True si el email se envió correctamente, False en caso contrario
     """
-    if not ENABLE_EMAIL_NOTIFICATIONS:
-        logger.debug(_MSG_EMAIL_DESHABILITADO)
-        return False
 
     if not fecha_ejecucion:
         fecha_ejecucion = ahora_naive()

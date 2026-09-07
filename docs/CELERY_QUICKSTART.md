@@ -23,7 +23,7 @@ En Windows no viene Redis instalado. **Recomendación para desarrollo: stack Doc
 .\scripts\docker-verify.ps1
 ```
 
-Dentro del contenedor Celery usa `REDIS_URL=redis://redis:6379/0` (Compose lo define; no hace falta cambiar `.env.develop` para Redis si solo usas el stack `app`).
+Dentro del contenedor Celery usa `REDIS_URL=redis://redis:6379/0` (Compose lo define; no hace falta cambiar `.env` para Redis si solo usas el stack `app`).
 
 **Opción A – Solo Redis con Docker Compose de este repo (API/Celery en host):**
 ```powershell
@@ -87,10 +87,10 @@ REDIS_URL=redis://localhost:6379/0
 # Sync nocturna de maestros de productos (deshabilitada por defecto desde 2026-07, ver abajo)
 # ENABLE_SYNC_PRODUCTOS_AUTOMATICA=false
 
-# Reconciliación automática de ST pendientes (por defecto deshabilitada; en prod va en true).
+# Reconciliación automática de ST pendientes: SIEMPRE activa, sin flag de
+# encendido/apagado (mismo criterio que la reconciliación de ODC ENCOLADAS de abajo).
 # Corre UNA VEZ AL DÍA (ventana de baja congestión en SAP), con dos horarios según el
-# día -- ver tabla abajo.
-# ENABLE_RECONCILIACION_ST_AUTOMATICA=true
+# día -- ver tabla abajo. Solo los horarios/ventanas son configurables.
 # RECONCILIAR_ST_HORA=23        # 11:00 PM
 # RECONCILIAR_ST_MINUTO=0
 # RECONCILIAR_ST_VENTANA_DIAS=2          # lunes a sábado: solo OCs enviadas en estos días
@@ -116,8 +116,8 @@ declaradas en `task_queues` en `src/celery_app.py`, así que aplica aunque se la
 
 | Tarea | Flag | Default | Frecuencia |
 |---|---|---|---|
-| `reconciliar_transferencias_pendientes` (diaria) | `ENABLE_RECONCILIACION_ST_AUTOMATICA` | `false` (prod: `true`) | lunes-sábado, `RECONCILIAR_ST_HORA:MINUTO` (11:00 PM), ventana de `RECONCILIAR_ST_VENTANA_DIAS` (2) días + colchón de seguridad |
-| `reconciliar_transferencias_pendientes` (semanal) | `ENABLE_RECONCILIACION_ST_AUTOMATICA` | `false` | domingo, misma hora, ventana de `RECONCILIAR_ST_VENTANA_DIAS_DOMINGO` (7) días + colchón de seguridad |
+| `reconciliar_transferencias_pendientes` (diaria) | *(ninguno, siempre activa)* | — | lunes-sábado, `RECONCILIAR_ST_HORA:MINUTO` (11:00 PM), ventana de `RECONCILIAR_ST_VENTANA_DIAS` (2) días + colchón de seguridad |
+| `reconciliar_transferencias_pendientes` (semanal) | *(ninguno, siempre activa)* | — | domingo, misma hora, ventana de `RECONCILIAR_ST_VENTANA_DIAS_DOMINGO` (7) días + colchón de seguridad |
 | `reconciliar_ordenes_compra_pendientes` | *(ninguno, siempre activa)* | — | cada `RECONCILIAR_OC_INTERVALO_MINUTOS` (5 min) |
 | `sync_productos_maestro` | `ENABLE_SYNC_PRODUCTOS_AUTOMATICA` | `false` | diaria, `SYNC_PRODUCTOS_HOUR:MINUTE` (3:00 AM) |
 | `execute_auto_migration` (legacy) | `ENABLE_AUTO_MIGRATE` | `false` | cada `AUTO_MIGRATE_INTERVAL_MINUTES` |
@@ -253,7 +253,6 @@ Para que la **carga de plantillas Excel** no bloquee la aplicación (y otros usu
    cd C:\Users\cortiz\PycharmProjects\mba3-consultas
    celery -A src.celery_app worker --loglevel=info --pool=solo
    ```
-3. **ENABLE_FILE_STORAGE=true** en `.env` (MinIO/S3 para archivos temporales).
 
 ## 📤 Proceso completo SAP (Enviar ODC a SAP) en segundo plano
 
@@ -263,7 +262,7 @@ El flujo **"Enviar ODC a SAP"** (Redistribución + Generar ODC + Enviar a SAP) p
 - **GET /api/pedidos/proceso-sap/resultado/{process_id}** → consultar resultado (polling). Si `status === "completed"`, el cuerpo es el mismo que el endpoint síncrono (incluye `envio_sap.oc_id` para descargar el PDF).
 - **GET /api/pedidos/proceso-sap/stream/{process_id}** → progreso en tiempo real (SSE).
 
-**Requisitos:** Redis y Celery Worker en marcha (mismos que para plantillas). No requiere ENABLE_FILE_STORAGE.
+**Requisitos:** Redis y Celery Worker en marcha (mismos que para plantillas).
 
 El frontend en `/mba3-consultas/proceso` debe llamar al **async** y usar `resultado_url` o `stream_url` para mostrar progreso y, al terminar, el modal de éxito con opción de descargar PDF (`GET /ordenes-compra/{oc_id}/pdf`).
 
@@ -309,11 +308,6 @@ pip list | grep celery
 **Cambiar intervalo de migración** (editar `.env`):
 ```bash
 AUTO_MIGRATE_INTERVAL_MINUTES=30  # Cambiar de 15 a 30 minutos
-```
-
-**Cambiar filtro de fecha** (editar `.env`):
-```bash
-MIGRATE_DATE_FILTER_DAYS=180  # Cambiar de 365 a 180 días
 ```
 
 ---

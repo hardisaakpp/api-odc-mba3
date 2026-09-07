@@ -33,7 +33,6 @@ from src.config import (
     SAP_SERVICE_LAYER_USERNAME,
     SAP_SERVICE_LAYER_PASSWORD,
     SAP_SERVICE_LAYER_DATABASE,
-    ENABLE_SAP_SERVICE_LAYER,
     SAP_SERVICE_LAYER_TIMEOUT,
     SAP_SERVICE_LAYER_VERIFY_SSL,
     SAP_SERVICE_LAYER_TRANSIENT_RETRIES,
@@ -96,7 +95,6 @@ class DirectSAPServiceLayerClient:
         self.username = SAP_SERVICE_LAYER_USERNAME
         self.password = SAP_SERVICE_LAYER_PASSWORD
         self.database = SAP_SERVICE_LAYER_DATABASE
-        self.enabled = ENABLE_SAP_SERVICE_LAYER
         self.session_id: Optional[str] = None
         self.session_expires: Optional[datetime] = None
         self.timeout = SAP_SERVICE_LAYER_TIMEOUT
@@ -106,9 +104,7 @@ class DirectSAPServiceLayerClient:
         self.working_session: Optional[requests.Session] = None
         self.working_tls_version: Optional[str] = None
         
-        if not self.enabled:
-            logger.warning("⚠️ SAP Service Layer deshabilitado (ENABLE_SAP_SERVICE_LAYER=False)")
-        elif not self.username or not self.password:
+        if not self.username or not self.password:
             logger.warning("⚠️ Credenciales de SAP Service Layer no configuradas")
         
         if not self.verify_ssl:
@@ -285,10 +281,6 @@ class DirectSAPServiceLayerClient:
         Returns:
             True si la autenticación fue exitosa, False en caso contrario
         """
-        if not self.enabled:
-            logger.debug("⏭️ Login a SAP Service Layer deshabilitado")
-            return False
-        
         if not self.username or not self.password:
             logger.error("❌ Credenciales de SAP Service Layer no configuradas")
             return False
@@ -586,14 +578,10 @@ class DirectSAPServiceLayerClient:
             ]
         }
         """
-        if not self.enabled:
-            logger.debug("⏭️ Creación de Purchase Order deshabilitada")
-            return None
-        
         if not self._ensure_session():
             logger.error(SESSION_ERROR_MESSAGE)
             return None
-        
+
         try:
             url = f"{self.base_url}/PurchaseOrders"
             headers = {
@@ -713,14 +701,10 @@ class DirectSAPServiceLayerClient:
             ]
         }
         """
-        if not self.enabled:
-            logger.debug("⏭️ Creación de Inventory Transfer Request deshabilitada")
-            return None
-        
         if not self._ensure_session():
             logger.error(SESSION_ERROR_MESSAGE)
             return None
-        
+
         try:
             # ⚠️ CORRECCIÓN CRÍTICA: Usar endpoint correcto de Service Layer
             url = f"{self.base_url}/InventoryTransferRequests"
@@ -809,10 +793,6 @@ class DirectSAPServiceLayerClient:
         Retorna una lista de dicts con DocNum, DocEntry, ToWarehouse, FromWarehouse y Comments.
         Si SAP no está disponible o la consulta falla, retorna lista vacía.
         """
-        if not self.enabled:
-            logger.debug("⏭️ Consulta de ITR deshabilitada")
-            return []
-
         if not self._ensure_session():
             logger.error(f"{SESSION_ERROR_MESSAGE} para consultar ITR")
             return []
@@ -907,14 +887,10 @@ class DirectSAPServiceLayerClient:
             O None si hay error de conexión.
             Lanza SAPDataMasterError si el artículo no tiene bodegas configuradas.
         """
-        if not self.enabled:
-            logger.debug("⏭️ Consulta de stock deshabilitada")
-            return None
-        
         if not self._ensure_session():
             logger.error(SESSION_ERROR_MESSAGE)
             return None
-        
+
         try:
             item_code_escaped = item_code.replace("'", "''")
             url = f"{self.base_url}/Items('{item_code_escaped}')"
@@ -975,14 +951,10 @@ class DirectSAPServiceLayerClient:
             O None si hay error de conexión.
             Retorna {"_error": True, "_error_type": "no_existe"} si el BP no existe.
         """
-        if not self.enabled:
-            logger.debug("⏭️ Consulta de Business Partner deshabilitada")
-            return None
-        
         if not self._ensure_session():
             logger.error(SESSION_ERROR_MESSAGE)
             return None
-        
+
         try:
             # Escapar caracteres especiales para OData
             card_code_escaped = card_code.replace("'", "''")
@@ -1070,14 +1042,10 @@ class DirectSAPServiceLayerClient:
             O None si hay error de conexión.
             Retorna {"_error": True, "_error_type": "no_existe"} si el artículo no existe.
         """
-        if not self.enabled:
-            logger.debug("⏭️ Consulta de Item deshabilitada")
-            return None
-        
         if not self._ensure_session():
             logger.error(SESSION_ERROR_MESSAGE)
             return None
-        
+
         try:
             # Escapar caracteres especiales para OData
             item_code_escaped = item_code.replace("'", "''")

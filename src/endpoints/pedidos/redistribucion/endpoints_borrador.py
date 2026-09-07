@@ -82,6 +82,7 @@ def _construir_dist_tiendas_confirmada(p: dict, tienda_repo) -> Optional[list]:
             tienda_nombre=d.get("tienda_nombre") or "",
             cantidad=float(d.get("cantidad_asignada", 0)),
             es_bodega=bool(d.get("es_bodega", False)),
+            agregada_manualmente=bool(d.get("agregada_manualmente", False)),
         )
         for d in p.get("distribuciones", [])
     ]

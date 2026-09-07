@@ -21,7 +21,7 @@ from src.database.services.producto_staging_sync_service import ProductoStagingS
 from src.database.services.proceso_estado_service import ProcesoEstadoService
 from src.database.repositories.sync_control_repository import SyncControlRepository
 from src.security.jwt_auth import verify_jwt_token, require_permission
-from src.config import SAP_LINKED_SERVER, SAP_DATABASE, ENABLE_SAP_QUERIES, SAP_USE_MIDDLEWARE
+from src.config import SAP_LINKED_SERVER, SAP_DATABASE, SAP_USE_MIDDLEWARE
 from src.database.connection import get_sap_db_connection, get_db_connection
 from src.database.clients.sap_service_layer_client import SAPServiceLayerClient
 
@@ -319,13 +319,6 @@ async def _agregar_sugerencias_sap(respuesta: dict, producto_info: dict, sku_cle
     """Agrega (in-place) sugerencias SAP a la respuesta. Nunca falla la respuesta principal."""
     logger.info(f"🔍 Buscando sugerencias SAP para SKU MBA3: {sku_clean}")
     try:
-        if not ENABLE_SAP_QUERIES:
-            logger.debug("⏭️ Consultas SAP deshabilitadas, omitiendo sugerencias")
-            respuesta["sugerencias_sap"] = []
-            respuesta["total_sugerencias_sap"] = 0
-            respuesta["sugerencias_sap_disabled"] = True
-            return
-
         from src.database.clients.sap_client import SAPClient
         sap_client = SAPClient()
 
@@ -599,13 +592,6 @@ async def _buscar_sku_sap_handler(sku: str):
 
         logger.info(f"🔍 Buscando SKU en SAP: {sku_clean}")
 
-        # Verificar si SAP está habilitado
-        if not ENABLE_SAP_QUERIES:
-            raise HTTPException(
-                status_code=400,
-                detail="Consultas SAP están deshabilitadas. Configura ENABLE_SAP_QUERIES=true en .env"
-            )
-
         if SAP_USE_MIDDLEWARE:
             resultado = await _buscar_sku_via_middleware(sku_clean)
             if resultado is not None:
@@ -629,13 +615,6 @@ async def _buscar_sugerencias_sku_sap_handler(sku: str, limite: int):
         _validar_sku(sku_clean)
 
         logger.info(f"🔍 Buscando sugerencias para SKU en SAP: {sku_clean}")
-
-        # Verificar si SAP está habilitado
-        if not ENABLE_SAP_QUERIES:
-            raise HTTPException(
-                status_code=400,
-                detail="Consultas SAP están deshabilitadas. Configura ENABLE_SAP_QUERIES=true en .env"
-            )
 
         # Importar cliente SAP y servicio de sugerencias
         from src.database.clients.sap_client import SAPClient

@@ -90,15 +90,14 @@ def procesar_plantilla_upload(
             on_progress=_reportar_progreso
         )
 
-        # Guardar archivo original en ruta definitiva si procesamiento OK y está habilitado
+        # Guardar archivo original en ruta definitiva si procesamiento OK
         # (misma lógica que upload síncrono; respuesta con archivo_original para paridad)
-        from src.config import ENABLE_FILE_STORAGE
         archivo_original: Dict[str, Any] = {
             "guardado": False,
-            "mensaje": "Almacenamiento deshabilitado o no aplicable" if not ENABLE_FILE_STORAGE else "No guardado",
+            "mensaje": "No guardado",
             "descarga_disponible": False
         }
-        if ENABLE_FILE_STORAGE and resultado.get("pedido_id"):
+        if resultado.get("pedido_id"):
             archivo_original = _guardar_archivo_original(storage, file_content, resultado, filename, user_id)
 
         # Resultado para el cliente (misma forma que el upload síncrono: paridad async/sync)

@@ -1419,7 +1419,7 @@ def register_ordenes_compra_endpoints(app: FastAPI):
         fecha_hasta: Optional[str] = Query(None, description="Filtrar hasta fecha (YYYY-MM-DD)"),
         nivel_log: Optional[str] = Query(None, description="Filtrar por nivel (INFO, ERROR, WARNING)"),
         success: Optional[bool] = Query(None, description="Filtrar por éxito (true) o error (false)"),
-        limit: Optional[int] = Query(50, description="Límite de registros por página"),
+        limit: Optional[int] = Query(50, le=500, description="Límite de registros por página"),
         offset: Optional[int] = Query(0, description="Offset para paginación"),
         user: dict = Depends(verify_jwt_token),
         _: None = Depends(require_any_permission([_PERM_ODCSAP, _PERM_MABEL]))

@@ -71,16 +71,12 @@ def _resolve_env_file_path(project_root: Path) -> Path:
     """
     Determina qué archivo .env cargar (ruta absoluta o bajo project_root).
 
-    Orden (sin fallback silencioso a un `.env` genérico sin nombre):
-
-    1) Si existe ``ENV_FILE`` -> ese archivo debe existir (típico en systemd:
-       ``Environment=ENV_FILE=/opt/odc-sap/.env``).
-    2) Si no -> ``.env.develop`` | ``.env.test`` | ``.env.staging`` | ``.env.production``
-       según ``ENVIRONMENT`` (normalizado; por defecto ``development`` → ``.env.develop``).
-
-    El valor lógico de ambiente (``APP_ENV``) se fija **después** de ``load_dotenv``,
-    para que ``ENVIRONMENT`` definido dentro del archivo cargado (o solo ahí) aplique
-    correctamente cuando se usa ``ENV_FILE``.
+    1) Si existe ``ENV_FILE`` -> ese archivo debe existir. Lo usan los
+       despliegues reales de test/producción, administrados fuera de este
+       repo (ej. ``Environment=ENV_FILE=/opt/odc-sap/.env`` en systemd).
+    2) Si no -> ``.env`` en la raíz del proyecto: único archivo de
+       credenciales para desarrollo local (test/producción ya no se simulan
+       localmente con archivos separados dentro del repo).
     """
     explicit_env_file = os.getenv("ENV_FILE", "").strip()
     if explicit_env_file:
@@ -93,14 +89,10 @@ def _resolve_env_file_path(project_root: Path) -> Path:
             )
         return explicit_path
 
-    env_hint = os.getenv("ENVIRONMENT", "development")
-    normalized_env = _normalize_environment(env_hint)
-    env_file_suffix = "develop" if normalized_env == "development" else normalized_env
-    env_file = project_root / f".env.{env_file_suffix}"
+    env_file = project_root / ".env"
     if not env_file.is_file():
         raise FileNotFoundError(
             f"Archivo de entorno obligatorio no encontrado: {env_file}\n"
-            f"Ambiente: {normalized_env} (ENVIRONMENT={env_hint!r}). "
             "Crea ese archivo en la raíz del proyecto o define ENV_FILE con la ruta a tu .env."
         )
     return env_file
@@ -131,16 +123,12 @@ MBA3_DIGEST_PASSWORD = os.getenv("MBA3_DIGEST_PASSWORD", MBA3_SERVICE_PASSWORD)
 # - SQL_SERVER_DATABASE=tu_base_de_datos
 # - SQL_SERVER_UID=tu_usuario (opcional para Windows Auth)
 # - SQL_SERVER_PWD=tu_contraseÃ±a (opcional para Windows Auth)
-# - ENABLE_SQL_SERVER_STORAGE=true
 
 SQL_SERVER_DRIVER = os.getenv("SQL_SERVER_DRIVER", "{ODBC Driver 18 for SQL Server}")
 SQL_SERVER_SERVER = os.getenv("SQL_SERVER_SERVER", "localhost")
 SQL_SERVER_DATABASE = os.getenv("SQL_SERVER_DATABASE", "TuBaseDeDatos")
 SQL_SERVER_UID = os.getenv("SQL_SERVER_UID", "")
 SQL_SERVER_PWD = os.getenv("SQL_SERVER_PWD", "")
-
-# Habilitar guardado en SQL Server (poner a False para deshabilitar)
-ENABLE_SQL_SERVER_STORAGE = os.getenv("ENABLE_SQL_SERVER_STORAGE", "true").lower() == "true"
 
 # ============================================================================
 # ConfiguraciÃ³n de SQL Server SAP (para consultas OPENQUERY)
@@ -182,9 +170,6 @@ SAP_LINKED_SERVER = os.getenv("SAP_LINKED_SERVER", "MYHANADB")
 SAP_DATABASE = os.getenv("SAP_DATABASE", "")
 SAP_SCHEMA = os.getenv("SAP_SCHEMA", "")
 
-# Habilitar consultas a SAP (poner a False para deshabilitar)
-ENABLE_SAP_QUERIES = os.getenv("ENABLE_SAP_QUERIES", "true").lower() == "true"
-
 # Tiempo de vida del cache en dÃ­as (cuÃ¡ntos dÃ­as antes de re-consultar SAP)
 SAP_CACHE_DAYS = int(os.getenv("SAP_CACHE_DAYS", "30"))
 
@@ -209,7 +194,19 @@ SAP_USE_MIDDLEWARE = os.getenv("SAP_USE_MIDDLEWARE", "true").lower() == "true"
 
 # Prevalidación de ODC en una sola llamada batch al middleware
 # (POST /api/v1/validations/purchase-order) en lugar de N requests por línea.
-# Si el batch falla o está deshabilitado, se usa la validación línea por línea.
+# Solo tiene efecto con SAP_USE_MIDDLEWARE=true (el cliente directo no
+# implementa el batch, siempre devuelve None y cae a línea por línea).
+#
+# Riesgo aceptado, app aún sin desplegar a producción (2026-09): el fallback a
+# línea por línea solo se dispara si el batch falla de forma explícita
+# (timeout, error HTTP, más de 500 líneas) -- NO cubre una respuesta "exitosa"
+# con datos mal mapeados por el middleware (ej. reportar un proveedor
+# congelado como activo, o mal calcular el stock disponible), un caso que los
+# tests unitarios no pueden anticipar porque depende de la variedad real de
+# datos de SAP en producción, que esta variable en true todavía no ha visto.
+# Si se sospecha un caso así: poner esta variable en false en el .env (sin
+# deploy, solo reiniciar API/worker) para volver a línea por línea, y auditar
+# en SAP las OCs creadas mientras estuvo en true.
 USE_BATCH_VALIDATION = os.getenv("USE_BATCH_VALIDATION", "false").lower() == "true"
 
 # Bodegas, búsqueda de SKU e info de producto en cache-miss usan la misma
@@ -232,7 +229,12 @@ USE_BATCH_VALIDATION = os.getenv("USE_BATCH_VALIDATION", "false").lower() == "tr
 # de reintentar automáticamente esa OC (el botón manual sigue disponible). Diseño y
 # datos de producción que lo motivaron: conversación 2026-08-27/28, ver
 # docs/CELERY_QUICKSTART.md.
-ENABLE_RECONCILIACION_ST_AUTOMATICA = os.getenv("ENABLE_RECONCILIACION_ST_AUTOMATICA", "false").lower() == "true"
+# SIEMPRE ACTIVA (sin flag de encendido/apagado, mismo criterio que
+# RECONCILIAR_OC_INTERVALO_MINUTOS abajo): automatiza un botón manual ya existente,
+# no es una función opcional -- que quede prendida o apagada según el ambiente
+# depende de que alguien recuerde setear la variable, y ese olvido ya causó que
+# quedara apagada en producción (docs/CELERY_QUICKSTART.md documentaba "prod: true"
+# pero .env.production nunca la seteó). 2026-09-01.
 RECONCILIAR_ST_HORA = int(os.getenv("RECONCILIAR_ST_HORA", "23"))  # Default: 11:00 PM
 RECONCILIAR_ST_MINUTO = int(os.getenv("RECONCILIAR_ST_MINUTO", "0"))
 RECONCILIAR_ST_VENTANA_DIAS = int(os.getenv("RECONCILIAR_ST_VENTANA_DIAS", "2"))
@@ -261,7 +263,7 @@ RECONCILIAR_ST_MARGEN_COLCHON_HORAS = int(os.getenv("RECONCILIAR_ST_MARGEN_COLCH
 
 # Reconciliación automática de ODC ENCOLADAS (HTTP 202 del middleware al crear la
 # Purchase Order, SAP saturado). Mismo patrón que la reconciliación de ST arriba,
-# pero SIEMPRE ACTIVA (sin flag de encendido/apagado): cierra el mismo loop que abre
+# también SIEMPRE ACTIVA (sin flag de encendido/apagado): cierra el mismo loop que abre
 # OCSAPService._resolver_job_encolado_previo, es parte de la lógica normal del envío
 # a SAP, no una función opcional (evita el duplicado que motivó esto, ver incidente
 # ODC 24711/24712 e IntegracionSAPModal.vue).
@@ -299,11 +301,9 @@ SAP_SERVICE_LAYER_USERNAME = SAP_USER
 SAP_SERVICE_LAYER_PASSWORD = SAP_PASSWORD
 SAP_SERVICE_LAYER_DATABASE = SAP_COMPANY_DB
 
-# Habilitar envÃ­o de ODC a SAP Service Layer
-ENABLE_SAP_SERVICE_LAYER = os.getenv("ENABLE_SAP_SERVICE_LAYER", "false").lower() == "true"
-
-# Timeout para requests a Service Layer (segundos)
-SAP_SERVICE_LAYER_TIMEOUT = int(os.getenv("SAP_SERVICE_LAYER_TIMEOUT", "30"))
+# Timeout para requests a Service Layer (segundos). Mismo valor en los 3 ambientes
+# desde siempre -- ya no es variable de entorno, es una constante de la aplicación.
+SAP_SERVICE_LAYER_TIMEOUT = 30
 
 # Reintentos ante fallos transitorios (SL caído, RemoteDisconnected, timeouts, 502/503/504)
 # Número de reintentos *adicionales* tras el primer intento (3 => hasta 4 intentos en total)
@@ -328,14 +328,16 @@ SAP_ST_FROM_WAREHOUSE = os.getenv("SAP_ST_FROM_WAREHOUSE", "")
 
 # Reintentos automáticos para Inventory Transfer Requests (ITR) por tienda.
 # Se aplican cuando una ODC fue enviada pero algunas o todas las ITR fallan.
-SAP_ITR_RETRY_MAX_ATTEMPTS = max(1, int(os.getenv("SAP_ITR_RETRY_MAX_ATTEMPTS", "3")))
-SAP_ITR_RETRY_BASE_DELAY_SECONDS = max(0.1, float(os.getenv("SAP_ITR_RETRY_BASE_DELAY_SECONDS", "3.0")))
-SAP_ITR_RETRY_MAX_JITTER_SECONDS = max(0.0, float(os.getenv("SAP_ITR_RETRY_MAX_JITTER_SECONDS", "1.0")))
+# Mismo valor en los 3 ambientes desde siempre -- ya no es variable de entorno.
+SAP_ITR_RETRY_MAX_ATTEMPTS = 3
+SAP_ITR_RETRY_BASE_DELAY_SECONDS = 3.0
+SAP_ITR_RETRY_MAX_JITTER_SECONDS = 1.0
 
 # Reintentos automáticos para envío de ODC (Purchase Orders) a SAP Service Layer.
-SAP_ODC_RETRY_MAX_ATTEMPTS = max(1, int(os.getenv("SAP_ODC_RETRY_MAX_ATTEMPTS", "3")))
-SAP_ODC_RETRY_BASE_DELAY_SECONDS = max(0.1, float(os.getenv("SAP_ODC_RETRY_BASE_DELAY_SECONDS", "3.0")))
-SAP_ODC_RETRY_MAX_JITTER_SECONDS = max(0.0, float(os.getenv("SAP_ODC_RETRY_MAX_JITTER_SECONDS", "1.0")))
+# Mismo valor en los 3 ambientes desde siempre -- ya no es variable de entorno.
+SAP_ODC_RETRY_MAX_ATTEMPTS = 3
+SAP_ODC_RETRY_BASE_DELAY_SECONDS = 3.0
+SAP_ODC_RETRY_MAX_JITTER_SECONDS = 1.0
 
 # Reintentos automáticos para la PREVALIDACIÓN de la ODC contra SAP Service Layer
 # (paso previo al envío: valida proveedor + artículos). A diferencia del envío en sí,
@@ -357,9 +359,13 @@ SAP_ODC_RETRY_MAX_JITTER_SECONDS = max(0.0, float(os.getenv("SAP_ODC_RETRY_MAX_J
 # Celery (asíncrono, no bloquea la UI); reintentos ya resueltos responden al instante
 # vía el cache de job_en_curso en Redis, así que el costo real no escala linealmente
 # con los intentos.
-SAP_PREVALIDACION_RETRY_MAX_ATTEMPTS = max(1, int(os.getenv("SAP_PREVALIDACION_RETRY_MAX_ATTEMPTS", "5")))
-SAP_PREVALIDACION_RETRY_BASE_DELAY_SECONDS = max(0.1, float(os.getenv("SAP_PREVALIDACION_RETRY_BASE_DELAY_SECONDS", "5.0")))
-SAP_PREVALIDACION_RETRY_MAX_JITTER_SECONDS = max(0.0, float(os.getenv("SAP_PREVALIDACION_RETRY_MAX_JITTER_SECONDS", "1.0")))
+#
+# Ya no es variable de entorno: producción y test corrían con este valor (nunca lo
+# sobrescribían), solo desarrollo lo tenía bajado a 3/3.0/1.0 en su .env local -- un
+# valor que el párrafo de arriba documenta como insuficiente en la práctica (2026-09-01).
+SAP_PREVALIDACION_RETRY_MAX_ATTEMPTS = 5
+SAP_PREVALIDACION_RETRY_BASE_DELAY_SECONDS = 5.0
+SAP_PREVALIDACION_RETRY_MAX_JITTER_SECONDS = 1.0
 
 # ============================================================================
 # ConfiguraciÃ³n de Seguridad (Opcional)
@@ -377,20 +383,6 @@ API_KEY = os.getenv("API_KEY", "")  # API Key requerida si ENABLE_AUTH=true
 JWT_SECRET = os.getenv('JWT_SECRET', 'clave_super_secreta_para_jwt_12345')
 JWT_ISSUER = os.getenv('JWT_ISSUER', 'SCNexus.Core')
 JWT_AUDIENCE = os.getenv('JWT_AUDIENCE', 'SCNexus.Users')
-
-# ============================================================================
-# ConfiguraciÃ³n de SCNexus.Core API (Active Directory)
-# ============================================================================
-# URL base del Core para llamadas a la API de permisos y otros servicios
-# El Core gestiona la integraciÃ³n con Active Directory y asigna permisos
-# a usuarios y roles de AD segÃºn las pÃ¡ginas a las que pueden tener acceso
-# IMPORTANTE: Configurar en .env (sin default por seguridad, ver validaciÃ³n abajo)
-CORE_API_URL = os.getenv("CORE_API_URL", "")
-CORE_API_TIMEOUT = int(os.getenv("CORE_API_TIMEOUT", "30"))  # Timeout en segundos
-
-# Habilitar autenticaciÃ³n JWT (requiere token vÃ¡lido del Core)
-# Cuando estÃ¡ habilitado, los endpoints protegidos requerirÃ¡n JWT vÃ¡lido
-ENABLE_JWT_AUTH = os.getenv("ENABLE_JWT_AUTH", "false").lower() == "true"
 
 # Rate Limiting (lÃ­mite de requests)
 ENABLE_RATE_LIMITING = os.getenv("ENABLE_RATE_LIMITING", "false").lower() == "true"
@@ -435,24 +427,19 @@ if ENVIRONMENT == "production":
             "Configura en .env"
         )
     
-    # Validar JWT_SECRET y CORE_API_URL si JWT está habilitado
-    if ENABLE_JWT_AUTH:
-        if not JWT_SECRET:
-            raise ValueError(
-                "JWT_SECRET debe configurarse en .env en produccion. No puede estar vacio."
-            )
-        if not CORE_API_URL:
-            raise ValueError(
-                "CORE_API_URL debe configurarse en .env en produccion. No puede estar vacio."
-            )
-        if JWT_SECRET == 'clave_super_secreta_para_jwt_12345':
-            logger.warning(
-                "[TEMPORAL] JWT_SECRET usa valor por defecto (compatibilidad con Core). "
-                "Cuando Core migre a secret seguro, actualizar mba3-consultas."
-            )
+    # Validar JWT_SECRET (requerido en produccion)
+    if not JWT_SECRET:
+        raise ValueError(
+            "JWT_SECRET debe configurarse en .env en produccion. No puede estar vacio."
+        )
+    if JWT_SECRET == 'clave_super_secreta_para_jwt_12345':
+        logger.warning(
+            "[TEMPORAL] JWT_SECRET usa valor por defecto (compatibilidad con Core). "
+            "Cuando Core migre a secret seguro, actualizar mba3-consultas."
+        )
     
     # Advertencia sobre SSL deshabilitado
-    if ENABLE_SAP_SERVICE_LAYER and not SAP_SERVICE_LAYER_VERIFY_SSL:
+    if not SAP_SERVICE_LAYER_VERIFY_SSL:
         logger.warning("=" * 70)
         logger.warning("âš ï¸ ADVERTENCIA DE SEGURIDAD EN PRODUCCIÃ“N")
         logger.warning("   SAP_SERVICE_LAYER_VERIFY_SSL=false")
@@ -472,14 +459,14 @@ elif ENVIRONMENT == "development":
             warnings_found = True
         logger.warning("   Credenciales MBA3 no configuradas en .env")
     
-    if ENABLE_JWT_AUTH and (not JWT_SECRET or JWT_SECRET == 'clave_super_secreta_para_jwt_12345'):
+    if not JWT_SECRET or JWT_SECRET == 'clave_super_secreta_para_jwt_12345':
         if not warnings_found:
             logger.warning("=" * 70)
             logger.warning(_CONFIG_INCOMPLETA_MSG)
             warnings_found = True
         logger.warning("   JWT_SECRET usando valor por defecto (inseguro)")
     
-    if ENABLE_SAP_SERVICE_LAYER and not SAP_SERVICE_LAYER_VERIFY_SSL:
+    if not SAP_SERVICE_LAYER_VERIFY_SSL:
         if not warnings_found:
             logger.warning("=" * 70)
             logger.warning(_CONFIG_INCOMPLETA_MSG)
@@ -501,19 +488,10 @@ ENABLE_AUTO_MIGRATE = os.getenv("ENABLE_AUTO_MIGRATE", "false").lower() == "true
 # Configurar en .env: AUTO_MIGRATE_INTERVAL_MINUTES=15
 AUTO_MIGRATE_INTERVAL_MINUTES = int(os.getenv("AUTO_MIGRATE_INTERVAL_MINUTES", "15"))
 
-# DÃ­as hacia atrÃ¡s para el filtro de fecha en migraciÃ³n (automÃ¡tica y manual)
-# Ambos procesos (automÃ¡tico y manual) usan la misma configuraciÃ³n
-# Por defecto: 365 dÃ­as (1 aÃ±o) desde hoy
-# Configurable en .env con MIGRATE_DATE_FILTER_DAYS
-# 
-# Compatibilidad hacia atrÃ¡s: Si existe AUTO_MIGRATE_DATE_FILTER_DAYS o 
-# MANUAL_MIGRATE_DATE_FILTER_DAYS en .env, se usarÃ¡ ese valor.
-# Si no, se usa MIGRATE_DATE_FILTER_DAYS o el valor por defecto (365).
-_migrate_days = os.getenv("MIGRATE_DATE_FILTER_DAYS") or \
-                os.getenv("AUTO_MIGRATE_DATE_FILTER_DAYS") or \
-                os.getenv("MANUAL_MIGRATE_DATE_FILTER_DAYS") or \
-                "365"
-MIGRATE_DATE_FILTER_DAYS = int(_migrate_days)
+# DÃ­as hacia atrÃ¡s para el filtro de fecha en migraciÃ³n (automÃ¡tica y manual).
+# Mismo valor en los 3 ambientes desde siempre -- ya no es variable de entorno,
+# es una constante de la aplicaciÃ³n.
+MIGRATE_DATE_FILTER_DAYS = 365
 
 # ============================================================================
 # ConfiguraciÃ³n de Celery y Tareas Automatizadas
@@ -538,9 +516,6 @@ SYNC_PRODUCTOS_MINUTE = int(os.getenv('SYNC_PRODUCTOS_MINUTE', '0'))  # Default:
 # ============================================================================
 # ConfiguraciÃ³n de Notificaciones por Email
 # ============================================================================
-# Habilitar notificaciones por correo electronico
-ENABLE_EMAIL_NOTIFICATIONS = os.getenv("ENABLE_EMAIL_NOTIFICATIONS", "true").lower() == "true"
-
 # ConfiguraciÃ³n SMTP (Outlook)
 EMAIL_SMTP_SERVER = os.getenv("EMAIL_SMTP_SERVER", "mabeltrading-com-ec.mail.protection.outlook.com")
 EMAIL_SMTP_PORT = int(os.getenv("EMAIL_SMTP_PORT", "25"))  # Puerto 25 para relay interno (sin TLS)
@@ -595,10 +570,8 @@ except ValueError:
 MAX_EXCEL_UPLOAD_SIZE_MB = max(1, MAX_EXCEL_UPLOAD_SIZE_MB)
 MAX_EXCEL_UPLOAD_SIZE_BYTES = MAX_EXCEL_UPLOAD_SIZE_MB * 1024 * 1024
 
-# Habilitar almacenamiento de archivos Excel originales para descarga posterior
-ENABLE_FILE_STORAGE = os.getenv("ENABLE_FILE_STORAGE", "false").lower() == "true"
-
-# Configuración del storage (compatible con S3 y MinIO)
+# Configuración del storage (compatible con S3 y MinIO). Siempre activo, sin
+# flag: MinIO es infraestructura obligatoria (ver docker-compose.yml).
 FILE_STORAGE_ENDPOINT = os.getenv("FILE_STORAGE_ENDPOINT", "http://localhost:9000")
 FILE_STORAGE_ACCESS_KEY = os.getenv("FILE_STORAGE_ACCESS_KEY", "minioadmin")
 FILE_STORAGE_SECRET_KEY = os.getenv("FILE_STORAGE_SECRET_KEY", "minioadmin")
@@ -606,7 +579,7 @@ FILE_STORAGE_BUCKET = os.getenv("FILE_STORAGE_BUCKET", "plantillas-excel")
 FILE_STORAGE_REGION = os.getenv("FILE_STORAGE_REGION", "us-east-1")
 
 # Validar configuración de storage en producción
-if ENVIRONMENT == "production" and ENABLE_FILE_STORAGE:
+if ENVIRONMENT == "production":
     if FILE_STORAGE_ACCESS_KEY == "minioadmin":
         logger.warning(
             "⚠️ FILE_STORAGE usando credenciales por defecto en producción. "

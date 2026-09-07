@@ -253,6 +253,7 @@ def _resolver_doc_num_y_solicitudes(resultado_sap_envio):
             {
                 "doc_num": r.get("doc_num"),
                 "tienda_codigo": (r.get("tienda_codigo") or ""),
+                "tienda_nombre": r.get("tienda_nombre"),
             }
             for r in solicitudes_para_response["resultados"]
             if r.get("doc_num") is not None

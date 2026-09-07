@@ -79,7 +79,6 @@ class TestPlantillaUploadAsyncNoBloquea:
 
         monkeypatch.setattr(plantillas, "_celery_workers_available", lambda: True)
         monkeypatch.setattr(plantillas, "_encolar_plantilla_async", fake_encolar)
-        monkeypatch.setattr(plantillas, "ENABLE_FILE_STORAGE", True)
 
         async def fake_leer(_file):
             return b"contenido-excel"
@@ -119,7 +118,6 @@ class TestPlantillaUploadAsyncNoBloquea:
 
         monkeypatch.setattr(plantillas, "_celery_workers_available", lambda: True)
         monkeypatch.setattr(plantillas, "_encolar_plantilla_async", encolar_lento)
-        monkeypatch.setattr(plantillas, "ENABLE_FILE_STORAGE", True)
 
         async def fake_leer(_file):
             return b"contenido-excel"

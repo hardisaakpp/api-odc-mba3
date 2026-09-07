@@ -670,7 +670,6 @@ def register_migrar_endpoint(app: FastAPI):
         - ✅ Filtro automático: siempre trae los últimos 365 días (1 año) desde hoy
         - ✅ Sin parámetros: solo ejecutar el endpoint
         - ✅ Fecha relativa: calcula automáticamente desde hoy hacia atrás
-        - ✅ Configurable: se puede cambiar en .env con MIGRATE_DATE_FILTER_DAYS
 
         **Nota:** Este endpoint realiza ambas operaciones (consulta y guardado).
         Para operaciones separadas, usar:

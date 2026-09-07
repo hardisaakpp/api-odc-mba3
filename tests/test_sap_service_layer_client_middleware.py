@@ -14,9 +14,7 @@ def _client():
     # Se instancia la implementación middleware directamente (no vía la factory
     # SAPServiceLayerClient()) para que estos tests prueben siempre el cliente
     # middleware, sin depender del flag SAP_USE_MIDDLEWARE del .env cargado.
-    client = _MiddlewareSAPServiceLayerClient()
-    client.enabled = True
-    return client
+    return _MiddlewareSAPServiceLayerClient()
 
 
 def _mock_response(status_code, json_data):
@@ -132,11 +130,6 @@ class TestGetAllWarehouses:
         with patch.object(client, "_get", return_value=None):
             assert client.get_all_warehouses() is None
 
-    def test_deshabilitado_retorna_none(self):
-        client = _client()
-        client.enabled = False
-        assert client.get_all_warehouses() is None
-
 
 class TestValidateWarehousesBatch:
     def test_lista_vacia_no_llama_http(self):
@@ -179,11 +172,6 @@ class TestValidateWarehousesBatch:
         with patch.object(client, "_validate_warehouses_chunk", return_value=None):
             result = client.validate_warehouses_batch(["A", "B"])
         assert result is None
-
-    def test_deshabilitado_retorna_none(self):
-        client = _client()
-        client.enabled = False
-        assert client.validate_warehouses_batch(["RL-CD"]) is None
 
 
 class TestExtraerErrorSapEmbebido:
@@ -340,11 +328,6 @@ class TestGetItemsBatch:
         with patch.object(client, "_get_items_batch_chunk", return_value=None):
             result = client.get_items_batch(["A1", "B2"])
         assert result is None
-
-    def test_deshabilitado_retorna_none(self):
-        client = _client()
-        client.enabled = False
-        assert client.get_items_batch(["A1"]) is None
 
 
 class TestCreateStockTransfer202:
@@ -617,8 +600,3 @@ class TestGetJobStatus:
         with patch.object(client, "_get") as mock_get:
             assert client.get_job_status("") is None
         mock_get.assert_not_called()
-
-    def test_deshabilitado_retorna_none(self):
-        client = _client()
-        client.enabled = False
-        assert client.get_job_status("job-123") is None

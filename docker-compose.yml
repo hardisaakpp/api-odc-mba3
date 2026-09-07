@@ -3,23 +3,22 @@
 # Por defecto (sin perfil): solo Redis.
 #   docker compose up -d
 #
-# MinIO embebido (solo desarrollo local), perfil "bundled-minio":
-#   docker compose --profile bundled-minio up -d
-#
-# Stack completo API + Celery (desarrollo), perfiles "app" + "bundled-minio":
-#   docker compose --profile app --profile bundled-minio up -d --build
+# Stack completo API + Celery (desarrollo), perfil "app" — incluye MinIO embebido,
+# ya no es infraestructura opcional (storage de archivos siempre activo):
+#   docker compose --profile app up -d --build
 #   .\scripts\docker-app-up.ps1
 #
-# Producción (srv-mabuiosapi, MinIO externo 192.168.2.211): sin bundled-minio.
+# Producción (srv-mabuiosapi, MinIO externo 192.168.2.211): docker-compose.prod.yml
+# desactiva el MinIO embebido de este archivo (se usa el externo en su lugar).
 #   docker compose -f docker-compose.yml -f docker-compose.prod.yml --profile app up -d --build
 #   ./scripts/docker-app-up-prod.sh -Build
 #   Ver docs/DEPLOY_DOCKER_PRODUCCION.md
 #
 # Requisitos para el perfil app (desarrollo):
-#   - Archivo .env.develop en la raíz del repo.
+#   - Archivo .env en la raíz del repo.
 #   - SQL Server / SAP / MBA3 alcanzables desde el contenedor (host.docker.internal o IP).
 #
-# Puertos host: Redis 6379, MinIO embebido 9100/9101 (solo bundled-minio), API 8000.
+# Puertos host: Redis 6379, MinIO embebido 9100/9101 (perfil app, dev), API 8000.
 # En dev, API/Celery usan redis://redis:6379/0 y http://minio:9000 dentro de la red Docker.
 #
 # Red compartida con scnexus-front (otro docker-compose): mba3-nexus_edge
@@ -46,14 +45,16 @@ x-app-common: &app-common
     REDIS_URL: redis://redis:6379/0
     FILE_STORAGE_ENDPOINT: http://minio:9000
   env_file:
-    - .env.develop
+    - .env
   volumes:
-    - ./.env.develop:/app/.env.develop:ro
+    - ./.env:/app/.env:ro
     - ./output:/app/output
   extra_hosts:
     - "host.docker.internal:host-gateway"
   depends_on:
     redis:
+      condition: service_healthy
+    minio:
       condition: service_healthy
 
 services:
@@ -74,7 +75,13 @@ services:
     restart: unless-stopped
 
   minio:
+    # Bundled solo para desarrollo local: parte obligatoria del perfil "app"
+    # (storage de archivos siempre activo, sin flag). "bundled-minio" se
+    # mantiene como alias para levantar solo Redis+MinIO sin el resto de la
+    # app. En producción (docker-compose.prod.yml) se desactiva porque el
+    # storage real es externo.
     profiles:
+      - app
       - bundled-minio
     image: minio/minio
     command: server /data --console-address ":9001"
@@ -135,7 +142,7 @@ services:
     <<: *app-common
     container_name: mba3-celery-beat
     volumes:
-      - ./.env.develop:/app/.env.develop:ro
+      - ./.env:/app/.env:ro
       - ./output:/app/output
       - celerybeat_data:/var/lib/celery
     command:

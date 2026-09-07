@@ -13,7 +13,6 @@ from typing import Optional, Dict, Any, List
 from src.config import (
     SAP_LINKED_SERVER,
     SAP_DATABASE,
-    ENABLE_SAP_QUERIES
 )
 from ..connection import get_sap_db_connection
 
@@ -26,12 +25,6 @@ class SAPClient:
     # Patrón permitido para ItemCode: alfanumérico, guiones, puntos, espacios, barra, guion bajo
     # SAP puede usar códigos como R463.1012.GR/AZ; longitud máxima 50 caracteres
     ITEM_CODE_PATTERN = re.compile(r'^[A-Za-z0-9.\-_/ ]{1,50}$')
-    
-    def __init__(self):
-        """Inicializa el cliente SAP."""
-        self.enabled = ENABLE_SAP_QUERIES
-        if not self.enabled:
-            logger.warning("⚠️ Consultas SAP deshabilitadas (ENABLE_SAP_QUERIES=False)")
     
     def _validate_item_code(self, item_code: str) -> bool:
         """
@@ -102,10 +95,6 @@ class SAPClient:
         Raises:
             Exception: Si hay error de conexión o consulta
         """
-        if not self.enabled:
-            logger.debug(f"⏭️ Consulta SAP deshabilitada para ItemCode: {item_code}")
-            return None
-        
         # Validar formato del item_code antes de procesarlo
         if not self._validate_item_code(item_code):
             logger.warning(f"⚠️ ItemCode inválido o inseguro: {item_code}")
@@ -198,10 +187,6 @@ class SAPClient:
                 ...
             }
         """
-        if not self.enabled:
-            logger.debug(f"⏭️ Consulta SAP batch deshabilitada para {len(item_codes)} productos")
-            return {}
-        
         if not item_codes:
             return {}
         
@@ -307,10 +292,6 @@ class SAPClient:
     ) -> List[Dict[str, Any]]:
         """Busca SKUs similares directamente en SAP vía OPENQUERY (fallback)."""
         import time
-
-        if not self.enabled:
-            logger.debug(f"⏭️ Consultas SAP deshabilitadas para: {sku_clean}")
-            return []
 
         start_time_sap = time.time()
         sku_escaped = sku_clean.replace("'", "''").replace("%", "[%]").replace("_", "[_]")
@@ -458,10 +439,6 @@ class SAPClient:
         Raises:
             Exception: Si hay error de conexión o consulta
         """
-        if not self.enabled:
-            logger.debug(f"⏭️ Consulta SAP deshabilitada para WhsCode: {whs_code}")
-            return None
-        
         # Validar formato del whs_code antes de procesarlo
         if not whs_code or not whs_code.strip():
             logger.warning("⚠️ WhsCode vacío")
@@ -531,16 +508,12 @@ class SAPClient:
             ]
             O lista vacía si hay error
         """
-        if not self.enabled:
-            logger.debug("⏭️ Consulta SAP deshabilitada para obtener todas las bodegas")
-            return []
-        
         query = f"""
-        SELECT 
+        SELECT
             T0."WhsCode" AS "WhsCode",
             T0."WhsName" AS "WhsName"
         FROM OPENQUERY([{SAP_LINKED_SERVER}], '
-            SELECT 
+            SELECT
                 "WhsCode",
                 "WhsName"
             FROM "{SAP_DATABASE}"."OWHS"

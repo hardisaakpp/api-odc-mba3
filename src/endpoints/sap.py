@@ -17,23 +17,10 @@ from src.database.repositories.orden_compra_repository import OrdenCompraReposit
 from src.database.repositories.sap_integration_log_repository import SAPIntegrationLogRepository, SAPLogEntry
 from src.database.services.oc_sap_service import OCSAPService
 from src.database.connection import get_db_connection, get_db_connection_context
-from src.config import ENABLE_SAP_QUERIES, SAP_LINKED_SERVER, ENABLE_SAP_SERVICE_LAYER
+from src.config import SAP_LINKED_SERVER
 from src.security.jwt_auth import verify_jwt_token, require_permission
 
 logger = logging.getLogger(__name__)
-
-
-def _respuesta_sap_deshabilitado(source):
-    logger.warning("⚠️ SAP Service Layer está deshabilitado")
-    return JSONResponse(
-        status_code=400,
-        content={
-            "status": "error",
-            "message": "SAP Service Layer está deshabilitado",
-            "hint": "Configura ENABLE_SAP_SERVICE_LAYER=true en .env"
-        },
-        headers={"X-Source": source, "X-Endpoint": "INTEGRAR-SAP"}
-    )
 
 
 def _log_safe(log_repo, entry, warning_msg):
@@ -613,9 +600,6 @@ def _ejecutar_integrar_sap(request, oc_id, referencia_despacho, user, notify_inf
     logger.info(f"🚀 INTEGRAR-SAP iniciado (usuario: {username}, fuente: {source})")
 
     try:
-        if not ENABLE_SAP_SERVICE_LAYER:
-            return _respuesta_sap_deshabilitado(source)
-
         proceso_id = str(uuid.uuid4())
         conn = get_db_connection()
         oc_repo = OrdenCompraRepository(conn)
@@ -724,16 +708,6 @@ def _ejecutar_test_sap_query(request, sku):
     logger.info("=" * 70)
 
     try:
-        if not ENABLE_SAP_QUERIES:
-            return JSONResponse(
-                status_code=400,
-                content={
-                    "status": "error",
-                    "message": "Consultas SAP están deshabilitadas",
-                    "hint": "Configura ENABLE_SAP_QUERIES=true en .env"
-                }
-            )
-
         sap_service = SAPService()
         producto_info = sap_service.get_or_fetch_producto_info(sku)
 
@@ -750,7 +724,6 @@ def _ejecutar_test_sap_query(request, sku):
                 },
                 "config": {
                     "sap_linked_server": SAP_LINKED_SERVER,
-                    "sap_enabled": ENABLE_SAP_QUERIES,
                 },
                 "message": "Producto encontrado en SAP",
                 "timestamp": ahora_naive().isoformat()
@@ -815,15 +788,6 @@ def _ejecutar_test_sap_direct(request, sku):
     logger.info("=" * 70)
 
     try:
-        if not ENABLE_SAP_QUERIES:
-            return JSONResponse(
-                status_code=400,
-                content={
-                    "status": "error",
-                    "message": "Consultas SAP están deshabilitadas"
-                }
-            )
-
         client = SAPClient()
         resultado = client.get_producto_info(sku)
 
@@ -947,7 +911,6 @@ def register_sap_endpoints(app: FastAPI):
           - `SAP_SERVICE_LAYER_USERNAME`
           - `SAP_SERVICE_LAYER_PASSWORD`
           - `SAP_SERVICE_LAYER_DATABASE`
-          - `ENABLE_SAP_SERVICE_LAYER=true`
 
         Returns:
             JSON con metadata del proceso de envío a SAP

@@ -32,7 +32,7 @@ def test_itrs_por_tienda_excluye_tiendas_sin_doc_num():
     _, _, solicitudes = _resolver_doc_num_y_solicitudes(resultado_sap_envio)
 
     assert solicitudes["itrs_por_tienda"] == [
-        {"doc_num": 70215584, "tienda_codigo": "TRL-MSU"}
+        {"doc_num": 70215584, "tienda_codigo": "TRL-MSU", "tienda_nombre": None}
     ]
 
 

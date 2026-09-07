@@ -27,6 +27,9 @@ exclude = [
 # para que todos los loggers queden configurados correctamente (ver comentario
 # en el propio archivo) - los imports posteriores son intencionales, no un descuido.
 "src/api_server.py" = ["E402"]
+# Script standalone: necesita insertar la raíz del proyecto en sys.path antes de
+# poder importar módulos de src/ - los imports posteriores son intencionales.
+"scripts/test_sap_query.py" = ["E402"]
 
 [tool.ruff.format]
 quote-style = "double"

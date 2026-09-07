@@ -4,35 +4,26 @@ Guía completa de configuración del sistema MBA3 Consultas.
 
 ## 📋 Variables de Entorno
 
-### Archivos por ambiente (obligatorios)
+### Archivo `.env` (desarrollo local)
 
-La aplicación **exige** un archivo de entorno según `ENVIRONMENT` (no usa fallback silencioso a `.env`):
+La aplicación **exige** un archivo **`.env`** en la raíz del proyecto para desarrollo local (no usa fallback silencioso). Si falta, el proceso **termina al iniciar** con un mensaje claro.
 
-| ENVIRONMENT (normalizado) | Archivo requerido en la raíz del proyecto |
-|---------------------------|-------------------------------------------|
-| `development` / `develop` | `.env.develop` |
-| `test` | `.env.test` |
-| `staging` | `.env.staging` |
-| `production` | `.env.production` |
+**Override:** define `ENV_FILE` con la ruta (absoluta o relativa al root del repo) a otro archivo `.env` concreto; ese archivo también debe existir. Tiene prioridad sobre `.env`. Se usa para los despliegues reales de test/producción, administrados fuera de este repo (equipo de Azure DevOps) — ya no hace falta mantener archivos `.env.test`/`.env.production` acá.
 
-Si falta el archivo correspondiente, el proceso **termina al iniciar** con un mensaje claro.
-
-**Override:** define `ENV_FILE` con la ruta (absoluta o relativa al root del repo) a un archivo `.env` concreto; ese archivo también debe existir. Tiene prioridad sobre la tabla anterior.
-
-**Orden de carga:** primero se elige el fichero (`ENV_FILE` o `.env.{ambiente}`), luego se carga con `python-dotenv`, y **después** se lee `ENVIRONMENT` para el modo lógico de la app. Así, en servidor puedes usar un solo archivo (p. ej. `/opt/odc-sap/.env`) con `ENVIRONMENT=production` dentro, sin depender de `.env.develop`.
+**Orden de carga:** primero se elige el fichero (`ENV_FILE` o `.env`), luego se carga con `python-dotenv`, y **después** se lee `ENVIRONMENT` (definido dentro de ese archivo) para el modo lógico de la app.
 
 ### Desarrollo con Docker (perfil `app`)
 
-Con `.\scripts\docker-app-up.ps1` el archivo **`.env.develop`** se monta en el contenedor. Compose sobrescribe solo:
+Con `.\scripts\docker-app-up.ps1` el archivo **`.env`** se monta en el contenedor. Compose sobrescribe solo:
 
 - `REDIS_URL=redis://redis:6379/0`
 - `FILE_STORAGE_ENDPOINT=http://minio:9000`
 
-El resto (SQL, SAP, MBA3, JWT) sale de tu `.env.develop`. Si SQL Server corre en tu **máquina Windows** y en el `.env` tienes `SQL_SERVER_SERVER=localhost`, **desde el contenedor fallará**: usa `host.docker.internal` (con puerto, p. ej. `host.docker.internal,1433`) o el hostname/IP del servidor. Detalle: [DOCKER_COMPOSE.md](DOCKER_COMPOSE.md).
+El resto (SQL, SAP, MBA3, JWT) sale de tu `.env`. Si SQL Server corre en tu **máquina Windows** y en el `.env` tienes `SQL_SERVER_SERVER=localhost`, **desde el contenedor fallará**: usa `host.docker.internal` (con puerto, p. ej. `host.docker.internal,1433`) o el hostname/IP del servidor. Detalle: [DOCKER_COMPOSE.md](DOCKER_COMPOSE.md).
 
 ### systemd (Linux): API, Celery worker y Celery beat
 
-En producción o test no uses `.env.develop` como única fuente en la unidad: apunta al fichero real del servidor y fija el ambiente explícitamente:
+Test y producción se administran fuera de este repo (equipo de Azure DevOps): apuntan a un `.env` propio del servidor vía `ENV_FILE`, fijando el ambiente explícitamente:
 
 ```ini
 Environment=ENVIRONMENT=production
@@ -59,7 +50,6 @@ SQL_SERVER_SERVER=210.17.1.54
 SQL_SERVER_DATABASE=store_control
 SQL_SERVER_UID=tu_usuario
 SQL_SERVER_PWD=tu_contraseña
-ENABLE_SQL_SERVER_STORAGE=true
 ```
 
 **Autenticación Windows:** Dejar `SQL_SERVER_UID` y `SQL_SERVER_PWD` vacíos.
@@ -90,7 +80,6 @@ SQL_SERVER_SAP_PWD=contraseña
 SAP_LINKED_SERVER=MYHANADB
 SAP_DATABASE=SBO_MABEL_PROD
 SAP_SCHEMA=SBO_MABEL_PROD
-ENABLE_SAP_QUERIES=true
 SAP_CACHE_DAYS=30
 ```
 
@@ -107,8 +96,6 @@ SAP_SL_BASE_URL=http://10.128.240.4:50001/b1s/v1
 SAP_COMPANY_DB=TEST_MABEL
 SAP_USER=MZ-SIS-05
 SAP_PASSWORD=***REMOVED***
-ENABLE_SAP_SERVICE_LAYER=true
-SAP_SERVICE_LAYER_TIMEOUT=30
 SAP_SERVICE_LAYER_VERIFY_SSL=false
 SAP_ST_FROM_WAREHOUSE=OUT-CON
 ```
@@ -122,9 +109,6 @@ SAP_ST_FROM_WAREHOUSE=OUT-CON
 ### Notificaciones por Email
 
 ```env
-# Habilitar/Deshabilitar notificaciones
-ENABLE_EMAIL_NOTIFICATIONS=true
-
 # Configuración SMTP
 EMAIL_SMTP_SERVER=mabeltrading-com-ec.mail.protection.outlook.com
 EMAIL_SMTP_PORT=25

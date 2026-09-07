@@ -5,7 +5,6 @@ Servicio para guardar facturas de MBA3 en SQL Server.
 import logging
 from typing import Dict, Any, List, Optional
 
-from src.config import ENABLE_SQL_SERVER_STORAGE
 from ..connection import get_db_connection_context
 from ..repositories.despacho_repository import DespachoRepository
 from ..mappers.factura_mapper import FacturaMapper
@@ -276,10 +275,6 @@ def save_mba3_data_to_sql_server(
     Returns:
         Dict con estadísticas de la operación
     """
-    if not ENABLE_SQL_SERVER_STORAGE:
-        logger.info("⏭️ Guardado en SQL Server deshabilitado (ENABLE_SQL_SERVER_STORAGE=False)")
-        return {"status": "disabled", "message": "SQL Server storage is disabled"}
-
     stats = {
         "status": "success",
         "total_facturas": 0,

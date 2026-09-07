@@ -9,7 +9,6 @@ Uso:
 """
 
 import sys
-import os
 from pathlib import Path
 
 # Agregar el directorio raíz del proyecto al path para importar módulos
@@ -23,7 +22,6 @@ from src.database.services.sap_service import SAPService
 from src.database.repositories.producto_sap_repository import ProductoSAPRepository
 from src.database.connection import get_db_connection
 from src.config import (
-    ENABLE_SAP_QUERIES, 
     SAP_LINKED_SERVER,
     SQL_SERVER_SERVER,
     SQL_SERVER_DATABASE
@@ -48,12 +46,7 @@ def test_sap_client_direct(sku: str = "5-0012.9"):
     print("🔍 PRUEBA 1: Cliente SAP Directo")
     print("=" * 70)
     
-    if not ENABLE_SAP_QUERIES:
-        print("❌ ERROR: Consultas SAP están deshabilitadas")
-        print("   Configura ENABLE_SAP_QUERIES=true en .env")
-        return False
-    
-    print(f"📋 Configuración:")
+    print("📋 Configuración:")
     print(f"   Servidor vinculado: {SAP_LINKED_SERVER}")
     print(f"   SKU a consultar: {sku}")
     print()
@@ -96,10 +89,6 @@ def test_sap_service_with_cache(sku: str = "5-0012.9"):
     print("=" * 70)
     print("🔍 PRUEBA 2: Servicio SAP con Cache")
     print("=" * 70)
-    
-    if not ENABLE_SAP_QUERIES:
-        print("❌ ERROR: Consultas SAP están deshabilitadas")
-        return False
     
     try:
         service = SAPService()
