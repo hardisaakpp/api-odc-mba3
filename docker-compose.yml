@@ -54,8 +54,11 @@ x-app-common: &app-common
   depends_on:
     redis:
       condition: service_healthy
-    minio:
-      condition: service_healthy
+    # MinIO no se declara aquí a propósito: el storage se consume bajo demanda
+    # vía HTTP (no hace falta al arranque), y test/prod usan un MinIO externo
+    # que no corre como servicio de este compose. Si se declarara aquí, los
+    # overlays de test/prod tendrían que "resetear" la dependencia con
+    # etiquetas de merge (!reset) que no todo motor de Compose soporta.
 
 services:
   redis:
