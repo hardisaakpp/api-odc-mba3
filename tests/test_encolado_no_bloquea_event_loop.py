@@ -252,6 +252,95 @@ class TestCruceProductosNoBloquea:
         )
 
 
+class TestNotificacionPersonaCorreoNoBloquea:
+    """Endpoints de administración de notificacion_persona_correo."""
+
+    @pytest.mark.asyncio
+    async def test_listar_corre_fuera_del_event_loop(self, monkeypatch):
+        from src.endpoints import notificacion_persona_correo_endpoints as npc
+
+        hilo = {}
+
+        def fake_db_listar():
+            hilo["id"] = _hilo_actual()
+            return {"personas_correo": []}
+
+        monkeypatch.setattr(npc, "_db_listar_personas_correo", fake_db_listar)
+
+        resultado = await npc._listar_handler()
+
+        assert resultado == {"personas_correo": []}
+        assert "id" in hilo, "no se llegó a consultar"
+        assert hilo["id"] != _hilo_actual(), (
+            "_db_listar_personas_correo() corrió en el event loop: hace DB (pyodbc). "
+            "Debe invocarse con asyncio.to_thread."
+        )
+
+    @pytest.mark.asyncio
+    async def test_crear_link_corre_fuera_del_event_loop(self, monkeypatch):
+        from src.endpoints import notificacion_persona_correo_endpoints as npc
+
+        hilo = {}
+
+        def fake_db_crear(_nombre, _correo, _tipo_correo_id, _creado_por):
+            hilo["id"] = _hilo_actual()
+            return 42
+
+        monkeypatch.setattr(npc, "_db_crear_link_persona_correo", fake_db_crear)
+
+        body = npc.CrearLinkRequest(nombre="Juan", email="juan@mabeltrading.com.ec", tipo_correo_id=1)
+        resultado = await npc._crear_link_handler(body, user={"username": "admin1"})
+
+        assert resultado["id"] == 42
+        assert "id" in hilo, "no se llegó a crear el link"
+        assert hilo["id"] != _hilo_actual(), (
+            "_db_crear_link_persona_correo() corrió en el event loop: hace DB (pyodbc). "
+            "Debe invocarse con asyncio.to_thread."
+        )
+
+    @pytest.mark.asyncio
+    async def test_eliminar_link_corre_fuera_del_event_loop(self, monkeypatch):
+        from src.endpoints import notificacion_persona_correo_endpoints as npc
+
+        hilo = {}
+
+        def fake_db_eliminar(_link_id):
+            hilo["id"] = _hilo_actual()
+            return True
+
+        monkeypatch.setattr(npc, "_db_eliminar_link_persona_correo", fake_db_eliminar)
+
+        resultado = await npc._eliminar_link_handler(7)
+
+        assert resultado == {"success": True}
+        assert "id" in hilo, "no se llegó a eliminar el link"
+        assert hilo["id"] != _hilo_actual(), (
+            "_db_eliminar_link_persona_correo() corrió en el event loop: hace DB (pyodbc). "
+            "Debe invocarse con asyncio.to_thread."
+        )
+
+    @pytest.mark.asyncio
+    async def test_eliminar_persona_corre_fuera_del_event_loop(self, monkeypatch):
+        from src.endpoints import notificacion_persona_correo_endpoints as npc
+
+        hilo = {}
+
+        def fake_db_eliminar(_email):
+            hilo["id"] = _hilo_actual()
+            return True
+
+        monkeypatch.setattr(npc, "_db_eliminar_persona", fake_db_eliminar)
+
+        resultado = await npc._eliminar_persona_handler("juan@mabeltrading.com.ec")
+
+        assert resultado == {"success": True}
+        assert "id" in hilo, "no se llegó a eliminar la persona"
+        assert hilo["id"] != _hilo_actual(), (
+            "_db_eliminar_persona() corrió en el event loop: hace DB (pyodbc). "
+            "Debe invocarse con asyncio.to_thread."
+        )
+
+
 class TestSapTestEndpointsNoBloquean:
     """GET /sap/test y /sap/test/direct"""
 
