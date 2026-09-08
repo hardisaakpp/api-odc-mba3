@@ -15,6 +15,7 @@ un thread distinto al del event loop. No dependen de Redis ni de un worker.
 
 import asyncio
 import threading
+from unittest.mock import MagicMock
 
 import pytest
 from fastapi.responses import JSONResponse
@@ -337,6 +338,60 @@ class TestNotificacionPersonaCorreoNoBloquea:
         assert "id" in hilo, "no se llegó a eliminar la persona"
         assert hilo["id"] != _hilo_actual(), (
             "_db_eliminar_persona() corrió en el event loop: hace DB (pyodbc). "
+            "Debe invocarse con asyncio.to_thread."
+        )
+
+
+class TestEliminarOrdenesCompraNoBloquea:
+    """DELETE /ordenes-compra/{oc_id} y DELETE /ordenes-compra (batch)"""
+
+    @pytest.mark.asyncio
+    async def test_eliminar_una_oc_corre_fuera_del_event_loop(self, monkeypatch):
+        from src.endpoints import ordenes_compra as oc_module
+
+        hilo = {}
+
+        def fake_db_eliminar(_oc_id, _source):
+            hilo["id"] = _hilo_actual()
+            return JSONResponse(status_code=200, content={"status": "success"})
+
+        monkeypatch.setattr(oc_module, "_db_eliminar_orden_compra", fake_db_eliminar)
+
+        request = MagicMock()
+        request.headers = {}
+
+        respuesta = await oc_module._delete_orden_compra_handler(request, "oc-1")
+
+        assert respuesta.status_code == 200
+        assert "id" in hilo, "no se llegó a eliminar"
+        assert hilo["id"] != _hilo_actual(), (
+            "_db_eliminar_orden_compra() corrió en el event loop: hace DB (pyodbc). "
+            "Debe invocarse con asyncio.to_thread."
+        )
+
+    @pytest.mark.asyncio
+    async def test_eliminar_ordenes_batch_corre_fuera_del_event_loop(self, monkeypatch):
+        from src.endpoints import ordenes_compra as oc_module
+
+        hilo = {}
+
+        def fake_db_eliminar_batch(_oc_ids_list):
+            hilo["id"] = _hilo_actual()
+            return [{"oc_id": "oc-1", "status": "success"}], {
+                "eliminadas": 1, "errores": 0, "no_encontradas": 0, "no_permitidas": 0
+            }
+
+        monkeypatch.setattr(oc_module, "_db_eliminar_ordenes_compra", fake_db_eliminar_batch)
+
+        request = MagicMock()
+        request.headers = {}
+
+        respuesta = await oc_module._delete_ordenes_compra_handler(request, ["oc-1"])
+
+        assert respuesta.status_code == 200
+        assert "id" in hilo, "no se llegó a eliminar"
+        assert hilo["id"] != _hilo_actual(), (
+            "_db_eliminar_ordenes_compra() corrió en el event loop: hace DB (pyodbc). "
             "Debe invocarse con asyncio.to_thread."
         )
 

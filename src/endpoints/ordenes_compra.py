@@ -931,17 +931,10 @@ async def _get_ordenes_compra_logs_handler(request, page, page_size, oc_id, refe
         )
 
 
-async def _delete_orden_compra_handler(request, oc_id):
-    source = get_source_from_headers(request)
-
-    logger.info("=" * 70)
-    logger.info(f"🗑️ DELETE /ordenes-compra/{oc_id}: Eliminación iniciada a las {ahora_naive().isoformat()}")
-    logger.info(f"Fuente: {source}")
-    logger.info("=" * 70)
-
-    try:
-        # Usar context manager para garantizar transacción y cierre de conexión
-        with get_db_connection_context() as conn:
+def _db_eliminar_orden_compra(oc_id, source):
+    """Consulta bloqueante (pyodbc); se ejecuta vía asyncio.to_thread."""
+    # Usar context manager para garantizar transacción y cierre de conexión
+    with get_db_connection_context() as conn:
             oc_repo = OrdenCompraRepository(conn)
 
             # Verificar que la OC existe antes de eliminar
@@ -1018,6 +1011,17 @@ async def _delete_orden_compra_handler(request, oc_id):
                     }
                 )
 
+
+async def _delete_orden_compra_handler(request, oc_id):
+    source = get_source_from_headers(request)
+
+    logger.info("=" * 70)
+    logger.info(f"🗑️ DELETE /ordenes-compra/{oc_id}: Eliminación iniciada a las {ahora_naive().isoformat()}")
+    logger.info(f"Fuente: {source}")
+    logger.info("=" * 70)
+
+    try:
+        return await asyncio.to_thread(_db_eliminar_orden_compra, oc_id, source)
     except Exception as e:
         logger.error(f"❌ Error al eliminar orden de compra {oc_id}: {e}", exc_info=True)
         return JSONResponse(
@@ -1028,6 +1032,21 @@ async def _delete_orden_compra_handler(request, oc_id):
                 "oc_id": oc_id
             }
         )
+
+
+def _db_eliminar_ordenes_compra(oc_ids_list):
+    """Consulta bloqueante (pyodbc); se ejecuta vía asyncio.to_thread."""
+    resultados = []
+    contadores = {"eliminadas": 0, "errores": 0, "no_encontradas": 0, "no_permitidas": 0}
+
+    with get_db_connection_context() as conn:
+        oc_repo = OrdenCompraRepository(conn)
+        for oc_id_item in oc_ids_list:
+            resultado, categoria = _eliminar_una_oc(oc_repo, oc_id_item)
+            resultados.append(resultado)
+            contadores[categoria] += 1
+
+    return resultados, contadores
 
 
 async def _delete_ordenes_compra_handler(request, oc_id):
@@ -1072,16 +1091,7 @@ async def _delete_ordenes_compra_handler(request, oc_id):
         logger.info(f"   IDs: {oc_ids_list}")
         logger.info("=" * 70)
 
-        # Usar context manager para garantizar transacción y cierre de conexión
-        resultados = []
-        contadores = {"eliminadas": 0, "errores": 0, "no_encontradas": 0, "no_permitidas": 0}
-
-        with get_db_connection_context() as conn:
-            oc_repo = OrdenCompraRepository(conn)
-            for oc_id_item in oc_ids_list:
-                resultado, categoria = _eliminar_una_oc(oc_repo, oc_id_item)
-                resultados.append(resultado)
-                contadores[categoria] += 1
+        resultados, contadores = await asyncio.to_thread(_db_eliminar_ordenes_compra, oc_ids_list)
 
         eliminadas = contadores["eliminadas"]
         errores = contadores["errores"]
