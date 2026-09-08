@@ -343,6 +343,91 @@ class TestNotificacionPersonaCorreoNoBloquea:
         )
 
 
+class TestBorradorRedistribucionNoBloquea:
+    """Endpoints de borrador y datos iniciales de redistribución."""
+
+    @pytest.mark.asyncio
+    async def test_guardar_borrador_corre_fuera_del_event_loop(self, monkeypatch):
+        from src.endpoints.pedidos.redistribucion import endpoints_borrador as eb
+
+        hilo = {}
+
+        def fake_db_guardar(_numero_pedido, _request_body, _user_id, _audit):
+            hilo["id"] = _hilo_actual()
+            return eb.GuardarBorradorResponse(
+                pedido_id="p1", numero_pedido="PED-1",
+                fecha_guardado=eb.ahora_naive(), message="ok"
+            )
+
+        monkeypatch.setattr(eb, "_db_guardar_borrador", fake_db_guardar)
+        monkeypatch.setattr(eb, "get_user_id", lambda _user: "u1")
+        monkeypatch.setattr(eb, "get_audit_context", lambda *_a, **_k: {})
+
+        ajuste = eb.AjusteDetalle(
+            codigo_producto="P1",
+            descripcion="Producto 1",
+            cantidad_solicitada=10,
+            cantidad_confirmada=10,
+            cantidad_ajustada=10,
+            distribucion_tiendas=[
+                eb.DistribucionTiendaFrontend(tienda_codigo="T001", cantidad=10)
+            ],
+        )
+        request_body = eb.GuardarBorradorRequest(ajustes_detalle=[ajuste])
+        respuesta = await eb._guardar_borrador_handler(
+            request=object(), numero_pedido="PED-1", request_body=request_body, user={"username": "u1"}
+        )
+
+        assert respuesta.message == "ok"
+        assert "id" in hilo, "no se llegó a guardar el borrador"
+        assert hilo["id"] != _hilo_actual(), (
+            "_db_guardar_borrador() corrió en el event loop: hace DB (pyodbc). "
+            "Debe invocarse con asyncio.to_thread."
+        )
+
+    @pytest.mark.asyncio
+    async def test_obtener_borrador_corre_fuera_del_event_loop(self, monkeypatch):
+        from src.endpoints.pedidos.redistribucion import endpoints_borrador as eb
+
+        hilo = {}
+
+        def fake_db_obtener(_numero_pedido):
+            hilo["id"] = _hilo_actual()
+            return eb.BorradorResponse(status="success", ajustes_detalle=[], fecha_guardado=None, message="ok")
+
+        monkeypatch.setattr(eb, "_db_obtener_borrador", fake_db_obtener)
+
+        respuesta = await eb._obtener_borrador_handler("PED-1")
+
+        assert respuesta.message == "ok"
+        assert "id" in hilo, "no se llegó a obtener el borrador"
+        assert hilo["id"] != _hilo_actual(), (
+            "_db_obtener_borrador() corrió en el event loop: hace DB (pyodbc). "
+            "Debe invocarse con asyncio.to_thread."
+        )
+
+    @pytest.mark.asyncio
+    async def test_obtener_datos_iniciales_corre_fuera_del_event_loop(self, monkeypatch):
+        from src.endpoints.pedidos.redistribucion import endpoints_borrador as eb
+
+        hilo = {}
+
+        def fake_db_datos_iniciales(_numero_pedido, _solo_lectura):
+            hilo["id"] = _hilo_actual()
+            return eb.BorradorResponse(ajustes_detalle=[], fecha_guardado=eb.ahora_naive())
+
+        monkeypatch.setattr(eb, "_db_obtener_datos_iniciales", fake_db_datos_iniciales)
+
+        respuesta = await eb._obtener_datos_iniciales_handler("PED-1", None)
+
+        assert respuesta.ajustes_detalle == []
+        assert "id" in hilo, "no se llegó a obtener los datos iniciales"
+        assert hilo["id"] != _hilo_actual(), (
+            "_db_obtener_datos_iniciales() corrió en el event loop: hace DB (pyodbc). "
+            "Debe invocarse con asyncio.to_thread."
+        )
+
+
 class TestDescargarPedidoExcelNoBloquea:
     """GET /api/pedidos/{pedido_id}/descargar-excel"""
 

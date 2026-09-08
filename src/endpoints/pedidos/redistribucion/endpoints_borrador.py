@@ -1,5 +1,6 @@
 """Endpoints de borrador y datos iniciales de redistribución."""
 
+import asyncio
 import json
 import logging
 from typing import Dict, Optional
@@ -184,25 +185,34 @@ def _construir_ajustes_normales(pedido_data: dict, respuestas_map: dict, tienda_
     return ajustes_detalle
 
 
+def _db_guardar_borrador(
+    numero_pedido: str, request_body: GuardarBorradorRequest, user_id, audit
+) -> GuardarBorradorResponse:
+    """Consulta bloqueante (pyodbc); se ejecuta vía asyncio.to_thread."""
+    with get_db_connection_context() as conn:
+        repo_pedido = PedidoRepository(conn)
+        repo_borrador = RedistribucionBorradorRepository(conn)
+        pedido_data = obtener_pedido_o_404(repo_pedido, numero_pedido, es_numero=True)
+        pedido_id = pedido_data["cabecera"]["pedido_id"]
+        ajustes_json = json.dumps([ajuste.dict() for ajuste in request_body.ajustes_detalle])
+        repo_borrador.upsert_borrador(pedido_id, numero_pedido, ajustes_json, user_id, audit_context=audit)
+        return GuardarBorradorResponse(
+            pedido_id=pedido_id,
+            numero_pedido=numero_pedido,
+            fecha_guardado=ahora_naive(),
+            message="Borrador guardado exitosamente"
+        )
+
+
 async def _guardar_borrador_handler(
     request: Request, numero_pedido: str, request_body: GuardarBorradorRequest, user: Dict
 ) -> GuardarBorradorResponse:
     try:
         user_id = get_user_id(user)
         audit = get_audit_context(request, user, origen=ORIGEN_WEB)
-        with get_db_connection_context() as conn:
-            repo_pedido = PedidoRepository(conn)
-            repo_borrador = RedistribucionBorradorRepository(conn)
-            pedido_data = obtener_pedido_o_404(repo_pedido, numero_pedido, es_numero=True)
-            pedido_id = pedido_data["cabecera"]["pedido_id"]
-            ajustes_json = json.dumps([ajuste.dict() for ajuste in request_body.ajustes_detalle])
-            repo_borrador.upsert_borrador(pedido_id, numero_pedido, ajustes_json, user_id, audit_context=audit)
-            return GuardarBorradorResponse(
-                pedido_id=pedido_id,
-                numero_pedido=numero_pedido,
-                fecha_guardado=ahora_naive(),
-                message="Borrador guardado exitosamente"
-            )
+        return await asyncio.to_thread(
+            _db_guardar_borrador, numero_pedido, request_body, user_id, audit
+        )
     except HTTPException:
         raise
     except Exception as e:
@@ -213,45 +223,50 @@ async def _guardar_borrador_handler(
         )
 
 
+def _db_obtener_borrador(numero_pedido: str) -> BorradorResponse:
+    """Consulta bloqueante (pyodbc); se ejecuta vía asyncio.to_thread."""
+    with get_db_connection_context() as conn:
+        repo_pedido = PedidoRepository(conn)
+        repo_borrador = RedistribucionBorradorRepository(conn)
+        pedido_data = repo_pedido.get_pedido_completo_por_numero(numero_pedido)
+        if not pedido_data:
+            return BorradorResponse(
+                status="success",
+                ajustes_detalle=[],
+                fecha_guardado=None,
+                message="No se encontró el pedido, no hay borrador disponible"
+            )
+        pedido_id = pedido_data["cabecera"]["pedido_id"]
+        borrador = repo_borrador.get_borrador(pedido_id)
+        if not borrador:
+            return BorradorResponse(
+                status="success",
+                ajustes_detalle=[],
+                fecha_guardado=None,
+                message="No hay borrador guardado para este pedido"
+            )
+        ajustes_list = json.loads(borrador["ajustes_detalle"])
+        fecha_guardado = borrador["fecha_guardado"]
+        detalles_pedido_map = {
+            detalle.get("codigo_interno"): detalle
+            for detalle in pedido_data.get("detalles", [])
+        }
+        ajustes_detalle_sincronizados = []
+        for ajuste_dict in ajustes_list:
+            _sincronizar_ajuste_con_pedido(ajuste_dict, detalles_pedido_map, repo_pedido.tienda_repo)
+            ajustes_detalle_sincronizados.append(AjusteDetalle(**ajuste_dict))
+        ajustes_detalle_sincronizados.sort(
+            key=lambda a: (a.codigo_producto or "", a.pedido_detalle_id or "")
+        )
+        return BorradorResponse(
+            ajustes_detalle=ajustes_detalle_sincronizados,
+            fecha_guardado=fecha_guardado
+        )
+
+
 async def _obtener_borrador_handler(numero_pedido: str) -> BorradorResponse:
     try:
-        with get_db_connection_context() as conn:
-            repo_pedido = PedidoRepository(conn)
-            repo_borrador = RedistribucionBorradorRepository(conn)
-            pedido_data = repo_pedido.get_pedido_completo_por_numero(numero_pedido)
-            if not pedido_data:
-                return BorradorResponse(
-                    status="success",
-                    ajustes_detalle=[],
-                    fecha_guardado=None,
-                    message="No se encontró el pedido, no hay borrador disponible"
-                )
-            pedido_id = pedido_data["cabecera"]["pedido_id"]
-            borrador = repo_borrador.get_borrador(pedido_id)
-            if not borrador:
-                return BorradorResponse(
-                    status="success",
-                    ajustes_detalle=[],
-                    fecha_guardado=None,
-                    message="No hay borrador guardado para este pedido"
-                )
-            ajustes_list = json.loads(borrador["ajustes_detalle"])
-            fecha_guardado = borrador["fecha_guardado"]
-            detalles_pedido_map = {
-                detalle.get("codigo_interno"): detalle
-                for detalle in pedido_data.get("detalles", [])
-            }
-            ajustes_detalle_sincronizados = []
-            for ajuste_dict in ajustes_list:
-                _sincronizar_ajuste_con_pedido(ajuste_dict, detalles_pedido_map, repo_pedido.tienda_repo)
-                ajustes_detalle_sincronizados.append(AjusteDetalle(**ajuste_dict))
-            ajustes_detalle_sincronizados.sort(
-                key=lambda a: (a.codigo_producto or "", a.pedido_detalle_id or "")
-            )
-            return BorradorResponse(
-                ajustes_detalle=ajustes_detalle_sincronizados,
-                fecha_guardado=fecha_guardado
-            )
+        return await asyncio.to_thread(_db_obtener_borrador, numero_pedido)
     except HTTPException:
         raise
     except Exception as e:
@@ -262,33 +277,40 @@ async def _obtener_borrador_handler(numero_pedido: str) -> BorradorResponse:
         )
 
 
+def _db_obtener_datos_iniciales(
+    numero_pedido: str, solo_lectura: Optional[str]
+) -> BorradorResponse:
+    """Consulta bloqueante (pyodbc); se ejecuta vía asyncio.to_thread."""
+    with get_db_connection_context() as conn:
+        repo_pedido = PedidoRepository(conn)
+        pedido_data = obtener_pedido_o_404(repo_pedido, numero_pedido, es_numero=True)
+        pedido_id = pedido_data["cabecera"]["pedido_id"]
+        if str(solo_lectura or "").lower() in ("1", "true"):
+            repo_dist = DistribucionConfirmadaRepository(conn)
+            version_actual = repo_dist.get_version_actual(pedido_id)
+            if version_actual >= 1:
+                distribucion_data = repo_dist.get_distribucion_completa(pedido_id)
+                detalles_by_id = {
+                    d.get("pedido_detalle_id"): d
+                    for d in pedido_data.get("detalles", [])
+                    if d.get("pedido_detalle_id")
+                }
+                ajustes = _construir_ajustes_solo_lectura(
+                    distribucion_data, detalles_by_id, repo_pedido.tienda_repo
+                )
+                return BorradorResponse(ajustes_detalle=ajustes, fecha_guardado=ahora_naive())
+        respuestas_map = obtener_respuestas_proveedor(repo_pedido, pedido_id, top_one=True)
+        ajustes_detalle = _construir_ajustes_normales(
+            pedido_data, respuestas_map, repo_pedido.tienda_repo
+        )
+        return BorradorResponse(ajustes_detalle=ajustes_detalle, fecha_guardado=ahora_naive())
+
+
 async def _obtener_datos_iniciales_handler(
     numero_pedido: str, solo_lectura: Optional[str]
 ) -> BorradorResponse:
     try:
-        with get_db_connection_context() as conn:
-            repo_pedido = PedidoRepository(conn)
-            pedido_data = obtener_pedido_o_404(repo_pedido, numero_pedido, es_numero=True)
-            pedido_id = pedido_data["cabecera"]["pedido_id"]
-            if str(solo_lectura or "").lower() in ("1", "true"):
-                repo_dist = DistribucionConfirmadaRepository(conn)
-                version_actual = repo_dist.get_version_actual(pedido_id)
-                if version_actual >= 1:
-                    distribucion_data = repo_dist.get_distribucion_completa(pedido_id)
-                    detalles_by_id = {
-                        d.get("pedido_detalle_id"): d
-                        for d in pedido_data.get("detalles", [])
-                        if d.get("pedido_detalle_id")
-                    }
-                    ajustes = _construir_ajustes_solo_lectura(
-                        distribucion_data, detalles_by_id, repo_pedido.tienda_repo
-                    )
-                    return BorradorResponse(ajustes_detalle=ajustes, fecha_guardado=ahora_naive())
-            respuestas_map = obtener_respuestas_proveedor(repo_pedido, pedido_id, top_one=True)
-            ajustes_detalle = _construir_ajustes_normales(
-                pedido_data, respuestas_map, repo_pedido.tienda_repo
-            )
-            return BorradorResponse(ajustes_detalle=ajustes_detalle, fecha_guardado=ahora_naive())
+        return await asyncio.to_thread(_db_obtener_datos_iniciales, numero_pedido, solo_lectura)
     except HTTPException:
         raise
     except Exception as e:
