@@ -18,6 +18,7 @@ import threading
 from unittest.mock import MagicMock
 
 import pytest
+from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 
 
@@ -339,6 +340,37 @@ class TestNotificacionPersonaCorreoNoBloquea:
         assert hilo["id"] != _hilo_actual(), (
             "_db_eliminar_persona() corrió en el event loop: hace DB (pyodbc). "
             "Debe invocarse con asyncio.to_thread."
+        )
+
+
+class TestDescargarPedidoExcelNoBloquea:
+    """GET /api/pedidos/{pedido_id}/descargar-excel"""
+
+    @pytest.mark.asyncio
+    async def test_generar_excel_corre_fuera_del_event_loop(self, monkeypatch):
+        from src.endpoints.pedidos import pedidos_descarga_endpoints as descarga
+
+        hilo = {}
+
+        def fake_db_generar(_pedido_id, _username):
+            hilo["id"] = _hilo_actual()
+            return JSONResponse(status_code=200, content={"status": "ok"})
+
+        monkeypatch.setattr(descarga, "_db_generar_pedido_excel", fake_db_generar)
+
+        app = FastAPI()
+        descarga.register_pedidos_descarga_endpoints(app)
+        handler = next(
+            r for r in app.routes if getattr(r, "path", None) == "/api/pedidos/{pedido_id}/descargar-excel"
+        ).endpoint
+
+        respuesta = await handler(pedido_id="ped-1", user={"username": "u1"})
+
+        assert respuesta.status_code == 200
+        assert "id" in hilo, "no se llegó a generar el excel"
+        assert hilo["id"] != _hilo_actual(), (
+            "_db_generar_pedido_excel() corrió en el event loop: hace DB (pyodbc) y "
+            "genera el Excel. Debe invocarse con asyncio.to_thread."
         )
 
 
