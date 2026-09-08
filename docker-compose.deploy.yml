@@ -22,11 +22,6 @@ x-deploy-common: &deploy-common
     FILE_STORAGE_ENDPOINT: ${FILE_STORAGE_ENDPOINT}
   env_file:
     - /opt/odc-sap/.env
-  # docker-compose.yml declara "minio" como dependencia (perfil "app", storage
-  # siempre activo en dev); acá se quita porque el MinIO embebido está
-  # desactivado en este host (ver nota junto al servicio "minio" abajo).
-  depends_on:
-    minio: !reset null
 
 services:
   redis:
