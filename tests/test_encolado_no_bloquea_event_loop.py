@@ -252,6 +252,50 @@ class TestCruceProductosNoBloquea:
         )
 
 
+class TestSapTestEndpointsNoBloquean:
+    """GET /sap/test y /sap/test/direct"""
+
+    def test_test_sap_query_corre_fuera_del_event_loop(self, client, monkeypatch):
+        from src.endpoints import sap
+
+        hilo_de_la_query = {}
+
+        def fake_ejecutar(_request, _sku):
+            hilo_de_la_query["id"] = _hilo_actual()
+            return {"ok": True}
+
+        monkeypatch.setattr(sap, "_ejecutar_test_sap_query", fake_ejecutar)
+
+        respuesta = client.get("/sap/test", params={"sku": "5-0012.9"})
+
+        assert respuesta.status_code == 200
+        assert "id" in hilo_de_la_query, "no se llegó a ejecutar la consulta"
+        assert hilo_de_la_query["id"] != _hilo_actual(), (
+            "_ejecutar_test_sap_query() corrió en el event loop: hace DB (pyodbc) "
+            "vía SAPService. Debe invocarse con asyncio.to_thread."
+        )
+
+    def test_test_sap_direct_corre_fuera_del_event_loop(self, client, monkeypatch):
+        from src.endpoints import sap
+
+        hilo_de_la_query = {}
+
+        def fake_ejecutar(_request, _sku):
+            hilo_de_la_query["id"] = _hilo_actual()
+            return {"ok": True}
+
+        monkeypatch.setattr(sap, "_ejecutar_test_sap_direct", fake_ejecutar)
+
+        respuesta = client.get("/sap/test/direct", params={"sku": "5-0012.9"})
+
+        assert respuesta.status_code == 200
+        assert "id" in hilo_de_la_query, "no se llegó a ejecutar la consulta"
+        assert hilo_de_la_query["id"] != _hilo_actual(), (
+            "_ejecutar_test_sap_direct() corrió en el event loop: hace DB (pyodbc) "
+            "vía SAPClient (OPENQUERY). Debe invocarse con asyncio.to_thread."
+        )
+
+
 class TestTimeoutsDeRedisConfigurados:
     """
     Sin timeouts de socket, redis-py espera para siempre y el thread nunca vuelve:

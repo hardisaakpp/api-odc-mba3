@@ -976,7 +976,9 @@ def register_sap_endpoints(app: FastAPI):
         Returns:
             JSON con información del producto desde SAP o error si falla
         """
-        return _ejecutar_test_sap_query(request, sku)
+        # _ejecutar_test_sap_query hace DB (pyodbc) vía SAPService -> se delega
+        # a un thread aparte para no bloquear el event loop.
+        return await asyncio.to_thread(_ejecutar_test_sap_query, request, sku)
 
     @app.get("/sap/test/direct", tags=["Integración SAP"])
     async def test_sap_direct(
@@ -1000,4 +1002,6 @@ def register_sap_endpoints(app: FastAPI):
         Returns:
             JSON con información del producto desde SAP (sin cache)
         """
-        return _ejecutar_test_sap_direct(request, sku)
+        # _ejecutar_test_sap_direct hace DB (pyodbc) vía SAPClient (OPENQUERY) -> se
+        # delega a un thread aparte para no bloquear el event loop.
+        return await asyncio.to_thread(_ejecutar_test_sap_direct, request, sku)
