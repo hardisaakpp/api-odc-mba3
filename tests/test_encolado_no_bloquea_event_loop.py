@@ -343,6 +343,34 @@ class TestNotificacionPersonaCorreoNoBloquea:
         )
 
 
+class TestObtenerDistribucionNoBloquea:
+    """GET /api/pedidos/{pedido_id}/distribucion"""
+
+    @pytest.mark.asyncio
+    async def test_obtener_distribucion_corre_fuera_del_event_loop(self, monkeypatch):
+        from src.endpoints.pedidos.redistribucion import endpoints_core as ec
+
+        hilo = {}
+
+        def fake_db_obtener(_pedido_id, _version):
+            hilo["id"] = _hilo_actual()
+            return ec.DistribucionPedidoResponse(
+                pedido_id="p1", numero_pedido="PED-1", version_actual=1,
+                estado_pedido="REDISTRIBUIDO", puede_descartar=False, productos=[]
+            )
+
+        monkeypatch.setattr(ec, "_db_obtener_distribucion", fake_db_obtener)
+
+        respuesta = await ec._handle_obtener_distribucion("p1", None)
+
+        assert respuesta.pedido_id == "p1"
+        assert "id" in hilo, "no se llegó a obtener la distribución"
+        assert hilo["id"] != _hilo_actual(), (
+            "_db_obtener_distribucion() corrió en el event loop: hace DB (pyodbc). "
+            "Debe invocarse con asyncio.to_thread."
+        )
+
+
 class TestBorradorRedistribucionNoBloquea:
     """Endpoints de borrador y datos iniciales de redistribución."""
 

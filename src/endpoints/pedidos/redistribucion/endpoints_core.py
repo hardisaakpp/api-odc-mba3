@@ -46,35 +46,42 @@ _PERM_ODCSAP_VIEW = 'odcsap.view'
 _PERM_MABEL_VIEW = 'mabel.view'
 
 
+def _db_obtener_distribucion(
+    pedido_id: str,
+    version: Optional[int],
+) -> DistribucionPedidoResponse:
+    """Consulta bloqueante (pyodbc); se ejecuta vía asyncio.to_thread."""
+    with get_db_connection_context() as conn:
+        repo_dist = DistribucionConfirmadaRepository(conn)
+        repo_pedido = PedidoRepository(conn)
+
+        distribucion_data = repo_dist.get_distribucion_completa(pedido_id, version)
+        pedido_data = obtener_pedido_o_404(repo_pedido, pedido_id)
+
+        productos_enriquecidos = enriquecer_productos_con_pedido(
+            distribucion_data.get("productos", []),
+            pedido_data.get("detalles", []),
+        )
+
+        cabecera = pedido_data["cabecera"]
+        puede_descartar = calcular_estado_puede_descartar(cabecera)
+
+        return DistribucionPedidoResponse(
+            pedido_id=pedido_id,
+            numero_pedido=cabecera["numero_pedido"],
+            version_actual=distribucion_data["version_actual"],
+            estado_pedido=cabecera.get("estado"),
+            puede_descartar=puede_descartar,
+            productos=[DistribucionProductoResponse(**p) for p in productos_enriquecidos]
+        )
+
+
 async def _handle_obtener_distribucion(
     pedido_id: str,
     version: Optional[int],
 ) -> DistribucionPedidoResponse:
     try:
-        with get_db_connection_context() as conn:
-            repo_dist = DistribucionConfirmadaRepository(conn)
-            repo_pedido = PedidoRepository(conn)
-
-            distribucion_data = repo_dist.get_distribucion_completa(pedido_id, version)
-            pedido_data = obtener_pedido_o_404(repo_pedido, pedido_id)
-
-            productos_enriquecidos = enriquecer_productos_con_pedido(
-                distribucion_data.get("productos", []),
-                pedido_data.get("detalles", []),
-            )
-
-            cabecera = pedido_data["cabecera"]
-            puede_descartar = calcular_estado_puede_descartar(cabecera)
-
-            return DistribucionPedidoResponse(
-                pedido_id=pedido_id,
-                numero_pedido=cabecera["numero_pedido"],
-                version_actual=distribucion_data["version_actual"],
-                estado_pedido=cabecera.get("estado"),
-                puede_descartar=puede_descartar,
-                productos=[DistribucionProductoResponse(**p) for p in productos_enriquecidos]
-            )
-
+        return await asyncio.to_thread(_db_obtener_distribucion, pedido_id, version)
     except HTTPException:
         raise
     except Exception as e:
