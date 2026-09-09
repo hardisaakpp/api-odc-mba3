@@ -370,6 +370,87 @@ class TestObtenerDistribucionNoBloquea:
             "Debe invocarse con asyncio.to_thread."
         )
 
+    @pytest.mark.asyncio
+    async def test_redistribuir_pedido_corre_fuera_del_event_loop(self, monkeypatch):
+        from src.endpoints.pedidos.redistribucion import endpoints_core as ec
+
+        hilo = {}
+
+        def fake_db_redistribuir(_pedido_id, _request_body, _user_id, _audit):
+            hilo["id"] = _hilo_actual()
+            resultado = {"mensaje": "ok", "pedido_id": "p1", "version": 1, "distribuciones_insertadas": 3}
+            pedido_data = {"cabecera": {"numero_pedido": "PED-1"}}
+            return resultado, pedido_data
+
+        async def fake_notificar(*_a, **_k):
+            return None
+
+        monkeypatch.setattr(ec, "_db_redistribuir_pedido", fake_db_redistribuir)
+        monkeypatch.setattr(ec, "get_user_id", lambda _user: "u1")
+        monkeypatch.setattr(ec, "get_audit_context", lambda *_a, **_k: {})
+        monkeypatch.setattr(ec, "notificar_redistribucion_creada", fake_notificar)
+
+        respuesta = await ec._handle_redistribuir_pedido(
+            "p1", MagicMock(), user={"username": "u1"}, request=MagicMock()
+        )
+
+        assert respuesta.status_code == 200
+        assert "id" in hilo, "no se llegó a redistribuir"
+        assert hilo["id"] != _hilo_actual(), (
+            "_db_redistribuir_pedido() corrió en el event loop: hace DB (pyodbc). "
+            "Debe invocarse con asyncio.to_thread."
+        )
+
+    @pytest.mark.asyncio
+    async def test_obtener_reporte_diferencias_corre_fuera_del_event_loop(self, monkeypatch):
+        from src.endpoints.pedidos.redistribucion import endpoints_core as ec
+
+        hilo = {}
+
+        def fake_db_reporte(_pedido_id, _version):
+            hilo["id"] = _hilo_actual()
+            return ec.ReporteDiferenciasResponse(
+                pedido_id="p1", numero_pedido="PED-1", version=1,
+                fecha_generacion=ec.ahora_naive(),
+                total_productos=0, total_cantidad_solicitada=0, total_cantidad_confirmada=0,
+                total_cantidad_asignada=0, total_diferencia_cantidad=0,
+                total_costo_original=0, total_costo_ajustado=0, total_diferencia_costo=0,
+                diferencias_productos=[], diferencias_tiendas=[]
+            )
+
+        monkeypatch.setattr(ec, "_db_obtener_reporte_diferencias", fake_db_reporte)
+
+        respuesta = await ec._handle_obtener_reporte_diferencias("p1", None)
+
+        assert respuesta.pedido_id == "p1"
+        assert "id" in hilo, "no se llegó a obtener el reporte"
+        assert hilo["id"] != _hilo_actual(), (
+            "_db_obtener_reporte_diferencias() corrió en el event loop: hace DB (pyodbc). "
+            "Debe invocarse con asyncio.to_thread."
+        )
+
+    @pytest.mark.asyncio
+    async def test_exportar_reporte_diferencias_excel_corre_fuera_del_event_loop(self, monkeypatch):
+        from src.endpoints.pedidos.redistribucion import endpoints_core as ec
+        from fastapi.responses import StreamingResponse
+
+        hilo = {}
+
+        def fake_db_exportar(_pedido_id, _version):
+            hilo["id"] = _hilo_actual()
+            return StreamingResponse(iter([b""]), media_type="application/octet-stream")
+
+        monkeypatch.setattr(ec, "_db_exportar_reporte_diferencias_excel", fake_db_exportar)
+
+        respuesta = await ec._handle_exportar_reporte_diferencias_excel("p1", None)
+
+        assert isinstance(respuesta, StreamingResponse)
+        assert "id" in hilo, "no se llegó a exportar"
+        assert hilo["id"] != _hilo_actual(), (
+            "_db_exportar_reporte_diferencias_excel() corrió en el event loop: hace DB (pyodbc) "
+            "y genera el Excel. Debe invocarse con asyncio.to_thread."
+        )
+
 
 class TestBorradorRedistribucionNoBloquea:
     """Endpoints de borrador y datos iniciales de redistribución."""

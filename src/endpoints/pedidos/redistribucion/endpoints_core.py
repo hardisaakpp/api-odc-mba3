@@ -95,6 +95,47 @@ async def _handle_obtener_distribucion(
         )
 
 
+def _db_redistribuir_pedido(pedido_id: str, request_body: RedistribuirPedidoRequest, user_id, audit):
+    """Consulta bloqueante (pyodbc); se ejecuta vía asyncio.to_thread."""
+    with get_db_connection_context() as conn:
+        repo_dist = DistribucionConfirmadaRepository(conn)
+        repo_pedido = PedidoRepository(conn)
+
+        pedido_data = obtener_pedido_o_404(repo_pedido, pedido_id)
+        respuestas_proveedor = obtener_respuestas_proveedor(repo_pedido, pedido_id)
+
+        validator = RedistribucionValidator()
+        productos_dict = [p.model_dump() for p in request_body.productos]
+        es_valido, errores = validator.validar_redistribucion(
+            pedido_data,
+            productos_dict,
+            respuestas_proveedor
+        )
+
+        if not es_valido:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "error": "validation_error",
+                    "message": "La redistribución no cumple con las reglas de negocio",
+                    "errores": errores
+                }
+            )
+
+        resultado = repo_dist.crear_redistribucion(
+            pedido_id=pedido_id,
+            productos_redistribucion=productos_dict,
+            usuario=user_id,
+            audit_context=audit
+        )
+
+        repo_pedido.update_estado(pedido_id, ESTADO_REDISTRIBUIDO, audit_context=audit)
+
+        logger.info(f"✅ Redistribución creada para pedido {pedido_id} por usuario {user_id}")
+
+        return resultado, pedido_data
+
+
 async def _handle_redistribuir_pedido(
     pedido_id: str,
     request_body: RedistribuirPedidoRequest,
@@ -103,63 +144,30 @@ async def _handle_redistribuir_pedido(
 ) -> JSONResponse:
     try:
         user_id = get_user_id(user)
+        audit = get_audit_context(request, user, origen=ORIGEN_WEB)
 
-        with get_db_connection_context() as conn:
-            repo_dist = DistribucionConfirmadaRepository(conn)
-            repo_pedido = PedidoRepository(conn)
+        resultado, pedido_data = await asyncio.to_thread(
+            _db_redistribuir_pedido, pedido_id, request_body, user_id, audit
+        )
 
-            pedido_data = obtener_pedido_o_404(repo_pedido, pedido_id)
-            respuestas_proveedor = obtener_respuestas_proveedor(repo_pedido, pedido_id)
+        try:
+            _numero_pedido = pedido_data["cabecera"].get("numero_pedido", "")
+            await notificar_redistribucion_creada(pedido_id, _numero_pedido)
+        except Exception as notif_err:
+            logger.warning(f"⚠️ Error al enviar notificación en tiempo real: {notif_err}")
 
-            validator = RedistribucionValidator()
-            productos_dict = [p.model_dump() for p in request_body.productos]
-            es_valido, errores = validator.validar_redistribucion(
-                pedido_data,
-                productos_dict,
-                respuestas_proveedor
-            )
-
-            if not es_valido:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail={
-                        "error": "validation_error",
-                        "message": "La redistribución no cumple con las reglas de negocio",
-                        "errores": errores
-                    }
-                )
-
-            audit = get_audit_context(request, user, origen=ORIGEN_WEB)
-
-            resultado = repo_dist.crear_redistribucion(
-                pedido_id=pedido_id,
-                productos_redistribucion=productos_dict,
-                usuario=user_id,
-                audit_context=audit
-            )
-
-            repo_pedido.update_estado(pedido_id, ESTADO_REDISTRIBUIDO, audit_context=audit)
-
-            logger.info(f"✅ Redistribución creada para pedido {pedido_id} por usuario {user_id}")
-
-            try:
-                _numero_pedido = pedido_data["cabecera"].get("numero_pedido", "")
-                await notificar_redistribucion_creada(pedido_id, _numero_pedido)
-            except Exception as notif_err:
-                logger.warning(f"⚠️ Error al enviar notificación en tiempo real: {notif_err}")
-
-            return JSONResponse(
-                status_code=status.HTTP_200_OK,
-                content={
-                    "status": "success",
-                    "message": resultado["mensaje"],
-                    "data": {
-                        "pedido_id": resultado["pedido_id"],
-                        "version": resultado["version"],
-                        "distribuciones_insertadas": resultado["distribuciones_insertadas"]
-                    }
+        return JSONResponse(
+            status_code=status.HTTP_200_OK,
+            content={
+                "status": "success",
+                "message": resultado["mensaje"],
+                "data": {
+                    "pedido_id": resultado["pedido_id"],
+                    "version": resultado["version"],
+                    "distribuciones_insertadas": resultado["distribuciones_insertadas"]
                 }
-            )
+            }
+        )
 
     except HTTPException:
         raise
@@ -289,59 +297,66 @@ async def _handle_confirmar_redistribucion(
         )
 
 
+def _db_obtener_reporte_diferencias(
+    pedido_id: str,
+    version: Optional[int],
+) -> ReporteDiferenciasResponse:
+    """Consulta bloqueante (pyodbc); se ejecuta vía asyncio.to_thread."""
+    import re
+    uuid_pattern = re.compile(r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$')
+    es_uuid = uuid_pattern.match(pedido_id.strip()) is not None
+
+    with get_db_connection_context() as conn:
+        repo_dist = DistribucionConfirmadaRepository(conn)
+        repo_pedido = PedidoRepository(conn)
+
+        if es_uuid:
+            logger.info(f"🔍 Detectado UUID: {pedido_id}, usando get_pedido_completo")
+            pedido_data = repo_pedido.get_pedido_completo(pedido_id)
+            pedido_id_real = pedido_id
+        else:
+            logger.info(f"🔍 Detectado numero_pedido: {pedido_id}, usando get_pedido_completo_por_numero")
+            pedido_data = repo_pedido.get_pedido_completo_por_numero(pedido_id)
+            if pedido_data:
+                pedido_id_real = pedido_data["cabecera"]["pedido_id"]
+            else:
+                pedido_id_real = None
+
+        if not pedido_data or pedido_id_real is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={
+                    "error": "pedido_not_found",
+                    "message": f"No se encontró el pedido: {pedido_id}"
+                }
+            )
+
+        diferencias = repo_dist.calcular_diferencias(pedido_id_real, version)
+
+        return ReporteDiferenciasResponse(
+            pedido_id=pedido_id_real,
+            numero_pedido=pedido_data["cabecera"]["numero_pedido"],
+            version=diferencias["version"],
+            fecha_generacion=ahora_naive(),
+            total_productos=diferencias["total_productos"],
+            total_cantidad_solicitada=diferencias["total_cantidad_solicitada"],
+            total_cantidad_confirmada=diferencias["total_cantidad_confirmada"],
+            total_cantidad_asignada=diferencias["total_cantidad_asignada"],
+            total_diferencia_cantidad=diferencias["total_diferencia_cantidad"],
+            total_costo_original=diferencias["total_costo_original"],
+            total_costo_ajustado=diferencias["total_costo_ajustado"],
+            total_diferencia_costo=diferencias["total_diferencia_costo"],
+            diferencias_productos=diferencias["diferencias_productos"],
+            diferencias_tiendas=diferencias["diferencias_tiendas"]
+        )
+
+
 async def _handle_obtener_reporte_diferencias(
     pedido_id: str,
     version: Optional[int],
 ) -> ReporteDiferenciasResponse:
     try:
-        import re
-        uuid_pattern = re.compile(r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$')
-        es_uuid = uuid_pattern.match(pedido_id.strip()) is not None
-
-        with get_db_connection_context() as conn:
-            repo_dist = DistribucionConfirmadaRepository(conn)
-            repo_pedido = PedidoRepository(conn)
-
-            if es_uuid:
-                logger.info(f"🔍 Detectado UUID: {pedido_id}, usando get_pedido_completo")
-                pedido_data = repo_pedido.get_pedido_completo(pedido_id)
-                pedido_id_real = pedido_id
-            else:
-                logger.info(f"🔍 Detectado numero_pedido: {pedido_id}, usando get_pedido_completo_por_numero")
-                pedido_data = repo_pedido.get_pedido_completo_por_numero(pedido_id)
-                if pedido_data:
-                    pedido_id_real = pedido_data["cabecera"]["pedido_id"]
-                else:
-                    pedido_id_real = None
-
-            if not pedido_data or pedido_id_real is None:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail={
-                        "error": "pedido_not_found",
-                        "message": f"No se encontró el pedido: {pedido_id}"
-                    }
-                )
-
-            diferencias = repo_dist.calcular_diferencias(pedido_id_real, version)
-
-            return ReporteDiferenciasResponse(
-                pedido_id=pedido_id_real,
-                numero_pedido=pedido_data["cabecera"]["numero_pedido"],
-                version=diferencias["version"],
-                fecha_generacion=ahora_naive(),
-                total_productos=diferencias["total_productos"],
-                total_cantidad_solicitada=diferencias["total_cantidad_solicitada"],
-                total_cantidad_confirmada=diferencias["total_cantidad_confirmada"],
-                total_cantidad_asignada=diferencias["total_cantidad_asignada"],
-                total_diferencia_cantidad=diferencias["total_diferencia_cantidad"],
-                total_costo_original=diferencias["total_costo_original"],
-                total_costo_ajustado=diferencias["total_costo_ajustado"],
-                total_diferencia_costo=diferencias["total_diferencia_costo"],
-                diferencias_productos=diferencias["diferencias_productos"],
-                diferencias_tiendas=diferencias["diferencias_tiendas"]
-            )
-
+        return await asyncio.to_thread(_db_obtener_reporte_diferencias, pedido_id, version)
     except HTTPException:
         raise
     except Exception as e:
@@ -355,28 +370,35 @@ async def _handle_obtener_reporte_diferencias(
         )
 
 
+def _db_exportar_reporte_diferencias_excel(
+    pedido_id: str,
+    version: Optional[int],
+) -> StreamingResponse:
+    """Consulta bloqueante (pyodbc) + generación del Excel; se ejecuta vía asyncio.to_thread."""
+    with get_db_connection_context() as conn:
+        repo_dist = DistribucionConfirmadaRepository(conn)
+        repo_pedido = PedidoRepository(conn)
+
+        pedido_data = obtener_pedido_o_404(repo_pedido, pedido_id)
+        diferencias = repo_dist.calcular_diferencias(pedido_id, version)
+        output = generar_excel_reporte_diferencias(diferencias)
+
+        numero_pedido = pedido_data["cabecera"]["numero_pedido"]
+        filename = f"reporte_diferencias_{numero_pedido.replace(' ', '_')}_v{diferencias['version']}.xlsx"
+
+        return StreamingResponse(
+            output,
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": f"attachment; filename={filename}"}
+        )
+
+
 async def _handle_exportar_reporte_diferencias_excel(
     pedido_id: str,
     version: Optional[int],
 ) -> StreamingResponse:
     try:
-        with get_db_connection_context() as conn:
-            repo_dist = DistribucionConfirmadaRepository(conn)
-            repo_pedido = PedidoRepository(conn)
-
-            pedido_data = obtener_pedido_o_404(repo_pedido, pedido_id)
-            diferencias = repo_dist.calcular_diferencias(pedido_id, version)
-            output = generar_excel_reporte_diferencias(diferencias)
-
-            numero_pedido = pedido_data["cabecera"]["numero_pedido"]
-            filename = f"reporte_diferencias_{numero_pedido.replace(' ', '_')}_v{diferencias['version']}.xlsx"
-
-            return StreamingResponse(
-                output,
-                media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                headers={"Content-Disposition": f"attachment; filename={filename}"}
-            )
-
+        return await asyncio.to_thread(_db_exportar_reporte_diferencias_excel, pedido_id, version)
     except HTTPException:
         raise
     except Exception as e:
