@@ -19,7 +19,7 @@ from unittest.mock import MagicMock
 
 import pytest
 from fastapi import FastAPI
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 
 
 def _hilo_actual():
@@ -693,6 +693,186 @@ class TestEliminarOrdenesCompraNoBloquea:
         assert "id" in hilo, "no se llegó a eliminar"
         assert hilo["id"] != _hilo_actual(), (
             "_db_eliminar_ordenes_compra() corrió en el event loop: hace DB (pyodbc). "
+            "Debe invocarse con asyncio.to_thread."
+        )
+
+
+class TestPlantillasConsultasNoBloquean:
+    """Endpoints de consulta de plantillas.py que aún hacían DB directamente."""
+
+    @pytest.mark.asyncio
+    async def test_get_ultimo_pedido_corre_fuera_del_event_loop(self, monkeypatch):
+        from src.endpoints import plantillas
+
+        hilo = {}
+
+        def fake_db_obtener(_incluir_respuesta, _user_id):
+            hilo["id"] = _hilo_actual()
+            return {"cabecera": {"pedido_id": "p1", "estado_id": 1}}
+
+        monkeypatch.setattr(plantillas, "_db_obtener_ultimo_pedido", fake_db_obtener)
+        monkeypatch.setattr(plantillas, "get_user_id", lambda _user: "u1")
+        monkeypatch.setattr(plantillas, "make_json_serializable", lambda x: x)
+
+        respuesta = await plantillas._get_ultimo_pedido_handler(False, {"username": "u1"})
+
+        assert respuesta.status_code == 200
+        assert "id" in hilo, "no se llegó a consultar"
+        assert hilo["id"] != _hilo_actual(), (
+            "_db_obtener_ultimo_pedido() corrió en el event loop: hace DB (pyodbc). "
+            "Debe invocarse con asyncio.to_thread."
+        )
+
+    @pytest.mark.asyncio
+    async def test_listar_pedidos_plantillas_corre_fuera_del_event_loop(self, monkeypatch):
+        from src.endpoints import plantillas
+
+        hilo = {}
+
+        def fake_db_listar(*_a, **_k):
+            hilo["id"] = _hilo_actual()
+            return {"data": [], "total": 0, "limit": 10, "offset": 0, "has_more": False}
+
+        monkeypatch.setattr(plantillas, "_db_listar_pedidos_plantillas", fake_db_listar)
+        monkeypatch.setattr(plantillas, "get_user_id", lambda _user: "u1")
+
+        respuesta = await plantillas._listar_pedidos_plantillas_handler(
+            None, None, 10, 0, None, {"username": "u1"}
+        )
+
+        assert respuesta.status_code == 200
+        assert "id" in hilo, "no se llegó a listar"
+        assert hilo["id"] != _hilo_actual(), (
+            "_db_listar_pedidos_plantillas() corrió en el event loop: hace DB (pyodbc). "
+            "Debe invocarse con asyncio.to_thread."
+        )
+
+    @pytest.mark.asyncio
+    async def test_descargar_plantilla_corre_fuera_del_event_loop(self, monkeypatch):
+        from src.endpoints import plantillas
+
+        hilos = {}
+
+        def fake_db_buscar(_pedido_id, _archivo_id):
+            hilos["buscar"] = _hilo_actual()
+            return {
+                "archivo_id": 1, "pedido_id": "p1", "nombre_original": "x.xlsx",
+                "storage_path": "s3://x", "content_type": "application/octet-stream",
+                "subido_por": "u1", "fecha_subida": "2026-01-01T00:00:00"
+            }
+
+        def fake_descargar_contenido(_storage_path):
+            return b"contenido"
+
+        def fake_db_registrar(_archivo_id, _descargado_por):
+            hilos["registrar"] = _hilo_actual()
+
+        monkeypatch.setattr(plantillas, "_db_buscar_archivo_info_descarga", fake_db_buscar)
+        monkeypatch.setattr(plantillas, "_descargar_contenido_storage", fake_descargar_contenido)
+        monkeypatch.setattr(plantillas, "_db_registrar_descarga_plantilla", fake_db_registrar)
+        monkeypatch.setattr(plantillas, "get_user_id", lambda _user: "u1")
+
+        respuesta = await plantillas._descargar_plantilla(user={"username": "u1"}, pedido_id="p1")
+
+        assert isinstance(respuesta, StreamingResponse)
+        assert "buscar" in hilos and "registrar" in hilos, "no se completó el flujo de descarga"
+        assert hilos["buscar"] != _hilo_actual(), (
+            "_db_buscar_archivo_info_descarga() corrió en el event loop: hace DB (pyodbc). "
+            "Debe invocarse con asyncio.to_thread."
+        )
+        assert hilos["registrar"] != _hilo_actual(), (
+            "_db_registrar_descarga_plantilla() corrió en el event loop: hace DB (pyodbc). "
+            "Debe invocarse con asyncio.to_thread."
+        )
+
+    @pytest.mark.asyncio
+    async def test_info_archivo_plantilla_corre_fuera_del_event_loop(self, monkeypatch):
+        from src.endpoints import plantillas
+
+        hilo = {}
+
+        def fake_db_info(_pedido_id):
+            hilo["id"] = _hilo_actual()
+            return None
+
+        monkeypatch.setattr(plantillas, "_db_info_archivo_plantilla", fake_db_info)
+
+        respuesta = await plantillas._info_archivo_plantilla_handler("p1")
+
+        assert respuesta.status_code == 200
+        assert "id" in hilo, "no se llegó a consultar"
+        assert hilo["id"] != _hilo_actual(), (
+            "_db_info_archivo_plantilla() corrió en el event loop: hace DB (pyodbc). "
+            "Debe invocarse con asyncio.to_thread."
+        )
+
+    @pytest.mark.asyncio
+    async def test_buscar_pedidos_por_numero_corre_fuera_del_event_loop(self, monkeypatch):
+        from src.endpoints import plantillas
+
+        hilo = {}
+
+        def fake_db_buscar(_numero_pedido, _limit):
+            hilo["id"] = _hilo_actual()
+            return {"data": [], "total": 0}
+
+        monkeypatch.setattr(plantillas, "_db_buscar_pedidos_por_numero", fake_db_buscar)
+
+        respuesta = await plantillas._buscar_pedidos_por_numero_handler("PED-1", 20)
+
+        assert respuesta.status_code == 200
+        assert "id" in hilo, "no se llegó a buscar"
+        assert hilo["id"] != _hilo_actual(), (
+            "_db_buscar_pedidos_por_numero() corrió en el event loop: hace DB (pyodbc). "
+            "Debe invocarse con asyncio.to_thread."
+        )
+
+    @pytest.mark.asyncio
+    async def test_listar_archivos_originales_corre_fuera_del_event_loop(self, monkeypatch):
+        from src.endpoints import plantillas
+
+        hilo = {}
+
+        def fake_db_listar(*_a, **_k):
+            hilo["id"] = _hilo_actual()
+            return [], 0
+
+        monkeypatch.setattr(plantillas, "_db_listar_archivos_originales", fake_db_listar)
+        monkeypatch.setattr(plantillas, "get_user_id", lambda _user: "u1")
+
+        respuesta = await plantillas._listar_archivos_originales_handler(
+            50, 0, True, None, {"username": "u1"}
+        )
+
+        assert respuesta.status_code == 200
+        assert "id" in hilo, "no se llegó a listar"
+        assert hilo["id"] != _hilo_actual(), (
+            "_db_listar_archivos_originales() corrió en el event loop: hace DB (pyodbc). "
+            "Debe invocarse con asyncio.to_thread."
+        )
+
+    @pytest.mark.asyncio
+    async def test_eliminar_archivo_original_corre_fuera_del_event_loop(self, monkeypatch):
+        from src.endpoints import plantillas
+
+        hilo = {}
+
+        def fake_db_verificar(_archivo_id, _user_id, _user_roles):
+            hilo["id"] = _hilo_actual()
+            return {
+                "ya_eliminado": False,
+                "archivo_info": {"archivo_id": 1, "nombre_original": "x.xlsx", "storage_path": None}
+            }
+
+        monkeypatch.setattr(plantillas, "_db_verificar_y_marcar_eliminado", fake_db_verificar)
+        monkeypatch.setattr(plantillas, "get_user_id", lambda _user: "u1")
+
+        respuesta = await plantillas._eliminar_archivo_original_handler(1, False, {"username": "u1"})
+
+        assert respuesta.status_code == 200
+        assert "id" in hilo, "no se llegó a verificar/eliminar"
+        assert hilo["id"] != _hilo_actual(), (
+            "_db_verificar_y_marcar_eliminado() corrió en el event loop: hace DB (pyodbc). "
             "Debe invocarse con asyncio.to_thread."
         )
 
