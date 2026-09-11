@@ -22,7 +22,7 @@ from src.database.connection import get_db_connection, get_db_connection_context
 from src.database.clients.sap_client import SAPClient
 from src.database.clients.sap_service_layer_client import SAPServiceLayerClient
 from src.database.services.stock_transfer_service import StockTransferService, redis_lock_reintento_st
-from src.config import SAP_USE_MIDDLEWARE
+from src.config import SAP_USE_MIDDLEWARE, RECONCILIAR_ST_MARGEN_ANTIGUEDAD_MINUTOS
 from src.security.jwt_auth import verify_jwt_token, require_permission, require_any_permission
 
 logger = logging.getLogger(__name__)
@@ -113,11 +113,13 @@ def _ordenes_compra_cache_key(
     referencia_despacho: Optional[str],
     numero_oc_sap: Optional[str],
     search: Optional[str],
+    solo_pendiente_reintento: bool = False,
 ) -> str:
     """Clave de caché que incluye paginación y filtros de listado."""
     return (
         f"ordenes_compra_{estado or 'all'}_p{page}_s{page_size}"
         f"_ref{referencia_despacho or ''}_sap{numero_oc_sap or ''}_q{search or ''}"
+        f"_spr{int(solo_pendiente_reintento)}"
     )
 
 
@@ -311,16 +313,29 @@ def _query_historial_logs(page, page_size, oc_id, referencia_despacho,
 
 
 def _query_ordenes_compra(estado_param, limit_param, offset_param,
-                          referencia_param, numero_sap_param, search_param):
+                          referencia_param, numero_sap_param, search_param,
+                          solo_pendiente_reintento_param=False):
     """Ejecuta listado paginado y enriquecimiento ST/ITR solo para la página actual."""
     conn = get_db_connection()
     try:
         oc_repo = OrdenCompraRepository(conn)
+        oc_ids_st_pendiente = None
+        if solo_pendiente_reintento_param:
+            # Mismo criterio que mostrar_reintentar_st (_enrich_oc_actions), pero sin
+            # ventana de días: el usuario pide expresamente "todas las pendientes",
+            # sin importar su antigüedad (a diferencia de la reconciliación Celery).
+            st_repo_filtro = SolicitudTransferenciaRepository(conn)
+            oc_ids_st_pendiente = st_repo_filtro.get_oc_ids_con_tiendas_pendientes(
+                dias_ventana=None,
+                margen_antiguedad_minutos=RECONCILIAR_ST_MARGEN_ANTIGUEDAD_MINUTOS,
+            )
         resultado = oc_repo.list_paginated(
             estado=estado_param,
             referencia_despacho=referencia_param,
             numero_oc_sap=numero_sap_param,
             search=search_param,
+            solo_pendiente_reintento=solo_pendiente_reintento_param,
+            oc_ids_st_pendiente=oc_ids_st_pendiente,
             limit=limit_param,
             offset=offset_param,
         )
@@ -743,14 +758,17 @@ async def _get_historial_ordenes_handler(request, oc_id, referencia_despacho, pr
 
 
 async def _get_ordenes_compra_handler(request, page, page_size, page_size_camel, estado,
-                                       referencia_despacho, numero_oc_sap, search):
+                                       referencia_despacho, numero_oc_sap, search,
+                                       solo_pendiente_reintento=False):
     source = get_source_from_headers(request)
     size = page_size_camel if page_size_camel is not None else page_size
     offset = (page - 1) * size
     estado_norm = estado.strip().upper() if estado else None
+    solo_pendiente_reintento = bool(solo_pendiente_reintento)
 
     cache_key = _ordenes_compra_cache_key(
-        estado_norm, page, size, referencia_despacho, numero_oc_sap, search
+        estado_norm, page, size, referencia_despacho, numero_oc_sap, search,
+        solo_pendiente_reintento,
     )
 
     cached_result = get_cached_ordenes_compra(cache_key)
@@ -772,6 +790,7 @@ async def _get_ordenes_compra_handler(request, page, page_size, page_size_camel,
     logger.info(f"📋 GET /ordenes-compra: Consulta ejecutada a las {ahora_naive().isoformat()}")
     logger.info(f"Fuente: {source}")
     logger.info(f"Filtro estado: {estado_norm or 'Todos'} | page={page} pageSize={size}")
+    logger.info(f"Solo pendientes de reintento: {solo_pendiente_reintento}")
     logger.info("=" * 70)
 
     try:
@@ -784,6 +803,7 @@ async def _get_ordenes_compra_handler(request, page, page_size, page_size_camel,
             referencia_despacho,
             numero_oc_sap,
             search,
+            solo_pendiente_reintento,
         )
 
         oc_list = resultado["data"]
@@ -800,6 +820,7 @@ async def _get_ordenes_compra_handler(request, page, page_size, page_size_camel,
             "metadata": {
                 "count": len(oc_list),
                 "estado_filter": estado_norm,
+                "solo_pendiente_reintento": solo_pendiente_reintento,
                 "total": total,
                 "page": page,
                 "pageSize": size,
@@ -1491,6 +1512,14 @@ def register_ordenes_compra_endpoints(app: FastAPI):
         referencia_despacho: Optional[str] = Query(None, description="Búsqueda parcial por referencia de despacho"),
         numero_oc_sap: Optional[str] = Query(None, description="Búsqueda parcial por número OC SAP / doc_entry"),
         search: Optional[str] = Query(None, description="Búsqueda parcial en referencia o número SAP"),
+        solo_pendiente_reintento: Optional[bool] = Query(
+            None,
+            description=(
+                "Si es true, solo trae ODCs donde el frontend mostraría el botón "
+                "'Reintentar' (PENDIENTE/ERROR) o 'Reintentar ST' (ENVIADA con "
+                "tiendas pendientes de reintento ITR), sin importar la antigüedad."
+            ),
+        ),
         user: dict = Depends(verify_jwt_token),
         _: None = Depends(require_any_permission([_PERM_ODCSAP, _PERM_MABEL]))
     ):
@@ -1502,10 +1531,12 @@ def register_ordenes_compra_endpoints(app: FastAPI):
         - `pageSize` o `page_size` (int, default: 50, máx. 100) - Registros por página
         - `estado` (string, opcional) - Filtrar por estado (PENDIENTE, ENVIANDO, ENVIADA, ERROR, ENCOLADA)
         - `referencia_despacho`, `numero_oc_sap`, `search` - Filtros opcionales en servidor
+        - `solo_pendiente_reintento` (bool, opcional) - Solo ODCs con alguna acción de reintento pendiente
 
         **Ejemplo:**
         ```
         GET /ordenes-compra?estado=PENDIENTE&page=1&pageSize=20
+        GET /ordenes-compra?solo_pendiente_reintento=true&page=1&pageSize=20
         ```
 
         **Respuesta (compatible con frontend / pedidos confirmados):**
@@ -1519,14 +1550,16 @@ def register_ordenes_compra_endpoints(app: FastAPI):
           "totalPages": 8,
           "metadata": {
             "count": 20,
-            "estado_filter": "PENDIENTE"
+            "estado_filter": "PENDIENTE",
+            "solo_pendiente_reintento": false
           }
         }
         ```
         """
         return await _get_ordenes_compra_handler(
             request, page, page_size, page_size_camel, estado,
-            referencia_despacho, numero_oc_sap, search
+            referencia_despacho, numero_oc_sap, search,
+            bool(solo_pendiente_reintento),
         )
 
     @app.get("/ordenes-compra/logs", tags=["Órdenes de Compra"])

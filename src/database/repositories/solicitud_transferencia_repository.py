@@ -863,20 +863,99 @@ class SolicitudTransferenciaRepository:
     def count_st_pendientes_reintento_por_oc_ids(self, oc_ids: List[str]) -> Dict[str, int]:
         """
         Para la tabla proceso: cuenta por oc_id cuántas tiendas siguen pendientes de reintento ITR.
+
+        Versión batched de get_st_pendiente_reintento_count (mismo criterio exacto:
+        último batch ST con tiendas en Error/Encolada, menos las que ya tienen ITR OK
+        en cualquier batch, con el mismo fallback a resultado_json para OCs cuyo
+        último batch no tiene ninguna fila relacional en solicitud_transferencia_detalle).
+
+        Antes hacía 1 query por oc_id (3-5 round trips c/u: _get_latest_solicitud_transferencia_id,
+        get_tiendas_itr_ok_norms_por_oc_id, el SELECT de pendientes, y casi siempre también el
+        fallback JSON) -- con pageSize=20 eran ~60-100 round trips secuenciales SOLO para este
+        cálculo, antes de poder responder el listado paginado de /ordenes-compra (ver
+        conversación 2026-09-11, demora del footer de paginación en /proceso). Ahora es 1 sola
+        consulta batched para todas las OC de la página; el fallback a resultado_json solo se
+        sigue haciendo (uno por uno) para las OC sin ninguna fila relacional -- se espera que
+        sean pocas o ninguna en el uso normal.
         """
         if not oc_ids:
             return {}
-        return {str(oid): self.get_st_pendiente_reintento_count(str(oid)) for oid in oc_ids}
+        oc_ids_str = [str(oid) for oid in oc_ids]
+        out: Dict[str, int] = {oid: 0 for oid in oc_ids_str}
+        try:
+            cursor = self.conn.cursor()
+            placeholders = ",".join("?" * len(oc_ids_str))
+            cursor.execute(
+                f"""
+                WITH latest AS (
+                    SELECT
+                        st.solicitud_transferencia_id,
+                        st.oc_id,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY st.oc_id
+                            ORDER BY st.creado_fecha DESC, st.solicitud_transferencia_id DESC
+                        ) AS rn
+                    FROM solicitud_transferencia st
+                    WHERE st.oc_id IN ({placeholders})
+                ),
+                latest_detalle AS (
+                    SELECT l.oc_id, d.tienda_codigo, d.estado
+                    FROM latest l
+                    INNER JOIN solicitud_transferencia_detalle d
+                        ON d.solicitud_transferencia_id = l.solicitud_transferencia_id
+                    WHERE l.rn = 1
+                      AND d.tienda_codigo IS NOT NULL
+                      AND LTRIM(RTRIM(d.tienda_codigo)) <> ''
+                ),
+                ok_tiendas AS (
+                    SELECT DISTINCT st.oc_id, d.tienda_codigo
+                    FROM solicitud_transferencia st
+                    INNER JOIN solicitud_transferencia_detalle d
+                        ON d.solicitud_transferencia_id = st.solicitud_transferencia_id
+                    WHERE st.oc_id IN ({placeholders})
+                      AND d.estado = 'Creada' AND d.doc_entry IS NOT NULL
+                )
+                SELECT ld.oc_id, ld.tienda_codigo, ld.estado, ok.tienda_codigo AS ok_tienda
+                FROM latest_detalle ld
+                LEFT JOIN ok_tiendas ok
+                    ON ok.oc_id = ld.oc_id
+                    AND UPPER(LTRIM(RTRIM(ok.tienda_codigo))) = UPPER(LTRIM(RTRIM(ld.tienda_codigo)))
+                """,
+                oc_ids_str + oc_ids_str,
+            )
+            rows = cursor.fetchall()
+            cursor.close()
+
+            oc_con_detalle: set = set()
+            pendientes_por_oc: Dict[str, set] = {}
+            for oc_id, tienda_codigo, estado, ok_tienda in rows:
+                key = str(oc_id)
+                oc_con_detalle.add(key)
+                if (estado or "").strip() in ("Error", "Encolada") and ok_tienda is None:
+                    pendientes_por_oc.setdefault(key, set()).add(self._norm_tienda(tienda_codigo))
+
+            for oid in oc_ids_str:
+                if oid in pendientes_por_oc:
+                    out[oid] = len(pendientes_por_oc[oid])
+                elif oid not in oc_con_detalle:
+                    # Legacy: sin ninguna fila relacional -- mismo fallback que la versión
+                    # por oc_id, solo para este subconjunto (se espera chico o vacío).
+                    out[oid] = len(self.get_tiendas_fallidas_desde_resultado_json_fallback(oid))
+        except Exception as e:
+            logger.warning(f"No se pudo calcular ST pendientes de reintento (batched) por oc_ids: {e}")
+            return {oid: 0 for oid in oc_ids_str}
+        return out
 
     def get_oc_ids_con_tiendas_pendientes(
-        self, dias_ventana: int, margen_antiguedad_minutos: int
+        self, dias_ventana: Optional[int], margen_antiguedad_minutos: int
     ) -> List[str]:
         """
         OCs en estado ENVIADA, con su primer intento de ST dentro de los últimos
-        `dias_ventana` días, cuyo último batch ST tiene al menos una tienda en
-        Error o Encolada (HTTP 202, job de middleware en curso) sin ITR ya creado
-        en ningún intento previo (misma idempotencia que
-        get_tiendas_pendientes_reintento_st, pero calculada para todas las OCs a la vez).
+        `dias_ventana` días (o sin límite de fecha si `dias_ventana` es None), cuyo
+        último batch ST tiene al menos una tienda en Error o Encolada (HTTP 202,
+        job de middleware en curso) sin ITR ya creado en ningún intento previo
+        (misma idempotencia que get_tiendas_pendientes_reintento_st, pero calculada
+        para todas las OCs a la vez).
 
         `margen_antiguedad_minutos`: solo considera una fila 'Encolada' si su
         detalle tiene al menos esta antigüedad -- evita chocar con un envío
@@ -887,17 +966,28 @@ class SolicitudTransferenciaRepository:
         de la query, aunque ese estado ya es definitivo (no hay job en curso que
         esperar).
 
-        `dias_ventana` es obligatorio a propósito (sin default): la reconciliación
-        automática NO debe alcanzar OCs viejas sin que quien la llama lo decida
-        explícitamente -- ver conversación 2026-08-28 (barrido diario corto vs.
-        semanal más amplio en celery_reconciliar_transferencias.py).
+        `dias_ventana`: la reconciliación automática (Celery) siempre pasa un valor
+        explícito a propósito -- NO debe alcanzar OCs viejas sin que quien la llama
+        lo decida explícitamente (ver conversación 2026-08-28, barrido diario corto
+        vs. semanal más amplio en celery_reconciliar_transferencias.py). El filtro
+        manual `solo_pendiente_reintento` de GET /ordenes-compra (ordenes_compra.py)
+        en cambio pasa None a propósito: ahí el usuario pide expresamente "todas las
+        que necesitan reintento", sin importar su antigüedad.
 
-        Candidatas a reconciliación automática (tarea Celery periódica).
+        Candidatas a reconciliación automática (tarea Celery periódica) o al filtro
+        manual "solo pendientes de reintento" del listado de ODC.
         """
         try:
             cursor = self.conn.cursor()
+            params: List[Any] = []
+            if dias_ventana is not None:
+                ventana_filtro = "AND pe.fecha >= DATEADD(day, -?, GETDATE())"
+                params.append(dias_ventana)
+            else:
+                ventana_filtro = ""
+            params.append(margen_antiguedad_minutos)
             cursor.execute(
-                """
+                f"""
                 WITH primer_envio AS (
                     SELECT oc_id, MIN(creado_fecha) AS fecha
                     FROM solicitud_transferencia
@@ -915,7 +1005,7 @@ class SolicitudTransferenciaRepository:
                     FROM solicitud_transferencia st
                     INNER JOIN orden_compra_cabecera oc ON oc.oc_id = st.oc_id
                     INNER JOIN primer_envio pe ON pe.oc_id = st.oc_id
-                    WHERE oc.estado = 'ENVIADA' AND pe.fecha >= DATEADD(day, -?, GETDATE())
+                    WHERE oc.estado = 'ENVIADA' {ventana_filtro}
                 ),
                 latest_pendientes_tiendas AS (
                     SELECT DISTINCT l.oc_id, d.tienda_codigo
@@ -940,7 +1030,7 @@ class SolicitudTransferenciaRepository:
                     AND UPPER(LTRIM(RTRIM(o.tienda_codigo))) = UPPER(LTRIM(RTRIM(e.tienda_codigo)))
                 WHERE o.tienda_codigo IS NULL
                 """,
-                (dias_ventana, margen_antiguedad_minutos),
+                tuple(params),
             )
             oc_ids = [str(row[0]) for row in cursor.fetchall() if row[0]]
             cursor.close()
