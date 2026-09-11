@@ -182,6 +182,80 @@ async def _handle_redistribuir_pedido(
         )
 
 
+def _db_confirmar_redistribucion(
+    pedido_id: str, request_body: ConfirmarRedistribucionRequest, user_id, audit
+):
+    """Consulta bloqueante (pyodbc); se ejecuta vía asyncio.to_thread.
+
+    Corre en su propia conexion/transaccion, separada de _db_procesar_sap_redistribucion:
+    el error de SAP ya se atrapaba localmente sin propagarse (no podia hacer rollback de
+    esto de todas formas) y separar la transaccion libera el lock de la fila del pedido
+    antes de la llamada HTTP lenta a SAP, en vez de mantenerlo abierto durante toda esa espera.
+    """
+    with get_db_connection_context() as conn:
+        repo_dist = DistribucionConfirmadaRepository(conn)
+        repo_pedido = PedidoRepository(conn)
+
+        pedido_data = obtener_pedido_o_404(repo_pedido, pedido_id)
+        estado_anterior = pedido_data["cabecera"].get("estado", "PENDIENTE")
+
+        distribucion_data = repo_dist.get_distribucion_completa(
+            pedido_id,
+            request_body.version
+        )
+
+        validator = RedistribucionValidator()
+        es_valido, errores = validator.validar_confirmacion_redistribucion(
+            pedido_id,
+            request_body.version or distribucion_data["version_actual"],
+            distribucion_data
+        )
+
+        if not es_valido:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "error": "validation_error",
+                    "message": "La redistribución no puede ser confirmada",
+                    "errores": errores
+                }
+            )
+
+        resultado = repo_dist.confirmar_redistribucion(
+            pedido_id=pedido_id,
+            version=request_body.version,
+            usuario=user_id,
+            audit_context=audit
+        )
+
+        repo_pedido.update_estado(pedido_id, ESTADO_REDISTRIBUIDO, audit_context=audit)
+
+        logger.info(f"✅ Redistribución confirmada para pedido {pedido_id} por usuario {user_id}")
+
+        return resultado, pedido_data, estado_anterior
+
+
+def _db_procesar_sap_redistribucion(pedido_id: str, user_id, audit) -> tuple:
+    """Consulta bloqueante (pyodbc) + llamada HTTP a SAP; se ejecuta vía asyncio.to_thread."""
+    with get_db_connection_context() as conn:
+        repo_pedido = PedidoRepository(conn)
+
+        resultado_sap = procesar_pedido_sap_con_homologacion_sync(
+            pedido_id=pedido_id,
+            user_id=user_id,
+            conn=conn,
+            logger=logger,
+        )
+
+        estado_confirmado = False
+        if resultado_sap.get("status") in ["success", "partial"]:
+            repo_pedido.update_estado(pedido_id, ESTADO_PEDIDO_CONFIRMADO, audit_context=audit)
+            estado_confirmado = True
+            logger.info(f"✅ Estado del pedido {pedido_id} actualizado a CONFIRMADO REDISTRIBUCION")
+
+        return resultado_sap, estado_confirmado
+
+
 async def _handle_confirmar_redistribucion(
     pedido_id: str,
     request_body: ConfirmarRedistribucionRequest,
@@ -190,99 +264,55 @@ async def _handle_confirmar_redistribucion(
 ) -> ConfirmarRedistribucionResponse:
     try:
         user_id = get_user_id(user)
+        audit = get_audit_context(request, user, origen=ORIGEN_WEB)
 
-        with get_db_connection_context() as conn:
-            repo_dist = DistribucionConfirmadaRepository(conn)
-            repo_pedido = PedidoRepository(conn)
+        resultado, pedido_data, estado_anterior = await asyncio.to_thread(
+            _db_confirmar_redistribucion, pedido_id, request_body, user_id, audit
+        )
+        estado_nuevo = "REDISTRIBUIDO"
 
-            pedido_data = obtener_pedido_o_404(repo_pedido, pedido_id)
-            estado_anterior = pedido_data["cabecera"].get("estado", "PENDIENTE")
+        try:
+            _numero_pedido = pedido_data["cabecera"].get("numero_pedido", "")
+            await notificar_redistribucion_confirmada(pedido_id, _numero_pedido)
+        except Exception as notif_err:
+            logger.warning(f"⚠️ Error al enviar notificación en tiempo real: {notif_err}")
 
-            distribucion_data = repo_dist.get_distribucion_completa(
-                pedido_id,
-                request_body.version
+        logger.info("=" * 70)
+        logger.info("🔄 PROCESANDO: Consultando SAP y procesando productos del pedido...")
+        logger.info("=" * 70)
+
+        try:
+            # Procesamiento SAP + homologaciones + email SMTP: todo síncrono/bloqueante
+            # (HTTP a SAP Service Layer, DB, smtplib) -> se delega a un thread aparte
+            # para no bloquear el event loop.
+            resultado_sap, estado_confirmado = await asyncio.to_thread(
+                _db_procesar_sap_redistribucion, pedido_id, user_id, audit
             )
 
-            validator = RedistribucionValidator()
-            es_valido, errores = validator.validar_confirmacion_redistribucion(
-                pedido_id,
-                request_body.version or distribucion_data["version_actual"],
-                distribucion_data
-            )
+            if estado_confirmado:
+                estado_nuevo = "CONFIRMADO REDISTRIBUCION"
+                try:
+                    await notificar_redistribucion_procesada_sap(
+                        pedido_id, pedido_data["cabecera"]["numero_pedido"]
+                    )
+                except Exception as notif_err:
+                    logger.warning(f"⚠️ Error al enviar notificación en tiempo real: {notif_err}")
 
-            if not es_valido:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail={
-                        "error": "validation_error",
-                        "message": "La redistribución no puede ser confirmada",
-                        "errores": errores
-                    }
-                )
+        except Exception as sap_error:
+            logger.error(f"❌ Error al procesar pedido con SAP: {sap_error}", exc_info=True)
+            logger.warning("⚠️ La redistribución fue confirmada pero el procesamiento SAP falló")
 
-            audit = get_audit_context(request, user, origen=ORIGEN_WEB)
+        logger.info("=" * 70)
 
-            resultado = repo_dist.confirmar_redistribucion(
-                pedido_id=pedido_id,
-                version=request_body.version,
-                usuario=user_id,
-                audit_context=audit
-            )
-
-            repo_pedido.update_estado(pedido_id, ESTADO_REDISTRIBUIDO, audit_context=audit)
-            estado_nuevo = "REDISTRIBUIDO"
-
-            logger.info(f"✅ Redistribución confirmada para pedido {pedido_id} por usuario {user_id}")
-
-            try:
-                _numero_pedido = pedido_data["cabecera"].get("numero_pedido", "")
-                await notificar_redistribucion_confirmada(pedido_id, _numero_pedido)
-            except Exception as notif_err:
-                logger.warning(f"⚠️ Error al enviar notificación en tiempo real: {notif_err}")
-
-            logger.info("=" * 70)
-            logger.info("🔄 PROCESANDO: Consultando SAP y procesando productos del pedido...")
-            logger.info("=" * 70)
-
-            try:
-                # Procesamiento SAP + homologaciones + email SMTP: todo síncrono/bloqueante
-                # (HTTP a SAP Service Layer, DB, smtplib) -> se delega a un thread aparte
-                # para no bloquear el event loop (usa la variante *_sync* pensada para esto).
-                resultado_sap = await asyncio.to_thread(
-                    procesar_pedido_sap_con_homologacion_sync,
-                    pedido_id=pedido_id,
-                    user_id=user_id,
-                    conn=conn,
-                    logger=logger,
-                )
-
-                if resultado_sap.get("status") in ["success", "partial"]:
-                    repo_pedido.update_estado(pedido_id, ESTADO_PEDIDO_CONFIRMADO, audit_context=audit)
-                    estado_nuevo = "CONFIRMADO REDISTRIBUCION"
-                    logger.info(f"✅ Estado del pedido {pedido_id} actualizado a CONFIRMADO REDISTRIBUCION")
-
-                    try:
-                        await notificar_redistribucion_procesada_sap(
-                            pedido_id, pedido_data["cabecera"]["numero_pedido"]
-                        )
-                    except Exception as notif_err:
-                        logger.warning(f"⚠️ Error al enviar notificación en tiempo real: {notif_err}")
-
-            except Exception as sap_error:
-                logger.error(f"❌ Error al procesar pedido con SAP: {sap_error}", exc_info=True)
-                logger.warning("⚠️ La redistribución fue confirmada pero el procesamiento SAP falló")
-
-            logger.info("=" * 70)
-
-            return ConfirmarRedistribucionResponse(
-                pedido_id=pedido_id,
-                numero_pedido=pedido_data["cabecera"]["numero_pedido"],
-                version_confirmada=resultado["version_confirmada"],
-                estado_anterior=estado_anterior,
-                estado_nuevo=estado_nuevo,
-                fecha_confirmacion=ahora_naive(),
-                mensaje=resultado["mensaje"]
-            )
+        return ConfirmarRedistribucionResponse(
+            pedido_id=pedido_id,
+            numero_pedido=pedido_data["cabecera"]["numero_pedido"],
+            version_confirmada=resultado["version_confirmada"],
+            estado_anterior=estado_anterior,
+            estado_nuevo=estado_nuevo,
+            fecha_confirmacion=ahora_naive(),
+            mensaje=resultado["mensaje"]
+        )
 
     except HTTPException:
         raise

@@ -452,6 +452,81 @@ class TestObtenerDistribucionNoBloquea:
         )
 
 
+class TestConfirmarRedistribucionNoBloquea:
+    """POST /api/pedidos/{pedido_id}/confirmar-redistribucion"""
+
+    @pytest.mark.asyncio
+    async def test_ambas_fases_corren_fuera_del_event_loop(self, monkeypatch):
+        from src.endpoints.pedidos.redistribucion import endpoints_core as ec
+
+        hilos = {}
+
+        def fake_db_confirmar(_pedido_id, _request_body, _user_id, _audit):
+            hilos["fase1"] = _hilo_actual()
+            resultado = {"version_confirmada": 2, "mensaje": "ok"}
+            pedido_data = {"cabecera": {"numero_pedido": "PED-1"}}
+            return resultado, pedido_data, "PENDIENTE"
+
+        def fake_db_procesar_sap(_pedido_id, _user_id, _audit):
+            hilos["fase2"] = _hilo_actual()
+            return {"status": "success"}, True
+
+        async def fake_notificar(*_a, **_k):
+            return None
+
+        monkeypatch.setattr(ec, "_db_confirmar_redistribucion", fake_db_confirmar)
+        monkeypatch.setattr(ec, "_db_procesar_sap_redistribucion", fake_db_procesar_sap)
+        monkeypatch.setattr(ec, "get_user_id", lambda _user: "u1")
+        monkeypatch.setattr(ec, "get_audit_context", lambda *_a, **_k: {})
+        monkeypatch.setattr(ec, "notificar_redistribucion_confirmada", fake_notificar)
+        monkeypatch.setattr(ec, "notificar_redistribucion_procesada_sap", fake_notificar)
+
+        respuesta = await ec._handle_confirmar_redistribucion(
+            "p1", MagicMock(), user={"username": "u1"}, request=MagicMock()
+        )
+
+        assert respuesta.estado_nuevo == "CONFIRMADO REDISTRIBUCION"
+        assert "fase1" in hilos, "no se llegó a confirmar la redistribución"
+        assert "fase2" in hilos, "no se llegó a procesar SAP"
+        assert hilos["fase1"] != _hilo_actual(), (
+            "_db_confirmar_redistribucion() corrió en el event loop: hace DB (pyodbc). "
+            "Debe invocarse con asyncio.to_thread."
+        )
+        assert hilos["fase2"] != _hilo_actual(), (
+            "_db_procesar_sap_redistribucion() corrió en el event loop: hace DB (pyodbc) y "
+            "una llamada HTTP a SAP. Debe invocarse con asyncio.to_thread."
+        )
+
+    @pytest.mark.asyncio
+    async def test_error_en_fase_sap_no_rompe_la_confirmacion_ya_hecha(self, monkeypatch):
+        """El error de SAP se degrada a warning: la redistribución ya confirmada en fase 1 se preserva."""
+        from src.endpoints.pedidos.redistribucion import endpoints_core as ec
+
+        def fake_db_confirmar(_pedido_id, _request_body, _user_id, _audit):
+            resultado = {"version_confirmada": 2, "mensaje": "ok"}
+            pedido_data = {"cabecera": {"numero_pedido": "PED-1"}}
+            return resultado, pedido_data, "PENDIENTE"
+
+        def fake_db_procesar_sap_falla(_pedido_id, _user_id, _audit):
+            raise RuntimeError("SAP caído")
+
+        async def fake_notificar(*_a, **_k):
+            return None
+
+        monkeypatch.setattr(ec, "_db_confirmar_redistribucion", fake_db_confirmar)
+        monkeypatch.setattr(ec, "_db_procesar_sap_redistribucion", fake_db_procesar_sap_falla)
+        monkeypatch.setattr(ec, "get_user_id", lambda _user: "u1")
+        monkeypatch.setattr(ec, "get_audit_context", lambda *_a, **_k: {})
+        monkeypatch.setattr(ec, "notificar_redistribucion_confirmada", fake_notificar)
+
+        respuesta = await ec._handle_confirmar_redistribucion(
+            "p1", MagicMock(), user={"username": "u1"}, request=MagicMock()
+        )
+
+        assert respuesta.estado_nuevo == "REDISTRIBUIDO"
+        assert respuesta.version_confirmada == 2
+
+
 class TestBorradorRedistribucionNoBloquea:
     """Endpoints de borrador y datos iniciales de redistribución."""
 
