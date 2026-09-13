@@ -285,7 +285,7 @@ async def _handle_confirmar_redistribucion(
             # Procesamiento SAP + homologaciones + email SMTP: todo síncrono/bloqueante
             # (HTTP a SAP Service Layer, DB, smtplib) -> se delega a un thread aparte
             # para no bloquear el event loop.
-            resultado_sap, estado_confirmado = await asyncio.to_thread(
+            _, estado_confirmado = await asyncio.to_thread(
                 _db_procesar_sap_redistribucion, pedido_id, user_id, audit
             )
 
