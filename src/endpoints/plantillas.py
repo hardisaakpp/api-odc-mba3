@@ -644,43 +644,52 @@ async def _stream_progreso_plantilla_handler(
     )
 
 
+def _db_obtener_ultimo_pedido(incluir_respuesta: bool, user_id) -> Optional[Dict]:
+    """Consulta bloqueante (pyodbc); se ejecuta vía asyncio.to_thread."""
+    with get_db_connection_context() as conn:
+        repo = PedidoRepository(conn)
+
+        ultimo_pedido = repo.get_ultimo_pedido(user_id)
+
+        if not ultimo_pedido:
+            return None
+
+        pedido_completo = repo.get_pedido_completo(ultimo_pedido["pedido_id"])
+
+        if not pedido_completo:
+            raise HTTPException(
+                status_code=500,
+                detail="Error al obtener detalles del último pedido"
+            )
+
+        if incluir_respuesta:
+            respuesta_repo = PedidoRespuestaRepository(conn)
+            pedido_id = pedido_completo["cabecera"]["pedido_id"]
+            respuesta = respuesta_repo.obtener_respuesta_activa(pedido_id)
+            if respuesta:
+                pedido_completo["respuesta_proveedor"] = respuesta
+
+        _eid = pedido_completo.get("cabecera", {}).get("estado_id")
+        try:
+            _eid = int(_eid) if _eid is not None else None
+        except (TypeError, ValueError):
+            _eid = None
+        pedido_completo["puede_descartar"] = _eid in ESTADOS_PUEDE_DESCARTAR
+        pedido_completo["puede_confirmar_redistribucion"] = _eid in ESTADOS_PUEDE_CONFIRMAR_REDISTRIBUCION
+
+        return pedido_completo
+
+
 async def _get_ultimo_pedido_handler(incluir_respuesta: bool, user: Dict):
     try:
         user_id = get_user_id(user)
+        pedido_completo = await asyncio.to_thread(_db_obtener_ultimo_pedido, incluir_respuesta, user_id)
 
-        with get_db_connection_context() as conn:
-            repo = PedidoRepository(conn)
+        if pedido_completo is None:
+            return JSONResponse(status_code=200, content=None)
 
-            ultimo_pedido = repo.get_ultimo_pedido(user_id)
-
-            if not ultimo_pedido:
-                return JSONResponse(status_code=200, content=None)
-
-            pedido_completo = repo.get_pedido_completo(ultimo_pedido["pedido_id"])
-
-            if not pedido_completo:
-                raise HTTPException(
-                    status_code=500,
-                    detail="Error al obtener detalles del último pedido"
-                )
-
-            if incluir_respuesta:
-                respuesta_repo = PedidoRespuestaRepository(conn)
-                pedido_id = pedido_completo["cabecera"]["pedido_id"]
-                respuesta = respuesta_repo.obtener_respuesta_activa(pedido_id)
-                if respuesta:
-                    pedido_completo["respuesta_proveedor"] = respuesta
-
-            _eid = pedido_completo.get("cabecera", {}).get("estado_id")
-            try:
-                _eid = int(_eid) if _eid is not None else None
-            except (TypeError, ValueError):
-                _eid = None
-            pedido_completo["puede_descartar"] = _eid in ESTADOS_PUEDE_DESCARTAR
-            pedido_completo["puede_confirmar_redistribucion"] = _eid in ESTADOS_PUEDE_CONFIRMAR_REDISTRIBUCION
-
-            content = make_json_serializable(pedido_completo)
-            return JSONResponse(status_code=200, content=content)
+        content = make_json_serializable(pedido_completo)
+        return JSONResponse(status_code=200, content=content)
 
     except HTTPException:
         raise
@@ -690,6 +699,53 @@ async def _get_ultimo_pedido_handler(incluir_respuesta: bool, user: Dict):
             status_code=500,
             detail=f"Error interno al obtener último pedido: {str(e)}"
         )
+
+
+def _db_listar_pedidos_plantillas(
+    estado: Optional[str],
+    numero_pedido: Optional[str],
+    limit: int,
+    offset: int,
+    filtrar_pendientes: bool,
+    creado_por: Optional[str],
+    modificado_por: Optional[str],
+    fecha_desde: Optional[str],
+    fecha_hasta: Optional[str],
+    tipo_fecha: Optional[str],
+    user_id,
+) -> Dict:
+    """Consulta bloqueante (pyodbc); se ejecuta vía asyncio.to_thread."""
+    with get_db_connection_context() as conn:
+        repo = PedidoRepository(conn)
+
+        resultado = repo.get_pedidos_con_filtros(
+            filtros=PedidosFiltros(
+                estado=estado,
+                numero_pedido=numero_pedido.strip() if numero_pedido else None,
+                creado_por=creado_por.strip() if creado_por else None,
+                modificado_por=modificado_por.strip() if modificado_por else None,
+                fecha_desde=fecha_desde,
+                fecha_hasta=fecha_hasta,
+                tipo_fecha=tipo_fecha,
+                excluir_borrador=False,  # INCLUIR BORRADOR para cargar-plantilla
+                # Cargar Plantilla usa su propio set de estados "pendientes" (Producción
+                # Pospuesta, Despachar y Facturar), no ESTADOS_REQUIERE_ACCION_* (proveedor) --
+                # ver ESTADOS_REQUIERE_ACCION_CARGAR_PLANTILLA_* en pedido_estados.py.
+                solo_pendientes_accion_cargar_plantilla=filtrar_pendientes,
+                # LISTO_PARA_REDISTRIBUCION (25, botón "Aceptar") solo se ve en /redistribucion
+                excluir_listo_para_redistribucion=True,
+            ),
+            limit=limit,
+            offset=offset,
+        )
+
+        logger.info(
+            f"📋 Listando pedidos para cargar-plantilla: "
+            f"usuario={user_id}, total={resultado['total']}, "
+            f"limit={limit}, offset={offset}"
+        )
+
+        return resultado
 
 
 async def _listar_pedidos_plantillas_handler(
@@ -712,49 +768,25 @@ async def _listar_pedidos_plantillas_handler(
             and str(solo_pendientes_accion).lower() in ("true", "1")
         )
 
-        with get_db_connection_context() as conn:
-            repo = PedidoRepository(conn)
+        resultado = await asyncio.to_thread(
+            _db_listar_pedidos_plantillas,
+            estado, numero_pedido, limit, offset, filtrar_pendientes,
+            creado_por, modificado_por, fecha_desde, fecha_hasta, tipo_fecha, user_id,
+        )
 
-            resultado = repo.get_pedidos_con_filtros(
-                filtros=PedidosFiltros(
-                    estado=estado,
-                    numero_pedido=numero_pedido.strip() if numero_pedido else None,
-                    creado_por=creado_por.strip() if creado_por else None,
-                    modificado_por=modificado_por.strip() if modificado_por else None,
-                    fecha_desde=fecha_desde,
-                    fecha_hasta=fecha_hasta,
-                    tipo_fecha=tipo_fecha,
-                    excluir_borrador=False,  # INCLUIR BORRADOR para cargar-plantilla
-                    # Cargar Plantilla usa su propio set de estados "pendientes" (Producción
-                    # Pospuesta, Despachar y Facturar), no ESTADOS_REQUIERE_ACCION_* (proveedor) --
-                    # ver ESTADOS_REQUIERE_ACCION_CARGAR_PLANTILLA_* en pedido_estados.py.
-                    solo_pendientes_accion_cargar_plantilla=filtrar_pendientes,
-                    # LISTO_PARA_REDISTRIBUCION (25, botón "Aceptar") solo se ve en /redistribucion
-                    excluir_listo_para_redistribucion=True,
-                ),
-                limit=limit,
-                offset=offset,
-            )
-
-            logger.info(
-                f"📋 Listando pedidos para cargar-plantilla: "
-                f"usuario={user_id}, total={resultado['total']}, "
-                f"limit={limit}, offset={offset}"
-            )
-
-            return JSONResponse(
-                status_code=200,
-                content={
-                    "status": "success",
-                    "data": resultado["data"],
-                    "metadata": {
-                        "total": resultado["total"],
-                        "limit": resultado["limit"],
-                        "offset": resultado["offset"],
-                        "has_more": resultado["has_more"]
-                    }
+        return JSONResponse(
+            status_code=200,
+            content={
+                "status": "success",
+                "data": resultado["data"],
+                "metadata": {
+                    "total": resultado["total"],
+                    "limit": resultado["limit"],
+                    "offset": resultado["offset"],
+                    "has_more": resultado["has_more"]
                 }
-            )
+            }
+        )
 
     except Exception as e:
         logger.error(f"❌ Error al listar pedidos para plantillas: {e}", exc_info=True)
@@ -837,6 +869,33 @@ def _descargar_contenido_storage(storage_path: str) -> bytes:
         )
 
 
+def _db_buscar_archivo_info_descarga(pedido_id: Optional[str], archivo_id: Optional[int]) -> Dict:
+    """Consulta bloqueante (pyodbc); se ejecuta vía asyncio.to_thread."""
+    with get_db_connection_context() as conn:
+        archivo_info = _buscar_archivo_info(conn, pedido_id, archivo_id)
+
+        if not archivo_info:
+            identificador = f"archivo_id={archivo_id}" if archivo_id is not None else f"pedido_id={pedido_id}"
+            raise HTTPException(
+                status_code=404,
+                detail={
+                    "error": "not_found",
+                    "message": f"No se encontró archivo original para {identificador}"
+                }
+            )
+        return archivo_info
+
+
+def _db_registrar_descarga_plantilla(archivo_id: int, descargado_por) -> None:
+    """Consulta bloqueante (pyodbc); se ejecuta vía asyncio.to_thread."""
+    with get_db_connection_context() as conn:
+        archivo_repo = ArchivoPlantillaRepository(conn)
+        archivo_repo.registrar_descarga(
+            archivo_id=archivo_id,
+            descargado_por=descargado_por
+        )
+
+
 async def _descargar_plantilla(
     *,
     user: Dict,
@@ -856,29 +915,13 @@ async def _descargar_plantilla(
                 }
             )
 
-        with get_db_connection_context() as conn:
-            archivo_info = _buscar_archivo_info(conn, pedido_id, archivo_id)
-
-            if not archivo_info:
-                identificador = f"archivo_id={archivo_id}" if archivo_id is not None else f"pedido_id={pedido_id}"
-                raise HTTPException(
-                    status_code=404,
-                    detail={
-                        "error": "not_found",
-                        "message": f"No se encontró archivo original para {identificador}"
-                    }
-                )
+        archivo_info = await asyncio.to_thread(_db_buscar_archivo_info_descarga, pedido_id, archivo_id)
 
         # Descarga de storage (MinIO/S3, get_object + read) es I/O síncrono/bloqueante ->
         # se delega a un thread aparte para no bloquear el event loop.
         contenido = await asyncio.to_thread(_descargar_contenido_storage, archivo_info["storage_path"])
 
-        with get_db_connection_context() as conn:
-            archivo_repo = ArchivoPlantillaRepository(conn)
-            archivo_repo.registrar_descarga(
-                archivo_id=archivo_info["archivo_id"],
-                descargado_por=user_id
-            )
+        await asyncio.to_thread(_db_registrar_descarga_plantilla, archivo_info["archivo_id"], user_id)
 
         logger.info(
             f"✅ Archivo descargado: pedido_id={archivo_info['pedido_id']}, "
@@ -910,40 +953,45 @@ async def _descargar_plantilla(
         )
 
 
+def _db_info_archivo_plantilla(pedido_id: str) -> Optional[Dict]:
+    """Consulta bloqueante (pyodbc); se ejecuta vía asyncio.to_thread."""
+    with get_db_connection_context() as conn:
+        archivo_repo = ArchivoPlantillaRepository(conn)
+        return archivo_repo.obtener_por_pedido_id(pedido_id)
+
+
 async def _info_archivo_plantilla_handler(pedido_id: str):
     try:
-        with get_db_connection_context() as conn:
-            archivo_repo = ArchivoPlantillaRepository(conn)
-            archivo_info = archivo_repo.obtener_por_pedido_id(pedido_id)
+        archivo_info = await asyncio.to_thread(_db_info_archivo_plantilla, pedido_id)
 
-            if not archivo_info:
-                return JSONResponse(
-                    status_code=200,
-                    content={
-                        "existe": False,
-                        "storage_habilitado": True,
-                        "mensaje": "No hay archivo original disponible para este pedido"
-                    }
-                )
-
+        if not archivo_info:
             return JSONResponse(
                 status_code=200,
                 content={
-                    "existe": True,
+                    "existe": False,
                     "storage_habilitado": True,
-                    "archivo": {
-                        "archivo_id": archivo_info["archivo_id"],
-                        "nombre_original": archivo_info["nombre_original"],
-                        _KEY_TAMANO_BYTES: archivo_info[_KEY_TAMANO_BYTES],
-                        "tamaño_mb": round(archivo_info[_KEY_TAMANO_BYTES] / (1024 * 1024), 2),
-                        "subido_por": archivo_info["subido_por"],
-                        "fecha_subida": archivo_info["fecha_subida"],
-                        "descargas": archivo_info["descargas"],
-                        "ultima_descarga": archivo_info["ultima_descarga"]
-                    },
-                    "url_descarga": f"/api/plantillas/{pedido_id}/descargar-original"
+                    "mensaje": "No hay archivo original disponible para este pedido"
                 }
             )
+
+        return JSONResponse(
+            status_code=200,
+            content={
+                "existe": True,
+                "storage_habilitado": True,
+                "archivo": {
+                    "archivo_id": archivo_info["archivo_id"],
+                    "nombre_original": archivo_info["nombre_original"],
+                    _KEY_TAMANO_BYTES: archivo_info[_KEY_TAMANO_BYTES],
+                    "tamaño_mb": round(archivo_info[_KEY_TAMANO_BYTES] / (1024 * 1024), 2),
+                    "subido_por": archivo_info["subido_por"],
+                    "fecha_subida": archivo_info["fecha_subida"],
+                    "descargas": archivo_info["descargas"],
+                    "ultima_descarga": archivo_info["ultima_descarga"]
+                },
+                "url_descarga": f"/api/plantillas/{pedido_id}/descargar-original"
+            }
+        )
 
     except Exception as e:
         logger.error(f"Error al obtener info de archivo: {e}", exc_info=True)
@@ -953,32 +1001,37 @@ async def _info_archivo_plantilla_handler(pedido_id: str):
         )
 
 
+def _db_buscar_pedidos_por_numero(numero_pedido: Optional[str], limit: int) -> Dict:
+    """Consulta bloqueante (pyodbc); se ejecuta vía asyncio.to_thread."""
+    with get_db_connection_context() as conn:
+        repo = PedidoRepository(conn)
+
+        return repo.get_pedidos_con_filtros(
+            filtros=PedidosFiltros(
+                numero_pedido=numero_pedido.strip() if numero_pedido else None,
+                creado_por=None,  # Sin filtrar por usuario — visibles para mabel.view
+                excluir_borrador=False,  # Incluir BORRADOR para cargar-plantilla
+                # LISTO_PARA_REDISTRIBUCION (25, botón "Aceptar") solo se ve en /redistribucion
+                excluir_listo_para_redistribucion=True,
+            ),
+            limit=limit,
+            offset=0,
+        )
+
+
 async def _buscar_pedidos_por_numero_handler(numero_pedido: Optional[str], limit: int):
     try:
-        with get_db_connection_context() as conn:
-            repo = PedidoRepository(conn)
+        resultado = await asyncio.to_thread(_db_buscar_pedidos_por_numero, numero_pedido, limit)
 
-            resultado = repo.get_pedidos_con_filtros(
-                filtros=PedidosFiltros(
-                    numero_pedido=numero_pedido.strip() if numero_pedido else None,
-                    creado_por=None,  # Sin filtrar por usuario — visibles para mabel.view
-                    excluir_borrador=False,  # Incluir BORRADOR para cargar-plantilla
-                    # LISTO_PARA_REDISTRIBUCION (25, botón "Aceptar") solo se ve en /redistribucion
-                    excluir_listo_para_redistribucion=True,
-                ),
-                limit=limit,
-                offset=0,
-            )
-
-            return JSONResponse(
-                status_code=200,
-                content={
-                    "status": "success",
-                    "data": resultado["data"],
-                    "total": resultado["total"],
-                    "query": numero_pedido.strip() if numero_pedido else None
-                }
-            )
+        return JSONResponse(
+            status_code=200,
+            content={
+                "status": "success",
+                "data": resultado["data"],
+                "total": resultado["total"],
+                "query": numero_pedido.strip() if numero_pedido else None
+            }
+        )
 
     except Exception as e:
         logger.error(f"❌ Error al buscar pedidos: {e}", exc_info=True)
@@ -988,74 +1041,86 @@ async def _buscar_pedidos_por_numero_handler(numero_pedido: Optional[str], limit
         )
 
 
+def _db_listar_archivos_originales(
+    limit: int, offset: int, solo_activos: bool, busqueda: Optional[str], user_id, permissions, roles
+) -> tuple:
+    """Consulta bloqueante (pyodbc); se ejecuta vía asyncio.to_thread."""
+    with get_db_connection_context() as conn:
+        archivo_repo = ArchivoPlantillaRepository(conn)
+
+        has_odcsap = any(_PERM_ODCSAP in str(p).lower() for p in permissions)
+        is_admin = any('admin' in str(r).lower() for r in roles)
+
+        if has_odcsap or is_admin:
+            resultado = archivo_repo.listar_todos(
+                limit=limit,
+                offset=offset,
+                solo_activos=solo_activos,
+                busqueda=busqueda
+            )
+        else:
+            resultado = archivo_repo.listar_por_usuario(
+                usuario_id=user_id,
+                limit=limit,
+                offset=offset,
+                solo_activos=solo_activos,
+                busqueda=busqueda
+            )
+
+        archivos_enriquecidos = []
+        for archivo in resultado["data"]:
+            archivos_enriquecidos.append({
+                "archivo_id": archivo["archivo_id"],
+                "pedido_id": archivo["pedido_id"],
+                "numero_pedido": archivo.get("numero_pedido"),
+                "nombre_original": archivo["nombre_original"],
+                _KEY_TAMANO_BYTES: archivo[_KEY_TAMANO_BYTES],
+                "tamaño_mb": round(archivo[_KEY_TAMANO_BYTES] / (1024 * 1024), 2) if archivo[_KEY_TAMANO_BYTES] else 0,
+                "subido_por": archivo["subido_por"],
+                "fecha_subida": archivo["fecha_subida"],
+                "activo": archivo["activo"],
+                "descargas": archivo["descargas"],
+                "ultima_descarga": archivo["ultima_descarga"],
+                "url_descarga": f"/api/plantillas/archivos/{archivo['archivo_id']}/descargar-original"
+            })
+
+        total = resultado["total"]
+        logger.info(
+            f"📋 Listando archivos originales: usuario={user_id}, "
+            f"total={total}, devueltos={len(archivos_enriquecidos)}, "
+            f"limit={limit}, offset={offset}, solo_activos={solo_activos}"
+        )
+
+        return archivos_enriquecidos, total
+
+
 async def _listar_archivos_originales_handler(
     limit: int, offset: int, solo_activos: bool, busqueda: Optional[str], user: Dict
 ):
     try:
         user_id = get_user_id(user)
         permissions = user.get('permissions', [])
+        roles = user.get('roles', [])
 
-        with get_db_connection_context() as conn:
-            archivo_repo = ArchivoPlantillaRepository(conn)
+        archivos_enriquecidos, total = await asyncio.to_thread(
+            _db_listar_archivos_originales,
+            limit, offset, solo_activos, busqueda, user_id, permissions, roles,
+        )
 
-            has_odcsap = any(_PERM_ODCSAP in str(p).lower() for p in permissions)
-            roles = user.get('roles', [])
-            is_admin = any('admin' in str(r).lower() for r in roles)
-
-            if has_odcsap or is_admin:
-                resultado = archivo_repo.listar_todos(
-                    limit=limit,
-                    offset=offset,
-                    solo_activos=solo_activos,
-                    busqueda=busqueda
-                )
-            else:
-                resultado = archivo_repo.listar_por_usuario(
-                    usuario_id=user_id,
-                    limit=limit,
-                    offset=offset,
-                    solo_activos=solo_activos,
-                    busqueda=busqueda
-                )
-
-            archivos_enriquecidos = []
-            for archivo in resultado["data"]:
-                archivos_enriquecidos.append({
-                    "archivo_id": archivo["archivo_id"],
-                    "pedido_id": archivo["pedido_id"],
-                    "numero_pedido": archivo.get("numero_pedido"),
-                    "nombre_original": archivo["nombre_original"],
-                    _KEY_TAMANO_BYTES: archivo[_KEY_TAMANO_BYTES],
-                    "tamaño_mb": round(archivo[_KEY_TAMANO_BYTES] / (1024 * 1024), 2) if archivo[_KEY_TAMANO_BYTES] else 0,
-                    "subido_por": archivo["subido_por"],
-                    "fecha_subida": archivo["fecha_subida"],
-                    "activo": archivo["activo"],
-                    "descargas": archivo["descargas"],
-                    "ultima_descarga": archivo["ultima_descarga"],
-                    "url_descarga": f"/api/plantillas/archivos/{archivo['archivo_id']}/descargar-original"
-                })
-
-            total = resultado["total"]
-            logger.info(
-                f"📋 Listando archivos originales: usuario={user_id}, "
-                f"total={total}, devueltos={len(archivos_enriquecidos)}, "
-                f"limit={limit}, offset={offset}, solo_activos={solo_activos}"
-            )
-
-            return JSONResponse(
-                status_code=200,
-                content={
-                    "status": "success",
-                    "data": archivos_enriquecidos,
-                    "metadata": {
-                        "total": total,
-                        "limit": limit,
-                        "offset": offset,
-                        "has_more": offset + len(archivos_enriquecidos) < total,
-                        "storage_habilitado": True
-                    }
+        return JSONResponse(
+            status_code=200,
+            content={
+                "status": "success",
+                "data": archivos_enriquecidos,
+                "metadata": {
+                    "total": total,
+                    "limit": limit,
+                    "offset": offset,
+                    "has_more": offset + len(archivos_enriquecidos) < total,
+                    "storage_habilitado": True
                 }
-            )
+            }
+        )
 
     except Exception as e:
         logger.error(f"❌ Error al listar archivos originales: {e}", exc_info=True)
@@ -1065,101 +1130,116 @@ async def _listar_archivos_originales_handler(
         )
 
 
+def _db_verificar_y_marcar_eliminado(archivo_id: int, user_id, user_roles: List) -> Dict:
+    """Consulta bloqueante (pyodbc); se ejecuta vía asyncio.to_thread.
+
+    No incluye la eliminación física del storage: esa se hace después, ya con la
+    conexión cerrada, para no mantenerla abierta durante la llamada a MinIO/S3.
+    """
+    with get_db_connection_context() as conn:
+        archivo_repo = ArchivoPlantillaRepository(conn)
+
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT archivo_id, pedido_id, nombre_original, storage_path,
+                   subido_por, activo
+            FROM archivo_plantilla
+            WHERE archivo_id = ?
+        """, (archivo_id,))
+        row = cursor.fetchone()
+
+        if not row:
+            raise HTTPException(
+                status_code=404,
+                detail={
+                    "error": "not_found",
+                    "message": f"Archivo con ID {archivo_id} no encontrado"
+                }
+            )
+
+        archivo_info = {
+            "archivo_id": row[0],
+            "pedido_id": row[1],
+            "nombre_original": row[2],
+            "storage_path": row[3],
+            "subido_por": row[4],
+            "activo": row[5]
+        }
+
+        if archivo_info["subido_por"] != user_id:
+            is_admin = any('admin' in str(r).lower() for r in user_roles)
+
+            if not is_admin:
+                raise HTTPException(
+                    status_code=403,
+                    detail={
+                        "error": "forbidden",
+                        "message": "No tienes permiso para eliminar este archivo. Solo el usuario que lo subió puede eliminarlo."
+                    }
+                )
+
+        if not archivo_info["activo"]:
+            return {"ya_eliminado": True, "archivo_info": archivo_info}
+
+        archivo_repo.eliminar(archivo_id)
+
+        return {"ya_eliminado": False, "archivo_info": archivo_info}
+
+
 async def _eliminar_archivo_original_handler(archivo_id: int, eliminar_fisicamente: bool, user: Dict):
     try:
         user_id = get_user_id(user)
+        user_roles = user.get("roles", [])
 
-        with get_db_connection_context() as conn:
-            archivo_repo = ArchivoPlantillaRepository(conn)
+        resultado = await asyncio.to_thread(
+            _db_verificar_y_marcar_eliminado, archivo_id, user_id, user_roles
+        )
+        archivo_info = resultado["archivo_info"]
 
-            cursor = conn.cursor()
-            cursor.execute("""
-                SELECT archivo_id, pedido_id, nombre_original, storage_path,
-                       subido_por, activo
-                FROM archivo_plantilla
-                WHERE archivo_id = ?
-            """, (archivo_id,))
-            row = cursor.fetchone()
-
-            if not row:
-                raise HTTPException(
-                    status_code=404,
-                    detail={
-                        "error": "not_found",
-                        "message": f"Archivo con ID {archivo_id} no encontrado"
-                    }
-                )
-
-            archivo_info = {
-                "archivo_id": row[0],
-                "pedido_id": row[1],
-                "nombre_original": row[2],
-                "storage_path": row[3],
-                "subido_por": row[4],
-                "activo": row[5]
-            }
-
-            if archivo_info["subido_por"] != user_id:
-                user_roles = user.get("roles", [])
-                is_admin = any('admin' in str(r).lower() for r in user_roles)
-
-                if not is_admin:
-                    raise HTTPException(
-                        status_code=403,
-                        detail={
-                            "error": "forbidden",
-                            "message": "No tienes permiso para eliminar este archivo. Solo el usuario que lo subió puede eliminarlo."
-                        }
-                    )
-
-            if not archivo_info["activo"]:
-                return JSONResponse(
-                    status_code=200,
-                    content={
-                        "status": "warning",
-                        "message": "El archivo ya estaba eliminado",
-                        "archivo_id": archivo_id
-                    }
-                )
-
-            archivo_repo.eliminar(archivo_id)
-
-            eliminacion_storage = False
-            if eliminar_fisicamente and archivo_info["storage_path"]:
-                try:
-                    from src.services.file_storage_service import get_file_storage, FileStorageError
-
-                    storage = get_file_storage()
-                    # delete_object es I/O síncrono/bloqueante -> se delega a un thread
-                    # aparte para no bloquear el event loop (esto ocurre dentro de un
-                    # "with get_db_connection_context()" abierto, así que es especialmente
-                    # importante no bloquear aquí).
-                    await asyncio.to_thread(storage.eliminar_archivo, archivo_info["storage_path"])
-                    eliminacion_storage = True
-
-                    logger.info(
-                        f"🗑️ Archivo eliminado físicamente del storage: {archivo_info['storage_path']}"
-                    )
-                except FileStorageError as e:
-                    logger.warning(f"⚠️ No se pudo eliminar del storage: {e}")
-                    # No fallar si el storage ya no tiene el archivo
-
-            logger.info(
-                f"🗑️ Archivo eliminado: archivo_id={archivo_id}, "
-                f"nombre={archivo_info['nombre_original']}, usuario={user_id}, "
-                f"eliminacion_fisica={eliminar_fisicamente}"
-            )
-
+        if resultado["ya_eliminado"]:
             return JSONResponse(
                 status_code=200,
                 content={
-                    "status": "success",
-                    "message": "Archivo eliminado correctamente",
-                    "archivo_id": archivo_id,
-                    "nombre_archivo": archivo_info["nombre_original"],
-                    "eliminacion_fisica": eliminacion_storage
+                    "status": "warning",
+                    "message": "El archivo ya estaba eliminado",
+                    "archivo_id": archivo_id
                 }
             )
+
+        eliminacion_storage = False
+        if eliminar_fisicamente and archivo_info["storage_path"]:
+            try:
+                from src.services.file_storage_service import get_file_storage, FileStorageError
+
+                storage = get_file_storage()
+                # delete_object es I/O síncrono/bloqueante -> se delega a un thread aparte
+                # para no bloquear el event loop.
+                await asyncio.to_thread(storage.eliminar_archivo, archivo_info["storage_path"])
+                eliminacion_storage = True
+
+                logger.info(
+                    f"🗑️ Archivo eliminado físicamente del storage: {archivo_info['storage_path']}"
+                )
+            except FileStorageError as e:
+                logger.warning(f"⚠️ No se pudo eliminar del storage: {e}")
+                # No fallar si el storage ya no tiene el archivo
+
+        logger.info(
+            f"🗑️ Archivo eliminado: archivo_id={archivo_id}, "
+            f"nombre={archivo_info['nombre_original']}, usuario={user_id}, "
+            f"eliminacion_fisica={eliminar_fisicamente}"
+        )
+
+        return JSONResponse(
+            status_code=200,
+            content={
+                "status": "success",
+                "message": "Archivo eliminado correctamente",
+                "archivo_id": archivo_id,
+                "nombre_archivo": archivo_info["nombre_original"],
+                "eliminacion_fisica": eliminacion_storage
+            }
+        )
 
     except HTTPException:
         raise

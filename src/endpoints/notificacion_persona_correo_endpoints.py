@@ -5,6 +5,7 @@ notificaciones. Ver docstring del repositorio: es la fuente real de
 destinatarios del envío de correos.
 """
 
+import asyncio
 import logging
 from typing import Dict
 
@@ -29,10 +30,24 @@ class CrearLinkRequest(BaseModel):
     tipo_correo_id: int
 
 
-async def _listar_handler() -> Dict:
+def _db_listar_personas_correo() -> Dict:
+    """Consulta bloqueante (pyodbc); se ejecuta vía asyncio.to_thread."""
     with get_db_connection_context() as conn:
         filas = listar_personas_correo(conn)
     return {"personas_correo": filas}
+
+
+async def _listar_handler() -> Dict:
+    return await asyncio.to_thread(_db_listar_personas_correo)
+
+
+def _db_crear_link_persona_correo(nombre: str, correo: str, tipo_correo_id: int, creado_por: str) -> int:
+    """Consulta bloqueante (pyodbc); se ejecuta vía asyncio.to_thread."""
+    try:
+        with get_db_connection_context() as conn:
+            return crear_link_persona_correo(conn, nombre, correo, tipo_correo_id, creado_por)
+    except ValueError as e:
+        raise HTTPException(status_code=409, detail=str(e))
 
 
 async def _crear_link_handler(body: CrearLinkRequest, user: Dict) -> Dict:
@@ -41,28 +56,36 @@ async def _crear_link_handler(body: CrearLinkRequest, user: Dict) -> Dict:
         raise HTTPException(status_code=400, detail=f"Email inválido: '{body.email}'")
 
     creado_por = user.get("username", "unknown")
-    try:
-        with get_db_connection_context() as conn:
-            nuevo_id = crear_link_persona_correo(conn, body.nombre, correo, body.tipo_correo_id, creado_por)
-    except ValueError as e:
-        raise HTTPException(status_code=409, detail=str(e))
+    nuevo_id = await asyncio.to_thread(
+        _db_crear_link_persona_correo, body.nombre, correo, body.tipo_correo_id, creado_por
+    )
 
     logger.info(f"✅ Link persona-correo creado por '{creado_por}': email={correo}, tipo_correo_id={body.tipo_correo_id}")
     return {"id": nuevo_id, "nombre": body.nombre, "email": correo, "tipo_correo_id": body.tipo_correo_id}
 
 
-async def _eliminar_link_handler(link_id: int) -> Dict:
+def _db_eliminar_link_persona_correo(link_id: int) -> bool:
+    """Consulta bloqueante (pyodbc); se ejecuta vía asyncio.to_thread."""
     with get_db_connection_context() as conn:
-        eliminado = eliminar_link_persona_correo(conn, link_id)
+        return eliminar_link_persona_correo(conn, link_id)
+
+
+async def _eliminar_link_handler(link_id: int) -> Dict:
+    eliminado = await asyncio.to_thread(_db_eliminar_link_persona_correo, link_id)
 
     if not eliminado:
         raise HTTPException(status_code=404, detail=f"Link {link_id} no encontrado")
     return {"success": True}
 
 
-async def _eliminar_persona_handler(email: str) -> Dict:
+def _db_eliminar_persona(email: str) -> bool:
+    """Consulta bloqueante (pyodbc); se ejecuta vía asyncio.to_thread."""
     with get_db_connection_context() as conn:
-        eliminado = eliminar_persona(conn, email)
+        return eliminar_persona(conn, email)
+
+
+async def _eliminar_persona_handler(email: str) -> Dict:
+    eliminado = await asyncio.to_thread(_db_eliminar_persona, email)
 
     if not eliminado:
         raise HTTPException(status_code=404, detail=f"No se encontró a '{email}'")

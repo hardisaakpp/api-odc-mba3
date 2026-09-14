@@ -34,6 +34,22 @@ def _append_set_clause_if_not_none(
         values.append(value)
 
 
+def _build_in_clause(column: str, values: List[str]) -> "tuple[str, List[Any]]":
+    """
+    Arma `columna IN (...)` para una lista de valores, partiéndola en bloques de
+    1000 unidos por OR si hace falta (SQL Server permite hasta 2100 parámetros
+    por consulta). En la práctica esta lista es chica (OCs con ST pendiente de
+    reintento en un momento dado), pero se protege igual ante un caso inesperado.
+    """
+    chunks = [values[i:i + 1000] for i in range(0, len(values), 1000)]
+    clauses = []
+    params: List[Any] = []
+    for chunk in chunks:
+        clauses.append(f"{column} IN ({','.join('?' * len(chunk))})")
+        params.extend(chunk)
+    return " OR ".join(clauses), params
+
+
 def _map_oc_cabecera_row(row: Any) -> Dict[str, Any]:
     """Mapea una fila de orden_compra_cabecera al dict usado por la API."""
     return {
@@ -608,6 +624,8 @@ class OrdenCompraRepository:
         referencia_despacho: Optional[str] = None,
         numero_oc_sap: Optional[str] = None,
         search: Optional[str] = None,
+        solo_pendiente_reintento: bool = False,
+        oc_ids_st_pendiente: Optional[List[str]] = None,
         limit: int = 50,
         offset: int = 0,
     ) -> Dict[str, Any]:
@@ -619,6 +637,16 @@ class OrdenCompraRepository:
             referencia_despacho: Búsqueda parcial por referencia de despacho
             numero_oc_sap: Búsqueda parcial por número de OC en SAP
             search: Búsqueda parcial en referencia_despacho o numero_oc_sap
+            solo_pendiente_reintento: si True, solo trae ODCs donde el frontend
+                mostraría el botón "Reintentar" (PENDIENTE/ERROR) o "Reintentar ST"
+                (ENVIADA con tiendas en `oc_ids_st_pendiente`). Debe reflejar
+                exactamente la misma regla que `_enrich_oc_actions` en
+                src/endpoints/ordenes_compra.py -- si esa regla cambia, actualizar
+                también aquí.
+            oc_ids_st_pendiente: ids de OC en ENVIADA con ST pendiente de reintento
+                (ver SolicitudTransferenciaRepository.get_oc_ids_con_tiendas_pendientes),
+                ya calculados por el caller. Ignorado si `solo_pendiente_reintento`
+                es False.
             limit: Máximo de filas a devolver
             offset: Desplazamiento para paginación
 
@@ -651,6 +679,16 @@ class OrdenCompraRepository:
                     "(referencia_despacho LIKE ? OR CAST(numero_oc_sap AS NVARCHAR(50)) LIKE ? OR CAST(doc_entry AS NVARCHAR(50)) LIKE ?)"
                 )
                 params.extend([term, term, term])
+
+            if solo_pendiente_reintento:
+                if oc_ids_st_pendiente:
+                    in_clause, in_params = _build_in_clause("oc_id", oc_ids_st_pendiente)
+                    where_conditions.append(
+                        f"(estado IN ('PENDIENTE', 'ERROR') OR (estado = 'ENVIADA' AND ({in_clause})))"
+                    )
+                    params.extend(in_params)
+                else:
+                    where_conditions.append("estado IN ('PENDIENTE', 'ERROR')")
 
             where_clause = " AND ".join(where_conditions) if where_conditions else "1=1"
 

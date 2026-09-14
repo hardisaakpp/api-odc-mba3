@@ -15,9 +15,11 @@ un thread distinto al del event loop. No dependen de Redis ni de un worker.
 
 import asyncio
 import threading
+from unittest.mock import MagicMock
 
 import pytest
-from fastapi.responses import JSONResponse
+from fastapi import FastAPI
+from fastapi.responses import JSONResponse, StreamingResponse
 
 
 def _hilo_actual():
@@ -249,6 +251,673 @@ class TestCruceProductosNoBloquea:
         assert hilo_del_encolado["id"] != _hilo_actual(), (
             "_encolar_cruce_productos() corrió en el event loop: toca SQL Server y "
             "Redis de forma síncrona. Debe invocarse con asyncio.to_thread."
+        )
+
+
+class TestNotificacionPersonaCorreoNoBloquea:
+    """Endpoints de administración de notificacion_persona_correo."""
+
+    @pytest.mark.asyncio
+    async def test_listar_corre_fuera_del_event_loop(self, monkeypatch):
+        from src.endpoints import notificacion_persona_correo_endpoints as npc
+
+        hilo = {}
+
+        def fake_db_listar():
+            hilo["id"] = _hilo_actual()
+            return {"personas_correo": []}
+
+        monkeypatch.setattr(npc, "_db_listar_personas_correo", fake_db_listar)
+
+        resultado = await npc._listar_handler()
+
+        assert resultado == {"personas_correo": []}
+        assert "id" in hilo, "no se llegó a consultar"
+        assert hilo["id"] != _hilo_actual(), (
+            "_db_listar_personas_correo() corrió en el event loop: hace DB (pyodbc). "
+            "Debe invocarse con asyncio.to_thread."
+        )
+
+    @pytest.mark.asyncio
+    async def test_crear_link_corre_fuera_del_event_loop(self, monkeypatch):
+        from src.endpoints import notificacion_persona_correo_endpoints as npc
+
+        hilo = {}
+
+        def fake_db_crear(_nombre, _correo, _tipo_correo_id, _creado_por):
+            hilo["id"] = _hilo_actual()
+            return 42
+
+        monkeypatch.setattr(npc, "_db_crear_link_persona_correo", fake_db_crear)
+
+        body = npc.CrearLinkRequest(nombre="Juan", email="juan@mabeltrading.com.ec", tipo_correo_id=1)
+        resultado = await npc._crear_link_handler(body, user={"username": "admin1"})
+
+        assert resultado["id"] == 42
+        assert "id" in hilo, "no se llegó a crear el link"
+        assert hilo["id"] != _hilo_actual(), (
+            "_db_crear_link_persona_correo() corrió en el event loop: hace DB (pyodbc). "
+            "Debe invocarse con asyncio.to_thread."
+        )
+
+    @pytest.mark.asyncio
+    async def test_eliminar_link_corre_fuera_del_event_loop(self, monkeypatch):
+        from src.endpoints import notificacion_persona_correo_endpoints as npc
+
+        hilo = {}
+
+        def fake_db_eliminar(_link_id):
+            hilo["id"] = _hilo_actual()
+            return True
+
+        monkeypatch.setattr(npc, "_db_eliminar_link_persona_correo", fake_db_eliminar)
+
+        resultado = await npc._eliminar_link_handler(7)
+
+        assert resultado == {"success": True}
+        assert "id" in hilo, "no se llegó a eliminar el link"
+        assert hilo["id"] != _hilo_actual(), (
+            "_db_eliminar_link_persona_correo() corrió en el event loop: hace DB (pyodbc). "
+            "Debe invocarse con asyncio.to_thread."
+        )
+
+    @pytest.mark.asyncio
+    async def test_eliminar_persona_corre_fuera_del_event_loop(self, monkeypatch):
+        from src.endpoints import notificacion_persona_correo_endpoints as npc
+
+        hilo = {}
+
+        def fake_db_eliminar(_email):
+            hilo["id"] = _hilo_actual()
+            return True
+
+        monkeypatch.setattr(npc, "_db_eliminar_persona", fake_db_eliminar)
+
+        resultado = await npc._eliminar_persona_handler("juan@mabeltrading.com.ec")
+
+        assert resultado == {"success": True}
+        assert "id" in hilo, "no se llegó a eliminar la persona"
+        assert hilo["id"] != _hilo_actual(), (
+            "_db_eliminar_persona() corrió en el event loop: hace DB (pyodbc). "
+            "Debe invocarse con asyncio.to_thread."
+        )
+
+
+class TestObtenerDistribucionNoBloquea:
+    """GET /api/pedidos/{pedido_id}/distribucion"""
+
+    @pytest.mark.asyncio
+    async def test_obtener_distribucion_corre_fuera_del_event_loop(self, monkeypatch):
+        from src.endpoints.pedidos.redistribucion import endpoints_core as ec
+
+        hilo = {}
+
+        def fake_db_obtener(_pedido_id, _version):
+            hilo["id"] = _hilo_actual()
+            return ec.DistribucionPedidoResponse(
+                pedido_id="p1", numero_pedido="PED-1", version_actual=1,
+                estado_pedido="REDISTRIBUIDO", puede_descartar=False, productos=[]
+            )
+
+        monkeypatch.setattr(ec, "_db_obtener_distribucion", fake_db_obtener)
+
+        respuesta = await ec._handle_obtener_distribucion("p1", None)
+
+        assert respuesta.pedido_id == "p1"
+        assert "id" in hilo, "no se llegó a obtener la distribución"
+        assert hilo["id"] != _hilo_actual(), (
+            "_db_obtener_distribucion() corrió en el event loop: hace DB (pyodbc). "
+            "Debe invocarse con asyncio.to_thread."
+        )
+
+    @pytest.mark.asyncio
+    async def test_redistribuir_pedido_corre_fuera_del_event_loop(self, monkeypatch):
+        from src.endpoints.pedidos.redistribucion import endpoints_core as ec
+
+        hilo = {}
+
+        def fake_db_redistribuir(_pedido_id, _request_body, _user_id, _audit):
+            hilo["id"] = _hilo_actual()
+            resultado = {"mensaje": "ok", "pedido_id": "p1", "version": 1, "distribuciones_insertadas": 3}
+            pedido_data = {"cabecera": {"numero_pedido": "PED-1"}}
+            return resultado, pedido_data
+
+        async def fake_notificar(*_a, **_k):
+            return None
+
+        monkeypatch.setattr(ec, "_db_redistribuir_pedido", fake_db_redistribuir)
+        monkeypatch.setattr(ec, "get_user_id", lambda _user: "u1")
+        monkeypatch.setattr(ec, "get_audit_context", lambda *_a, **_k: {})
+        monkeypatch.setattr(ec, "notificar_redistribucion_creada", fake_notificar)
+
+        respuesta = await ec._handle_redistribuir_pedido(
+            "p1", MagicMock(), user={"username": "u1"}, request=MagicMock()
+        )
+
+        assert respuesta.status_code == 200
+        assert "id" in hilo, "no se llegó a redistribuir"
+        assert hilo["id"] != _hilo_actual(), (
+            "_db_redistribuir_pedido() corrió en el event loop: hace DB (pyodbc). "
+            "Debe invocarse con asyncio.to_thread."
+        )
+
+    @pytest.mark.asyncio
+    async def test_obtener_reporte_diferencias_corre_fuera_del_event_loop(self, monkeypatch):
+        from src.endpoints.pedidos.redistribucion import endpoints_core as ec
+
+        hilo = {}
+
+        def fake_db_reporte(_pedido_id, _version):
+            hilo["id"] = _hilo_actual()
+            return ec.ReporteDiferenciasResponse(
+                pedido_id="p1", numero_pedido="PED-1", version=1,
+                fecha_generacion=ec.ahora_naive(),
+                total_productos=0, total_cantidad_solicitada=0, total_cantidad_confirmada=0,
+                total_cantidad_asignada=0, total_diferencia_cantidad=0,
+                total_costo_original=0, total_costo_ajustado=0, total_diferencia_costo=0,
+                diferencias_productos=[], diferencias_tiendas=[]
+            )
+
+        monkeypatch.setattr(ec, "_db_obtener_reporte_diferencias", fake_db_reporte)
+
+        respuesta = await ec._handle_obtener_reporte_diferencias("p1", None)
+
+        assert respuesta.pedido_id == "p1"
+        assert "id" in hilo, "no se llegó a obtener el reporte"
+        assert hilo["id"] != _hilo_actual(), (
+            "_db_obtener_reporte_diferencias() corrió en el event loop: hace DB (pyodbc). "
+            "Debe invocarse con asyncio.to_thread."
+        )
+
+    @pytest.mark.asyncio
+    async def test_exportar_reporte_diferencias_excel_corre_fuera_del_event_loop(self, monkeypatch):
+        from src.endpoints.pedidos.redistribucion import endpoints_core as ec
+        from fastapi.responses import StreamingResponse
+
+        hilo = {}
+
+        def fake_db_exportar(_pedido_id, _version):
+            hilo["id"] = _hilo_actual()
+            return StreamingResponse(iter([b""]), media_type="application/octet-stream")
+
+        monkeypatch.setattr(ec, "_db_exportar_reporte_diferencias_excel", fake_db_exportar)
+
+        respuesta = await ec._handle_exportar_reporte_diferencias_excel("p1", None)
+
+        assert isinstance(respuesta, StreamingResponse)
+        assert "id" in hilo, "no se llegó a exportar"
+        assert hilo["id"] != _hilo_actual(), (
+            "_db_exportar_reporte_diferencias_excel() corrió en el event loop: hace DB (pyodbc) "
+            "y genera el Excel. Debe invocarse con asyncio.to_thread."
+        )
+
+
+class TestConfirmarRedistribucionNoBloquea:
+    """POST /api/pedidos/{pedido_id}/confirmar-redistribucion"""
+
+    @pytest.mark.asyncio
+    async def test_ambas_fases_corren_fuera_del_event_loop(self, monkeypatch):
+        from src.endpoints.pedidos.redistribucion import endpoints_core as ec
+
+        hilos = {}
+
+        def fake_db_confirmar(_pedido_id, _request_body, _user_id, _audit):
+            hilos["fase1"] = _hilo_actual()
+            resultado = {"version_confirmada": 2, "mensaje": "ok"}
+            pedido_data = {"cabecera": {"numero_pedido": "PED-1"}}
+            return resultado, pedido_data, "PENDIENTE"
+
+        def fake_db_procesar_sap(_pedido_id, _user_id, _audit):
+            hilos["fase2"] = _hilo_actual()
+            return {"status": "success"}, True
+
+        async def fake_notificar(*_a, **_k):
+            return None
+
+        monkeypatch.setattr(ec, "_db_confirmar_redistribucion", fake_db_confirmar)
+        monkeypatch.setattr(ec, "_db_procesar_sap_redistribucion", fake_db_procesar_sap)
+        monkeypatch.setattr(ec, "get_user_id", lambda _user: "u1")
+        monkeypatch.setattr(ec, "get_audit_context", lambda *_a, **_k: {})
+        monkeypatch.setattr(ec, "notificar_redistribucion_confirmada", fake_notificar)
+        monkeypatch.setattr(ec, "notificar_redistribucion_procesada_sap", fake_notificar)
+
+        respuesta = await ec._handle_confirmar_redistribucion(
+            "p1", MagicMock(), user={"username": "u1"}, request=MagicMock()
+        )
+
+        assert respuesta.estado_nuevo == "CONFIRMADO REDISTRIBUCION"
+        assert "fase1" in hilos, "no se llegó a confirmar la redistribución"
+        assert "fase2" in hilos, "no se llegó a procesar SAP"
+        assert hilos["fase1"] != _hilo_actual(), (
+            "_db_confirmar_redistribucion() corrió en el event loop: hace DB (pyodbc). "
+            "Debe invocarse con asyncio.to_thread."
+        )
+        assert hilos["fase2"] != _hilo_actual(), (
+            "_db_procesar_sap_redistribucion() corrió en el event loop: hace DB (pyodbc) y "
+            "una llamada HTTP a SAP. Debe invocarse con asyncio.to_thread."
+        )
+
+    @pytest.mark.asyncio
+    async def test_error_en_fase_sap_no_rompe_la_confirmacion_ya_hecha(self, monkeypatch):
+        """El error de SAP se degrada a warning: la redistribución ya confirmada en fase 1 se preserva."""
+        from src.endpoints.pedidos.redistribucion import endpoints_core as ec
+
+        def fake_db_confirmar(_pedido_id, _request_body, _user_id, _audit):
+            resultado = {"version_confirmada": 2, "mensaje": "ok"}
+            pedido_data = {"cabecera": {"numero_pedido": "PED-1"}}
+            return resultado, pedido_data, "PENDIENTE"
+
+        def fake_db_procesar_sap_falla(_pedido_id, _user_id, _audit):
+            raise RuntimeError("SAP caído")
+
+        async def fake_notificar(*_a, **_k):
+            return None
+
+        monkeypatch.setattr(ec, "_db_confirmar_redistribucion", fake_db_confirmar)
+        monkeypatch.setattr(ec, "_db_procesar_sap_redistribucion", fake_db_procesar_sap_falla)
+        monkeypatch.setattr(ec, "get_user_id", lambda _user: "u1")
+        monkeypatch.setattr(ec, "get_audit_context", lambda *_a, **_k: {})
+        monkeypatch.setattr(ec, "notificar_redistribucion_confirmada", fake_notificar)
+
+        respuesta = await ec._handle_confirmar_redistribucion(
+            "p1", MagicMock(), user={"username": "u1"}, request=MagicMock()
+        )
+
+        assert respuesta.estado_nuevo == "REDISTRIBUIDO"
+        assert respuesta.version_confirmada == 2
+
+
+class TestBorradorRedistribucionNoBloquea:
+    """Endpoints de borrador y datos iniciales de redistribución."""
+
+    @pytest.mark.asyncio
+    async def test_guardar_borrador_corre_fuera_del_event_loop(self, monkeypatch):
+        from src.endpoints.pedidos.redistribucion import endpoints_borrador as eb
+
+        hilo = {}
+
+        def fake_db_guardar(_numero_pedido, _request_body, _user_id, _audit):
+            hilo["id"] = _hilo_actual()
+            return eb.GuardarBorradorResponse(
+                pedido_id="p1", numero_pedido="PED-1",
+                fecha_guardado=eb.ahora_naive(), message="ok"
+            )
+
+        monkeypatch.setattr(eb, "_db_guardar_borrador", fake_db_guardar)
+        monkeypatch.setattr(eb, "get_user_id", lambda _user: "u1")
+        monkeypatch.setattr(eb, "get_audit_context", lambda *_a, **_k: {})
+
+        ajuste = eb.AjusteDetalle(
+            codigo_producto="P1",
+            descripcion="Producto 1",
+            cantidad_solicitada=10,
+            cantidad_confirmada=10,
+            cantidad_ajustada=10,
+            distribucion_tiendas=[
+                eb.DistribucionTiendaFrontend(tienda_codigo="T001", cantidad=10)
+            ],
+        )
+        request_body = eb.GuardarBorradorRequest(ajustes_detalle=[ajuste])
+        respuesta = await eb._guardar_borrador_handler(
+            request=object(), numero_pedido="PED-1", request_body=request_body, user={"username": "u1"}
+        )
+
+        assert respuesta.message == "ok"
+        assert "id" in hilo, "no se llegó a guardar el borrador"
+        assert hilo["id"] != _hilo_actual(), (
+            "_db_guardar_borrador() corrió en el event loop: hace DB (pyodbc). "
+            "Debe invocarse con asyncio.to_thread."
+        )
+
+    @pytest.mark.asyncio
+    async def test_obtener_borrador_corre_fuera_del_event_loop(self, monkeypatch):
+        from src.endpoints.pedidos.redistribucion import endpoints_borrador as eb
+
+        hilo = {}
+
+        def fake_db_obtener(_numero_pedido):
+            hilo["id"] = _hilo_actual()
+            return eb.BorradorResponse(status="success", ajustes_detalle=[], fecha_guardado=None, message="ok")
+
+        monkeypatch.setattr(eb, "_db_obtener_borrador", fake_db_obtener)
+
+        respuesta = await eb._obtener_borrador_handler("PED-1")
+
+        assert respuesta.message == "ok"
+        assert "id" in hilo, "no se llegó a obtener el borrador"
+        assert hilo["id"] != _hilo_actual(), (
+            "_db_obtener_borrador() corrió en el event loop: hace DB (pyodbc). "
+            "Debe invocarse con asyncio.to_thread."
+        )
+
+    @pytest.mark.asyncio
+    async def test_obtener_datos_iniciales_corre_fuera_del_event_loop(self, monkeypatch):
+        from src.endpoints.pedidos.redistribucion import endpoints_borrador as eb
+
+        hilo = {}
+
+        def fake_db_datos_iniciales(_numero_pedido, _solo_lectura):
+            hilo["id"] = _hilo_actual()
+            return eb.BorradorResponse(ajustes_detalle=[], fecha_guardado=eb.ahora_naive())
+
+        monkeypatch.setattr(eb, "_db_obtener_datos_iniciales", fake_db_datos_iniciales)
+
+        respuesta = await eb._obtener_datos_iniciales_handler("PED-1", None)
+
+        assert respuesta.ajustes_detalle == []
+        assert "id" in hilo, "no se llegó a obtener los datos iniciales"
+        assert hilo["id"] != _hilo_actual(), (
+            "_db_obtener_datos_iniciales() corrió en el event loop: hace DB (pyodbc). "
+            "Debe invocarse con asyncio.to_thread."
+        )
+
+
+class TestDescargarPedidoExcelNoBloquea:
+    """GET /api/pedidos/{pedido_id}/descargar-excel"""
+
+    @pytest.mark.asyncio
+    async def test_generar_excel_corre_fuera_del_event_loop(self, monkeypatch):
+        from src.endpoints.pedidos import pedidos_descarga_endpoints as descarga
+
+        hilo = {}
+
+        def fake_db_generar(_pedido_id, _username):
+            hilo["id"] = _hilo_actual()
+            return JSONResponse(status_code=200, content={"status": "ok"})
+
+        monkeypatch.setattr(descarga, "_db_generar_pedido_excel", fake_db_generar)
+
+        app = FastAPI()
+        descarga.register_pedidos_descarga_endpoints(app)
+        handler = next(
+            r for r in app.routes if getattr(r, "path", None) == "/api/pedidos/{pedido_id}/descargar-excel"
+        ).endpoint
+
+        respuesta = await handler(pedido_id="ped-1", user={"username": "u1"})
+
+        assert respuesta.status_code == 200
+        assert "id" in hilo, "no se llegó a generar el excel"
+        assert hilo["id"] != _hilo_actual(), (
+            "_db_generar_pedido_excel() corrió en el event loop: hace DB (pyodbc) y "
+            "genera el Excel. Debe invocarse con asyncio.to_thread."
+        )
+
+
+class TestEliminarOrdenesCompraNoBloquea:
+    """DELETE /ordenes-compra/{oc_id} y DELETE /ordenes-compra (batch)"""
+
+    @pytest.mark.asyncio
+    async def test_eliminar_una_oc_corre_fuera_del_event_loop(self, monkeypatch):
+        from src.endpoints import ordenes_compra as oc_module
+
+        hilo = {}
+
+        def fake_db_eliminar(_oc_id, _source):
+            hilo["id"] = _hilo_actual()
+            return JSONResponse(status_code=200, content={"status": "success"})
+
+        monkeypatch.setattr(oc_module, "_db_eliminar_orden_compra", fake_db_eliminar)
+
+        request = MagicMock()
+        request.headers = {}
+
+        respuesta = await oc_module._delete_orden_compra_handler(request, "oc-1")
+
+        assert respuesta.status_code == 200
+        assert "id" in hilo, "no se llegó a eliminar"
+        assert hilo["id"] != _hilo_actual(), (
+            "_db_eliminar_orden_compra() corrió en el event loop: hace DB (pyodbc). "
+            "Debe invocarse con asyncio.to_thread."
+        )
+
+    @pytest.mark.asyncio
+    async def test_eliminar_ordenes_batch_corre_fuera_del_event_loop(self, monkeypatch):
+        from src.endpoints import ordenes_compra as oc_module
+
+        hilo = {}
+
+        def fake_db_eliminar_batch(_oc_ids_list):
+            hilo["id"] = _hilo_actual()
+            return [{"oc_id": "oc-1", "status": "success"}], {
+                "eliminadas": 1, "errores": 0, "no_encontradas": 0, "no_permitidas": 0
+            }
+
+        monkeypatch.setattr(oc_module, "_db_eliminar_ordenes_compra", fake_db_eliminar_batch)
+
+        request = MagicMock()
+        request.headers = {}
+
+        respuesta = await oc_module._delete_ordenes_compra_handler(request, ["oc-1"])
+
+        assert respuesta.status_code == 200
+        assert "id" in hilo, "no se llegó a eliminar"
+        assert hilo["id"] != _hilo_actual(), (
+            "_db_eliminar_ordenes_compra() corrió en el event loop: hace DB (pyodbc). "
+            "Debe invocarse con asyncio.to_thread."
+        )
+
+
+class TestPlantillasConsultasNoBloquean:
+    """Endpoints de consulta de plantillas.py que aún hacían DB directamente."""
+
+    @pytest.mark.asyncio
+    async def test_get_ultimo_pedido_corre_fuera_del_event_loop(self, monkeypatch):
+        from src.endpoints import plantillas
+
+        hilo = {}
+
+        def fake_db_obtener(_incluir_respuesta, _user_id):
+            hilo["id"] = _hilo_actual()
+            return {"cabecera": {"pedido_id": "p1", "estado_id": 1}}
+
+        monkeypatch.setattr(plantillas, "_db_obtener_ultimo_pedido", fake_db_obtener)
+        monkeypatch.setattr(plantillas, "get_user_id", lambda _user: "u1")
+        monkeypatch.setattr(plantillas, "make_json_serializable", lambda x: x)
+
+        respuesta = await plantillas._get_ultimo_pedido_handler(False, {"username": "u1"})
+
+        assert respuesta.status_code == 200
+        assert "id" in hilo, "no se llegó a consultar"
+        assert hilo["id"] != _hilo_actual(), (
+            "_db_obtener_ultimo_pedido() corrió en el event loop: hace DB (pyodbc). "
+            "Debe invocarse con asyncio.to_thread."
+        )
+
+    @pytest.mark.asyncio
+    async def test_listar_pedidos_plantillas_corre_fuera_del_event_loop(self, monkeypatch):
+        from src.endpoints import plantillas
+
+        hilo = {}
+
+        def fake_db_listar(*_a, **_k):
+            hilo["id"] = _hilo_actual()
+            return {"data": [], "total": 0, "limit": 10, "offset": 0, "has_more": False}
+
+        monkeypatch.setattr(plantillas, "_db_listar_pedidos_plantillas", fake_db_listar)
+        monkeypatch.setattr(plantillas, "get_user_id", lambda _user: "u1")
+
+        respuesta = await plantillas._listar_pedidos_plantillas_handler(
+            None, None, 10, 0, None, {"username": "u1"}
+        )
+
+        assert respuesta.status_code == 200
+        assert "id" in hilo, "no se llegó a listar"
+        assert hilo["id"] != _hilo_actual(), (
+            "_db_listar_pedidos_plantillas() corrió en el event loop: hace DB (pyodbc). "
+            "Debe invocarse con asyncio.to_thread."
+        )
+
+    @pytest.mark.asyncio
+    async def test_descargar_plantilla_corre_fuera_del_event_loop(self, monkeypatch):
+        from src.endpoints import plantillas
+
+        hilos = {}
+
+        def fake_db_buscar(_pedido_id, _archivo_id):
+            hilos["buscar"] = _hilo_actual()
+            return {
+                "archivo_id": 1, "pedido_id": "p1", "nombre_original": "x.xlsx",
+                "storage_path": "s3://x", "content_type": "application/octet-stream",
+                "subido_por": "u1", "fecha_subida": "2026-01-01T00:00:00"
+            }
+
+        def fake_descargar_contenido(_storage_path):
+            return b"contenido"
+
+        def fake_db_registrar(_archivo_id, _descargado_por):
+            hilos["registrar"] = _hilo_actual()
+
+        monkeypatch.setattr(plantillas, "_db_buscar_archivo_info_descarga", fake_db_buscar)
+        monkeypatch.setattr(plantillas, "_descargar_contenido_storage", fake_descargar_contenido)
+        monkeypatch.setattr(plantillas, "_db_registrar_descarga_plantilla", fake_db_registrar)
+        monkeypatch.setattr(plantillas, "get_user_id", lambda _user: "u1")
+
+        respuesta = await plantillas._descargar_plantilla(user={"username": "u1"}, pedido_id="p1")
+
+        assert isinstance(respuesta, StreamingResponse)
+        assert "buscar" in hilos and "registrar" in hilos, "no se completó el flujo de descarga"
+        assert hilos["buscar"] != _hilo_actual(), (
+            "_db_buscar_archivo_info_descarga() corrió en el event loop: hace DB (pyodbc). "
+            "Debe invocarse con asyncio.to_thread."
+        )
+        assert hilos["registrar"] != _hilo_actual(), (
+            "_db_registrar_descarga_plantilla() corrió en el event loop: hace DB (pyodbc). "
+            "Debe invocarse con asyncio.to_thread."
+        )
+
+    @pytest.mark.asyncio
+    async def test_info_archivo_plantilla_corre_fuera_del_event_loop(self, monkeypatch):
+        from src.endpoints import plantillas
+
+        hilo = {}
+
+        def fake_db_info(_pedido_id):
+            hilo["id"] = _hilo_actual()
+            return None
+
+        monkeypatch.setattr(plantillas, "_db_info_archivo_plantilla", fake_db_info)
+
+        respuesta = await plantillas._info_archivo_plantilla_handler("p1")
+
+        assert respuesta.status_code == 200
+        assert "id" in hilo, "no se llegó a consultar"
+        assert hilo["id"] != _hilo_actual(), (
+            "_db_info_archivo_plantilla() corrió en el event loop: hace DB (pyodbc). "
+            "Debe invocarse con asyncio.to_thread."
+        )
+
+    @pytest.mark.asyncio
+    async def test_buscar_pedidos_por_numero_corre_fuera_del_event_loop(self, monkeypatch):
+        from src.endpoints import plantillas
+
+        hilo = {}
+
+        def fake_db_buscar(_numero_pedido, _limit):
+            hilo["id"] = _hilo_actual()
+            return {"data": [], "total": 0}
+
+        monkeypatch.setattr(plantillas, "_db_buscar_pedidos_por_numero", fake_db_buscar)
+
+        respuesta = await plantillas._buscar_pedidos_por_numero_handler("PED-1", 20)
+
+        assert respuesta.status_code == 200
+        assert "id" in hilo, "no se llegó a buscar"
+        assert hilo["id"] != _hilo_actual(), (
+            "_db_buscar_pedidos_por_numero() corrió en el event loop: hace DB (pyodbc). "
+            "Debe invocarse con asyncio.to_thread."
+        )
+
+    @pytest.mark.asyncio
+    async def test_listar_archivos_originales_corre_fuera_del_event_loop(self, monkeypatch):
+        from src.endpoints import plantillas
+
+        hilo = {}
+
+        def fake_db_listar(*_a, **_k):
+            hilo["id"] = _hilo_actual()
+            return [], 0
+
+        monkeypatch.setattr(plantillas, "_db_listar_archivos_originales", fake_db_listar)
+        monkeypatch.setattr(plantillas, "get_user_id", lambda _user: "u1")
+
+        respuesta = await plantillas._listar_archivos_originales_handler(
+            50, 0, True, None, {"username": "u1"}
+        )
+
+        assert respuesta.status_code == 200
+        assert "id" in hilo, "no se llegó a listar"
+        assert hilo["id"] != _hilo_actual(), (
+            "_db_listar_archivos_originales() corrió en el event loop: hace DB (pyodbc). "
+            "Debe invocarse con asyncio.to_thread."
+        )
+
+    @pytest.mark.asyncio
+    async def test_eliminar_archivo_original_corre_fuera_del_event_loop(self, monkeypatch):
+        from src.endpoints import plantillas
+
+        hilo = {}
+
+        def fake_db_verificar(_archivo_id, _user_id, _user_roles):
+            hilo["id"] = _hilo_actual()
+            return {
+                "ya_eliminado": False,
+                "archivo_info": {"archivo_id": 1, "nombre_original": "x.xlsx", "storage_path": None}
+            }
+
+        monkeypatch.setattr(plantillas, "_db_verificar_y_marcar_eliminado", fake_db_verificar)
+        monkeypatch.setattr(plantillas, "get_user_id", lambda _user: "u1")
+
+        respuesta = await plantillas._eliminar_archivo_original_handler(1, False, {"username": "u1"})
+
+        assert respuesta.status_code == 200
+        assert "id" in hilo, "no se llegó a verificar/eliminar"
+        assert hilo["id"] != _hilo_actual(), (
+            "_db_verificar_y_marcar_eliminado() corrió en el event loop: hace DB (pyodbc). "
+            "Debe invocarse con asyncio.to_thread."
+        )
+
+
+class TestSapTestEndpointsNoBloquean:
+    """GET /sap/test y /sap/test/direct"""
+
+    def test_test_sap_query_corre_fuera_del_event_loop(self, client, monkeypatch):
+        from src.endpoints import sap
+
+        hilo_de_la_query = {}
+
+        def fake_ejecutar(_request, _sku):
+            hilo_de_la_query["id"] = _hilo_actual()
+            return {"ok": True}
+
+        monkeypatch.setattr(sap, "_ejecutar_test_sap_query", fake_ejecutar)
+
+        respuesta = client.get("/sap/test", params={"sku": "5-0012.9"})
+
+        assert respuesta.status_code == 200
+        assert "id" in hilo_de_la_query, "no se llegó a ejecutar la consulta"
+        assert hilo_de_la_query["id"] != _hilo_actual(), (
+            "_ejecutar_test_sap_query() corrió en el event loop: hace DB (pyodbc) "
+            "vía SAPService. Debe invocarse con asyncio.to_thread."
+        )
+
+    def test_test_sap_direct_corre_fuera_del_event_loop(self, client, monkeypatch):
+        from src.endpoints import sap
+
+        hilo_de_la_query = {}
+
+        def fake_ejecutar(_request, _sku):
+            hilo_de_la_query["id"] = _hilo_actual()
+            return {"ok": True}
+
+        monkeypatch.setattr(sap, "_ejecutar_test_sap_direct", fake_ejecutar)
+
+        respuesta = client.get("/sap/test/direct", params={"sku": "5-0012.9"})
+
+        assert respuesta.status_code == 200
+        assert "id" in hilo_de_la_query, "no se llegó a ejecutar la consulta"
+        assert hilo_de_la_query["id"] != _hilo_actual(), (
+            "_ejecutar_test_sap_direct() corrió en el event loop: hace DB (pyodbc) "
+            "vía SAPClient (OPENQUERY). Debe invocarse con asyncio.to_thread."
         )
 
 

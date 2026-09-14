@@ -2,6 +2,7 @@
 Endpoints de descarga de pedidos.
 """
 
+import asyncio
 import logging
 from typing import Dict
 
@@ -17,6 +18,47 @@ from .export_pedido_excel import generate_pedido_excel
 logger = logging.getLogger(__name__)
 
 
+def _db_generar_pedido_excel(pedido_id: str, username: str) -> StreamingResponse:
+    """Consulta bloqueante (pyodbc) + generación del Excel; se ejecuta vía asyncio.to_thread."""
+    with get_db_connection_context() as conn:
+        repo = PedidoRepository(conn)
+
+        # Obtener pedido completo
+        pedido_data = repo.get_pedido_completo(pedido_id)
+
+        if not pedido_data:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={"error": "not_found", "message": "Pedido no encontrado"}
+            )
+
+        cabecera = pedido_data.get("cabecera", {})
+        estado_id = cabecera.get("estado_id")
+
+        # Validar que este en estado CONFIRMADO (4)
+        if estado_id != ESTADO_REDISTRIBUCION:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "error": "estado_no_permitido",
+                    "message": f"El pedido debe estar en estado CONFIRMADO para descargar. Estado actual: {cabecera.get('estado_nombre', 'Desconocido')}"
+                }
+            )
+
+        # Generar Excel usando modulo extraido
+        excel_buffer, filename = generate_pedido_excel(conn, pedido_id, pedido_data, username)
+
+        # Retornar archivo Excel
+        return StreamingResponse(
+            excel_buffer,
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={
+                "Content-Disposition": f"attachment; filename={filename}",
+                "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            }
+        )
+
+
 def register_pedidos_descarga_endpoints(app: FastAPI):
     """Registra endpoints de descarga Excel/CSV de pedidos."""
 
@@ -29,68 +71,31 @@ def register_pedidos_descarga_endpoints(app: FastAPI):
     ):
         """
         Descargar informacion del pedido en formato Excel (.xlsx).
-        
+
         **Uso:**
         - Interfaz: Detalle del Pedido (`/pedidos/{pedido_id}`)
         - Boton: "Descargar Excel"
         - Estado requerido: **CONFIRMADO (4)** (ESTADO_REDISTRIBUCION)
-        
+
         **Contenido del Excel:**
         - Informacion de cabecera del pedido
         - Detalles de todos los articulos
         - Distribuciones por tienda
-        
+
         **Formato:**
         - Archivo Excel (.xlsx) con 3 hojas:
           - Hoja 1: Informacion de cabecera
           - Hoja 2: Detalles de articulos
           - Hoja 3: Distribucion por tiendas
-        
+
         **Respuestas:**
         - **200**: Archivo Excel descargado correctamente
         - **400**: Pedido no esta en estado CONFIRMADO (4)
         - **404**: Pedido no encontrado
         """
         try:
-            with get_db_connection_context() as conn:
-                repo = PedidoRepository(conn)
-                
-                # Obtener pedido completo
-                pedido_data = repo.get_pedido_completo(pedido_id)
-                
-                if not pedido_data:
-                    raise HTTPException(
-                        status_code=status.HTTP_404_NOT_FOUND,
-                        detail={"error": "not_found", "message": "Pedido no encontrado"}
-                    )
-                
-                cabecera = pedido_data.get("cabecera", {})
-                estado_id = cabecera.get("estado_id")
-                
-                # Validar que este en estado CONFIRMADO (4)
-                if estado_id != ESTADO_REDISTRIBUCION:
-                    raise HTTPException(
-                        status_code=status.HTTP_400_BAD_REQUEST,
-                        detail={
-                            "error": "estado_no_permitido",
-                            "message": f"El pedido debe estar en estado CONFIRMADO para descargar. Estado actual: {cabecera.get('estado_nombre', 'Desconocido')}"
-                        }
-                    )
-                
-                # Generar Excel usando modulo extraido
-                username = user.get("username", "UNKNOWN")
-                excel_buffer, filename = generate_pedido_excel(conn, pedido_id, pedido_data, username)
-                
-                # Retornar archivo Excel
-                return StreamingResponse(
-                    excel_buffer,
-                    media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    headers={
-                        "Content-Disposition": f"attachment; filename={filename}",
-                        "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                    }
-                )
-                
+            username = user.get("username", "UNKNOWN")
+            return await asyncio.to_thread(_db_generar_pedido_excel, pedido_id, username)
         except HTTPException:
             raise
         except Exception as e:
