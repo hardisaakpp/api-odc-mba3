@@ -7,6 +7,15 @@
 # ============================================================================
 
 migrations:
+  # Bootstrap: tablas que el resto del manifest asume existentes pero que se
+  # crearon a mano en los ambientes originales. Idempotente (no-op en test/prod);
+  # necesaria para levantar una BD vacía. Va primero a propósito.
+  - version: "000.5"
+    name: "bootstrap_tablas_sin_script"
+    file: "migrations/bootstrap_tablas_sin_script.sql"
+    description: "Crea si no existen despacho_cabecera/detalle, orden_compra_cabecera/detalle y pack_conversion (DECIMAL(19,9): la 002 la define DECIMAL(10,9) e inserta 12.0 -> overflow en BD vacía)"
+    category: "base"
+
   # Base: Tablas fundamentales
   - version: "001"
     name: "create_despacho_tables"
@@ -46,17 +55,21 @@ migrations:
     description: "Crear tabla para distribución confirmada"
     category: "base"
 
-  - version: "007"
-    name: "create_pedido_confirmacion_rayo"
-    file: "create_pedido_confirmacion_rayo_tables.sql"
-    description: "Crear tablas para confirmación El Rayo"
-    category: "base"
-
+  # 008 va antes que 007: FK_confirmacion_rayo_respuesta (007) referencia
+  # pedido_respuesta_proveedor, que crea la 008. El runner sigue el orden de
+  # este archivo, no el número de versión.
   - version: "008"
     name: "create_respuesta_proveedor_tables"
     file: "add_respuesta_proveedor_tables.sql"
     description: "Crear tablas para respuesta de proveedor"
     category: "base"
+
+  - version: "007"
+    name: "create_pedido_confirmacion_rayo"
+    file: "create_pedido_confirmacion_rayo_tables.sql"
+    description: "Crear tablas para confirmación El Rayo"
+    category: "base"
+    dependencies: ["008"]
 
   - version: "009"
     name: "create_pedido_sap_procesamiento"
@@ -321,6 +334,15 @@ migrations:
     name: "create_pedido_original_tables"
     file: "migrations/create_pedido_original_tables.sql"
     description: "Crear tablas pedido_original y pedido_detalle_original para snapshot inmutable del pedido al momento del envío"
+    category: "base"
+    dependencies: ["004"]
+
+  # Script de 2026-02 aplicado a mano en producción y nunca registrado aquí;
+  # la 606 le agrega columnas, por eso va justo antes. Idempotente.
+  - version: "605.5"
+    name: "create_redistribucion_borrador"
+    file: "create_redistribucion_borrador.sql"
+    description: "Tabla redistribucion_borrador (borradores de ajustes de redistribución por pedido)"
     category: "base"
     dependencies: ["004"]
 
@@ -689,3 +711,77 @@ migrations:
     file: "migrations/add_agregada_manualmente_distribucion_confirmada.sql"
     description: "distribucion_confirmada.agregada_manualmente: marca las filas de tiendas agregadas manualmente en la Vista Excel de Redistribucion (pedidos hijo, fuera del Excel original), para que el frontend pueda resaltar esas columnas de forma permanente (sobrevive recargar la pagina y confirmar la redistribucion)"
     category: "alter"
+
+  # ==========================================================================
+  # 659-669: scripts de scripts/migrations/ que se aplicaron a mano en producción
+  # (feb-may 2026) y nunca se registraron en este manifest, por lo que una BD
+  # vacía quedaba sin ellos. Se registran en su orden cronológico original.
+  # Todos son idempotentes (verifican existencia/tipo antes de cada cambio), así
+  # que en test/producción deben quedar como no-op al aplicarse.
+  # ==========================================================================
+  - version: "659"
+    name: "add_archivo_plantilla"
+    file: "migrations/add_archivo_plantilla.sql"
+    description: "Tabla archivo_plantilla (archivos Excel originales de plantillas de pedido)"
+    category: "base"
+
+  - version: "660"
+    name: "create_fn_normalizar_codigo"
+    file: "migrations/create_fn_normalizar_codigo.sql"
+    description: "Función dbo.fn_normalizar_codigo (quita . - / _ y espacios, mayúsculas) para comparar códigos de producto"
+    category: "base"
+
+  - version: "661"
+    name: "add_audit_fields_complete"
+    file: "migrations/add_audit_fields_complete.sql"
+    description: "Campos de auditoría (creado_por, modificado_por, modificado_fecha, origen, ip_origen) en pedidos, despachos y órdenes de compra"
+    category: "alter"
+
+  - version: "662"
+    name: "add_audit_fields_origen"
+    file: "migrations/add_audit_fields_origen.sql"
+    description: "Campos origen/ip_origen en tablas que no los tenían"
+    category: "alter"
+
+  - version: "663"
+    name: "add_missing_indexes"
+    file: "migrations/add_missing_indexes.sql"
+    description: "Índices faltantes de consultas frecuentes"
+    category: "index"
+
+  - version: "664"
+    name: "create_pedido_estado_historial"
+    file: "migrations/create_pedido_estado_historial.sql"
+    description: "Tabla pedido_estado_historial (bitácora de transiciones de estado de pedidos)"
+    category: "base"
+    dependencies: ["004", "005"]
+
+  - version: "665"
+    name: "alter_numero_pedido_mensaje_100"
+    file: "migrations/alter_numero_pedido_mensaje_100.sql"
+    description: "Amplía numero_pedido/mensaje/referencia_despacho a NVARCHAR(100) (solo amplía, nunca reduce)"
+    category: "alter"
+
+  - version: "666"
+    name: "alter_pedido_detalle_tienda_cantidad_decimal"
+    file: "migrations/alter_pedido_detalle_tienda_cantidad_decimal.sql"
+    description: "pedido_detalle_tienda.cantidad a DECIMAL(18,4)"
+    category: "alter"
+
+  - version: "667"
+    name: "alter_pedido_respuesta_detalle_cantidad_decimal"
+    file: "migrations/alter_pedido_respuesta_detalle_cantidad_decimal.sql"
+    description: "pedido_respuesta_proveedor_detalle.cantidad_solicitada_total/cantidad_confirmada_total a DECIMAL(18,4)"
+    category: "alter"
+
+  - version: "668"
+    name: "alter_pedido_mensaje_nvarchar_500"
+    file: "migrations/alter_pedido_mensaje_nvarchar_500.sql"
+    description: "pedido.mensaje y pedido_original.mensaje a NVARCHAR(500)"
+    category: "alter"
+
+  - version: "669"
+    name: "add_orden_compra_listado_indexes"
+    file: "migrations/add_orden_compra_listado_indexes.sql"
+    description: "Índices para el listado de órdenes de compra"
+    category: "index"

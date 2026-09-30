@@ -18,14 +18,23 @@ PRINT 'Migración: pedido_detalle_tienda.cantidad → DECIMAL(18,4)';
 PRINT '============================================================================';
 GO
 
-IF EXISTS (SELECT 1 FROM sys.tables WHERE name = 'pedido_detalle_tienda')
+-- Idempotente (2026-09-24): solo actúa si cantidad aún no es DECIMAL(18,4), y
+-- solo elimina los CHECK que referencian cantidad (antes eliminaba todos los
+-- CHECK de la tabla en cada ejecución).
+IF EXISTS (
+    SELECT 1 FROM sys.columns c
+    JOIN sys.types t ON t.user_type_id = c.user_type_id
+    WHERE c.object_id = OBJECT_ID('pedido_detalle_tienda') AND c.name = 'cantidad'
+      AND NOT (t.name = 'decimal' AND c.precision = 18 AND c.scale = 4)
+)
 BEGIN
-    -- Eliminar constraint(s) CHECK existentes en la tabla (p. ej. cantidad > 0)
+    -- Eliminar constraint(s) CHECK sobre cantidad (p. ej. cantidad > 0)
     DECLARE @ConstraintName NVARCHAR(200);
     DECLARE @Sql NVARCHAR(500);
     DECLARE cur CURSOR LOCAL FOR
         SELECT name FROM sys.check_constraints
-        WHERE parent_object_id = OBJECT_ID('pedido_detalle_tienda');
+        WHERE parent_object_id = OBJECT_ID('pedido_detalle_tienda')
+          AND definition LIKE '%\[cantidad\]%' ESCAPE '\';
     OPEN cur;
     FETCH NEXT FROM cur INTO @ConstraintName;
     WHILE @@FETCH_STATUS = 0
@@ -50,7 +59,7 @@ BEGIN
 END
 ELSE
 BEGIN
-    PRINT '  ⚠️ Tabla pedido_detalle_tienda no existe. Nada que alterar.';
+    PRINT '  ⏭️ pedido_detalle_tienda.cantidad no existe o ya es DECIMAL(18,4). Nada que alterar.';
 END
 GO
 

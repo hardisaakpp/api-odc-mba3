@@ -75,6 +75,9 @@ scripts/
 !scripts/migrations_manifest.yaml
 !scripts/migrations/
 !scripts/migrations/**
+# Los .sql base (001-016, 1xx-4xx, 605.5) viven en la raíz de scripts/: sin
+# ellos el auto-apply falla en la 001 contra una BD vacía.
+!scripts/*.sql
 azure-pipeline/
 deploy/
 docker-compose*.yml
