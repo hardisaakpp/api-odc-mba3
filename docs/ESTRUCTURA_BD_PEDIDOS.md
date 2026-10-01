@@ -1,5 +1,7 @@
 # Estructura de Base de Datos - Pedidos
 
+> **Alcance:** este documento explica con ejemplos el modelo de las tablas de pedidos y el mapeo desde el Excel; fue escrito en febrero de 2026 y describe sobre todo las 4 tablas originales. Para el **esquema completo y exacto** (las 43 tablas con columnas, tipos, claves primarias y foráneas, leído de la base real) ver [ESQUEMA_BD.md](ESQUEMA_BD.md). Para qué hace cada migración y en qué orden se aplican ver [CATALOGO_MIGRACIONES.md](CATALOGO_MIGRACIONES.md). Los campos agregados después de este documento están resumidos en [«Campos agregados posteriormente»](#campos-agregados-posteriormente).
+
 ## 📊 Modelo de Datos
 
 El sistema de pedidos utiliza un modelo jerárquico de 3 niveles:
@@ -304,6 +306,30 @@ Permite rastrear de qué fila del Excel vino cada registro, útil para:
 - Reportes de trazabilidad
 
 **Nota:** El campo es opcional (NULL) para mantener compatibilidad con datos existentes.
+
+---
+
+### Campos agregados posteriormente
+
+Resumen de columnas que este documento no describe, con la migración que las creó y el tipo actual en la base (verificado el 01/10/2026 contra `ESQUEMA_BD.md`). Descripción tomada del manifest de migraciones.
+
+| Tabla | Campo | Tipo en BD | Qué es | Migración |
+|---|---|---|---|---|
+| `pedido` | `pedido_padre_id` | uniqueidentifier, null (FK a `pedido.pedido_id`) | Enlaza el pedido **hijo** de una Producción Pospuesta (`numero_pedido = '<original>.NN'`) con su pedido original. Un pedido es parcial si `pedido_padre_id IS NOT NULL`; no hay columna booleana aparte. | 643 |
+| `pedido` | `fecha_facturacion` | date, null | Fecha de facturación; en blanco por defecto. Exclusiva de `odcsap.view` (EL RAYO) y editable solo con el pedido en Confirmado y Enviado; habilita "Despachar y Facturar". | 627 |
+| `pedido` | `numero_pedido` | nvarchar(100), not null | Ampliado de 50 a 100 caracteres (solo amplía, nunca reduce). | 665 |
+| `pedido` | `mensaje` | nvarchar(500), null | Ampliado a 500 caracteres (también en `pedido_original`). | 668 |
+| `pedido_detalle` | `cantidad_solicitada_original` | decimal(18,4), null | Cantidad pedida originalmente. Se escribe **una sola vez** al cargar el Excel y no la tocan las ediciones de "Total", para poder calcular la diferencia con el total vigente. Filas anteriores a la migración quedan en NULL. | 641 |
+| `pedido_detalle_tienda` | `cantidad_solicitada_original` | decimal(18,4), null | Lo mismo, a nivel de tienda. | 642 |
+| `pedido_detalle_tienda` | `cantidad` | decimal(18,4), not null | Ahora admite decimales (0.5, 1.5, 2.25); antes era entera y se truncaba. | 666 |
+| `pedido_detalle` | `costo_margen` | decimal(18,4), null | Columna "Costo" de la plantilla Excel; solo informativa. Distinta de `costo_doc_sin_iva`. | 618 |
+| `pedido_detalle` | `costo_unitario` | decimal(18,4), null | `costo_doc_sin_iva / unidad_conversion` (por el pack ya resuelto entre SAP y Excel). Es el insumo del **Margen de Rentabilidad** y reemplaza a `costo_margen` para ese cálculo. | 619 |
+| `pedido_detalle` | `orden_linea` | int, not null | Conserva el orden de las filas de la plantilla en las pantallas y en los Excel (también en `pedido_detalle_original`). | 607, 609 |
+| `tienda` | `marca` | nvarchar(20), null | ROLAND, REGIONS o DESCUENTON, sincronizada desde `sc_maestros.dbo.almacenes_local`. Permite saber a qué bodega (RL-CD, RG-CD, OUT-CD) pertenece cada tienda; base de las **dos ODC** para pedidos que mezclan marcas. | 648 |
+| `distribucion_confirmada` | `agregada_manualmente` | bit, not null (0) | Marca las tiendas agregadas a mano en la Vista Excel de Redistribución (pedidos hijo, fuera del Excel original), para que el resaltado se conserve al recargar o confirmar. | 658 |
+| varias | `creado_por`, `modificado_por`, `modificado_fecha`, `origen`, `ip_origen` | — | Campos de auditoría en pedidos, despachos y órdenes de compra. | 661, 662 |
+
+Tablas nuevas relacionadas con pedidos: `pedido_estado_historial` (bitácora de transiciones de estado, migración 664), `archivo_plantilla` (archivos Excel originales, 659) y `pedido_detalle_modificacion_columna` (qué celdas se editaron y por qué rol, 639). Detalle de columnas en [ESQUEMA_BD.md](ESQUEMA_BD.md).
 
 ---
 

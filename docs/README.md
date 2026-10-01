@@ -35,10 +35,10 @@ Desarrollo con perfil `app` (stack recomendado)
 - Variables `REDIS_URL` / MinIO dentro de la red Docker
 - Enlace con scnexus-front y verificación (`docker-verify.ps1`)
 
-### 2. **[ENDPOINTS.md](ENDPOINTS.md)** 🔌
-API REST completa
-- Todos los endpoints disponibles
-- Parámetros y respuestas
+### 2. **[REFERENCIA_API.md](REFERENCIA_API.md)** 🔌 y **[ENDPOINTS.md](ENDPOINTS.md)**
+API REST
+- **REFERENCIA_API.md**: todas las operaciones (generada desde el OpenAPI), con permiso, parámetros y respuestas
+- **ENDPOINTS.md**: guía escrita a mano de los endpoints originales (despachos, migración, SAP)
 - Ejemplos de uso
 
 ### 3. **[INTEGRACION_SAP.md](INTEGRACION_SAP.md)** 📦
@@ -146,12 +146,16 @@ Sistema de homologaciones
 docs/
 ├── README.md                    (este archivo)
 ├── CONFIGURACION.md             ⭐ ESENCIAL
-├── ENDPOINTS.md                 ⭐ ESENCIAL
+├── REFERENCIA_API.md            ⭐ ESENCIAL (generada: scripts/generar_referencia_api.py)
+├── ENDPOINTS.md                 (endpoints originales, a mano)
 ├── INTEGRACION_SAP.md           ⭐ ESENCIAL
 ├── ESTRUCTURA_BD_PEDIDOS.md     ⭐ ESENCIAL
 ├── DEPLOY_TEST.md               ⭐ ESENCIAL (servidor DESA / pruebas)
 ├── DEPLOY_PRODUCCION.md         ⭐ ESENCIAL (actualizar backend Linux)
 ├── DEPLOY_MIGRATIONS.md         ⭐ ESENCIAL (migraciones BD)
+├── CATALOGO_MIGRACIONES.md      (generado: las 113 migraciones en orden)
+├── ESQUEMA_BD.md                (generado: tablas y columnas de la BD real)
+├── Manual_del_usuario/          (manual de usuario del módulo Gestión ODC SAP)
 ├── CELERY_QUICKSTART.md         ⭐ ESENCIAL
 ├── SEGURIDAD.md                 ⭐ ESENCIAL
 ├── TESTING.md                   ⭐ ESENCIAL
@@ -176,7 +180,10 @@ docs/
 | **¿Cómo despliego en el servidor de pruebas (DESA)?** | **[DEPLOY_TEST.md](DEPLOY_TEST.md)** 🧪 |
 | **¿Cómo actualizo el backend en producción (Linux)?** | **[DEPLOY_PRODUCCION.md](DEPLOY_PRODUCCION.md)** 🐧 |
 | **¿Cómo despliego migraciones?** | **[DEPLOY_MIGRATIONS.md](DEPLOY_MIGRATIONS.md)** 🚀 |
-| ¿Cuáles son los endpoints? | [ENDPOINTS.md](ENDPOINTS.md) |
+| ¿Qué hace cada migración? | [CATALOGO_MIGRACIONES.md](CATALOGO_MIGRACIONES.md) |
+| ¿Qué tablas y columnas tiene la base de datos? | [ESQUEMA_BD.md](ESQUEMA_BD.md) |
+| ¿Cómo uso el módulo Gestión ODC SAP (usuarios)? | [Manual de Usuario](Manual_del_usuario/Manual%20de%20Usuario%20-%20Modulo%20Gesti%C3%B3n%20ODC%20SAP%20-%20SCNexus.md) |
+| ¿Cuáles son los endpoints y qué permiso exige cada uno? | [REFERENCIA_API.md](REFERENCIA_API.md) |
 | ¿Cómo integro con SAP? | [INTEGRACION_SAP.md](INTEGRACION_SAP.md) |
 | ¿Cómo activo Celery? | [CELERY_QUICKSTART.md](CELERY_QUICKSTART.md) |
 | ¿Cómo uso homologaciones? | [HOMOLOGACIONES_SKU.md](HOMOLOGACIONES_SKU.md) |

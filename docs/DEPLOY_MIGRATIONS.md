@@ -86,6 +86,18 @@ scripts/
 
 ---
 
+## 📚 Catálogo y esquema
+
+- [CATALOGO_MIGRACIONES.md](CATALOGO_MIGRACIONES.md): las 113 migraciones del manifest, en orden de ejecución, con su categoría, archivo y descripción (generado con `python scripts/generar_catalogo_migraciones.py`).
+- [ESQUEMA_BD.md](ESQUEMA_BD.md): el esquema resultante (43 tablas), leído de la base real (generado con `scripts/generar_esquema_bd.py`).
+
+## 🆕 Base de datos vacía y migraciones idempotentes
+
+- **Migración `000.5` (`bootstrap_tablas_sin_script`)**: crea, si no existen, `despacho_cabecera`, `despacho_detalle`, `orden_compra_cabecera`, `orden_compra_detalle` y `pack_conversion`. Esas tablas se crearon a mano en los ambientes originales y el resto del manifest asume que existen; sin ella una **base vacía** (por ejemplo, un entorno local nuevo) no se puede levantar. Va primero a propósito y es un *no-op* en test y producción.
+- **Orden 008 antes que 007:** en el manifest la 008 se ejecuta antes que la 007, porque la 007 depende de ella (`FK_confirmacion_rayo_respuesta`).
+- **Migraciones 665, 666 y 667 son idempotentes:** al re-ejecutarlas no reducen columnas que ya se ampliaron ni borran un `CHECK` equivocado. Cada `ALTER` solo corre si la columna mide menos de lo que se pretende.
+- La última versión del manifest es la **669** (`add_orden_compra_listado_indexes`); la 668 amplía `pedido.mensaje` a NVARCHAR(500).
+
 ## 📝 Manifest de Migraciones
 
 El archivo `migrations_manifest.yaml` define todas las migraciones en orden:

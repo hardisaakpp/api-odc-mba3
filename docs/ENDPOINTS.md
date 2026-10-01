@@ -1,5 +1,7 @@
 # Documentación de Endpoints
 
+> **Alcance de este documento:** describe a mano los endpoints originales (despachos, migración, SAP). La **referencia completa de todas las operaciones** (pedidos, plantillas, órdenes de compra, cruce de productos, homologaciones, notificaciones, preferencias…), con el permiso que exige cada una, está en [REFERENCIA_API.md](REFERENCIA_API.md), generada desde el OpenAPI del servicio con `python scripts/generar_referencia_api.py`.
+
 ## Endpoints Principales
 
 ### Health Check

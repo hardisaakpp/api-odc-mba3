@@ -150,7 +150,8 @@ La documentación completa está organizada en el directorio `docs/`.
 - **[Quick Start Homologaciones](docs/QUICKSTART_HOMOLOGACIONES.md)** 🚀 - SKU en 3 pasos
 
 ### 📋 Documentación de API
-- **[Endpoints](docs/ENDPOINTS.md)** - Referencia completa de API REST
+- **[Referencia de la API](docs/REFERENCIA_API.md)** - Todas las operaciones con permiso, parámetros y respuestas (generada desde el OpenAPI)
+- **[Endpoints](docs/ENDPOINTS.md)** - Guía a mano de los endpoints originales (despachos, migración, SAP)
 - **[Flujo Completo](docs/FLUJO_COMPLETO.md)** - Flujo de procesamiento end-to-end
 - **[Estructura BD](docs/ESTRUCTURA_BD_PEDIDOS.md)** - Modelo de datos completo
 
@@ -181,7 +182,7 @@ La API de pedidos vive bajo el prefijo **`/api/pedidos`**. Resumen:
 - **GET `/api/homologaciones-sku`** - Listar homologaciones SKU (paginado)
 - **POST `/api/homologaciones-sku/sincronizar`** - Sincronizar desde despachos
 
-Ver [docs/ENDPOINTS.md](docs/ENDPOINTS.md) para documentación completa.
+Ver [docs/REFERENCIA_API.md](docs/REFERENCIA_API.md) para la referencia completa.
 
 ## 🗄️ Migraciones de Base de Datos
 

@@ -7,7 +7,7 @@
 **ÁREA DE DESARROLLO**
 
 Autor: Carlos Ortiz
-Fecha: 18/02/2026 — **Actualizado:** 28/08/2026 (segunda fase del módulo)
+Fecha: 18/02/2026 — **Actualizado:** 01/10/2026 (segunda fase del módulo y mejoras de septiembre de 2026)
 
 ---
 
@@ -32,6 +32,16 @@ Adicionalmente:
 - **`funcionalidades-admin.view`** no es un perfil, es un permiso extra que se suma a cualquiera de los tres anteriores. Habilita el panel **"Información Pedidos y ODC"** en el Dashboard (Órdenes de Compra, Procesamiento SAP, Homologaciones, Listado Pedidos Originales) y la **Vista Compacta** dentro de Redistribución.
 - El **rol Admin** no pertenece al flujo de pedidos: administra los **Destinatarios de Notificaciones** y el **Catálogo de Correos** del sistema (ver [sección 17](#17-administración-de-notificaciones-rol-admin)).
 
+### 1.2 Novedades desde la versión del 28/08/2026
+
+- **Contadores "requiere acción":** el Dashboard muestra un círculo rojo con el total real de pendientes en cada botón, y los listados tienen un botón naranja "N pedidos requieren acción". Antes solo contaban los pedidos de la página cargada. Ver [sección 3.3](#33-qué-significa-requiere-acción).
+- **Estados retirados:** nueve estados del flujo antiguo (por ejemplo Confirmado Proveedor, Redistribuido y Error Datos Maestros) ya no se usan, y *Pendiente Confirmación* es el nombre antiguo de **Borrador**. Ver [sección 4.1](#41-estados-retirados-y-nombres-antiguos).
+- **Confirmar (EL RAYO)** exige una **fecha de entrega real**; mientras falte aparece el aviso "Seleccione una fecha de entrega para confirmar". Ver [sección 9.2](#92-acciones-en-el-detalle-del-pedido).
+- **Un botón "Número OC SAP" por cada ODC** del pedido, también en Cargar Plantilla y Redistribución. Ver [sección 6.3](#63-pedidos-que-generan-más-de-una-orden-de-compra).
+- **Redistribución:** en pedidos hijo se puede **agregar una tienda**, y su resaltado se conserva al recargar. Ver [sección 6.2](#62-pasos).
+- **ODC a SAP:** botón "con reintento pendiente" y selector de tamaño de página. Ver [sección 7](#7-odc-a-sap-ambos-perfiles).
+- **Destinatarios de Notificaciones** rediseñado: buscador, tarjetas por persona y catálogo de correos que se arrastra. Ver [sección 17](#17-administración-de-notificaciones-rol-admin).
+
 ## 2. Acceso al módulo
 
 1. Inicie sesión en SCNexus con su usuario y contraseña de Active Directory.
@@ -53,6 +63,8 @@ El dashboard es la pantalla principal con botones de acceso rápido a cada funci
 | **Revisar Redistribución** | `odcsap.view` | EL RAYO — ver la distribución por tienda (solo lectura). |
 | **ODC a SAP** | `mabel.view` u `odcsap.view` | Visualizar órdenes de compra generadas y enviarlas/consultarlas en SAP. |
 
+Cuando hay trabajo pendiente para usted, el botón muestra en su esquina superior derecha un **círculo rojo con el número** de pendientes (se muestra "99+" si son más de 99; con cero no aparece). Los botones con círculo son **Cargar Plantilla**, **Producción El Rayo**, **Listado de Pedidos**, **Redistribución** y **ODC a SAP**. El número es el total real, no solo lo que se ve en la primera página, y se conserva al volver al Dashboard.
+
 ### 3.2 Panel "Información Pedidos y ODC" (requiere `funcionalidades-admin.view`)
 
 Al hacer clic se expande un grupo de opciones adicionales, disponible para cualquier perfil que tenga este permiso extra:
@@ -69,24 +81,37 @@ Al hacer clic se expande un grupo de opciones adicionales, disponible para cualq
 
 > **Nota:** la pantalla **"Crear Pedido Manual"** existe en el sistema pero actualmente **no tiene botón de acceso** en ninguna pantalla del módulo; no está disponible para uso normal.
 
+### 3.3 ¿Qué significa «requiere acción»?
+
+Cada pantalla cuenta algo distinto, según lo que le toca hacer a su perfil:
+
+| Pantalla | Perfil | Cuenta los pedidos en estado… | Qué le toca hacer |
+|---|---|---|---|
+| Cargar Plantilla | MABEL TRADING | **Producción Pospuesta** y **Despachar y Facturar** | Aceptar o Rechazar la diferencia; Finalizar el pedido |
+| Listado de Pedidos | EL RAYO | **Confirmado por Producción** y **Confirmado y Enviado** | Confirmar o Cancelar; Despachar y Facturar |
+| Redistribución | MABEL TRADING | **Confirmado por El Rayo** y **Listo para Redistribución** | Redistribuir por tienda y enviar la ODC a SAP |
+| Producción El Rayo | Producción El Rayo | **Nuevo Pedido** | Revisar y Confirmar Producción |
+| ODC a SAP | ambos | (cuenta **órdenes de compra**, no pedidos) con **Reintentar** o **Reintentar ST** disponible | Reintentar el envío |
+
+En los listados, el botón naranja **"N pedidos requieren acción"** (en el de EL RAYO dice "requieren tu acción") filtra solo esos pedidos y muestra el aviso "Mostrando solo pedidos que requieren acción". Púlselo de nuevo para volver a ver todos. Si no hay ninguno, el botón no aparece.
+
 ## 4. Estados del pedido (referencia)
 
-La lista de estados creció respecto a la primera versión del módulo. Agrupados por etapa del flujo:
+Estados vigentes, agrupados por etapa del flujo (el orden de la tabla es el del flujo normal):
 
 **Flujo normal**
 
 | Estado | Significado |
 |---|---|
-| Borrador | Pedido en edición por MABEL TRADING, aún no enviado. |
-| Nuevo Pedido | MABEL TRADING envió el pedido al proveedor. |
-| Gestionar Pedido | Disponible para EL RAYO / Producción El Rayo, editable. |
-| Confirmado por Producción | Producción El Rayo confirmó que el pedido puede producirse (perfil Producción El Rayo). |
-| Pendiente Confirmación / Respuesta Cargada / Confirmado Proveedor | Pasos intermedios mientras EL RAYO carga y confirma su respuesta. |
-| Confirmado por El Rayo | La respuesta del proveedor quedó confirmada; el pedido pasa a redistribución. |
-| Redistribución / Redistribuido / Confirmado redistribución | Cantidades siendo asignadas o ya asignadas por tienda. |
-| Confirmado y Enviado | ODC y Solicitudes de Traslado (ST) generadas y enviadas a SAP. |
-| Despachar y Facturar | Listo para despacho. |
-| Finalizado / Cerrado | Proceso terminado. |
+| Borrador | Pedido en edición por MABEL TRADING, aún no enviado. Es el estado inicial al subir un Excel. |
+| Nuevo Pedido | MABEL TRADING envió el pedido al proveedor (EL RAYO es notificado). |
+| Gestionar Pedido | El pedido está en gestión por EL RAYO / Producción El Rayo, que pueden revisarlo y editarlo. Pasa a este estado al abrir su detalle desde el listado. |
+| Confirmado por Producción | Producción El Rayo confirmó que el pedido puede producirse; ahora le toca a Administración El Rayo. |
+| Confirmado por El Rayo | Administración El Rayo confirmó la respuesta; el pedido pasa a redistribución (MABEL TRADING). |
+| Confirmado redistribución | MABEL TRADING confirmó la redistribución por tienda; sigue el envío de la ODC a SAP. |
+| Confirmado y Enviado | La ODC y sus Solicitudes de Traslado (ST) se generaron y enviaron a SAP con éxito. |
+| Despachar y Facturar | Listo para despacho; se marca manualmente desde Confirmado y Enviado. |
+| Finalizado | Estado final del flujo. Solo se llega desde Despachar y Facturar. |
 
 **Pedidos parciales (Producción Pospuesta)**
 
@@ -96,20 +121,37 @@ La lista de estados creció respecto a la primera versión del módulo. Agrupado
 | Listo para Redistribución | MABEL TRADING aceptó la Producción Pospuesta; la diferencia entra directo a la cola de redistribución. |
 | Rechazado | MABEL TRADING rechazó la Producción Pospuesta. Estado final. |
 
-**Estados de excepción / envío a SAP**
+**Excepciones en el envío a SAP**
 
 | Estado | Significado |
 |---|---|
-| Pendiente Logística | El pedido quedó a la espera de resolución logística tras el envío a SAP. |
-| Error Datos Maestros | Un artículo no está correctamente configurado en SAP para completar el traslado. |
-| Error envío SAP (reintentar) | El envío a SAP falló y requiere reintento manual o espera a la reconciliación automática. |
+| Error envío SAP (reintentar) | El envío de la ODC a SAP falló (típicamente por conexión u otra falla transitoria); permite reintentar. |
+| Pendiente Logística | La ODC se envió bien, pero alguna Solicitud de Traslado quedó pendiente o con error. |
 
 **Cancelaciones**
 
 | Estado | Significado |
 |---|---|
-| Cancelado por El Rayo | MABEL solicita que EL RAYO cancele el pedido. |
-| Cancelado | Pedido cancelado definitivamente. |
+| Cancelado por El Rayo | Administración El Rayo canceló el pedido. Solo es posible desde Confirmado por Producción y debe hacerse únicamente a solicitud expresa de MABEL TRADING. |
+| Cancelado | MABEL TRADING canceló el pedido desde Redistribución. Es definitivo (irreversible). |
+
+### 4.1 Estados retirados y nombres antiguos
+
+**Estados retirados en septiembre de 2026.** Ya no forman parte del flujo ni aparecen en los filtros, y ningún pedido real los tenía:
+
+- *Respuesta Cargada* (en algunos ambientes se veía como "En revisión")
+- *Confirmado Proveedor*
+- *Rechazado Proveedor*
+- *En Ajuste Mabel*
+- *Redistribuido*
+- *Procesado SAP*
+- *Error Datos Maestros*
+- *En Proceso*
+- *Completado*
+
+**Nombre antiguo.** *Pendiente Confirmación* (o "Pendiente Confirmación Proveedor") **no es un estado retirado: es el nombre antiguo de Borrador**, el estado inicial de todo pedido nuevo. Si en algún documento, correo o dato antiguo ve "Pendiente Confirmación", corresponde a Borrador.
+
+**Respuesta del proveedor por Excel.** El flujo antiguo en que el proveedor respondía cargando un Excel fue reemplazado por la Redistribución; por eso esos estados intermedios dejaron de usarse.
 
 ## 5. Cargar Plantilla (MABEL TRADING)
 
@@ -125,7 +167,7 @@ Permite seleccionar un pedido para cargar una plantilla Excel, editarla o contin
 2. Espere a que termine el proceso (barra de progreso con 3 fases: Subir → Validar → Guardar).
 3. Una vez cargada la plantilla Excel, podrá:
    - Visualizar la cabecera y los detalles del pedido cargado, incluyendo el **Origen Traslado** (bodega/CD detectado automáticamente a partir de las tiendas del pedido).
-   - Modificar fecha de entrega o seleccionar la opción "INMEDIATO" (si selecciona esta última opción ya no podrá modificar la fecha).
+   - Modificar fecha de entrega o seleccionar la opción "INMEDIATO" (si selecciona esta última opción ya no podrá modificar la fecha). Mientras se guarda una fecha (de pedido o de entrega) aparece un indicador de progreso y el campo se bloquea hasta terminar. Para que EL RAYO pueda **Confirmar** el pedido, la fecha de entrega debe ser una fecha real: con "INMEDIATO" o vacía, EL RAYO verá "Seleccione una fecha de entrega para confirmar".
    - Enviar el pedido al proveedor.
    - Descartar el pedido (lo elimina completamente del sistema; el botón se oculta si el pedido tiene una Producción Pospuesta pendiente de Aceptar/Rechazar).
 
@@ -166,8 +208,8 @@ El botón **"Descargar Análisis de Margen"** exporta un Excel (`analisis_margen
 
 Permite buscar un pedido por medio de filtros:
 
-- **Solo pedidos que requieren acción**: muestra solo pedidos en estados Pendiente Confirmación, Respuesta Cargada, Confirmado Proveedor.
-- **Estado / Fecha Desde / Fecha Hasta / Proveedor / Número de Pedido / Creado Por.**
+- **Botón "N pedidos requieren acción"**: filtra los pedidos en estado **Producción Pospuesta** (para Aceptar/Rechazar) o **Despachar y Facturar** (para Finalizar). Ver [sección 3.3](#33-qué-significa-requiere-acción).
+- **Estado / Fecha Desde / Fecha Hasta / Proveedor / Número de Pedido / Creado Por.** La lista de Estados incluye únicamente los estados en los que existen pedidos realmente.
 
 ### 5.7 Uso de filtros
 
@@ -181,7 +223,7 @@ Muestra todos los pedidos previamente cargados. **Para ver detalle**: clic en el
 
 Si un pedido se encuentra en estado **"Gestionar Pedido"**, significa que el proveedor (EL RAYO, o Producción El Rayo) está revisándolo o realizando alguna modificación. En este estado, el usuario puede visualizar los comentarios o cambios efectuados y, si corresponde, solicitar la cancelación del pedido.
 
-> Las celdas de Costo/Total/Comentario que fueron modificadas se resaltan en **color** para identificar quién hizo el último cambio: **púrpura** si fue EL RAYO, **ámbar** si fue Producción El Rayo.
+> Las celdas de Costo/Total/Comentario que fueron modificadas se resaltan en **color** para identificar quién hizo el último cambio: **púrpura** si fue EL RAYO, **naranja** si fue Producción El Rayo. El color depende de quién editó la celda, no de quién la esté viendo.
 
 ## 6. Redistribución (MABEL TRADING)
 
@@ -200,10 +242,13 @@ Distribuir las cantidades de productos por tienda a partir de la respuesta del p
 3. Haga clic en **Guardar Borrador** para guardar los cambios sin enviar aún.
 4. Al colocar el mouse sobre **Enviar ODC a SAP** aparece un tooltip que explica que este botón generará la Orden de Compra en SAP, creará las Solicitudes de Traslado por tienda, realizará validaciones y conversiones de unidades, y notificará al personal de El Rayo.
 5. **Cancelar Pedido**: cambia el estado de Confirmado por el Rayo a Cancelado. Este cambio es **irreversible**.
+6. **Agregar tienda** (solo en pedidos hijo, es decir, la diferencia de una Producción Pospuesta): el botón **"Agregar tienda a la redistribución"**, en el encabezado de la matriz, permite redistribuir hacia una tienda que no estaba en el Excel original. La tienda agregada queda **resaltada**, y el resaltado se conserva aunque recargue la página o confirme la redistribución.
 
 ### 6.3 Pedidos que generan más de una Orden de Compra
 
 Si el pedido mezcla tiendas de más de una marca/bodega (por ejemplo ROLAND y REGIONS), el sistema genera **automáticamente dos Órdenes de Compra**, una por bodega, cada una con sus propias Solicitudes de Traslado. Ambas se envían a SAP en paralelo. El correo de confirmación se envía una sola vez, solo si ambas ODC tuvieron éxito.
+
+Cada ODC tiene su propio botón en el campo **"Número OC SAP"** de la cabecera del pedido: con dos ODC verá dos botones (antes solo se veía el del número más antiguo). Al pulsar uno se abre la ventana **"Integración con SAP Completada"** de esa ODC, con sus Solicitudes de Traslado por tienda; la tabla incluye la columna **"Nombre de Tienda"**, entre DocNum y Tienda. Este botón funciona en el detalle del pedido, en Cargar Plantilla y en Redistribución (incluida la vista de solo lectura de EL RAYO). Junto al número hay un ícono para **copiarlo**.
 
 ### 6.4 Envío confiable a SAP
 
@@ -231,6 +276,14 @@ Esta pantalla muestra las ODC generadas y enviadas a SAP, además de un botón p
 - Se visualizan los números de pedido, la fecha y hora de creación, y el estado actual de la ODC.
 - La columna **RESPUESTA SAP** muestra un mensaje descriptivo con la respuesta emitida por SAP.
 
+### 7.2 Buscar, filtrar y paginar
+
+- **Buscar:** el banner **"Procesar ODC"**, en la parte superior de la pantalla, busca en el servidor (no solo en la página que ve).
+- **Con reintento pendiente:** si alguna ODC tiene disponible **Reintentar** o **Reintentar ST**, aparece el botón naranja **"N pedidos con reintento pendiente"** (aunque diga "pedidos", cuenta órdenes de compra). Púlselo para ver solo esas ODC y púlselo de nuevo para volver a ver todas. El mismo número aparece en el círculo rojo del botón **ODC a SAP** del Dashboard.
+- **Reintentar ST:** muestra en un círculo cuántas tiendas quedan pendientes sobre el total (por ejemplo "2/5"). Para reintentos automáticos, ver la [sección 15](#15-reconciliación-automática-diaria-de-traslados).
+- **Columnas:** el selector de columnas, a la derecha del filtro, permite mostrar u ocultar columnas y restablecerlas.
+- **Paginación:** cuando hay más de una página, el pie indica "Mostrando X–Y de N órdenes (página P de T)" y permite **elegir cuántas filas ver por página (10, 20 o 50)**.
+
 ## 8. Procesamiento SAP (MABEL TRADING)
 
 **Ruta:** Dashboard → Información Pedidos y ODC → Procesamiento SAP
@@ -251,7 +304,7 @@ Búsqueda de un pedido por número para ver su procesamiento SAP. En la cabecera
 
 ### 9.1 Descripción
 
-Muestra todos los pedidos con filtros por estado, fechas, proveedor, número de pedido y creado por. El filtro rápido **"Solo pedidos que requieren acción"** resalta los que están Pendiente Confirmación, Respuesta Cargada o Confirmado Proveedor, con un contador visible. El tamaño de página elegido se recuerda entre visitas.
+Muestra todos los pedidos con filtros por estado, fechas, proveedor, número de pedido y creado por. El botón naranja **"N pedidos requieren tu acción"** filtra los pedidos que esperan algo de usted: los que están en **Confirmado por Producción** (para Confirmar o Cancelar) o en **Confirmado y Enviado** (para Despachar y Facturar). El tamaño de página elegido se recuerda entre visitas.
 
 Al hacer clic en un pedido, este pasa automáticamente a estado **Gestionar Pedido** y se abre el detalle.
 
@@ -263,12 +316,13 @@ Dentro del detalle, usted puede:
 
 - **Descargar Pedido Original**: archivo Excel basado en el pedido cargado por MABEL TRADING.
 - **Editar Costo Unitario, Total o Comentario** (campos editables mientras el pedido está en Gestionar Pedido).
-- **Modificar fecha** de entrega, o marcar **Fecha Facturación**.
-- **Confirmar** (cuando aplique) para crear la respuesta del proveedor.
+- **Modificar fecha** de entrega. La **Fecha Facturación** es exclusiva de EL RAYO y solo se puede elegir con el pedido en **Confirmado y Enviado**; hasta que se elija, el botón **Despachar y Facturar** permanece deshabilitado.
+- **Confirmar**, para crear la respuesta del proveedor. Solo está disponible con el pedido en **Confirmado por Producción** y exige una **fecha de entrega real**: si falta, el botón queda deshabilitado y aparece el aviso "Seleccione una fecha de entrega para confirmar".
+- **Cancelar Pedido** (parte inferior del detalle, solo en Confirmado por Producción): cambia el pedido a **Cancelado por El Rayo**. Úselo únicamente cuando MABEL TRADING lo solicite expresamente.
 - **Generar TXT MBA3**: si el pedido generó más de una ODC (por mezclar tiendas de distintas bodegas), aparece un botón de descarga independiente por cada ODC.
 - **Volver** al listado de pedidos.
 
-Las celdas que usted modifique se resaltan en **púrpura** para diferenciarlas de las que edite Producción El Rayo (resaltadas en ámbar).
+Las celdas que usted modifique se resaltan en **púrpura** para diferenciarlas de las que edite Producción El Rayo (resaltadas en naranja).
 
 ## 10. Revisar Redistribución (EL RAYO)
 
@@ -367,18 +421,21 @@ En el detalle de un pedido encontrará, según su perfil y el estado del pedido:
 
 | Botón | Cuándo aparece | Acción |
 |---|---|---|
-| Confirmar | EL RAYO, pedido en estado apropiado | Crear respuesta del proveedor |
+| Confirmar | EL RAYO, pedido en Confirmado por Producción (requiere fecha de entrega real) | Crear respuesta del proveedor |
+| Cancelar Pedido (EL RAYO) | EL RAYO, pedido en Confirmado por Producción | Pasa a Cancelado por El Rayo; solo a solicitud expresa de MABEL TRADING |
+| Número OC SAP (uno por ODC) | Pedido con ODC generadas | Abre "Integración con SAP Completada" de esa ODC |
+| Reintentar / Reintentar ST | ODC a SAP: **Reintentar** en una ODC Pendiente o con Error; **Reintentar ST** en una ODC Enviada con tiendas pendientes | Reintenta el envío de la ODC o los traslados pendientes |
 | Confirmar Producción | Producción El Rayo, en Gestionar Pedido | Pasa a Confirmado por Producción, notifica a EL RAYO |
 | Aceptar / Rechazar | MABEL TRADING, pedido en Producción Pospuesta | Envía la diferencia a redistribución, o la cierra como Rechazado |
 | Generar ODC / Enviar ODC a SAP | Pedido con redistribución confirmada | Genera orden de compra y solicitudes de traslado |
 | Confirmar Redistribución | MABEL, pedido con redistribución editable | Guardar redistribución |
 | Exportar a Excel | Desde Confirmado y Enviado en adelante | Descarga los traslados (matriz + detalle) |
 | Descargar Análisis de Margen | Cargar Plantilla, MABEL/EL RAYO | Descarga el Excel de márgenes |
-| Despachar y Facturar | Pedido en Confirmado y Enviado | Marcar para despacho |
+| Despachar y Facturar | EL RAYO, pedido en Confirmado y Enviado y con **Fecha Facturación** elegida | Marcar para despacho |
 | Finalizar | Pedido en Despachar y Facturar | Marcar como finalizado |
 | Generar TXT MBA3 | Según ODC generadas (una por bodega si aplica) | Descargar archivo de exportación |
 | Descargar Pedido / Pedido Original | Según permisos | Descargar datos del pedido |
-| Cancelar Pedido | Confirmado por el Rayo en adelante (MABEL) | Cambia a Cancelado (irreversible) |
+| Cancelar Pedido (MABEL) | Confirmado por el Rayo en adelante, antes de Confirmado redistribución | Cambia a Cancelado (irreversible) |
 
 ### 16.1 Información mostrada
 
@@ -390,13 +447,38 @@ En el detalle de un pedido encontrará, según su perfil y el estado del pedido:
 
 **Ruta:** Dashboard → Información Pedidos y ODC → Destinatarios de Notificaciones (solo visible con rol `Admin`)
 
-- **Destinatarios de Notificaciones** (`/mba3-consultas/admin/destinatarios`): administración de personas y correos que reciben notificaciones del sistema.
-- **Catálogo de Correos** (`/mba3-consultas/admin/catalogo-correos`): catálogo de tipos de correo/notificación que envía el módulo.
+### 17.1 Destinatarios de Notificaciones
+
+**Ruta:** `/mba3-consultas/admin/destinatarios`. Define qué personas reciben qué correos del sistema. **Cada persona recibe solo los correos que aparecen en su tarjeta.**
+
+La pantalla tiene dos zonas: a la izquierda las **tarjetas de personas** y a la derecha el **Catálogo de correos**.
+
+**Para agregar a alguien y asignarle correos:**
+
+1. En el buscador superior, **"Buscar usuario o escribir un correo externo"**, escriba el nombre. Elija una sugerencia de usuario interno o, si es una persona externa, escriba su correo y presione **Enter** (si no hay coincidencias internas verá "Sin coincidencias internas — presiona Enter para agregar este correo externo").
+2. Se crea una **tarjeta "pendiente"**: avatar gris y sin correos. Todavía no está guardada en el sistema. El Catálogo de correos se resalta un momento para indicarle el siguiente paso.
+3. En el **Catálogo de correos**, **arrastre** el correo que le corresponde hasta la tarjeta, o **toque el correo y luego toque la tarjeta** (útil en pantallas táctiles). En cuanto la persona recibe su primer correo, queda **guardada**.
+4. Repita con los demás correos. Si intenta soltar un correo que la persona ya tiene, la tarjeta se marca en rojo y no se permite.
+
+**Para quitar correos o personas:**
+
+- **"Quitar este correo"** (en cada correo de la tarjeta). Si quita el último, la tarjeta **no desaparece**: queda como pendiente (gris), igual que una persona nueva.
+- **"Eliminar persona"** (ícono de la tarjeta): si la tarjeta está pendiente (sin correos) simplemente se descarta; si ya estaba guardada, el sistema pregunta "¿Eliminar a … y todos sus correos asignados?" y, al aceptar, la elimina junto con todos sus correos.
+
+**Otras ayudas:**
+
+- El catálogo tiene su propio buscador (**"Buscar correo o tipo"**), muestra los correos agrupados y coloreados por tipo, y un contador "X de Y".
+- Sobre las tarjetas, los botones **"Todos los equipos"** y uno por cada equipo permiten ver solo las personas de ese equipo.
+- El enlace **"→ Gestionar catálogo"** lleva al Catálogo de Correos.
+
+### 17.2 Catálogo de Correos
+
+**Ruta:** `/mba3-consultas/admin/catalogo-correos`. Catálogo de tipos de correo/notificación que envía el módulo.
 
 ## 18. Consejos y buenas prácticas
 
 1. **Auto-actualizar**: actívelo en listados largos para mantener la información actualizada.
-2. **Filtros**: use "Solo pedidos que requieren acción" para centrarse en lo pendiente.
+2. **Pendientes**: use el botón naranja "N pedidos requieren acción" (y los círculos rojos del Dashboard) para centrarse en lo que le toca.
 3. **Número de pedido**: el formato típico es `P-12.48 - 12 - 2025`; respete espacios y guiones al buscar.
 4. **Homologaciones**: revise periódicamente los SKUs pendientes para evitar bloqueos en el envío a SAP.
 5. **Redistribución**: confirme la redistribución solo cuando las cantidades por tienda estén correctas.
@@ -412,9 +494,10 @@ En el detalle de un pedido encontrará, según su perfil y el estado del pedido:
 | Error al cargar plantilla: "Discrepancias de Pack/PVP" | El Pack o PVP del Excel no coincide con SAP. Use el valor que el mensaje sugiere. |
 | Error al cargar plantilla por TOTAL/SUBTOTAL | La fórmula de TOTAL o SUBTOTAL de algún producto no cuadra con las cantidades reales por tienda/bodega; revise el mensaje para identificar la fila. |
 | ODC con error de SKU | Vaya a Homologaciones y complete la homologación del SKU. |
-| Pedido no aparece en listado | Revise filtros (estado, fechas). Pruebe con "Solo pedidos que requieren acción" desmarcado. |
-| Botón Confirmar / Confirmar Producción deshabilitado | El pedido puede estar ya confirmado o fuera de Gestionar Pedido; revise el estado. |
-| El pedido queda en Pendiente Logística / Error Datos Maestros después de enviar a SAP | Es un estado de excepción durante el envío de traslados; la reconciliación automática reintentará esa noche, o puede usar "Reintentar ST" manualmente. |
+| Pedido no aparece en listado | Revise filtros (estado, fechas). Si activó el botón "N pedidos requieren acción", púlselo de nuevo para quitar el filtro. |
+| Botón Confirmar / Confirmar Producción deshabilitado | **Confirmar** (EL RAYO) solo funciona en Confirmado por Producción y con una fecha de entrega real: si ve "Seleccione una fecha de entrega para confirmar", elija la fecha. **Confirmar Producción** solo funciona en Gestionar Pedido. Revise también el estado del pedido. |
+| El pedido queda en Pendiente Logística o en Error envío SAP (reintentar) | Son estados de excepción durante el envío; la reconciliación automática reintentará esa noche, o puede usar "Reintentar" / "Reintentar ST" manualmente en ODC a SAP. |
+| El botón "Número OC SAP" no abre nada | En versiones anteriores no respondía en Cargar Plantilla ni en Redistribución; ya funciona en las tres pantallas. Si su pedido generó dos ODC verá un botón por cada una. |
 | El proceso de "Enviar ODC a SAP" sigue mostrando progreso tras varios minutos | Es esperado si SAP aún no confirma alguna Solicitud de Traslado; el sistema sigue consultando en vez de cerrar el proceso de forma prematura. |
 | No encuentro "Crear Pedido Manual" | La pantalla existe pero no tiene botón de acceso habilitado actualmente; no está disponible para uso normal. |
 
@@ -433,6 +516,9 @@ En el detalle de un pedido encontrará, según su perfil y el estado del pedido:
 | Producción Pospuesta | Pedido "hijo" generado con la diferencia entre lo solicitado y lo confirmado por EL RAYO/Producción |
 | Margen de Rentabilidad | Porcentaje calculado a partir del Costo Unitario y el PVP de cada producto |
 | Reconciliación | Proceso automático diario que reintenta Solicitudes de Traslado pendientes con SAP |
+| Requiere acción | Pedido (u ODC) que espera una acción de su perfil; el significado cambia según la pantalla (ver sección 3.3) |
+| Pedido hijo | Pedido generado con la diferencia de una Producción Pospuesta; se numera `<pedido>.NN` |
+| Tarjeta pendiente | En Destinatarios, persona recién agregada que aún no tiene ningún correo asignado (avatar gris) |
 
 ---
 
