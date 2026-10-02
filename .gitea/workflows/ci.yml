@@ -1,0 +1,58 @@
+# Pipeline local (Gitea Actions): pytest+cobertura -> SonarQube -> quality gate
+name: CI
+on:
+  push:
+    branches: [main, test, develop, 'ci/**', 'feature/**', 'fix/**', 'docs/**']
+
+jobs:
+  calidad:
+    runs-on: ubuntu-latest
+    # test_sse_redis_bridge requiere un Redis real alcanzable
+    services:
+      redis:
+        image: redis:7-alpine
+    steps:
+      - uses: https://github.com/actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Dependencias del sistema (ODBC para pyodbc, Java para Sonar)
+        run: |
+          apt-get update -qq
+          apt-get install -y -qq python3-pip python3-venv unixodbc-dev build-essential default-jre-headless
+
+      - name: Instalar dependencias Python
+        run: |
+          python3 -m venv .venv
+          .venv/bin/pip install -q -r requirements.txt
+
+      - name: Tests con cobertura
+        id: tests
+        continue-on-error: true
+        env:
+          # La app exige un .env; en CI se usa la plantilla versionada (valores de ejemplo, sin secretos).
+          ENV_FILE: deploy/env/prod.env.example
+          REDIS_URL: redis://redis:6379/0
+          ENVIRONMENT: development   # la plantilla es de producción y exige credenciales reales
+        run: |
+          .venv/bin/python -m pytest tests --cov=src --cov-report=xml:coverage.xml -q -p no:cacheprovider
+
+      - name: Análisis SonarQube + quality gate
+        uses: https://github.com/SonarSource/sonarqube-scan-action@v5
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+        with:
+          args: >
+            -Dsonar.projectKey=api-odc-mba3
+            -Dsonar.sources=src
+            -Dsonar.tests=tests
+            -Dsonar.python.coverage.reportPaths=coverage.xml
+            -Dsonar.python.version=3.11
+            -Dsonar.qualitygate.wait=true
+
+      - name: Fallar si los tests fallaron
+        if: steps.tests.outcome == 'failure'
+        run: |
+          echo "Hay tests fallando (ver paso 'Tests con cobertura')"
+          exit 1
