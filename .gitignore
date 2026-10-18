@@ -83,3 +83,6 @@ scratch_*.py
 
 # GitHub Actions (el repositorio usa Azure DevOps)
 .github/
+
+# Pedidos reales de clientes: datos de terceros, nunca al repositorio
+docs/examples/PEDIDO ROLAND*.xlsx
